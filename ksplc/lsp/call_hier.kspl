@@ -125,11 +125,33 @@ impl Ast_node
                 if recv != null
                     res.target_def = recv.def_node
                     res.range_node = recv
+                return res
         else if r.kind_id == .k_enum_init_call && r.children.len > 0
             first: = r.get_child(0)
             res.target_def = first.def_node
             res.range_node = first
+            return res
+        // **An operator the compiler rewrites to a method call is a call** (`a + b` to `add`,
+        // `xs[i]` to `at`). Sema links the operator's node to the method; the range is the mark.
+        if is_fn_or_impl_decl(r.def_node)
+            if mark: = r.operator_mark()
+                res.target_def = r.def_node
+                res.range_node = mark
         return res
+
+    priv fn operator_mark(r: Self$@): Ast_node$@? //<
+        //< The operator's own node in an expression an operator trait can rewrite; none otherwise
+        switch r.kind_id
+        case .k_expr
+            return .some(r.get_binary_op())
+        case .k_expr_unary
+            return .some(r.get_unary_op())
+        case .k_expr_postfix
+            op: = r.get_postfix_op()
+            if op != null && op.text.equals("[")
+                return .some(op)
+        default {}
+        return .none
 priv struct Fqn_lookup_idx //< the indexes compute_def_fqn uses, built once per request
     //< The call hierarchy calls compute_def_fqn per call site. Its two reverse lookups (an
     //< instance's template name, a generic method template's FQN) would be O(N*M) as linear walks.
@@ -310,6 +332,12 @@ fn prepare_call_hierarchy(state: Doc_state$@, params: json.Value, id_val: json.V
             name: = id_node.text if id_node != null else def_node.text
             idx: = build_fqn_lookup_idx(state.sema)
             fqn: = compute_def_fqn(idx, def_node)
+            // **An error can stop the analysis before the functions are registered** (a method its
+            // trait does not declare, say). The function then has no name to find it by, and an
+            // item without one would answer "no callers".
+            if fqn.len == 0
+                lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED, NOT_ANALYSED, arena)
+                return
 
             def_file: = def_node.loc.file()
             src_res: = base_core.source_of(state.sema.source_map, def_file)
@@ -366,6 +394,10 @@ priv fn answered_no_workspace(ws_state: Doc_state$@, id_val: json.Value, arena: 
         "the workspace could not be analysed, so the callers cannot be listed", arena)
     return true
 
+priv const NOT_ANALYSED: U8[] = //< the answer where a function has no name the analysis knows
+    "the function was not analysed, as an error stops the analysis before it. Fix the errors, then \
+        ask again"
+
 fn item_fqn(params: json.Value): U8[] //<
     //< The FQN of the function a call hierarchy request asks about (the `data` prepare returned)
     return params.get("item").get("data").as_str().unwrap_or("")
@@ -376,10 +408,16 @@ fn handle_calls(ws_state: Doc_state$@, params: json.Value, id_val: json.Value, i
     if answered_no_workspace(ws_state, id_val, arena)
         return
     target_fqn: = item_fqn(params)
+    idx: = build_fqn_lookup_idx(ws_state.sema)
+    target_def: = resolve_def_by_fqn(ws_state.root_file, ws_state.sema, idx, target_fqn)
+    // Caution: **Answer an error, not the empty array, where the function is not found.** An error
+    // in another file can stop the workspace's analysis before it registers the function.
+    if target_fqn.len == 0 || target_def == null
+        lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED, NOT_ANALYSED, arena)
+        return
     defer calls_map: = base_core.arena
         .create(Map<|U8[], Call_hier_entry$@|>(base_core.arena))
 
-    idx: = build_fqn_lookup_idx(ws_state.sema)
     // The exclusion table is built from **the whole tree**; from the target alone a call's callee
     // would also be listed as passing a function pointer.
     search: = Call_search::{ .idx = idx, .callee_ids = build_callee_id_set(ws_state.root_file),
@@ -387,9 +425,6 @@ fn handle_calls(ws_state: Doc_state$@, params: json.Value, id_val: json.Value, i
     if is_incoming
         find_incoming_calls(search, ws_state.root_file, target_fqn, null, 0)
     else
-        target_def: =
-            resolve_def_by_fqn(ws_state.root_file, ws_state.sema, idx, target_fqn)
-        if target_def != null
-            find_outgoing_calls(search, target_def, 0)
+        find_outgoing_calls(search, target_def, 0)
     respond_with_call_hier_entries(calls_map, ws_state.sema, idx, is_incoming,
         base_locate.uri_style_of(ws_state.uri_perm), Json_builder(arena), id_val, arena)

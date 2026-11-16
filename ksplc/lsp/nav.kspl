@@ -1,7 +1,7 @@
 //< Navigation: which declaration a name stands for, the jump to it, and what it says of itself
 //< `get_definition_node` answers "which declaration does this name stand for" for the hover,
 //< references and renaming alike. **Only the jump (`handle_definition`) goes on from a declared
-//< name to its type**. `declared_doc` and `linked_doc` read a declaration's description for every
+//< name to its type**. `declared_run` and `linked_doc` read a declaration's description for every
 //< editor feature, and `write_full_name` gives the name the whole program knows it by.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_doc" as base_ast_doc
@@ -47,11 +47,16 @@ fn write_full_name(name: U8[], file: U8[], out: Str_builder$@) //<
             out.s_path_as_dots(module).c('.')
     out.s(name)
 
-priv fn get_base_type_id(env: sema_type_env.Env$@, id: I32): I32
+priv fn get_base_type_id(env: sema_type_env.Env$@, id: I32): I32 //<
+    //< The type a value's members follow: pointers, immutability and a result's error side removed
+    //< **Immutability can wrap any layer** (`Cup@` is a pointer to an immutable `Cup`, a `for` item
+    //< may be immutable outside), so each step sees through it.
     $curr: = id
     for _d in Range.asc(100)
         switch env.get_info(curr)
         case .pointer(b)
+            curr = b
+        case .const_of(b)
             curr = b
         default
             if !env.is_result(curr)
@@ -62,6 +67,12 @@ priv fn get_base_type_id(env: sema_type_env.Env$@, id: I32): I32
 fn handle_definition(state: Doc_state$@, params: json.Value, id_val: json.Value, arena: Arena$@) //<
     //< It answers a jump to the definition: the place the name under the cursor is declared
     defer path: = lsp_position.find_path_at_params(state, params, arena)
+    if state.sema != null
+        if file: = imported_file_at(state.sema, path)
+            $b: = Json_builder(arena)
+            style: = base_locate.uri_style_of(state.uri_perm)
+            lsp_msg.send_response(id_val, b.location(style.spell(file), 0, 0, 0, 0), arena)
+            return
     $def_node: Ast_node$@ = null
     if path.len > 0
         def_node = resolve_def_node(state.sema, path, path.get(path.len - 1)).def_node
@@ -95,6 +106,25 @@ fn handle_definition(state: Doc_state$@, params: json.Value, id_val: json.Value,
     style: = base_locate.uri_style_of(state.uri_perm)
     lsp_msg.send_response(id_val,
         b.location(style.spell(def_file), line, col, line, col + text_len), arena)
+
+priv fn imported_file_at(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): U8[]? //<
+    //< The logical name of the file an import's path names, where the path ends on that string
+    //< **It is the name the compiler read**, resolved as the loader resolves it
+    //< (`resolve_import_path`), so a jump never guesses among files of the same name. None where
+    //< that file was not read (an import that failed has its own diagnostic).
+    for $i: = path.len; i > 1; i -= 1
+        decl: = path.get(i - 2)
+        if decl.kind_id != .k_decl_import
+            continue
+        if path.get(i - 1) != decl.get_import_path()
+            return .none
+        written: = decl.get_import_path_text() catch
+            return .none
+        defer $logical: = decl.loc.file().resolve_import_path(written)
+        if base_core.source_of(c.source_map, logical.slice()).len == 0
+            return .none
+        return .some(base_core.arena.dup_str(logical.slice()))
+    return .none
 
 priv fn resolve_decl_type_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
     Ast_node$@? //<
@@ -276,6 +306,19 @@ fn folded_receiver_type(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, mark: Ast_nod
         decl.kind_id != .k_decl_const
         return ""
     return path_type_name(c, path, p, at, 0)
+
+fn named_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>@, head: U8[]): U8[] //<
+    //< The registered name of the type a head written in the file names (`Cup`, `io.File_stream`)
+    //< **The head is spelled as the file names it**, through its imports, and a type's members are
+    //< registered under its full name (`app.Cup`), so it is resolved as a jump resolves it
+    //< (`get_definition_node`). `Self` is the type of the enclosing `impl`, and nothing outside
+    //< one.
+    if head.equals("Self")
+        for $i: = path.len; i > 0; i -= 1
+            if path.get(i - 1).kind_id == .k_decl_impl
+                return declared_type_name(c, path.get(i - 1).get_decl_type_node())
+        return ""
+    return c.resolve_fqn_for_type(head)
 
 priv fn local_decl_of(path: List<|Ast_node$@|>$@, name: Ast_node$@): Ast_node$@? //<
     //< What a name on the path is declared by, found the way the hover finds a local
@@ -586,19 +629,20 @@ fn find_parent_enum(node: Ast_node$@, target: Ast_node$@, depth: Sz = 0): Ast_no
             return .some(res)
     return .none
 
-priv fn declared_doc(c: Sema_ctx$@, def_node: Ast_node$@): U8[] //<
+priv fn declared_run(c: Sema_ctx$@, def_node: Ast_node$@): base_ast_doc.Doc_run //<
     //< The documentation a declaration carries, read from the source it was declared in
     //< **One place answers this for every editor feature.** The hover and the completion list read
     //< the same comment run that the record and the declaration file read
     //< (`../base/ast_doc.kspl`). So no two of them can say different things about one declaration
     //< (Principle 6 in `../../docs/DESIGN-principles.md`).
+    none: = base_ast_doc.Doc_run::{ .summary = "", .detail = "" }
     if c == null || def_node == null
-        return ""
+        return none
     // The source is the declaration's own file, often not the document being edited.
     src: = base_core.source_of(c.source_map, def_node.loc.file())
     if src.len == 0 || def_node.loc.offset >= src.len
-        return ""
-    return base_ast_doc.doc_parted(src, def_node.loc.offset,
+        return none
+    return base_ast_doc.doc_run(src, def_node.loc.offset,
         base_ast_doc.body_brace(src, def_node))
 
 priv fn place_of(c: Sema_ctx$@, node: Ast_node$@): U8[] //<
@@ -630,11 +674,14 @@ fn linked_doc(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
     //< (`../sema/session/pointer.kspl`) through the scope of the file the description is written
     //< in. So a link and a warning never disagree about one name. The position given is the
     //< declaration's own: a function's description is read in that function's scope.
-    doc: = declared_doc(c, def_node)
-    if doc.len == 0
-        return doc
+    run: = declared_run(c, def_node)
+    // **The names are read in the run's joined text**, as `[W0211]` reads them. A writer may
+    // break a name's backticks, or the "Python's" before one, across the summary's end.
+    text: = base_ast_doc.joined(run.summary, run.detail)
+    if text.len == 0
+        return text
     file: = def_node.loc.file()
-    return sema_session_pointer.link_names(doc, sema_session_pointer.next_pointer, "",
+    got: = sema_session_pointer.link_names_marked(text, sema_session_pointer.next_pointer, "",
         fn(name: U8[]; c: Sema_ctx$@, root: Ast_node$@, file: U8[], def_node: Ast_node$@): U8[] {
             switch sema_session_pointer.pointed_at(c, root, file, def_node.loc.offset, name)
             case .found(node) {
@@ -642,7 +689,13 @@ fn linked_doc(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
             } default {
                 return "";
             }
-        })
+        }, run.summary.len)
+    if run.summary.len == 0 || run.detail.len == 0
+        return got.text
+    // A link across the summary's end keeps the two in one paragraph.
+    at: = got.mark catch
+        return got.text
+    return base_ast_doc.parted(got.text.sub(0, at), got.text.sub_from(at + 1))
 
 priv fn scan_enum_variant(sym: Sema_symbol$@, target_node: Ast_node@, res: Enum_resolve_result$@)
     if sym == null || sym.node == null || sym.node.kind_id != .k_decl_enum

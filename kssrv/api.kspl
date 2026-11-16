@@ -29,13 +29,17 @@ fn queue_json(c: conn.Conn$@, status: I32, val: json.Value, keep: Bool, allow: U
     val.dump(body@)
     conn.queue_response(c, status, "application/json", body.slice(), keep, allow)
 
-fn queue_json_error(c: conn.Conn$@, status: I32, allow: U8[] = "") //<
-    //< Queues an error answer in JSON; `allow` is a 405's `Allow`
+fn queue_json_error( //< queues an error answer in JSON
+    c: conn.Conn$@,
+    status: I32,
+    allow: U8[] = "", //< a 405's `Allow`
+    keep: Bool = false, //< whether the request was read whole and its client keeps the connection
+)
     reason: = http.reason_phrase(status).unwrap_or("")
     $b: = Json_builder(c.arena)
     val: = b.obj().set("error", b.str_val(reason)).set("status", b.int_val(status)).build()
-    // An error response closes (the same reason as `queue_error` on the static side).
-    queue_json(c, status, val, false, allow)
+    // The connection stays open after a refusal only as `queue_error` on the static side decides.
+    queue_json(c, status, val, keep && conn.keeps_after(status), allow)
 
 fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
     //< `GET /api/status`: returns that it is running, and how much it has handled
@@ -142,7 +146,8 @@ fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
     file: = io.open(path, "rb") catch _e
         queue_json_error(c, 500)
         return
-    conn.queue_file(c, "application/octet-stream", file, size, keep)
+    conn.queue_file(c, 200, "application/octet-stream", file, 0, size, keep,
+        http.headers(c.arena).build())
 
 priv fn check_content(path: U8[], expected: U8[], arena: Arena$@): I32 //<
     //< checks a conditional write's baseline
@@ -347,18 +352,20 @@ priv enum Reach //< in which mode an endpoint exists
         //< **Facing outward it does not**: with no token, anyone could read and write under the
         //< root.
 
-priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx@, r: Reach): Bool //<
+priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx@, r: Reach, keep: Bool): Bool //<
     //< Whether the endpoint exists in this mode
     //< Where it does not, the 404 is already queued.
-    local: = ctx.is_local()
-    $here: = true
-    switch r
-    case .both {}
-    case .local
-        here = local
+    here: = exists_here(ctx, r)
     if !here
-        queue_json_error(c, 404)
+        queue_json_error(c, 404, "", keep)
     return here
+
+priv fn exists_here(ctx: conn.Ctx@, r: Reach): Bool //< whether an endpoint so reached exists here
+    switch r
+    case .both
+        return true
+    case .local
+        return ctx.is_local()
 
 priv fn queue_ok(c: conn.Conn$@, keep: Bool) //< returns only "it took effect"
     //< **A response with no content is JSON too**, so the page need not branch on the format.
@@ -576,19 +583,26 @@ priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that met
         rest = rest.sub_from(cut + 1) if cut < rest.len else ""
     return false
 
+fn takes_method(path: U8[], method: U8[], ctx: conn.Ctx@): Bool //<
+    //< Whether `queue_api` would take that method on that path, rather than answer 404 or 405
+    for r in ROUTES
+        if path.equals(r.path)
+            return exists_here(ctx, r.reach) && takes(r, method)
+    return false
+
 fn queue_api(c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@, keep: Bool)
     // The connection pump authorizes the head before reading its body.
     for r in ROUTES
         if !t.path.equals(r.path)
             continue
-        if !reaches(c, ctx, r.reach)
+        if !reaches(c, ctx, r.reach, keep)
             return
         if !takes(r, req.method)
-            queue_json_error(c, 405, r.methods)
+            queue_json_error(c, 405, r.methods, keep)
             return
         r.api.queue(c, t, req, ctx, keep)
         return
-    queue_json_error(c, 404)
+    queue_json_error(c, 404, "", keep)
 
 impl Api
     priv fn queue(r: Self, c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@,

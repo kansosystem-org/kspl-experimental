@@ -212,39 +212,85 @@ priv fn report_summary_fault(file: U8[], src: U8[], at: Sz, fault: base_ast_doc.
     head: = base_lines.skip_blanks(src, at)
     sema.report_diagnostic_at(file, src, head, 3, .warning, why.slice())
 
+priv struct Run_line //<
+    //< one line of a comment run, and where its text stands in the run's joined text
+    at: Sz //< where the line's comment starts in the source
+    stop: Sz //< the line's end
+    joined: Sz //< where the line's text starts in the joined text
+    from: Sz //< where that text starts in the source
+
+priv fn comment_text_start(src: U8[], at: Sz, stop: Sz): Sz //<
+    //< Where a comment's text starts past its mark (`//`, `//<` and the like) and the blanks after it
+    $i: = at + 2
+    for i < stop && (src[i] == '<' || src[i] == '/' || src[i] == '!')
+        i += 1
+    for i < stop && (src[i] == ' ' || src[i] == '\t')
+        i += 1
+    return i
+
+priv fn continues_run(src: U8[], at: Sz, next: Sz): Bool //<
+    //< Whether the comment at `next` goes on with the one at `at`, as one run of text
+    //< It stands alone on the very next line and carries the same mark: a `//<` run, or a `//` one.
+    stop: = base_lines.line_end(src, at)
+    if stop >= src.len || next >= src.len || base_lines.line_start(src, next) != stop + 1 ||
+        base_lines.skip_blanks(src, stop + 1) != next
+        return false
+    return src.starts_with("//<", at) == src.starts_with("//<", next)
+
 priv fn report_comments(files: List<|Read_file|>@, root_file: Ast_node$@, sema: Sema_ctx$@) //<
     //< It reads every line comment once, for the warnings about a comment's marks and names
-    //< Those are an unread `///` (`[W0212]`) and a name that leads nowhere (`[W0211]`). **Each
-    //< question goes to the code that answers it for the editor**: `base/ast_doc.kspl` on whether a
-    //< mark is read, `sema/session/pointer.kspl` on what a name refers to.
+    //< Those are an unread `///` (`[W0212]`) and a name that leads nowhere (`[W0211]`), asked of
+    //< `base/ast_doc.kspl` and `sema/session/pointer.kspl`, as the editor asks. **A name is read in
+    //< its run's joined text**: fmt may cut "Python's" from the `json.dumps` it introduces.
     //< Caution: **Run it after the declarations are collected.** A member is looked up in the
     //< tables the collecting fills, which have another file's method only once that file is loaded.
     for f in files
         src: U8[] = f.src
         $at: = parse_layout.next_line_comment(src, 0)
         for at < src.len
-            $stop: = at
-            for stop < src.len && src[stop] != '\n' && src[stop] != '\r'
-                stop += 1
-            text: = src.sub(at, stop - at)
-            // A shebang's `#!` arrives rewritten as `//`, and followed by its path it reads as
-            // `///`.
-            if base_ast_doc.is_unread_mark(text) &&
-                !(at == 0 && base_as_written.opened_with_shebang(f.name))
-                report_unread_mark(sema, f.name, src, at, stop)
+            defer $joined: = Str_builder()
+            defer $run: = List<|Run_line|>(null)
+            $next: = at
+            for
+                $stop: = next
+                for stop < src.len && src[stop] != '\n' && src[stop] != '\r'
+                    stop += 1
+                text: = src.sub(next, stop - next)
+                // A shebang's `#!` arrives rewritten as `//`, and followed by its path it reads as
+                // `///`.
+                if base_ast_doc.is_unread_mark(text) &&
+                    !(next == 0 && base_as_written.opened_with_shebang(f.name))
+                    report_unread_mark(sema, f.name, src, next, stop)
+                from: = comment_text_start(src, next, stop)
+                if run.len > 0
+                    joined.c(' ')
+                run
+                    .push(Run_line::{ .at = next, .stop = stop, .joined = joined.len,
+                    .from = from })
+                joined.s(src.sub(from, stop - from) if from < stop else "")
+                after: = parse_layout.next_line_comment(src, stop)
+                if !continues_run(src, next, after)
+                    at = after
+                    break
+                next = after
+            text: = joined.slice()
+            $line: Sz = 0
             $from: Sz = 0
             for
                 p: = sema_session_pointer.next_pointer(text, from)
                 if p.open >= text.len
                     break
                 from = p.end
+                for line + 1 < run.len && run.get(line + 1).joined <= p.at
+                    line += 1
+                ln: = run.get(line)
+                pos: = ln.from + p.at - ln.joined
                 name: = text.sub(p.at, p.len)
-                pointed: = sema_session_pointer.pointed_at(sema, root_file, f.name, at + p.at, name)
+                pointed: = sema_session_pointer.pointed_at(sema, root_file, f.name, pos, name)
                 switch pointed
                 case .missing(part)
-                    report_pointer(sema, f.name, src, at + p.at, stop, name, part)
+                    report_pointer(sema, f.name, src, pos, ln.stop, name, part)
                 default {}
-            at = parse_layout.next_line_comment(src, stop)
 
 priv fn as_written_at(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz): Sz //<
     //< Where position `pos` of a comment is in the file as written

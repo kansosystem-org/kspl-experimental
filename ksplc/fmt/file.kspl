@@ -81,28 +81,11 @@ fn check_reads_back(fmt_out: U8[], in_path: U8[], base_parser: kspeg.Target$@, n
                 This is a formatter bug. Report it with the file.\n")
         throw .unreadable_output
 
-fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_place: Bool,
-    fixed: Fixed_points$@): Void!Fmt_error //<
-        //< It formats one file, in place (`in_place`) or to standard output
-    if in_place && fs.is_link(in_path)
-        io.err()
-            .s("error: \{in_path\}: in-place formatting refuses a symbolic link. Format its target \
-                directly.\n")
-        throw .write_refused
-    raw: = io.read_file(in_path, null) catch e
-        io.err().s(base_diag.io_line(e, "fmt/io"))
-        throw .parse(.io(e))
-    defer dealloc(Void$@::raw.ptr)
-    // The `defer` above frees the original buffer. The fixed-up text lives on the arena, so never
-    // pass it to `dealloc`.
-    record: = fixed.key_path(raw, config)
-    if record.len > 0
-        if fs.exists(record)
-            fixed.hits += 1
-            if !in_place
-                io.out().s(raw)
-            return
-        fixed.misses += 1
+fn format_bytes(raw: U8[], in_path: U8[], base_parser: kspeg.Target$@, config: Config):
+    U8[]!Fmt_error //<
+        //< A source's bytes as the formatter writes them, with its BOM, line ends and shebang kept
+        //< **`ksplc fmt` and the language server's formatting both come here**, so an editor
+        //< writes what the command writes. `in_path` names the source in a diagnostic.
     // Caution: **Strip the BOM before formatting and restore it before writing** (as with the
     // shebang). Left on, it makes the first line unreadable; not restored, it silently disappears
     // from the user's file.
@@ -147,6 +130,36 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
         out_bytes = parse_source_fix.to_crlf(out_bytes, base_core.arena)
     if had_bom
         out_bytes = base_core.arena.text().s("\uFEFF").s(out_bytes).take()
+    // Copied out: the formatter's buffer goes with it (`defer` above).
+    return base_core.arena.dup_str(out_bytes)
+
+fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_place: Bool,
+    fixed: Fixed_points$@): Void!Fmt_error //<
+        //< It formats one file, in place (`in_place`) or to standard output
+    if in_place && fs.is_link(in_path)
+        io.err()
+            .s("error: \{in_path\}: in-place formatting refuses a symbolic link. Format its target \
+                directly.\n")
+        throw .write_refused
+    // **`-` is standard input**, written to standard output, as `gofmt` and `rustfmt` read a
+    // source with no file: an editor or a pipe formats a buffer that is on no disk.
+    raw: =
+        (io.read_stdin(null) if in_path.equals(base_core.STDIN_NAME)
+        else io.read_file(in_path, null)) catch e
+            io.err().s(base_diag.io_line(e, "fmt/io"))
+            throw .parse(.io(e))
+    defer dealloc(Void$@::raw.ptr)
+    // The `defer` above frees the original buffer. The fixed-up text lives on the arena, so never
+    // pass it to `dealloc`.
+    record: = fixed.key_path(raw, config)
+    if record.len > 0
+        if fs.exists(record)
+            fixed.hits += 1
+            if !in_place
+                io.out().s(raw)
+            return
+        fixed.misses += 1
+    out_bytes: = format_bytes(raw, in_path, base_parser, config)!
     // A record that cannot be written costs only the next run's time.
     if record.len > 0 && raw.equals(out_bytes)
         $stored: = true

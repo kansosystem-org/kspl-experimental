@@ -136,9 +136,14 @@ priv fn check_one_account_only(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     defer lsp_client.close(c, BROKEN_URI, arena)
     $count: Sz = 0
     $came: = false
-    if got: = lsp_client.published(c, "recover_probe.kspl", 12, lsp_client.READ_MS, arena)
-        count = got.get("diagnostics").arr_list(arena).len
-        came = true
+    // **The close before this open clears the same document's marks**, so an empty list may come
+    // first; the analysis's own list follows it.
+    for _k in Range.asc(2)
+        if got: = lsp_client.published(c, "recover_probe.kspl", 12, lsp_client.READ_MS, arena)
+            count = got.get("diagnostics").arr_list(arena).len
+            came = true
+            if count > 0
+                break
     verdict.check("a broken line is accounted for once and no more", came && count == 1,
         lsp_client.why(c, arena.text().s("\{count\} diagnostics, came=\{came\}").take(), arena))
 

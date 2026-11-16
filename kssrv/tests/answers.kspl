@@ -1,0 +1,239 @@
+//< What a file's answer says: its type, its validators, a part of it, and HTTP's smaller rules
+//< A browser shows a file, keeps it and checks it again, scrubs a video and resolves a page's
+//< links by these alone. Run by `kssrv/tests/main.kspl` against the outward-facing server.
+import "kssrv/tests/client"
+import "std/chars"
+import "std/ds"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+// One file of each kind a browser shows rather than downloads, and the type each must come as.
+// **A wrong type is worse than none**: a browser trusts it, so each is the registered one.
+priv const TYPED_RELS: U8[][10] = ::{ "kinds/doc.pdf", "kinds/clip.mp4", "kinds/clip.webm",
+    "kinds/song.mp3", "kinds/font.woff2", "kinds/table.csv", "kinds/feed.xml",
+    "kinds/app.webmanifest", "kinds/PIC.AVIF", "kinds/script.js.map" }
+priv const TYPED_AS: U8[][10] = ::{ "application/pdf", "video/mp4", "video/webm", "audio/mpeg",
+    "font/woff2", "text/csv; charset=utf-8", "application/xml", "application/manifest+json",
+    "image/avif", "application/json" }
+
+priv const TYPED_KINDS: Sz = 10 //< how many kinds are named above
+
+// A folder asked for without its `/`, and the name it is sent to, the query and `%XX` kept.
+priv const FOLDER_ASKED: U8[][3] = ::{ "/sub", "/sub?x=1&y", "/%73ub" }
+priv const FOLDER_SENT: U8[][3] = ::{ "/sub/", "/sub/?x=1&y", "/%73ub/" }
+
+priv const PARTS_REL: U8[] = "parts.bin" //< the file asked for in parts
+priv const PARTS_BYTES: Sz = 1024 * 1024 + 13 //< past many of the server's 16 KiB chunks
+// Ranges answered with the whole file: several, one of another version, one that cannot be read,
+// and another unit. Each has its name for the check beside it.
+priv const WHOLE_ASKED: U8[][4] = ::{ "Range: bytes=0-1,5-6\r\n",
+    "Range: bytes=5-\r\nIf-Range: \"old\"\r\n", "Range: bytes=9-3\r\n", "Range: lines=1-2\r\n" }
+priv const WHOLE_SAID: U8[][4] = ::{ "two ranges", "a range of another version",
+    "a range ending before it starts", "a range in lines" }
+priv const KEPT_REL: U8[] = "kept.txt" //< the file kept and checked again
+priv const KEPT_BODY: U8[] = "first\n"
+priv const KEPT_CHANGED: U8[] = "again\n" //< the same length, so only the time tells them apart
+
+fn place(root: U8[], arena: Arena$@): Bool //< puts this file's fixtures under the root
+    // Each file holds its own name: only its type is looked at.
+    fs.write_tree(root, U8[][]::TYPED_RELS, U8[][]::TYPED_RELS, arena) catch
+        return false
+    io.write_file(fs.join(root, PARTS_REL, arena), patterned(PARTS_BYTES, arena)) catch
+        return false
+    io.write_file(fs.join(root, KEPT_REL, arena), KEPT_BODY) catch
+        return false
+    return true
+
+priv fn patterned(n: Sz, arena: Arena$@): U8[] //<
+    //< `n` bytes that differ from their neighbours, so a part read from the wrong place shows
+    out: = arena.text()
+    for i in Range.asc(n)
+        out.c('a' + U8::(i % 23))
+    return out.take()
+
+fn cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end //< every check, in turn
+    type_cases(port, arena)!
+    folder_cases(port, arena)!
+    date_cases(port, arena)!
+    kept_cases(port, root, arena)!
+    part_cases(port, arena)!
+    kept_open_cases(port, arena)!
+    rule_cases(port, arena)!
+
+priv fn type_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< Each common kind of file comes as its registered type, not as bytes to download
+    for i in Range.asc(TYPED_KINDS)
+        r: = client.get(port, arena.text().c('/').s(TYPED_RELS[i]).take(), "", arena)!
+        got: = client.header(r.head, "content-type")
+        nm: = arena.text().s("a file named ").s(TYPED_RELS[i]).s(" comes as ").s(TYPED_AS[i]).take()
+        verdict.check(nm, r.status == 200 && got.equals(TYPED_AS[i]), got)
+
+priv fn folder_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< A folder named without its `/` is sent to the name with one, the query kept
+    //< **Served as it is, the page's relative links resolve against the folder above**, and every
+    //< image and script in it fails to load.
+    for i in Range.asc(3)
+        r: = client.get(port, FOLDER_ASKED[i], "", arena)!
+        to: = client.header(r.head, "location")
+        nm: = arena.text().s("a folder asked for as ").s(FOLDER_ASKED[i]).s(" is sent to ")
+            .s(FOLDER_SENT[i]).take()
+        verdict.check(nm, r.status == 301 && to.equals(FOLDER_SENT[i]), client.shown(r, arena))
+    slash: = client.get(port, "/sub/", "", arena)!
+    verdict.check("a folder asked for with its `/` is its index",
+        slash.status == 200 && slash.body.equals("sub index\n"), client.shown(slash, arena))
+    // **Only a folder with an index is sent on**: one without is absent either way.
+    bare: = client.get(port, "/kinds", "", arena)!
+    client.expect_status("a folder with no index is not found, with or without its `/`", bare, 404,
+        arena)
+
+priv fn date_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< Every answer names the time it was made (RFC 9110 §6.6.1), a refusal's and a redirect's too
+    for target in U8[][]::{ "/style.css", "/no-such.txt", "/sub", "/api/status" }
+        r: = client.get(port, target, "", arena)!
+        date: = client.header(r.head, "date")
+        nm: = arena.text().s("the answer to ").s(target).s(" names the time as an HTTP date").take()
+        verdict.check(nm, date.len == 29 && date.ends_with(" GMT") && date[3] == ',', date)
+
+priv fn kept_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< A file's validators let a client keep it, and check it again without fetching it
+    target: = arena.text().c('/').s(KEPT_REL).take()
+    first: = client.get(port, target, "", arena)!
+    tag: = client.header(first.head, "etag")
+    since: = client.header(first.head, "last-modified")
+    verdict.check("a file names an entity tag and its time",
+        first.status == 200 && tag.starts_with("\"") && tag.ends_with("\"") && since.len == 29,
+        first.head)
+    verdict.check("a file asks the browser to check it again before using a copy",
+        client.header(first.head, "cache-control").equals("no-cache"), first.head)
+    same: = client.get(port, target,
+        arena.text().s("If-None-Match: ").s(tag).s("\r\n").take(), arena)!
+    verdict.check("a client holding the version named gets a 304 with no body",
+        same.status == 304 && same.body.len == 0 &&
+        client.header(same.head, "etag").equals(tag), client.shown(same, arena))
+    listed: = client.get(port, target,
+        arena.text().s("If-None-Match: \"other\", W/").s(tag).s("\r\n").take(), arena)!
+    client.expect_status("a weak tag in a list is a match for If-None-Match", listed, 304, arena)
+    dated: = client.get(port, target,
+        arena.text().s("If-Modified-Since: ").s(since).s("\r\n").take(), arena)!
+    client.expect_status("the date given back is a match for If-Modified-Since", dated, 304, arena)
+    other: = client.get(port, target, "If-None-Match: \"other\"\r\n", arena)!
+    verdict.check("a client holding another version gets the file",
+        other.status == 200 && other.body.equals(KEPT_BODY), client.shown(other, arena))
+    failed: = client.get(port, target, "If-Match: \"other\"\r\n", arena)!
+    client.expect_status("a change guarded by another version gets a 412", failed, 412, arena)
+    // **A save of the same length changes the tag**: the time is read to the nanosecond.
+    sys.sleep_ms(20)
+    io.write_file(fs.join(root, KEPT_REL, arena), KEPT_CHANGED) catch
+        verdict.check("the kept file can be saved again", false, KEPT_REL)
+        return
+    after: = client.get(port, target,
+        arena.text().s("If-None-Match: ").s(tag).s("\r\n").take(), arena)!
+    verdict.check("a file saved again is sent again, under a new tag",
+        after.status == 200 && after.body.equals(KEPT_CHANGED) &&
+        !client.header(after.head, "etag").equals(tag), client.shown(after, arena))
+
+priv fn part_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< One range of a file comes as a 206 naming where it lies, so a video can be scrubbed
+    target: = arena.text().c('/').s(PARTS_REL).take()
+    all: = patterned(PARTS_BYTES, arena)
+    whole: = client.get(port, target, "", arena)!
+    verdict.check("a file says it can be asked for in parts",
+        client.header(whole.head, "accept-ranges").equals("bytes"), whole.head)
+    // A part far from the start and across many chunks, the file's end, and from a byte on.
+    asked: U8[][3] = ::{ "bytes=400003-700012", "bytes=-7", "bytes=1048570-" }
+    firsts: Sz[3] = ::{ 400003, PARTS_BYTES - 7, 1048570 }
+    lasts: Sz[3] = ::{ 700012, PARTS_BYTES - 1, PARTS_BYTES - 1 }
+    for i in Range.asc(3)
+        r: = client.get(port, target,
+            arena.text().s("Range: ").s(asked[i]).s("\r\n").take(), arena)!
+        want: = all.sub(firsts[i], lasts[i] - firsts[i] + 1)
+        said: = client.header(r.head, "content-range")
+        named: = arena.text().s("bytes \{firsts[i]\}-\{lasts[i]\}/\{PARTS_BYTES\}").take()
+        nm: = arena.text().s("the range ").s(asked[i]).s(" comes as a 206 of those bytes").take()
+        verdict.check(nm, r.status == 206 && said.equals(named) && r.body.equals(want),
+            arena.text().s("\{r.status\} ").s(said).s(", \{r.body.len\} bytes").take())
+    past: = client.get(port, target, "Range: bytes=2000000-\r\n", arena)!
+    verdict.check("a range past the end is a 416 naming the file's length",
+        past.status == 416 &&
+        client.header(past.head, "content-range")
+        .equals(arena.text().s("bytes */\{PARTS_BYTES\}").take()), client.shown(past, arena))
+    // **A range the server does not take gets the whole file**, as RFC 9110 §14.2 allows.
+    for i in Range.asc(4)
+        r: = client.get(port, target, WHOLE_ASKED[i], arena)!
+        nm: = arena.text().s("a request with ").s(WHOLE_SAID[i]).s(" gets the whole file").take()
+        verdict.check(nm, r.status == 200 && r.body.len == PARTS_BYTES,
+            arena.text().s("\{r.status\}, \{r.body.len\} bytes").take())
+    // **Only a GET takes a range** (RFC 9110 §14.2), so a HEAD names the whole length.
+    head: = client.request(port,
+        client.raw("HEAD", target, "Range: bytes=0-9\r\n", "", arena), 1,
+        client.DEFAULT_TIMEOUT_MS, true, arena)!
+    verdict.check("a HEAD with a range names the whole file",
+        head.get(0).status == 200 &&
+        client.header(head.get(0).head, "content-length")
+        .equals(arena.text().s("\{PARTS_BYTES\}").take()), head.get(0).head)
+    tag: = client.header(whole.head, "etag")
+    held: = client.get(port, target,
+        arena.text().s("Range: bytes=5-9\r\nIf-Range: ").s(tag).s("\r\n").take(), arena)!
+    verdict.check("a range of the version the client holds comes as a 206",
+        held.status == 206 && held.body.equals(all.sub(5, 5)), client.shown(held, arena))
+
+priv fn kept_open_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< A request refused for what it asked for leaves the connection open for the next one
+    //< **A missing image would otherwise cost the browser its connection**, and a request sent
+    //< behind it would go unanswered.
+    for first in U8[][]::{ "GET /no-such.txt", "GET /sub/../../x", "POST /index.html" }
+        raw: = arena.text().s(first).s(" HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n")
+            .s(client.raw("GET", "/style.css", "Connection: close\r\n", "", arena)).take()
+        got: =
+            client.request(port, raw, 2, client.DEFAULT_TIMEOUT_MS, false, arena) catch e
+                verdict.check(arena.text().s("after ").s(first).s(", the next request is answered")
+                    .take(), false, e.reason())
+                continue
+        verdict.check(arena.text().s("after ").s(first).s(", the next request is answered").take(),
+            got.get(1).status == 200 && got.get(1).body.equals("body{}\n"),
+            client.shown(got.get(1), arena))
+
+priv fn rule_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< HTTP/1.1's smaller rules: an empty line first, another version, the absolute form, a body
+    //< in chunks, and `Expect` on a request that would be refused
+    blank: = client.request(port,
+        arena.text().s("\r\n").s(client.raw("GET", "/style.css", "", "", arena)).take(), 1,
+        client.DEFAULT_TIMEOUT_MS, false, arena)!
+    verdict.check("an empty line before the request line is passed over (RFC 9112 §2.2)",
+        blank.get(0).status == 200 && blank.get(0).body.equals("body{}\n"),
+        client.shown(blank.get(0), arena))
+    for version in U8[][]::{ "HTTP/2.0", "HTTP/3.0" }
+        r: = client.request(port,
+            arena.text().s("GET /style.css ").s(version).s("\r\nHost: 127.0.0.1\r\n\r\n").take(), 1,
+            client.DEFAULT_TIMEOUT_MS, false, arena)!
+        client.expect_status(arena.text().s("a request line naming ").s(version).s(" is a 505")
+            .take(), r.get(0), 505, arena)
+    absolute: = client.request(port,
+        "GET http://127.0.0.1/style.css HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", 1,
+        client.DEFAULT_TIMEOUT_MS, false, arena)!
+    verdict.check("a target naming the server too is served (RFC 9112 §3.2.2)",
+        absolute.get(0).status == 200 && absolute.get(0).body.equals("body{}\n"),
+        client.shown(absolute.get(0), arena))
+    chunked: = client.request(port,
+        "PUT /up.txt HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: \
+            chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n", 1, client.DEFAULT_TIMEOUT_MS, false, arena)!
+    verdict.check("a body in chunks gets a 411 saying to send a length",
+        chunked.get(0).status == 411 &&
+        chunked.get(0).body.find_str("Content-Length").is_some(),
+        client.shown(chunked.get(0), arena))
+    // **A body a refusal would throw away is not asked for**: the refusal comes before it.
+    for target in U8[][]::{ "/index.html", "/api/nope" }
+        defer $c: = client.Conn.open(port)!
+        c
+            .send(arena.text().s("POST ").s(target).s(" HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+            .s("Content-Length: 5\r\nExpect: 100-continue\r\n\r\n").take())!
+        first: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
+        nm: = arena.text().s("a POST to ").s(target)
+            .s(" waiting on Expect is refused, not asked on").take()
+        verdict.check(nm, first.status == 405 || first.status == 404,
+            client.shown(first, arena))

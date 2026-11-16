@@ -367,6 +367,57 @@ priv fn check_didclose(exe: U8[], arena: Arena$@)
     verdict.check("a document that was didClose is not restored after the worker is remade", ok10,
         d5)
 
+// **Format Document formats as `ksplc fmt` does**, the same code on the editor's buffer. Text that
+// does not parse gets no edit, so a format-on-save cannot write a guess over it.
+priv fn check_formatting(c: jsonrpc_client.Client$@, caps: json.Value, arena: Arena$@)
+    verdict.check("the server says it formats documents",
+        caps.get("documentFormattingProvider").as_bool().unwrap_or(false),
+        lsp_client.dump(caps, arena))
+    $b: = Json_builder(arena)
+    for i in Range.asc(2)
+        uri: = "fmt_probe.kspl" if i == 0 else "fmt_broken.kspl"
+        text: = "fn main( ): I32\n    return 0\n" if i == 0 else "fn main(: I32\n    return 0\n"
+        lsp_client.open(c, uri, text, arena)
+        defer lsp_client.close(c, uri, arena)
+        params: = b.obj()
+            .set("textDocument", b.obj().set("uri", b.str_val(uri)).build())
+            .set("options",
+            b.obj().set("tabSize", b.int_val(4)).set("insertSpaces", b.bool_val(true)).build())
+            .build()
+        got: = lsp_client.answer(c, "textDocument/formatting", params, lsp_client.READ_MS, arena)
+        if i == 0
+            edits: = got.get("result").arr_list(arena)
+            verdict.check("Format Document replaces the text with what ksplc fmt writes",
+                edits.len == 1 &&
+                edits.get(0).get("newText").as_str().unwrap_or("")
+                .equals("fn main(): I32\n    return 0\n"),
+                lsp_client.why(c, lsp_client.dump(got, arena), arena))
+        else
+            verdict.check("Format Document leaves text that does not parse alone",
+                !is_missing(got.get("id")) && is_missing(got.get("result")) &&
+                is_missing(got.get("error")),
+                lsp_client.why(c, lsp_client.dump(got, arena), arena))
+
+// **A standard library that cannot be found is said on the document**, not only in the server's
+// log, which the editor hides by default. Silent, the editor shows no diagnostic and no answer.
+priv fn check_no_std(exe: U8[], arena: Arena$@)
+    name: = "a document gets a diagnostic saying the standard library is not found"
+    empty: = harness.sandbox("lsp_no_std")
+    sys.set_env("KSPLC_STD_DIR", empty) catch panic("KSPLC_STD_DIR could not be set")
+    defer sys.set_env("KSPLC_STD_DIR", harness.std_dir()) catch panic("KSPLC_STD_DIR not restored")
+    defer $c: =
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, empty, arena) catch
+            verdict.check(name, false, "the client cannot be started")
+            return
+    lsp_client.open(c@, "no_std.kspl", "fn main(): I32\n    return 0\n", arena)
+    $said: U8[] = ""
+    if p: = lsp_client.published(c@, "no_std.kspl", 8, lsp_client.READ_MS, arena)
+        for one in p.get("diagnostics").arr_list(arena)
+            said = one.get("message").as_str().unwrap_or("")
+    verdict.check(name,
+        said.find_str("standard library is not found").is_some() &&
+        said.find_str("KSPLC_STD_DIR").is_some(), lsp_client.why_quoted(c@, said, arena))
+
 priv fn check_cfg(c: jsonrpc_client.Client$@, exe: U8[], arena: Arena$@)
     lsp_client.open(c, CFG_URI, CFG_SRC, arena)
     defer lsp_client.close(c, CFG_URI, arena)
@@ -725,7 +776,9 @@ fn main(): I32
     verdict.check("hover answers after a hang too (the watchdog brings it back)", ok1, d20)
 
     check_cfg(c@, exe, arena)
+    check_formatting(c@, init.val.get("result").get("capabilities"), arena)
     check_didclose(exe, arena)
+    check_no_std(exe, arena)
     lsp_recover.run_empty(exe, arena)
     lsp_recover.run_restart(exe, arena)
     check_worker_alive(exe, top, ch_text, arena)
@@ -739,4 +792,5 @@ fn main(): I32
     lsp_pick.check_completion_generic(c@, arena)
     lsp_pick.check_completion_trait(c@, arena)
     lsp_pick.check_completion_sibling(exe, arena)
+    lsp_pick.check_completion_view(c@, arena)
     return harness.finish()

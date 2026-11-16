@@ -31,17 +31,28 @@ A request for any path outside `/api/` gets a file from the root. The first tabl
 | `GET /` | `<root>/index.html` (a 404 if there is none). With `--page`, that file |
 | `GET /index.html` | the same (`--page` swaps these two and nothing else) |
 | `GET /a/b.txt` | `<root>/a/b.txt` |
-| `GET /sub` (a directory) | `<root>/sub/index.html` |
+| `GET /sub/` (a directory) | `<root>/sub/index.html` |
+| `GET /a/b.txt/` (a file named with a `/` at its end) | a 404, as if absent. **A `/` at the end names a folder**, and the file is not one |
+| `GET /sub?x=1` (a directory holding `index.html`) | a 301 whose `Location` is `/sub/?x=1`: the path as sent, a `/` and the query. **Served at `/sub`, the page's relative links would resolve against the folder above** |
+| `GET /a/b.txt` with `Range: bytes=…` | a 206 holding that part, named by `Content-Range` ("Parts and copies kept" below) |
+| `GET /a/b.txt` with `If-None-Match` naming its `ETag` | a 304 with no body: the client's copy is current |
 | `HEAD <any of the above>` | the head alone; `Content-Length` is the real length. **No answer to a HEAD carries a body**, a refusal's included |
+| `GET http://<host>/a/b.txt` (the absolute form) | the same as `GET /a/b.txt`. The host in the target stands in for `Host` (RFC 9112 §3.2.2) |
 
 | Status | When the server answers it |
 |---|---|
 | 405 Method Not Allowed | anything but `GET` / `HEAD`; its `Allow` header names `GET, HEAD` |
 | 403 Forbidden | a path pointing outside the root, or written in a form refused on every OS ("Known limits" below) |
-| 404 Not Found | not found |
-| 400 Bad Request | a broken request, a broken `%XX`; plain HTTP on the HTTPS port ("HTTPS" below) |
+| 404 Not Found | not found. So is a file named with a `/` at its end, and a name longer than the file system holds |
+| 412 Precondition Failed | `If-Match` names no tag the file has |
+| 416 Range Not Satisfiable | a range that holds no byte of the file; `Content-Range: bytes */<size>` names its length |
+| 400 Bad Request | a broken request, a broken `%XX`, a `Transfer-Encoding` other than `chunked`; plain HTTP on the HTTPS port ("HTTPS" below) |
+| 411 Length Required | a body sent in chunks (`Transfer-Encoding: chunked`). The body of the answer says to send a `Content-Length` |
 | 413 Content Too Large | a body over the cap (refused as soon as the head names it) |
 | 431 Request Header Fields Too Large | a head past 64 KiB, or more bytes held unanswered on one connection than 64 KiB plus the body cap (64 KiB facing outward, 8 MiB with `--local`) |
+| 505 HTTP Version Not Supported | a request line naming a version other than 1.x, such as `HTTP/2.0` |
+
+**An empty line before the request line is passed over** (RFC 9112 §2.2). **A request waiting on `Expect: 100-continue` is asked for its body only where it would be taken.** Where its method or path would be refused, the refusal comes at once, and the connection closes.
 
 A path's `%XX` (one byte as `%` and two hex digits) is decoded once only.
 
@@ -51,7 +62,7 @@ A path's `%XX` (one byte as `%` and two hex digits) is decoded once only.
 | `/a+b.txt` | `a+b.txt` | **A path's `+` is not a space.** A `+` for a space is the convention of HTML forms (`application/x-www-form-urlencoded`), not of a URI's path |
 | `/%252e` | `%2e` | `%25` is decoded to `%`, and the result is not decoded again |
 
-The `Content-Type` is looked up from the extension, whatever its letter case (`PHOTO.JPG` is `image/jpeg`). **An extension it does not know is made `application/octet-stream`, not guessed at.** A receiver believes a wrong type and reads the content another way. No type is registered for safetensors, so such a file is returned this way.
+The `Content-Type` is looked up from the extension, whatever its letter case (`PHOTO.JPG` is `image/jpeg`). It knows the registered types a web site serves: pages, scripts, styles, images, fonts, sound, video, PDF and the like (`TYPES` in [`kssrv/static.kspl`](../static.kspl)). Text is named as UTF-8. **An extension it does not know is made `application/octet-stream`, not guessed at.** A receiver believes a wrong type and reads the content another way. No type is registered for safetensors, so such a file is returned this way.
 
 ### Headers on every answer
 
@@ -59,9 +70,31 @@ The `Content-Type` is looked up from the extension, whatever its letter case (`P
 
 | Header | Facing outward | Local use (`--local`) |
 | :-- | :-- | :-- |
+| `Date` | Sent: the time the answer was made (RFC 9110 §6.6.1) | Sent |
 | `X-Content-Type-Options: nosniff` | Sent | Sent |
 | `Content-Security-Policy: frame-ancestors 'none'` | Not sent | Sent: no page can frame it |
 | `Referrer-Policy: no-referrer` | Not sent | Sent: a link leaves no address behind |
+
+### Parts and copies kept
+
+**An answer with a file's bytes names what tells this version of the file from the next**, in both modes:
+
+| Header | What it holds |
+| :-- | :-- |
+| `ETag` | A strong tag made from the time the file last changed, to the nanosecond, and its size. A save changes it |
+| `Last-Modified` | That time, to the second |
+| `Cache-Control: no-cache` | A browser may keep a copy, but asks again before each use. It then gets a 304 while the file is unchanged |
+| `Accept-Ranges: bytes` | A part of the file can be asked for |
+
+| The client sends | It gets |
+| :-- | :-- |
+| `If-None-Match` naming the `ETag` (a weak `W/` tag matches too), or `*` | a 304 with no body |
+| `If-Modified-Since` with the `Last-Modified` it was given, written the same | a 304 with no body |
+| `If-Match` naming no tag the file has | a 412 |
+| `Range: bytes=a-b`, `bytes=a-` or `bytes=-n` (the last `n` bytes), on a `GET` | a 206 holding that part, `Content-Range: bytes <first>-<last>/<size>` |
+| A range holding no byte of the file | a 416 with `Content-Range: bytes */<size>` |
+| Several ranges, another unit, a range ending before it starts, or a range on a `HEAD` | the whole file, a 200 |
+| `If-Range` naming another tag, or a date not the `Last-Modified` | the whole file, a 200 |
 
 **Facing outward, framing and the referrer stay the site's own choice.** A public file has no action to steal by framing, and some sites rely on being framed. The reasons for local use are "What guards the page in the browser" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
@@ -85,7 +118,7 @@ Paths that start with `/api/` are not files. The server answers them itself thro
 | :-- | :-- |
 | `GET /api/file` | bytes, as `application/octet-stream` |
 | `GET /api/here` | a head and nothing after it |
-| A request that cannot be read at all (the 400, 413 and 431 above) | `text/plain`, since its path is not known yet |
+| A request that cannot be read at all (the 400, 411, 413, 431 and 505 above) | `text/plain`, since its path is not known yet |
 
 **An endpoint asked for in the other mode answers 404**, as if it did not exist.
 
@@ -155,9 +188,9 @@ These hold for every connection, in both modes.
 
 | | What holds |
 | :-- | :-- |
-| The connection | **Kept, as HTTP/1.1's default calls for** (keep-alive: one connection carries many requests). It closes where `close` is among the client's `Connection` tokens, where an HTTP/1.0 client did not list `keep-alive` there, and after an error response |
-| At the cap | **128 connections are held at once.** One arriving at the cap is closed at once with no response, not queued |
-| From one address | **Facing outward, 16 at most.** One more from the same address is closed at once with no response. With `--local` only the cap of 128 applies |
+| The connection | **Kept, as HTTP/1.1's default calls for** (keep-alive: one connection carries many requests). It closes where `close` is among the client's `Connection` tokens, and where an HTTP/1.0 client did not list `keep-alive` there. **A 403, 404, 405, 412 or 416 keeps it**: the request was read whole, so the next one starts where it ended. Any other error closes it |
+| At the cap | **128 connections are held at once.** A new one at the cap closes the connection idle the longest. Idle means waiting for its next request, with nothing partly read or still to send, and no page holding it. **With none idle, the new one is closed at once with no response**, not queued |
+| From one address | **Facing outward, 16 at most.** At this cap the address's connection idle the longest is closed, or with none idle the new one. With `--local` only the cap of 128 applies |
 | An idle connection | **Closed once it has passed no byte either way for 30 seconds**, a page's hold (`GET /api/here`) excepted |
 | A request arriving slowly | **Closed if it has not arrived whole 30 seconds after its first byte**, however its bytes trickle in |
 | A TLS handshake, with `--cert` | **Closed if it has not finished 10 seconds after the connection was accepted** |
@@ -168,8 +201,11 @@ These hold for every connection, in both modes.
 These are the places where the server does less than a client can expect.
 
 * **`%2f` works as a separator.** It becomes a `/` after the decode, so `/a%2Fb` is the same as `/a/b`. The check for outside the root comes after the decode, so it is not a hole.
-* **`Range` and conditional requests (`If-Modified-Since` and the like) are not supported.** It always returns the whole thing.
+* **One range is answered in part, and several are answered whole.** A body of several parts helps no browser.
+* **`If-Modified-Since` matches only the `Last-Modified` it was given**, written the same; any other date gets the file. **`If-Unmodified-Since` is not read**: a client guarding a change sends `If-Match`.
+* **A request body is not read in chunks** (411). It is sent with a `Content-Length`.
 * **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served. A folder is checked together with its `index.html`. The root itself can be a link (macOS's `/tmp` is one).
+* **A name longer than the file system holds answers 404**, as if absent, on every OS. Linux and macOS hold 255 bytes, Windows 255 UTF-16 units, so 100 kana (300 bytes) fit on Windows alone. No file can stand at such a name, so it is not found, not refused.
 * **Only a regular file is served.** A FIFO or a device in the root answers 404, as if absent, since its read can go on forever.
 * **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception (RFC 8615). In `path=`, `GET /api/file` reads a dot name, and `PUT /api/file` and `GET /api/list` refuse one with 403.
-* **A path in a form that Windows reads as another name is refused** (403) on every OS, both here and in `path=`. These are a `\`, an empty segment (`/a//b`), a `:`, a name ending in `.` or a space, and a device name (`CON`). So are a name shaped like a short name (`GIT~1`, `A~1.TXT`) and a wildcard (`*`, `?`). One `/` at the end names a folder: `/sub/` is `/sub`. So a file whose name holds one of these forms is not served, and `GET /api/list` leaves it out.
+* **A path in a form that Windows reads as another name is refused** (403) on every OS, both here and in `path=`. These are a `\`, an empty segment (`/a//b`), a `:`, a name ending in `.` or a space, and a device name (`CON`). So are a name shaped like a short name (`GIT~1`, `A~1.TXT`) and a wildcard (`*`, `?`). One `/` at the end names a folder: `/sub/` is its index, `/sub` is sent there, and a file named so (`/sub/f.txt/`) is a 404. So a file whose name holds one of these forms is not served, and `GET /api/list` leaves it out.

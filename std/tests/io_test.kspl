@@ -73,9 +73,21 @@ fn test_io_read_past_2gib(arena: Arena$@) //<
         return
     head: = io.read_file_capped(path, 4, arena)
         catch panic("a file past 2 GiB should open and read")
+    // **A seek past 2 GiB lands there**: a 32-bit offset would wrap and read from near the head.
+    $f: = io.open(path, "rb") catch panic("a file past 2 GiB should open")
+    $far: U8[2] = ::{ 'x', 'x' }
+    f.seek_to(3221225470I64) catch panic("a seek past 2 GiB should succeed")
+    far_n: = f.read(U8$[]::far) catch panic("a read past 2 GiB should succeed")
+    $near: U8[3] = ::{}
+    f.seek_to(1I64) catch panic("a seek back to the head should succeed")
+    near_n: = f.read(U8$[]::near) catch panic("a read after a seek should succeed")
+    f.free()
     fs.remove_path(path) catch {}
     assert(head.equals("head"), "a file past 2 GiB reads from its head")
-    verdict.pass("A file past 2 GiB reads from its head.")
+    assert(far_n == 2 && far[0] == '\0' && far[1] == '\0',
+        "a seek past 2 GiB reads the file's last bytes")
+    assert(near_n == 3 && (U8[]::near).equals("ead"), "a seek reads from the offset named")
+    verdict.pass("A file past 2 GiB reads from its head, and a seek past 2 GiB lands there.")
 
 fn test_io_stream_writes(arena: Arena$@) //<
     //< a stream holds every byte its byte, string and number writes put

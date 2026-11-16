@@ -62,6 +62,7 @@ Words used here: the *root* is the one folder whose files ksagent reads. A *sour
 * **A line matches when it holds every word, in any order**, ASCII case ignored. A model writes its own phrase, which a document almost never holds word for word.
 * **A word is found inside a longer one**, so `quote` finds `quoted`. The other way round does not work, so the model is told to give each word in its shortest form.
 * **With no line holding every word, the lines holding the most words come first**, under a line that says so. The model then sees where the closest text stands.
+* **An Excel line is matched by its cells**, not by its head (`excel.cells_of`). Every line of a sheet names the sheet, so a word of the name would match each one. A sheet named `休暇一覧` would fill the list before the lines that hold `休暇`.
 * **Japanese has no spaces, so a Japanese text is one word**, matched as it is written. Words are split at the ideographic space too, the one a Japanese keyboard types.
 * **When a search finds nothing, the system prompt says what to do next.** The model searches for one key word alone, then reads the README and the documents `list` shows. A small model otherwise gives up with the answer one file away.
 
@@ -69,7 +70,7 @@ Words used here: the *root* is the one folder whose files ksagent reads. A *sour
 
 **A small model invents, and an invented rule reads like a real one.** So each source is checked by machine against the file (`answer.check_source`):
 
-* **The quote must stand within the lines the source names.** Both are compared with each run of spaces, tabs and line breaks made one space.
+* **The quote must stand within the lines the source names.** Both are compared with every space, tab and line break left out, the full-width and the no-break space too. A Japanese file often breaks a sentence across lines with no space, and the model copies it with none. A file can also hold a full-width space where the model writes an ASCII one. Every other difference fails: a letter's case, a changed word, a full-width digit, a curly apostrophe for a straight one, or `…` for left-out words.
 * **A source that fails is removed**, and one line says how many were removed. In `ask`, each removed source is named with the reason, so whoever tries a model sees what it got wrong.
 * **The range may span at most 50 lines.** Any quote stands somewhere in a long range, so a wider one points at no evidence. Without this cap, `eval` would pass an answer that cites a whole file.
 * **A quote must hold at least 8 characters.** One word, or one Japanese character, stands in almost any range. Characters are counted, not bytes, so a Japanese quote needs as many as an English one.
@@ -114,12 +115,14 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 | A text box | Its paragraphs after the paragraph it stands in | Word's second copy for older readers (`mc:Fallback`) is left out, or the text would stand twice |
 | A tracked change | The text as changed: insertions kept, deletions left out | The person reads the changed text. A quote of deleted text then fails the check |
 | A footnote or endnote | `[^1]` where it is referred to, and `[^1]: …` at the end | The note stays one line, and its mark ties it to its place |
-| Hidden text, comments, field codes | Left out | The reader of the document does not see them. A field's result, such as a date, is kept |
+| Hidden text, comments, field codes | Left out | The reader of the document does not see them. A field's result, such as a date, is kept. Text is hidden by its run, or by a character or paragraph style |
+| Furigana (`rt`) | Left out | The reading stands over its base text, as in Excel below |
+| A symbol from a symbol font (`w:sym`) | The character it draws: `☑`, `✓`, `±` | A form's check box is a Wingdings symbol. Each box becomes ☐, ☑ or ☒, so a search finds one sign for each. A symbol with no such character is left out |
 | Headers and footers | Left out | They repeat on every page, and hold page numbers and the company's name |
 
 | In Excel | In the view | Why |
 | :-- | :-- | :-- |
-| A row | One line, `規程一覧!12: 有給休暇 \| 20日` | The sheet and the row tell the person where to look. A source's line numbers count the view's lines, which Excel does not show |
+| A row | One line, `規程一覧!12: 有給休暇 \| 20日` | The sheet and the row tell the person where to look. So an Excel source is shown by the sheet and rows its lines name (`answer.Sheet_rows`). Its line numbers count the view's lines, which Excel does not show: after an empty row, line 8 is row 9 |
 | A column | The same place on every line of the sheet | An empty cell keeps its place, from the sheet's first used column. So a model can match a value to the heading row |
 | A number | Its stored value, to 15 significant digits | Excel keeps 15. The digits are worked on as text, so `0.25` shown as `25%` is never `25.000000000000004` |
 | A date or a time | `yyyy-mm-dd`, `hh:mm`, or both | A date is stored as a count of days. One spelling, whatever the cell's format, is what a search can find |
@@ -128,6 +131,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 | A merged cell | Its text in every row of the merge | A category merged down a column then stands on each of its rows. A merge within one row shows its text once |
 | A hidden sheet | Left out | The person who opens the file does not see it, and it often holds old or working data |
 | A hidden row or column | Kept | A filter hides rows the same way, and a view cannot tell the two apart |
+| A character Excel escapes (`_x000D_`) | The character: a line break or a tab becomes a space | Excel writes a character XML cannot hold this way, often in text pasted from another program. The person sees the character |
 | Furigana (`rPh`) | Left out | It is no part of the cell's text: `社内規程` would become `社内規程シャナイキテイ` |
 | An empty row | No line | It holds nothing to find. The next line names its own row, so no place is lost |
 
@@ -171,7 +175,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 | File | Writer | What it holds |
 | :-- | :-- | :-- |
 | `team.ask.jsonl` | The page | `{"type":"question","id":…,"text":…}` for each question, and `{"type":"stop","id":…}` to stop one |
-| `team.chat.jsonl` | ksagent | `{"type":"question",…,"lang":…}` for each question it took, then `{"type":"answer","id":…,"state":…}` with the text, the checked sources, the sources removed and the lines it adds |
+| `team.chat.jsonl` | ksagent | `{"type":"question",…,"lang":…}` for each question it took, then `{"type":"answer","id":…,"state":…}` with the text, the checked sources, the sources removed and the lines it adds. An Excel source also holds `sheet`, `from_row`, `to_sheet` and `to_row` |
 | `team.live.json` | ksagent | One record, replaced as a whole: the question's id, what the model is doing, and the unchecked text so far. Where ksagent answers none of the conversation's questions, the id is empty, the phase `refused`, and `why` says why |
 
 * **The page gives each question its id**, and the answer names the same id. Ids match a question to its answer whatever their order. An id holds 1 to 64 ASCII letters, digits, `-` and `_`, since it names a question in three files and on the console.

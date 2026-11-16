@@ -680,6 +680,8 @@ ksplc fmt --in-place src/main.kspl src/utils.kspl
 
 Without `--in-place` the output goes to standard output.
 
+**`-` in place of the files formats standard input** (`ksplc fmt - < main.kspl`), for an editor or a pipe holding text that is not saved. It takes no other file and no `--in-place`. `ksplc lint -` likewise analyses standard input. A diagnostic names the text `-`.
+
 **In-place formatting writes a temporary file before replacing the source**, keeping its permission bits, so a failed write leaves the original intact. Symbolic links are refused; format the target directly. Replacement changes only the named file, not other hard links to its old content.
 
 **Standard output holds the formatted text alone. Every line about the run goes to standard error**: a file's diagnostics, the list of the files that failed and the closing `fmt/failed: …` line. The exit code says whether every file was formatted.
@@ -725,14 +727,14 @@ A summary is its run's first line, so it runs past the width instead of being cu
 * **One already below its mark is left alone**, so one pass of formatting reaches the final shape.
 * **A mark after a return type, on the line where a wrapped head closes, is not touched.** It speaks for the return, and left bare it would read as the declaration's own run.
 
-**A string literal too long for its line is continued on the next** with a `\` at the line's end. The `\` stands for no byte, so the text is the same however it is broken ("Escape sequences" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). The literal is joined before it is broken, so formatting twice moves nothing. The continuation stands one step in from the line that opened it, as a `//<` run does; the mark swallows the indent. Four rules place the break:
+**A string literal too long for its line is continued on the next** with a `\` at the line's end. The `\` stands for no byte, so the text is the same however it is broken ("Escape sequences" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). The literal is joined before it is broken, so formatting twice moves nothing. The continuation stands one step in from the line that opened it, as a `//<` run does; the mark swallows the indent. Widths are display columns, as `ColumnLimit`'s are. Four rules place the break:
 
 | Where the break goes | Why |
 | :-- | :-- |
 | **after a space**, the one the writer typed | nothing is added or removed |
 | **never inside a run of spaces**; it goes after the run's last space | the mark would swallow the rest of the run, and the literal would come back a space short |
 | **never inside a `\{ … \}`** | its spaces belong to an expression the compiler reads as code, where a mark is no continuation |
-| a word longer than the line **goes out whole**, and that line stands over the width | there is no space to break at |
+| a word longer than the line **goes out whole**, up to the first space after it. Only that line stands over the width | there is no space to break at inside the word |
 
 **A line breaks only where the indentation notation joins it back.** That is inside a bracket, after a mark or word that continues a line, or before one that continues the line above. The cases are "2.5 Blocks and statement ends" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). Elsewhere the line runs past the width. Broken after `fn` or `switch`, the next line would read as a statement of its own.
 
@@ -772,7 +774,7 @@ A summary is its run's first line, so it runs past the width instead of being cu
 
 **Quick edits are analysed as one.** Where the editor sends a change while an earlier one is still waiting, only the newest text of that document is analysed. A request sent between two changes is answered against the text the editor had when it asked. The diagnostics end matching the final text.
 
-**An edit to one open document refreshes the diagnostics of the others** too, one document at a time, while the editor sends nothing. An edit can break or mend a file that imports the edited one.
+**An edit to one open document refreshes the diagnostics of the others** too, one document at a time, while the editor sends nothing. An edit can break or mend a file that imports the edited one. **So do a close and a change on disk.** A closed document is read from the disk again, which may differ from the text discarded. A file changed on disk (a checkout, `make fmt`) is told by the editor's watcher (`workspace/didChangeWatchedFiles`). **A closed document's diagnostics are cleared.**
 
 **A message whose header holds no valid `Content-Length` ends the server** with exit code 1, and its log says why. Past such a header, where the next message starts is not known.
 
@@ -791,22 +793,27 @@ flowchart LR
   * **Where a name is bound it shows what a use of it shows**: `words: std.ds.List<|U8[]|>` on `$words: = List<|U8[]|>(arena)` as on a later `words`. The same holds for a parameter, a `for`'s item, `if v: = opt`, `catch e` and a pattern's payload.
   * **On a mark it answers nothing.** A bracket, a comma, an operator, `::`, `<|` and `|>`, and a keyword such as `priv` or `fn` name no declaration. A position at a name's end still answers that name: with the caret on the `(` of `free()`, it shows `free`.
 * **Completion**: while you type a name, it lists the names that can stand there.
-  * **After a value and a `.`** (`cup.`) it lists the fields and methods of the value's type. **After an import's alias or a type name** (`io.`, `Cup.`) it lists what can be called from outside. **For a bare name** it lists the declarations before it in the enclosing scopes, the file's own declarations and the imports' aliases.
+  * **After a value and a `.`** (`cup.`) it lists the fields and methods of the value's type. A read-only value (`r: Self@`, a `for`'s item) gets the same list. **After an import's alias or a type name** (`io.`, `Cup.`, `List.`) it lists what can be called from outside. After an enum's name (`Color.`) the list holds its variants too. **For a bare name** it lists the declarations before it in the enclosing scopes, the file's own declarations and the imports' aliases.
   * Each item shows a function's signature or a field's type, and the declaration's own description, as the hover does.
   * **No trigger characters are declared**: the editor decides when to ask. Text that is still missing a closing bracket or the end of a statement gets an empty list.
 * **Jump to definition**: from a use to its declaration, including a typedef or an enum variant in another file.
   * **Where the server finds nothing, nothing happens**; the VS Code extension does not search the text instead.
   * On a name where it is declared, it jumps to the definition of the variable's type.
+  * **On an import's path it opens the file the compiler reads for it** (`import "std/io"` opens `std/io.kspl`), found as the compiler finds it.
 * **Finding references**: every place in the project that uses the name. It matches on the declaration a name points at, not on its spelling. The results are ordered by file name, line, then column. `context.includeDeclaration` is followed exactly as asked, and the declaration counts where the option is absent.
-* **Renaming**: renames a function or a variable across the project, without confusing it with a same-named declaration hidden further in. It changes the same places finding references returns. **A name a selective import brings in is renamed on the import line too** (`import "lib" { helper }`).
+* **Renaming**: renames a function or a variable across the project, without confusing it with a same-named declaration hidden further in. It changes the same places finding references returns. **A name a selective import brings in is renamed on the import line too** (`import "lib" { helper }`). An enum's variant is renamed where it is written after the enum's name (`Color.red`) too.
+  * **The files searched are those that spell the declaration's name**, wherever the cursor stands. Started on `Self`, the type is renamed in every file that uses it.
   * **It refuses, with a message, rather than write a program that no longer compiles or means something else.** It refuses:
     * a new name the grammar does not read as one identifier (`1bad name`), or a keyword (`return`, `I32`, `true`);
     * a name declared in a file outside the workspace: the standard library, or a package read from another folder. The workspace is the files under the folder the editor opened, outside the folders `.gitignore` names and those starting with a dot. Asked first (`textDocument/prepareRename`), the editor says so before a new name is typed;
     * a new name already declared in a scope around a place the name is written bare. The scope is the same block, an enclosing block, the function's parameters, or the file's own declarations and imports. A field, a variant or a method is compared with the other members of its type instead;
-    * a function that a type call selects (`Vector(1, 2)` selects `Vector.new`): the calls name the type, not the function, so a rename would break them.
-* **The call hierarchy**: a function's callers and callees across files, as a tree. It follows the operators and the methods to the plain calls the compiler rewrites them to. Passing a function as a function pointer is an edge too, marked `(as fn pointer)` in `detail`.
+    * a function that a type call selects (`Vector(1, 2)` selects `Vector.new`): the calls name the type, not the function, so a rename would break them;
+    * a method a trait declares, or one that implements a trait (`Shape.area`, or the `add` behind `+`). The trait and its implementations are matched by name, so renaming one alone breaks the program.
+* **The call hierarchy**: a function's callers and callees across files, as a tree. It follows the operators, the type calls and the methods to the plain calls the compiler rewrites them to. Passing a function as a function pointer is an edge too, marked `(as fn pointer)` in `detail`. **Where an error stops the analysis before the function, the answer is an error**, not an empty list that reads as "no callers".
+* **Formatting**: "Format Document" and format-on-save give the text `ksplc fmt` writes, from the same code ([§3](#3-the-formatter-ksplc-fmt)). The editor's tab size is not read: the layout has one form. **Text that does not parse gets no edit**, and no error pop-up; its diagnostic says why.
 * **The outline**: it answers `textDocument/documentSymbol` with what the file declares, nested as written. It lists functions, types with their fields and variants, an `impl` and a trait with their functions, constants and global variables. An `impl` is named by its header as written (`impl Editor`, `impl Align: Formattable`). It is read from the syntax tree already kept for the document, so it parses nothing again and resolves no import. Nothing inside a body is listed. A document that does not parse lists the declarations parsed around the error.
 * **Diagnostics**: the analysis runs as you type, and errors and warnings show as wavy underlines ([5. Static analysis and the linter](#5-static-analysis-and-the-linter-ksplc-lint)).
+  * **A standard library that cannot be found is reported on the document's first line**, with every place looked in ([§2.9.1](#291-locating-the-standard-library---std-dir)). Nothing else can be answered until it is found.
 
 **Hover lays a signature out as the source does.** It stays on one line where it fits the formatter's width and no parameter has a description. Otherwise each parameter takes a line of its own, followed by its own `//<`, and the return type closes the last line:
 

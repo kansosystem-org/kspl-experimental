@@ -425,6 +425,16 @@ fn quiet(io: Sz): Sz //< the `io.out` here is the parameter's, not the module's
   return io
 
 
+fn crossing(): Sz //< the count `Row.put(r, 1,
+  //< 2)` gives, written across the summary's end
+  return 0
+
+
+fn foreign(): Sz //< what a name reads as in Python's
+  //< `Row.put` is no concern here
+  return 0
+
+
 fn main(): I32
   w2: = wrapped(1, 0, 0, 0, 0, 0, 0, 0, 0)
   r: Row = ::{ .text = "a" }
@@ -573,6 +583,26 @@ priv fn check_hover_links(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@)
     verdict.check("a parameter hides the module's name in its function",
         quiet.find_str("`io.out` here").is_some() && quiet.find_str("[`io.out`]").is_none(),
         lsp_client.why_quoted(c, quiet, arena))
+    // **The names are read in the run's joined text**, as `[W0211]` reads them. A writer may
+    // break a name's backticks, or the "Python's" before one, across the summary's end.
+    cross_at: = Spot::{ .line = "fn crossing(): Sz", .needle = "crossing" }
+    cross: =
+        lsp_client.hover_text_at(c, uri, DOC_SRC, cross_at, lsp_client.READ_MS, arena) catch e
+            verdict.check("a name cut across the summary's end is one link", false, end_text(e))
+            return
+    whole: = arena.text().s("the count [`Row.put(r, 1, 2)`](").s(uri).s("#L").s("\{put_line + 1\}")
+        .s(") gives").take()
+    verdict.check("a name cut across the summary's end is one link",
+        cross.find_str(whole).is_some(), lsp_client.why_quoted(c, cross, arena))
+    foreign_at: = Spot::{ .line = "fn foreign(): Sz", .needle = "foreign" }
+    foreign: =
+        lsp_client.hover_text_at(c, uri, DOC_SRC, foreign_at, lsp_client.READ_MS, arena) catch e
+            verdict.check("another product's name after the summary's end stays text", false,
+                end_text(e))
+            return
+    verdict.check("another product's name after the summary's end stays text",
+        foreign.find_str("`Row.put` is no concern").is_some() &&
+        foreign.find_str("[`Row.put`]").is_none(), lsp_client.why_quoted(c, foreign, arena))
 
 fn run_docs(c: jsonrpc_client.Client$@, arena: Arena$@)
     check_hover_doc(c, arena)

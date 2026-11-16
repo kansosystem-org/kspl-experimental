@@ -18,7 +18,7 @@ Lower flattens complex control flow (`defer`, short-circuit `&&`, `!` and `catch
 
 ### The internal flow: flatten, add vtables, mangle, prune, verify
 
-`Compiler.run_lower_and_codegen` in `pipeline.kspl` runs the steps **in this order**; it is the order's source.
+`Compiler.run_lower_and_codegen` in `pipeline.kspl` runs the steps **in this order**; it is the order's source. `lower_root.run` runs the second step itself, at its end.
 
 ```mermaid
 flowchart LR
@@ -52,6 +52,7 @@ The steps, one by one:
 
   They extend the same `impl Ast_node` (`lower_expr_postfix`, `lower_cleanup_stmt`, `lower_loop_jump` and so on). The `Ast_node.lower` dispatch in `lower/root.kspl` calls them, and they recurse back through `r.lower(lctx)`. So the tree is walked once.
 * **`generate_trait_thunks` in `lower/vtable.kspl` is an independent second pass.** One flat loop over `root.children` finds each `.k_decl_impl`. It gathers the thunk functions (`decl_fn`) and the vtables (`decl_const`) into a side list. It then `add_child`s them to the root (`root_file`), where the backend emits them as plain functions and constants. It has two inputs (["An upcast, not conformance, decides what gets a vtable"](#an-upcast-not-conformance-decides-what-gets-a-vtable)).
+  * **`lower_root.run` calls it after its walk, with the walk's own context.** A thunk is built already lowered, so it adds its own counts. It copies a managed value through a pointer in two cases. One is a receiver taken by value; the other is a pointer a method returns where the trait returns a value. Each copy gets its retain through `Arc_take`. The ARC helpers that retain makes join the walk's, and are added once.
 * **The ABI mangling (`lower/abi.kspl`) is the last pass that synthesizes.** *Mangling* turns a name into one that cannot collide ([the glossary](DESIGN-compiler.md#the-glossary)). It runs after the thunk generation, so its walk (`apply_abi_recursive`) covers the new nodes too. Sema itself does no string rewriting.
   * **It gives every declaration its final C name, and both backends write that name as it stands** (`transform_decl_name`). Neither backend adds a prefix or recognizes `main`.
 
@@ -207,6 +208,12 @@ A `retain` goes into **every position where a value is copied and the copy can o
 Caution: A variable declaration, an argument and a `return` are not enough. Struct-literal fields, array-literal elements, enum payloads and assignment into an existing binding count too. At each, a missed retain frees a value still in use.
 
 **A receiver passed by value is an argument too** (`arc_receiver_takes`). The callee releases every managed parameter it takes by value, `r: Self` included. So `key.hash()` on a struct holding an `Rc` gives up a count the caller never handed over. A receiver taken by pointer (`Self$@`, `Self@`) takes nothing.
+
+**Each way to call counts its arguments the same way.** Each reads its parameters from what it calls:
+* A call through a function value has no declaration to read. The value may be a variable, a field, a parameter, an anonymous function or a method. `add_arc_call_args` reads its parameters from the callee's function type instead.
+* A user operator and a subscript through a method build their call by hand. They add each operand as that method's parameter (`add_method_operand` in `lower/expr.kspl`, `arc_param_takes` in `lower/arc.kspl`). So `a + b`, `-a`, `x: = bag[i]` and `bag[i] = v` take what `a.add(b)`, `bag.get(i)` and `bag.set(i, v)` would.
+* A subscript through `Index.get` is that call's new value, not a place in its receiver. So `x: = bag[i]` takes the count the call brings, and `bag[i].f()` holds it in a temporary that is released.
+* A trait value's thunk copies the value where it reads one through a pointer (["The internal flow"](#the-internal-flow-flatten-add-vtables-mangle-prune-verify)).
 
 **The verdict lives in one place, `Arc_take` in `lower/arc.kspl`.** Every taker decides with it before lowering, and places the retain with it after lowering:
 * A place is retained at its own type.

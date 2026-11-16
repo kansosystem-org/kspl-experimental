@@ -803,6 +803,50 @@ priv fn case_diagnostic_json(arena: Arena$@) //<
         U8[][]::{ "--lint=W9999=off", bad, out_c },
         "unknown diagnostic code 'W9999'. The codes are listed under")
 
+// ==========================================
+// `fmt -` and `lint -` read standard input
+// **An editor or a pipe holds a buffer that is on no disk**, as `gofmt` and `rustfmt` take one.
+// ==========================================
+
+priv struct Fed //< what a child fed on standard input wrote, and how it ended
+    out: U8[]
+    code: I32 //< -1 where it did not end in time
+
+priv fn fed(argv: U8[][], input: U8[], arena: Arena$@): Fed //<
+    //< Runs argv with `input` on its standard input, and collects its standard output
+    $c: = subproc.spawn_piped(argv, "") catch
+        return Fed::{ .out = "", .code = -1 }
+    defer c.kill()
+    c.write(input, 60000) catch {}
+    c.close_stdin()
+    $out: = arena.text()
+    $buf: U8[4096] = ::{}
+    for
+        got: = c.read(U8$[]::buf, 60000) catch
+            break
+        out = out.s(U8[]::{ .ptr = buf@, .len = got })
+    for _w in Range.asc(600)
+        if code: = c.exit_code()
+            return Fed::{ .out = out.take(), .code = code }
+        sys.sleep_ms(100)
+    return Fed::{ .out = out.take(), .code = -1 }
+
+priv fn case_stdin(arena: Arena$@)
+    exe: = harness.ksplc_exe()
+    got: = fed(U8[][]::{ exe, "fmt", "-" }, "fn main( ): I32\n    return 0\n", arena)
+    verdict.check("fmt - formats standard input to standard output",
+        got.code == 0 && got.out.equals("fn main(): I32\n    return 0\n"), got.out)
+    bad: = fed(U8[][]::{ exe, "fmt", "-" }, "fn main(: I32\n    return 0\n", arena)
+    verdict.check("fmt - on text that does not parse writes nothing and fails",
+        bad.code == 1 && bad.out.len == 0, bad.out)
+    both: = cli(U8[][]::{ "fmt", "--in-place", "-" })
+    verdict.check("fmt - refuses --in-place, having no file to write back",
+        !both.exited_with(0) && both.out.find_str("no --in-place").is_some(), both.out)
+    // A sound program passes; an `unknown option: -` would fail it.
+    lint: =
+        fed(harness.ksplc_argv(U8[][]::{ "lint", "-" }), "fn main(): I32\n    return 0\n", arena)
+    verdict.check("lint - reads the program from standard input", lint.code == 0, lint.out)
+
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     io.out().s("# ksplc's command line\n")
@@ -832,9 +876,11 @@ fn main(): I32
     case_bad_utf8(arena)
     case_fmt_reads_back(arena)
     case_fmt_in_place_safe(arena)
+    case_stdin(arena)
     cli_emit.case_surface_doc(arena)
     cli_emit.case_emit_libs(arena)
     cli_emit.case_output_is_input(arena)
+    cli_emit.case_asm_carried(arena)
     cli_emit.case_output_cut_short(arena)
     cli_emit.case_later_output_unwritable(arena)
     case_entry_spelling(arena)

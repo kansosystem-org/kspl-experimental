@@ -4,6 +4,7 @@
 //< from these.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/literal" as base_literal
+import "ksplc/fmt/comment" as fmt_comment
 import "ksplc/fmt/kinds" as fmt_kinds
 import "ksplc/fmt/source" { skip_space_from }
 import "ksplc/fmt/space" { Fmt_flags, calc_spacing_requirement, join_string_lines }
@@ -89,7 +90,7 @@ impl Ast_node
         return base_literal.literal_end(src, c_start) - c_start
 
     priv fn get_string_width(r: Ast_node@, src: U8[]): Sz //<
-        //< How wide the string the node opens is written: its joined spelling's length
+        //< How wide the string the node opens is written: its joined spelling's display width
         //< Caution: **Measure what the printer writes, not the source.** A literal continued with
         //< `\` spans the line break and the next line's indent there. So a chain holding one looks
         //< too wide to stay on its line. The next run reads the joined literal and puts it back
@@ -97,7 +98,7 @@ impl Ast_node
         span: = r.get_string_span(src)
         defer $joined: = Str_builder()
         if join_string_lines(U8[]::{ .ptr = src.ptr + r.loc.offset, .len = span }, joined@)
-            return joined.len
+            return fmt_comment.disp_width(joined.slice())
         return span
 
     priv fn is_string_token(r: Ast_node$@): Bool //< a string or character literal, pieces and all

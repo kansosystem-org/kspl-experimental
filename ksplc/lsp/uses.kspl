@@ -6,6 +6,7 @@
 //< the hash. Then the same answer **looks shuffled on screen** from one request to the next.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as _base_ast_spell // `get_path_name`
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/lsp/msg" as lsp_msg
@@ -14,6 +15,7 @@ import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/state" { Doc_state }
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/session/import_table" as _sema_session_import_table
+import "ksplc/sema/type/query" as _sema_type_query // `get_real_type`, `strip_ptr`
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/json" + { Json_builder }
@@ -56,6 +58,66 @@ fn target_at(state: Doc_state$@, params: json.Value, arena: Arena$@): Target? //
     // Where the name is unresolved (sema names no local binding, say), the identifier itself is
     // taken as the definition.
     return .some(Target::{ .def = name.def_node if name.def_node != null else name, .name = name })
+
+fn filter_word(c: Sema_ctx$@, root: Ast_node$@, def: Ast_node$@): U8[] //<
+    //< The word every file holding a place of `def` spells; empty where it is not known here
+    //< Mostly the declaration's own name. **A method the syntax calls is spelled by its type
+    //< instead**: a type call (`Vector(1, 2)`) selects `new`, and an operator or a `for` calls a
+    //< method of a std/lang trait (`a + b` calls `add`). A file using either names the type.
+    if c == null || def == null
+        return ""
+    id: = def.find_child(.k_identifier)
+    name: = id.text if id != null else def.text
+    if !def.is_fn_decl()
+        return name
+    block: = owner_block(root, def, 0) catch
+        return name
+    type_node: = block.get_decl_type_node()
+    if block.kind_id != .k_decl_impl || type_node == null
+        return name
+    trait_id: = trait_with_method(c, type_node.type_id, name)
+    if !name.equals("new") && !trait_fqn(c, trait_id).starts_with("std.lang.")
+        return name
+    return type_node.get_path_name().get_generic_base_name().fqn_last()
+
+fn trait_with_method(c: Sema_ctx@, type_id: I32, name: U8[]): I32 //<
+    //< A trait the type implements that declares a method `name`; 0 where none does
+    //< **The trait and its implementation are matched by the name alone**, wherever the method
+    //< stands: in the `impl` naming the trait or in another of the type's.
+    if type_id <= 0 || type_id >= c.env.id_to_type.len
+        return 0
+    traits: = c.env.id_to_type.get(c.env.strip_ptr(type_id)).implemented_traits
+    if traits == null
+        return 0
+    for trait_id in traits
+        switch c.env.get_info(c.env.get_real_type(trait_id))
+        case .trait_type(def)
+            for m in def.methods_list
+                if m.name.fqn_last().equals(name)
+                    return trait_id
+        default {}
+    return 0
+
+priv fn trait_fqn(c: Sema_ctx$@, trait_id: I32): U8[] //< a trait's full name; empty for 0
+    //< An instance (`Add<|V2, V2|>`) is named by its generic's (`std.lang.Add`).
+    if trait_id == 0
+        return ""
+    real: = c.env.get_real_type(trait_id)
+    base: = c.env.instance_base(real)
+    return base if base.len > 0 else c.env.get_str(real)
+
+priv fn owner_block(node: Ast_node$@, def: Ast_node$@, depth: Sz): Ast_node$@? //<
+    //< The `impl` or trait whose member `def` is, searched through the files' tops
+    if node == null || depth > lsp_position.MAX_WALK_DEPTH
+        return .none
+    for child in node.children
+        if child == def
+            return .some(node)
+        if child.kind_id == .k_file || child.kind_id == .k_decl_impl ||
+            child.kind_id == .k_decl_trait
+            if got: = owner_block(child, def, depth + 1)
+                return .some(got)
+    return .none
 
 priv fn name_node(at: Ast_node$@): Ast_node$@? //< the identifier a picked node is, or holds
     if at.kind_id == .k_identifier
@@ -273,13 +335,25 @@ impl Walk
 
         if w.gather
             w.note_named(node)
-        if node.kind_id == .k_identifier && node.loc.file().len > 0 && w.refers(node)
+        if node.kind_id == .k_identifier && node.loc.file().len > 0 && w.refers(node) &&
+            !w.in_trait_self(node)
             w.add_spot(node)
 
         w.above.push(node)
         for child in node.children
             w.node(child, depth + 1)
         w.above.truncate(w.above.len - 1)
+
+    priv fn in_trait_self(w: Self@, n: Ast_node@): Bool //<
+        //< Whether n is a `Self` inside a trait, which names whatever implements it
+        //< **A trait's instance for one type links its `Self` to that type** (std's `Add` for a
+        //< `Vec2`), yet the trait is written for every implementer, so it is no use of the type.
+        if !n.text.equals("Self")
+            return false
+        for a in w.above
+            if a.kind_id == .k_decl_trait
+                return true
+        return false
 
     priv fn note_named(w: Self$@, node: Ast_node$@) //<
         //< records node where it is an identifier or a local's declaration of the target's name
@@ -301,6 +375,13 @@ impl Walk
         if src.len == 0
             return
         offset: = src.clamp_offset(hit.loc.offset)
+        // **Only what the source spells there is a place of use.** A generic's instance copies its
+        // template's nodes, places and all, with the arguments put in: `Output` in `Index_place`
+        // reads `col.Color` for an array of `Color`. Listed, it would point into std. A name the
+        // syntax selects (`new` of a type call) is kept, for the rename to refuse.
+        if !hit.made_by_compiler() &&
+            !src.sub_from(offset).starts_with(hit.text.get_generic_base_name())
+            return
         defer $key: = Str_builder()
         key.s(hit.loc.file()).c(':').s("\{offset\}")
         if w.seen.get(key.slice()).unwrap_or(0) != 0

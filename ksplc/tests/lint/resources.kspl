@@ -381,32 +381,36 @@ fn main()
   break_unlocks(mx@, 5)
   defer_in_branch(mx@, true)
 // ==== case release_method_spelling
-//< Warns about a name or contract that releases but is not tracked
+//< Warns about a method that frees its receiver under a name or contract that is not tracked
 // EXPECT: [W0107] 'close' releases the receiver
 // EXPECT: [W0107] 'free' releases the receiver
 // EXPECT: [W0107] 'destroy' releases the receiver
-// EXPECT: [W0107] 'shutdown' releases the receiver
+// EXPECT: [W0107] 'teardown' releases the receiver, but its type does not conform to 'Manual_free'. Use-after-free is therefore not tracked. Add 'impl H: Manual_free {}' and spell the method 'free'. 'free' returns nothing and cannot fail
 // EXPECT: [W0107] 'dispose' releases its first parameter
 // EXPECT-NOT: [W0107] 'take'
 // EXPECT-NOT: [W0107] 'clear'
 // EXPECT-NOT: [W0107] 'deinit'
+// EXPECT-NOT: [W0107] 'shutdown'
+// EXPECT-NOT: [W0107] 'delete'
 import "std/io"
-import "std/mem" { dealloc }
+import "std/mem" { alloc, dealloc }
 
 pub struct H
   pub id: I32
+  pub buf: Void$@
 
 impl H
   pub fn open(): H
-    return H::{ .id = 1 }
+    return H::{ .id = 1, .buf = alloc(8) }
 
   pub fn close(r: Self$@) //< in scope
-    //< The name is not `free`.
-    r.id = 0
+    //< The name is not `free`, and the release sits in a branch, where nothing tracks it.
+    if r.id > 0
+      dealloc(r.buf)
 
   pub fn free(r: Self$@) //< in scope
-    //< The name is `free` but H does not conform to Manual_free.
-    r.id = -1
+    //< The name is `free` but H does not conform to Manual_free. It frees through a helper.
+    drop_buffer(r)
 
   pub fn take(r: Self$@, key: I32): Bool //< out of scope
     //< It takes an argument because it erases something else.
@@ -418,22 +422,38 @@ impl H
 
   priv fn destroy(r: Self$@) //< in scope
     //< The visibility is not asked about (even a priv can conform to `Manual_free`).
-    r.id = -2
+    if r.buf != null
+      dealloc(r.buf)
 
-  pub fn shutdown(r: Self$@, _reason: I32) //< in scope
-    //< The second and later arguments are not asked about (a tool is sometimes handed to a
-    //< release).
+  pub fn shutdown(r: Self$@) //< out of scope
+    //< The name suggests a release, but the body frees nothing.
     r.id = -3
+
+  pub fn delete(r: Self$@, key: I32) //< out of scope
+    //< It takes another argument: what it frees is chosen by the key, so it has no `free` to become.
+    if key == r.id
+      dealloc(r.buf)
+
+  pub fn teardown(r: Self$@): Bool //< in scope
+    //< It frees and returns a result, which `free` cannot; the advice says so.
+    if r.id > 0
+      dealloc(r.buf)
+    return true
 
   pub fn deinit(r: Self$@) //< out of scope
     //< The body releases the first argument itself, so it is tracked regardless of the name and the
     //< conformance.
     dealloc(Void$@::r)
 
+priv fn drop_buffer(h: H$@) //< frees the buffer, which makes `H.free` a release one call down
+  if h.buf != null
+    dealloc(h.buf)
+
 pub fn dispose(h: H$@) //< in scope
-  //< A release written as a free function is looked at too. It returns the content alone, so it
-  //< does not ride road 2.
-  h.id = 0
+  //< A release written as a free function is looked at too. It frees a field in a branch, which
+  //< the use-after-free check does not follow.
+  if h.id != 0
+    dealloc(h.buf)
 
 pub struct G //< nothing comes out, it having conformed
   pub id: I32
@@ -448,11 +468,14 @@ impl G: Manual_free
 
 fn main(): I32
   $h: = H.open()
-  h.close()
   _ok: = h.take(1)
   h.clear()
+  h.shutdown()
+  h.delete(2)
+  _done: = h.teardown()
+  h.close()
   h.destroy()
-  h.shutdown(1)
+  h.free()
   dispose(h@)
   $g: = G.open()
   g.free()
@@ -598,8 +621,9 @@ fn main()
 // ==== case thread_never_joined
 //< [W0109] A thread started and never waited for
 //< `free()` waits for it, so a thread no path frees can outlive what it was handed. **Two must stay
-//< silent**: `defer` in front, which waits at the block's end, and a thread freed by hand.
-// EXPECT: thread_never_joined.kspl:16:3: warning: [W0109] '_t' is never freed
+//< silent**: `defer` in front, which waits at the block's end, and a thread freed by hand. The fix
+//< it suggests carries the `$` that `free` needs, though the declaration has none.
+// EXPECT: thread_never_joined.kspl:17:3: warning: [W0109] '_t' is never freed. Put 'defer' in front of its declaration ('defer $_t: = …')
 // EXPECT-NOT: 'scoped'
 // EXPECT-NOT: 'joined'
 // EXPECT: 0 error(s), 1 warning(s)

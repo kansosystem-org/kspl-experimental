@@ -167,13 +167,19 @@ impl Lsp_docs
         //< It records the text on didOpen / didChange and discards it on didClose
         //< **Each of the three settles the document's analysis**: the worker analyses the new text
         //< itself, or the document is gone. So none is sent again. A change unsettles the other
-        //< open documents (`recheck_others`).
+        //< open documents (`recheck_others`). So does a close: the others now read that file from
+        //< the disk, which may differ from the text the editor discarded. A file changed on disk
+        //< (`workspace/didChangeWatchedFiles`) unsettles every open document.
+        if method.equals("workspace/didChangeWatchedFiles")
+            r.recheck_others("")
+            return
         td: = params.get("textDocument")
         uri: = td.get("uri").as_str().unwrap_or("")
         if uri.len == 0
             return
         if method.equals("textDocument/didClose")
             r.store.close(uri)
+            r.recheck_others(uri)
         else if method.equals("textDocument/didOpen")
             r.store.put(uri, td.get("text").as_str().unwrap_or(""))
         else if method.equals("textDocument/didChange")
@@ -187,7 +193,7 @@ impl Lsp_docs
         r.quarantine.remove(uri) // a new edit lifts the poison mark (once fixed, it is analysed again)
 
     priv fn recheck_others(r: Self$@, uri: U8[]) //<
-        //< It marks every other open document unchecked, so the idle analysis refreshes it
+        //< It marks every open document but `uri` unchecked, so the idle analysis refreshes it
         //< **An edit can change another document's diagnostics**: one that imports the edited one,
         //< directly or through a third. The supervisor reads no imports, so it marks every open
         //< document. Each is analysed once, while the editor is idle, so a request waits for one

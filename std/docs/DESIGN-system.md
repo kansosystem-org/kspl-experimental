@@ -550,6 +550,11 @@ Caution: **Do not look at `FILE_ATTRIBUTE_REPARSE_POINT` alone on Windows.** One
 
 The LLVM backend's degenerate case is -1 too. Made 0, it would land on the unsafe side.
 
+**A step longer than the file system holds is the one exception: it names nothing.** The OS cannot look it up, so `kspl_is_link` cannot tell. The check then asks whether anything stands there, and where nothing does, the path goes on, as absent. So a web server answers 404 for such a name, as for any other name not there, not 403.
+
+* **Each OS counts in its own unit** (`fs.name_too_long_on`): 255 bytes on Linux and macOS, 255 UTF-16 units on Windows. 100 kana are 300 bytes, too long on Linux but not on Windows. The count takes the OS as a parameter, so a test on Linux checks both answers.
+* **The length alone does not let a step through.** A file system that holds longer names finds the link, and it is refused as before.
+
 **`fs.lies_under(root, path)` answers another question**: whether a path the program itself holds, such as a file named in its settings, lies in a folder. It compares the steps and follows no link, so it is no door for a path from outside.
 
 ### A hidden name is found by its long name too
@@ -908,13 +913,20 @@ Caution: **Do not fold across that line.** It decides whether the caller fixes t
 
 * **A streamed reply needs its pieces as they come.** A model server writes its answer token by token for minutes. A reader that waits for the whole body shows nothing until then.
 * **A body comes by its length or in chunks, and in no other way.** A chunked body ends with a chunk of size 0, so one cut off early fails as `connection_closed`. A body that runs to the close cannot be told from one cut short, so it is refused.
-* **Chunks are read in a response only.** A server behind a proxy reads requests, and a chunked request is the usual way to smuggle a second one in. No client here sends one.
+* **Chunks are read in a response only.** A server behind a proxy reads requests, and a chunked request is the usual way to smuggle a second one in. No client here sends one. **A lone `chunked` in a request is refused as `chunked_request`**, apart from the codings no reader takes (`unsupported_transfer_encoding`). A server can then ask for a length with a 411, where RFC 9112 §6.3 requires a 400 for the others.
 * **The buffer form, `parse_response`, reads a body by its length alone.** It serves a caller that cannot block, and none of those reads a stream. It refuses a chunked body by name, rather than read it as empty.
 * **A wait that brings nothing returns `waiting`**, so the caller can do other work between pieces, such as deciding to stop. The response's own time limit still holds over all the waits.
 * **Each piece is a view of the reader's buffer until the next call**, so a body is never copied twice. A caller that keeps a piece copies it.
 * **The limits**: the body's limit counts the data alone, not the chunks' framing. A size line holds at most 4 KiB (`MAX_CHUNK_LINE`), and the trailers 64 KiB together. A trailer is checked as a header line is, then dropped: RFC 9110 §6.5.1 forbids merging one into the headers unasked.
 
 **A server streams a body with `format_chunked_head`, a `format_chunk` per piece, and `format_last_chunk`.** `format_response_head` writes a head whose body runs to the close, which this reader refuses. That one serves a body that never ends, such as kssrv's keep-alive answer.
+
+### An HTTP date is worked out from the seconds
+
+**`http.Http_date` writes a time as RFC 9110's IMF-fixdate** (`Sun, 06 Nov 1994 08:49:37 GMT`), the one form a sender may write in `Date` or `Last-Modified`.
+
+* **No C library is asked.** `strftime` names the day and month in the locale's language, and `gmtime` is not thread-safe on every OS. The date is worked out from the day count by arithmetic alone, so every OS writes the same text.
+* **A time outside 1970 to 9999 is written as the nearer end.** The form has four digits for the year and no sign, so the text would not be a date at all.
 
 ### The frame is kept apart from the transport
 

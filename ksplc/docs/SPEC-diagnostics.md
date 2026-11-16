@@ -67,8 +67,13 @@ After `thread.Mutex<|T|>.lock()`, the lock is still held, on every path, where t
 * **Fix**: call `g.unlock()` before each way out, or `defer g.unlock()` right after locking, which releases on every exit.
 
 ### [W0107] A method that frees outside a release contract
-The use-after-free check reads "freed" only when the receiver's type conforms to `Manual_free` and the method called is `free`. So a `pub` method that frees its receiver otherwise lets `x.close()` followed by `x.read()` compile silently. It is reported where the name differs (`close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`). It is also reported where the name is `free` but the type has no `impl X: Manual_free {}`.
-* **Fix**: name it `free` and add `impl X: Manual_free {}`. That `free` returns no failure, so a clean-up whose result must be checked (a flush) goes in a separate method. An operation that frees no receiver, or takes an argument (`delete(key)`), is out of scope.
+The use-after-free check reads "freed" only when the receiver's type conforms to `Manual_free` and the method called is `free`. So a method that frees its receiver otherwise lets `x.close()` followed by `x.read()` compile silently. It is reported where the name differs (`close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`). It is also reported where the name is `free` but the type has no `impl X: Manual_free {}`.
+* **Only a method that can become such a `free` is reported.** Its body frees the receiver or a part of it (`dealloc(r.buf)`, `r.rows.free()`), in any branch, or calls a function whose body does. The receiver is its only parameter.
+* **Not reported**:
+  * a method that frees nothing, such as a `shutdown()` that only sets a flag;
+  * a method that takes another argument, such as `delete(key)`: the argument chooses what is freed;
+  * a method whose body always frees the receiver itself, outside any branch (`dealloc(Void$@::r)`). The use-after-free check already follows that.
+* **Fix**: name it `free` and add `impl X: Manual_free {}`. That `free` returns no failure, so a clean-up whose result must be checked (a flush) goes in a separate method. Where the method returns a value, the message says so.
 
 ### [W0108] A bit operation's operand is compared without brackets
 The result of `&` / `|` / `^` is compared without brackets, as in `a & b == c`. KSPL reads it `(a & b) == c`. **C reads it the other way** (`a & (b == c)`), and neither the types nor a run-time check catch it. The precedence table is "6.1 The operator list and precedence" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#61-the-operator-list-and-precedence).
@@ -159,10 +164,10 @@ A `priv` function, struct or the like is never referred to within its file.
 
 ### [W0207] A local variable or parameter nobody reads
 A local variable or a parameter is **never read**. Reading counts, not the name appearing. A fixed-length array's `.len` folds to a constant at translation time. So an `a: Sz[3] = ::{ 1, 2, 3 }` used only through `a.len` fires it.
-* **Fix**: delete the variable, or, where a trait's constraint requires the parameter, start its name with `_` (`_x`). Where only the length is needed, declare a `const` rather than an array.
+* **Fix**: delete the variable, or, where a trait's constraint requires the parameter, start its name with `_` (`_x`). Where only the length is needed, declare a `const` rather than an array. Where the only read is under a `#cfg` this build leaves out, put the same `#cfg` on the declaration; the message names it.
 
 ### [W0208] A variable assigned but never read
-A value is assigned to a variable and never read afterwards.
+A variable is assigned (`x = …`, `x += …`) but never read anywhere in its function. **It is decided per variable, not per store.** Once the variable is read somewhere, a store a later one overwrites unread (`d = 4` then `d = 5`) is not reported.
 * **Fix**: where it is deliberate, start the name with `_`.
 
 ### [W0209] A `//<` continuation that continues nothing
@@ -175,7 +180,7 @@ A `//<` behind a declaration can carry no text and leave the description to the 
 * **It is reached by deleting**: remove the continuations and the anchor is left with nothing under it.
 
 ### [W0211] A name a comment points at leads nowhere
-A dotted name in backticks in a comment (`` `Map.entry_list` ``, `` `io.out()` ``) is read as the code beside it would read it. The head is resolved through the enclosing function's names, the file's declarations, its imports and the prelude. Each later part is a member of the one before. Where the owner lacks the member (a method renamed, say), a reader finds nothing, and a model believes the name exists.
+A dotted name in backticks in a comment (`` `Map.entry_list` ``, `` `io.out()` ``) is read as the code beside it would read it. The head is resolved through the enclosing function's names, the file's declarations, its imports and the prelude. Each later part is a member of the one before. Where the owner lacks the member (a method renamed, say), a reader finds nothing, and a model believes the name exists. **The lines of one comment are read as one text**, so a line break that `ksplc fmt` puts between "Python's" and the name it introduces changes nothing.
 * **Fix**: point at what exists.
   * A method another file adds to the type can be missing from the compilation. Tie such a method to its file (`` `List.order_by` in `std/seq` ``); `make test-docref` reads it instead.
   * Introduce a name another product owns as its own ("Python's `` `json.dumps` ``").
@@ -336,7 +341,7 @@ Something an `import` brought in is never used in that file: a whole file's alia
 * **The verdict covers that one file alone**: whether the file writes the name. A use inside a generic template never instantiated counts.
 * An alias counts only at the head of a qualified name (`io.out()`, `ds.List`), not as a field (`p.io`) or a function (`io()`) spelled the same.
 * An import an extension method's call needs ("An extension method requires the import" in [§9](../../docs/SPEC-programming-language.md)) counts as used. This holds for a built-in type's method (`import "std/ds"` for `s.equals(...)`) and a format specifier (`import "std/strfmt"` for `\{n:x\}`).
-* **Fix**: delete the import. Where loading it is deliberate, mark it ignored with a `_` on the alias (`import "p" as _p`).
+* **Fix**: delete the import, or the symbol from its braces. Where loading it is deliberate, mark it ignored with a `_` on the alias (`import "p" as _p`). A symbol in braces takes no `_`: its name must match the file's declaration.
   * A file can be imported only so that its conformances hold (`import "std/strfmt" as _strfmt` for the `fmt` each type's `\{x\}` reaches). The call is made inside `put`'s instantiation, so give it the `_`.
   * A name inside a declaration `#cfg` dropped is not counted. For a symbol used in one build only, put the same `#cfg` on the import, **on the line directly before it** (`ksplc fmt` moves it there anyway).
 

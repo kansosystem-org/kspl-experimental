@@ -113,6 +113,36 @@ fn test_a_wrong_quote_is_removed_and_counted(work: U8[], arena: Arena$@)
         block.find_str(why).is_some() && block.find_str(kept).is_some(), block)
     stub.release(s)
 
+fn test_a_quote_passes_whatever_spaces_stand_between_its_words(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a quote passes the check with the spaces of the file, or none")
+    // **A Japanese file breaks a sentence across lines with no space**, and its words may stand
+    // apart by a full-width or a no-break space where the model writes an ASCII one.
+    root: = fs.mkdir_unique(work, "spaces-", arena) catch panic("the test folder can be made")
+    body: = arena.text().s("# 休暇\n\n第3条　年次有給休暇は、入社6か月後に10日を\n付与する。\nIt’s")
+        .c(0xC2U8).c(0xA0U8).s("the rule here.\n").take()
+    fs.write_tree(root, U8[][]::{ "規程/wrap.md" }, U8[][]::{ body }, arena)
+        catch panic("the test file can be written")
+    // Each case: the first line, the last, the quote, and whether it passes.
+    cases: = U8[][]::{ "3", "4", "入社6か月後に10日を付与する", "pass", "3", "3",
+        "第3条 年次有給休暇は", "pass", "3", "3", "第3条年次有給休暇は", "pass", "5", "5",
+        "It’s the rule here", "pass", "5", "5", "it’s the rule here", "a changed case", "5", "5",
+        "It's the rule here", "a straight apostrophe", "3", "4",
+        "入社6か月後に20日を付与する", "a changed word", "3", "4",
+        "入社６か月後に10日を付与する", "a full-width digit", "3", "4",
+        "入社6か月後に…付与する", "a left-out part", "3", "3", "3: 第3条 年次有給休暇は",
+        "a line number" }
+    for k in Range.asc(cases.len / 4)
+        s: = answer.Source::{ .path = "規程/wrap.md", .from_line = cases[4 * k][0] - '0',
+            .to_line = cases[4 * k + 1][0] - '0', .quote = cases[4 * k + 2],
+            .rows = answer.NO_ROWS }
+        $out: = s
+        why: = answer.check_source(files.Folder(root), s, out@, arena)
+        pass: = cases[4 * k + 3].equals("pass")
+        name: =
+            (arena.text().s("passes: ").s(cases[4 * k + 2]).take() if pass
+            else arena.text().s("is refused, with ").s(cases[4 * k + 3]).take())
+        verdict.check(name, (why.len == 0) == pass, why)
+
 fn test_the_prompt_counts_a_cited_range_as_the_check_does(arena: Arena$@)
     verdict.start("[ksagent] the prompt counts a cited range's lines as the check does")
     // **"50 lines apart" allowed 51 lines**, which the check removes: both ends count.
@@ -329,8 +359,7 @@ fn test_a_search_finds_japanese(work: U8[], arena: Arena$@)
     verdict.check("a Japanese word is found with its file and line",
         hits.find_str("規程/休暇.md:3: 第3条").is_some(), hits)
     verdict.check("a Japanese question is answered in Japanese lines",
-        Lang.of("有給休暇は何日ですか") == Lang.ja &&
-        Lang.of("How many days?") == Lang.en, "")
+        Lang.of("有給休暇は何日ですか") == Lang.ja && Lang.of("How many days?") == Lang.en, "")
 
 fn test_a_search_matches_words_in_any_order(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a search finds the lines that hold every word, in any order")
@@ -353,8 +382,7 @@ fn test_a_search_matches_words_in_any_order(work: U8[], arena: Arena$@)
     none: = files.tool_search(files.Folder(root), "unicorn zebra", "", stub.ROOM, stub.GOING, arena)
     verdict.check("a search for words no line holds says so",
         none.equals("(no line holds any of those words)"), none)
-    ja: = files.tool_search(files.Folder(root), "有給休暇　付与", "", stub.ROOM, stub.GOING,
-        arena)
+    ja: = files.tool_search(files.Folder(root), "有給休暇　付与", "", stub.ROOM, stub.GOING, arena)
     verdict.check("Japanese words split at an ideographic space are found together",
         ja.find_str("規程/休暇.md:3: 第3条").is_some() &&
         ja.find_str("no line holds every word").is_none(), ja)

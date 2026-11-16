@@ -5,6 +5,9 @@
 //< already-reported flag, and this file stays silent when it is set (`report_*_if_needed`).
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/cfg_inactive" as base_cfg_inactive
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
 import "ksplc/sema/flow/field" as sema_flow_field
 import "ksplc/sema/flow/track" as sema_flow_track
 import "ksplc/sema/session/ctx" { Sema_ctx }
@@ -13,6 +16,8 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // testing and slicing single characters
 import "std/ds"
+import "std/math"
+import "std/str" as _str // `text`
 
 priv fn is_arc_related(c: Sema_ctx$@, type_id: I32): Bool //<
     //< Whether a declared type is ARC-managed itself or has an ARC-managed value field
@@ -38,6 +43,45 @@ priv fn holds_fixed_array(c: Sema_ctx$@, type_id: I32, depth: Sz): Bool //<
                 return true
     default {}
     return false
+
+priv fn subtree_end(node: Ast_node@): Sz //< the furthest offset a node of the subtree starts at
+    $end: Sz = node.loc.offset
+    for ch in node.children
+        if ch != null
+            end = math.max(end, subtree_end(ch))
+    return end
+
+priv fn dropped_read_cfg(c: Sema_ctx$@, decl: Ast_node@, name: U8[]): U8[] //<
+    //< The `#cfg(…)` of a range this build left out that names the local, or empty where none does
+    //< **Only ranges inside the declaring function count**, after the declaration. The text is
+    //< searched for the name as a whole word, so a comment naming it counts too, erring toward the
+    //< note, which changes only the advice.
+    fn_node: = c.fn_ctx.decl
+    if fn_node == null || base_core.arena == null
+        return ""
+    file: = decl.loc.file()
+    src: = base_core.source_of(c.source_map, file)
+    from: Sz = decl.loc.offset
+    to: = subtree_end(fn_node)
+    for region in base_cfg_inactive.cfg_inactive
+        if !base_locate.is_same_file(region.file, file) || region.offset <= from ||
+            region.offset > to || region.offset + region.span > src.len
+            continue
+        text: = src.sub(region.offset, region.span)
+        $at: Sz = 0
+        for
+            found: = text.sub_from(at).find_str(name) catch
+                break
+            i: = at + found
+            before_ok: = i == 0 || !(text[i - 1].is_alnum() || text[i - 1] == '_')
+            after: = i + name.len
+            after_ok: =
+                after >= text.len || !(text[after].is_alnum() || text[after] == '_')
+            if before_ok && after_ok
+                return base_core.arena.text().s("#cfg(").s("!" if region.is_neg else "")
+                    .s(region.flag).s(")").take()
+            at = i + 1
+    return ""
 
 fn report_unread_payload(c: Sema_ctx$@, pattern: Ast_node$@) //<
     //< One [I0313] on a `case` pattern whose payload binds only names nobody reads
@@ -97,6 +141,11 @@ fn check_local_usage(c: Sema_ctx$@, st: sema_flow_track.Local_state)
             c.clear_scratch()
                 .s("[W0207] Nothing reads local variable or parameter '\{var_name\}'. Prefix with \
                     '_' to ignore.")
+            dropped: = dropped_read_cfg(c, decl, var_name)
+            if dropped.len > 0
+                c.scratch
+                    .s(" Note: it is read under a '\{dropped\}' this build leaves out. Put the same \
+                        '\{dropped\}' on its declaration.")
             // Caution: **Say "nobody reads it", not "unused".** A fixed-length array's `.len` folds
             // to a constant (sema/body/postfix.kspl), so `a.len` alone reads nothing. The reason
             // is added for an array only.

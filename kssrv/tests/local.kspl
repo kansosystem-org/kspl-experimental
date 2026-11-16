@@ -47,6 +47,7 @@ fn cases(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_e
     conditional_cases(port, auth, arena)!
     cap_cases(port, auth, arena)!
     files_only_cases(port, auth, arena)!
+    full_table_cases(port, auth, arena)!
 
 priv fn early_head_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end
     defer $valid: = client.Conn.open(port)!
@@ -169,6 +170,17 @@ priv fn host_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end 
         nm_h: = arena.text().s("--local refuses a request naming Host twice: ").s(host_names[i])
             .take()
         client.expect_status(nm_h, r, 400, arena)
+    // **A target naming its host is judged by that host**, which stands in for `Host` (RFC 9112
+    // §3.2.2). Judged by `Host`, a request could name the loopback there and another host here.
+    named: = client.request(port, "GET http://attacker.example/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        1, client.DEFAULT_TIMEOUT_MS, false, arena)!
+    client.expect_status("--local refuses a target naming another host, whatever Host says",
+        named.get(0), 403, arena)
+    own: = client.request(port, "GET http://127.0.0.1/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", 1,
+        client.DEFAULT_TIMEOUT_MS, false, arena)!
+    verdict.check("--local serves the page to a target naming the loopback",
+        own.get(0).status == 200 && own.get(0).body.equals(PAGE_BODY),
+        client.shown(own.get(0), arena))
 
 priv fn refusal_cases(port: I32, token: U8[], arena: Arena$@): Void!client.Http_end //<
     //< a missing or wrong token
@@ -531,3 +543,31 @@ priv fn early_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end
         c.send(head.s("\r\n").take())!
         got: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
         client.expect_status("a refused head needs no body", got, 403 if which == 1 else 401, arena)
+
+priv const TABLE_CAP: Sz = 128 //< `MAX_CONNS` in `kssrv/conn.kspl`
+    //< The server is driven from outside, so the figure is stated here, as `PER_PEER` is.
+
+priv fn full_table_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< With every slot held by an idle connection, a newcomer is taken and the oldest closed
+    //< **A page's tabs keep their connections open, idle.** Refused, a newcomer would wait out the
+    //< idle timer, and the page it asks for would not open.
+    $held: = ds.List<|client.Conn$@|>(arena)
+    defer
+        for c in held@
+            c.free()
+    asker: = client.Conn.open_in(port, arena)!
+    held.push(asker)
+    for _i in Range.asc(TABLE_CAP - 1)
+        held.push(client.Conn.open_in(port, arena)!)
+    $full: = false
+    deadline: = sys.deadline_after_ms(client.DEFAULT_TIMEOUT_MS)
+    for !full && sys.mono_us() < deadline
+        asker.send(client.raw("GET", "/api/status", auth, "", arena))!
+        st: = asker.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
+        full =
+            client.doc_of(st, arena).get("connections_open").as_int64().unwrap_or(-1I64) == I64::TABLE_CAP
+        sys.sleep_ms(10)
+    verdict.check("every slot is held by an idle connection", full, "the table never filled")
+    page: = client.get(port, "/", "", arena)!
+    verdict.check("with every slot idle, a newcomer is served",
+        page.status == 200 && page.body.equals(PAGE_BODY), client.shown(page, arena))

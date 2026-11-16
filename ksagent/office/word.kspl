@@ -1,8 +1,10 @@
 //< A Word file (.docx) as lines of text: one paragraph a line, one table row a line
 //< The body is read in order. **What the reader of the document sees is kept**: inserted text,
 //< text boxes, list numbers and footnotes. **What the reader does not see is left out**: deleted
-//< text, hidden text, comments, field codes, and the copy of a text box kept for older readers.
+//< text, hidden text, comments, field codes, furigana, and the copy of a text box kept for older
+//< readers.
 //< Headers and footers are left out too: they repeat on every page, and hold page numbers.
+//< A symbol from a symbol font (`w:sym`) shows as the Unicode character it draws.
 //< A heading opens with one `#` per level. A footnote's mark is `[^1]` in the text, and the note
 //< is a line at the end, `[^1]: …`. A table row's cells are joined by ` | `, and a cell merged
 //< down from the row above repeats its text, so each row reads whole.
@@ -114,7 +116,9 @@ priv struct Walk //< the boxes and tables open where the reader stands
     boxes: List<|Box$@|>
     tables: List<|Table$@|>
     in_t: Bool //< inside a `t`, whose text is the document's text
-    hidden: Bool //< the current run is hidden text (`vanish`)
+    hidden: Bool //< the current text is hidden (`vanish`), set at each `t` and `sym`
+    vanish: I32 //< the current run's own `vanish`: 1 on, 0 off, -1 where it sets none
+    run_style: U8[] //< the current run's character style; empty for none
     note_ids: List<|Keyed|> //< each note read so far, by id, to its place in `note_texts`
     note_texts: List<|U8[]|>
 
@@ -149,8 +153,8 @@ impl Box
 impl Part
     fn new_walk(r: Self, a: Arena$@): Walk //< a walk of a part of this kind, with nothing open yet
         return Walk::{ .part = r, .boxes = List<|Box$@|>(a), .tables = List<|Table$@|>(a),
-            .in_t = false, .hidden = false, .note_ids = List<|Keyed|>(a),
-            .note_texts = List<|U8[]|>(a) }
+            .in_t = false, .hidden = false, .vanish = -1, .run_style = "",
+            .note_ids = List<|Keyed|>(a), .note_texts = List<|U8[]|>(a) }
 
 priv fn walk(doc: Doc$@, src: U8[], part: Part): Walk!U8[] //<
     //< Reads one part to its end, sending each finished line where it belongs
@@ -175,9 +179,10 @@ priv fn walk(doc: Doc$@, src: U8[], part: Part): Walk!U8[] //<
 priv fn skipped(name: U8[]): Bool //< whether an element and all it holds are left out
     //< Deleted text (`del`, `moveFrom`), the copy of a text box for older readers (`Fallback`),
     //< tab stops (`tabs`, whose `tab` is no tab character), the record of earlier formatting
-    //< (`…Change`), and a section's properties.
+    //< (`…Change`), a section's properties, and furigana (`rt`, the reading over its base text).
     return name.equals("del") || name.equals("moveFrom") || name.equals("Fallback") ||
-        name.equals("tabs") || name.ends_with("Change") || name.equals("sectPr")
+        name.equals("tabs") || name.ends_with("Change") || name.equals("sectPr") ||
+        name.equals("rt")
 
 priv fn start_of(doc: Doc$@, x: xml.Reader$@, w: Walk$@): Void!U8[] //< takes one start tag
     //< Each paragraph, table, row and cell is charged to the file's work before it is made.
@@ -190,8 +195,10 @@ priv fn start_of(doc: Doc$@, x: xml.Reader$@, w: Walk$@): Void!U8[] //< takes on
         w.boxes.push(Kind.para.new_box(x.depth(), a))
     else if name.equals("t")
         w.in_t = true
+        w.hidden = hidden_now(doc, w)
     else if name.equals("r")
-        w.hidden = false
+        w.vanish = -1
+        w.run_style = ""
     else if name.equals("tbl")
         tb: = a
             .create(Table::{ .depth = x.depth(), .cells = List<|U8[]|>(a), .col = 0,
@@ -231,8 +238,13 @@ priv fn in_box(doc: Doc$@, x: xml.Reader@, top: Box$@, w: Walk$@): Void!U8[] //<
     a: = doc.arena
     name: = x.name
     if name.equals("vanish")
-        val: = x.attr_or("val", "true", a)!
-        w.hidden = !val.equals("0") && !val.equals("false") && !val.equals("off")
+        w.vanish = 1 if styles.is_on(x.attr_or("val", "true", a)!) else 0
+    else if name.equals("rStyle")
+        w.run_style = x.attr_or("val", "", a)!
+    else if name.equals("sym")
+        if !hidden_now(doc, w)
+            top.put_raw(symbol(x.attr_or("font", "", a)!, x.attr_or("char", "", a)!, a),
+                doc.view@)!
     else if name.equals("tab") || name.equals("br") || name.equals("cr")
         top.put_raw(" ", doc.view@)!
     else if name.equals("noBreakHyphen")
@@ -254,6 +266,74 @@ priv fn in_box(doc: Doc$@, x: xml.Reader@, top: Box$@, w: Walk$@): Void!U8[] //<
         mark: =
             note_mark(doc, name.equals("endnoteReference"), x.attr_or("id", "", a)!)!
         top.put_raw(mark, doc.view@)!
+
+priv fn hidden_now(doc: Doc@, w: Walk@): Bool //<
+    //< Whether the current run's text is hidden: by the run itself, or else by its styles
+    //< **A run's own `vanish` decides alone.** Without one, the character style and the
+    //< paragraph style each turn it over, as Word turns an on-off property in a style over.
+    if w.vanish >= 0
+        return w.vanish == 1
+    $para: U8[] = ""
+    $k: = w.boxes.len
+    for k > 0
+        k -= 1
+        if w.boxes.get(k).kind == Kind.para
+            para = w.boxes.get(k).style
+            break
+    by_run: = w.run_style.len > 0 && doc.styles.hides(w.run_style)
+    by_para: = para.len > 0 && doc.styles.hides(para)
+    return by_run != by_para
+
+priv const SYMBOLS: U8[][36] = ::{ "symbol a3 ≤", "symbol a5 ∞", "symbol ac ←", "symbol ad ↑",
+    "symbol ae →", "symbol af ↓", "symbol b0 °", "symbol b1 ±", "symbol b3 ≥", "symbol b4 ×",
+    "symbol b7 •", "symbol b8 ÷", "symbol b9 ≠", "symbol bb ≈", "symbol d6 √", "wingdings 6f ☐",
+    "wingdings 71 ☐", "wingdings 72 ☐", "wingdings 78 ☒", "wingdings 9f •", "wingdings a8 ☐",
+    "wingdings fb ✗", "wingdings fc ✓", "wingdings fd ☒", "wingdings fe ☑", "wingdings 2 4f ✗",
+    "wingdings 2 50 ✓", "wingdings 2 51 ☒", "wingdings 2 52 ☑", "wingdings 2 53 ☒",
+    "wingdings 2 54 ☒", "wingdings 2 a3 ☐", "wingdings 2 98 ●", "wingdings 2 99 ○",
+    "webdings 61 ✓", "webdings 63 ☐" } //< the symbols a symbol font draws that a view shows, as `font code character`
+        //< **The check boxes and marks a form uses, and the signs of the Symbol font.** Each box is
+        //< made the ballot box a reader knows (☐ ☑ ☒), whichever of the fonts' boxes it is. Any
+        //< other symbol of these fonts is left out: a code with no character is no text to search
+        //< or quote.
+
+priv fn symbol(font: U8[], code: U8[], arena: Arena$@): U8[] //<
+    //< The text a `w:sym` shows: its font's symbol of that code, or the character the code names
+    //< Word stores a symbol font's code as itself or with 0xF000 added. Another font's code is
+    //< the Unicode character, unless it is in the private use area, which no reader can show.
+    v: = hex_number(code.trim_spaces())
+    if v < 0
+        return ""
+    near: = v - 0xF000 if v >= 0xF000 && v <= 0xF0FF else v
+    name: = font.trim_spaces().to_lower_ascii(arena)
+    if near < 0x100 &&
+        (name.equals("symbol") || name.starts_with("wingdings") || name.equals("webdings"))
+        key: = arena.text().s(name).c(' ').c(hex_digit(near >> 4)).c(hex_digit(near & 15)).c(' ')
+            .take()
+        for entry in SYMBOLS
+            if entry.starts_with(key)
+                return entry.sub_from(key.len)
+        return ""
+    if v < 0x20 || (v >= 0x7F && v < 0xA0) || (v >= 0xD800 && v <= 0xDFFF) ||
+        (v >= 0xE000 && v <= 0xF8FF)
+        return ""
+    out: = arena.text()
+    for k in Range.asc(chars.codepoint_len(v))
+        out.c(chars.codepoint_byte(v, k))
+    return out.take()
+
+priv fn hex_number(text: U8[]): I32 //< a number of 1 to 6 hex digits; -1 for none or more
+    if text.len == 0 || text.len > 6
+        return -1
+    $v: I32 = 0
+    for c in text
+        d: = c.hex_val() catch
+            return -1
+        v = v * 16 + d
+    return v if v <= 0x10FFFF else -1
+
+priv fn hex_digit(v: I32): U8 //< one hex digit, lower case
+    return U8::(v + '0') if v < 10 else U8::(v - 10 + 'a')
 
 priv fn count_of(text: U8[]): Sz //< a count of grid columns, 0 to 1000; 0 where the text is none
     v: = text.trim_spaces().to_i64() catch

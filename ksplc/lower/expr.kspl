@@ -363,17 +363,21 @@ impl Ast_node
         // The value runs first, then the place's steps left to right, then the write ("Evaluation
         // order" in docs/SPEC-programming-language.md). A place fixed before a call in the value
         // could point into memory the call moved.
-        defer $ops: = Operand_order()
-        ops.add_value(r, 2, owed.type_id != 0, lctx)
-
         // A place-returning subscript (`Index_place`) is not made a `set`: its `at(i)$` is an
         // lvalue, so it is an ordinary (or compound) assignment below.
-        if left.kind_id == .k_expr_postfix && left.postfix_op_text().equals("[") &&
+        by_set: =
+            left.kind_id == .k_expr_postfix && left.postfix_op_text().equals("[") &&
             left.def_node.is_fn_decl() && !lctx.sema.env.is_place_index_node(left)
+        defer $ops: = Operand_order()
+        // Through `set`, the value is its third parameter, and takes a count where that does.
+        ops.add_value(r, 2,
+            (left.def_node.arc_param_takes(2, lctx) if by_set else owed.type_id != 0), lctx)
+
+        if by_set
             loc: = r.loc
             method_node: = left.def_node
-            ops.add(left, 0, method_node.receiver_is_pointer(lctx.sema))
-            ops.add(left, 2, false)
+            left.add_method_operand(lctx, ops@, 0, 0)
+            left.add_method_operand(lctx, ops@, 2, 1)
             ops.apply(lctx)
             value: = r.get_assign_right()
             value.lower(lctx)
@@ -406,7 +410,10 @@ impl Ast_node
         ops.finish(lctx)
         r.finish_arc_assign(lctx, owed)
 
-    fn lower_postfix_index_operator(r: Ast_node$@, lctx: Lowering_ctx$@)
+    fn lower_postfix_index_operator(r: Ast_node$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
+        //< A subscript through a method (`at`, `at_ref` or `get`) becomes that method's call
+        //< ops holds the operands, ordered by order_index_operands; their counts go in before the
+        //< call.
         loc: = r.loc
         res_type_id: = r.type_id
         method_node: = r.def_node
@@ -425,6 +432,7 @@ impl Ast_node
         else
             expr_node.lower(lctx)
         next_op.lower(lctx)
+        ops.finish(lctx)
 
         if is_place
             // It rewrites an `a[i]` as `a.at(i)$`, dereferenced at once, so reads, assignments and
@@ -464,8 +472,9 @@ impl Ast_node
         // A part read off a fresh value holds the value first, which also fixes the order.
         if r.lower_arc_part_of_fresh(lctx)
             return
+        defer $ops: = Operand_order()
         if op_text.equals("[")
-            r.order_index_operands(lctx)
+            r.order_index_operands(lctx, ops@)
             r.hoist_index_receiver(lctx)
         if op_text.equals("!")
             r.lower_try_op(lctx)
@@ -473,9 +482,8 @@ impl Ast_node
         if r.arc_needs_pointer_hoist(lctx)
             r.set_child(0, r.get_postfix_receiver().hoist_complex_expr(lctx, true))
         if op_text.equals("[") && r.def_node.is_fn_decl()
-            r.lower_postfix_index_operator(lctx)
+            r.lower_postfix_index_operator(lctx, ops@)
             return
-        defer $ops: = Operand_order()
         if op_text.equals("(")
             r.order_call_operands(lctx, ops@)
             r.hoist_method_receiver(lctx)
@@ -542,15 +550,16 @@ impl Ast_node
             else obj_node.hoist_complex_expr(lctx, true))
         recv_node.set_child(0, new_obj)
 
-    priv fn order_index_operands(r: Self$@, lctx: Lowering_ctx$@) //<
+    fn order_index_operands(r: Self$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
         //< A subscript's operands in order: the receiver (an array by its address), then the index
-        recv: = r.get_child(0)
-        defer $ops: = Operand_order()
-        by_address: =
-            (r.def_node.receiver_is_pointer(lctx.sema) if r.def_node.is_fn_decl()
-            else !lctx.sema.env.is_slice(recv.type_id))
-        ops.add(r, 0, by_address)
-        ops.add(r, 2, false)
+        //< A subscript through a method passes them as that method's call would, with their counts;
+        //< the caller lowers it, then calls `ops.finish`.
+        if r.def_node.is_fn_decl()
+            r.add_method_operand(lctx, ops, 0, 0)
+            r.add_method_operand(lctx, ops, 2, 1)
+        else
+            ops.add(r, 0, !lctx.sema.env.is_slice(r.get_child(0).type_id))
+            ops.add(r, 2, false)
         ops.apply(lctx)
 
     priv fn order_call_operands(r: Self$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
@@ -584,7 +593,21 @@ impl Ast_node
             else
                 inner.lower(lctx)
 
-    priv fn lower_user_operator(r: Ast_node$@, lctx: Lowering_ctx$@)
+    priv fn add_method_operand(r: Self$@, lctx: Lowering_ctx$@, ops: Operand_order$@, idx: Sz,
+        param_pos: Sz) //<
+            //< It adds child idx of a call built by hand to ops, as r.def_node's parameter param_pos
+            //< Caution: **Count an operator's and a subscript's operands as a written call's.** The
+            //< method releases each managed value it takes by value, the receiver included. Added
+            //< without its count, `a + b` on a type holding an `Rc` frees what `a` and `b` hold.
+        method: = r.def_node
+        if param_pos == 0 && method.receiver_is_pointer(lctx.sema)
+            ops.add(r, idx, true)
+        else
+            ops.add_value(r, idx, method.arc_param_takes(param_pos, lctx), lctx)
+
+    priv fn lower_user_operator(r: Ast_node$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
+        //< A user operator becomes its method's call, bound to a temporary
+        //< ops holds the operands, already in order; their counts go in before the call.
         loc: = r.loc
         res_type_id: = r.type_id
         method_node: = r.def_node
@@ -608,6 +631,7 @@ impl Ast_node
         if recv_node.has_side_effect()
             recv_node = recv_node.hoist_to_tmp(lctx, loc)
 
+        ops.finish(lctx)
         r.finish_call_as_tmp(lctx, tmp_name, recv_node, method_node, args_node, res_type_id, loc)
     fn lower_expr_ternary(r: Self$@, lctx: Lowering_ctx$@)
         cond_node: = r.get_ternary_cond()
@@ -644,17 +668,20 @@ impl Ast_node
 
     fn lower_expr_node(r: Ast_node$@, lctx: Lowering_ctx$@)
         op: = r.safe_get_child(1)
+        if r.def_node.is_fn_decl()
+            // A user operator's left side is its receiver, its right side the next parameter.
+            defer $user_ops: = Operand_order()
+            if r.children.len == 3
+                r.add_method_operand(lctx, user_ops@, 0, 0)
+                r.add_method_operand(lctx, user_ops@, 2, 1)
+                user_ops.apply(lctx)
+            r.lower_user_operator(lctx, user_ops@)
+            return
         if r.children.len == 3 && !op.is_literal("&&") && !op.is_literal("||")
             defer $ops: = Operand_order()
-            // A user operator's left side is its receiver, taken by address where the method says
-            // so.
-            ops.add(r, 0,
-                r.def_node.is_fn_decl() && r.def_node.receiver_is_pointer(lctx.sema))
+            ops.add(r, 0, false)
             ops.add(r, 2, false)
             ops.apply(lctx)
-        if r.def_node.is_fn_decl()
-            r.lower_user_operator(lctx)
-            return
         if r.children.len == 3
             op_node: = r.get_child(1)
             if op_node.is_literal("&&")
@@ -667,6 +694,8 @@ impl Ast_node
 
     fn lower_expr_unary(r: Ast_node$@, lctx: Lowering_ctx$@)
         if r.def_node.is_fn_decl()
-            r.lower_user_operator(lctx)
+            defer $ops: = Operand_order()
+            r.add_method_operand(lctx, ops@, 1, 0)
+            r.lower_user_operator(lctx, ops@)
             return
         r.lower_default(lctx)

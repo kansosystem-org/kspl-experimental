@@ -1,0 +1,122 @@
+//< Word and Excel files made by the tests, each holding only the parts a case needs
+//< **A fixture made here holds what no file from Office or a library should**, or the one piece
+//< of markup a case is about, so the case reads whole in its test.
+import "std/bytes"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+
+struct Entry_spec //< one entry of a zip made for a test
+    name: U8[]
+    data: U8[] //< the bytes as stored
+    method: U16 //< 0 stored, 8 DEFLATE
+    size: Sz //< the size it declares unpacked
+    crc: U32
+
+fn stored(name: U8[], data: U8[]): Entry_spec //< an entry stored as it is
+    return Entry_spec::{ .name = name, .data = data, .method = 0U16, .size = data.len,
+        .crc = data.crc32(0xFFFFFFFFU32) ^ 0xFFFFFFFFU32 }
+
+fn zip_of(entries: Entry_spec[], arena: Arena$@): U8[] //< the entries as one zip file
+    out: = arena.text()
+    $at: Sz = 0
+    $offsets: = List<|Sz|>(arena)
+    for e in entries
+        offsets.push(at)
+        u32(out, 0x04034b50U32)
+        u16(out, 20)
+        u16(out, 0)
+        u16(out, e.method)
+        u32(out, 0U32)
+        u32(out, e.crc)
+        u32(out, U32::e.data.len)
+        u32(out, U32::e.size)
+        u16(out, I32::e.name.len)
+        u16(out, 0)
+        out.s(e.name).s(e.data)
+        at += 30 + e.name.len + e.data.len
+    cd_at: = at
+    for k in Range.asc(entries.len)
+        e: = entries[k]
+        u32(out, 0x02014b50U32)
+        u16(out, 20)
+        u16(out, 20)
+        u16(out, 0)
+        u16(out, e.method)
+        u32(out, 0U32)
+        u32(out, e.crc)
+        u32(out, U32::e.data.len)
+        u32(out, U32::e.size)
+        u16(out, I32::e.name.len)
+        for _z in Range.asc(4)
+            u16(out, 0)
+        u32(out, 0U32)
+        u32(out, U32::offsets.get(k))
+        out.s(e.name)
+        at += 46 + e.name.len
+    u32(out, 0x06054b50U32)
+    u16(out, 0)
+    u16(out, 0)
+    u16(out, I32::entries.len)
+    u16(out, I32::entries.len)
+    u32(out, U32::(at - cd_at))
+    u32(out, U32::cd_at)
+    u16(out, 0)
+    return out.take()
+
+fn u16(out: str.Arena_text$@, v: I32) //< two bytes, least significant first
+    out.c(U8::(v & 0xFF)).c(U8::((v >> 8) & 0xFF))
+
+fn u32(out: str.Arena_text$@, v: U32) //< four bytes, least significant first
+    out.c(U8::(v & 0xFFU32)).c(U8::((v >> 8U32) & 0xFFU32)).c(U8::((v >> 16U32) & 0xFFU32))
+        .c(U8::(v >> 24U32))
+
+fn docx_of(document: U8[], numbering: U8[], arena: Arena$@): U8[] //<
+    //< A Word file of a document part, and a numbering part where it is not empty
+    rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
+            Target=\"word/document.xml\"/></Relationships>"
+    doc_rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/numbering\" \
+            Target=\"numbering.xml\"/></Relationships>"
+    $entries: = List<|Entry_spec|>(arena)
+    entries.push(stored("_rels/.rels", rels))
+    entries.push(stored("word/document.xml", document))
+    if numbering.len > 0
+        entries.push(stored("word/_rels/document.xml.rels", doc_rels))
+        entries.push(stored("word/numbering.xml", numbering))
+    return zip_of(entries.slice(), arena)
+
+fn docx_styled(document: U8[], styles: U8[], arena: Arena$@): U8[] //<
+    //< A Word file of a document part and a styles part
+    rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
+            Target=\"word/document.xml\"/></Relationships>"
+    doc_rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/styles\" \
+            Target=\"styles.xml\"/></Relationships>"
+    return zip_of(Entry_spec[]::{ stored("_rels/.rels", rels),
+        stored("word/document.xml", document), stored("word/_rels/document.xml.rels", doc_rels),
+        stored("word/styles.xml", styles) }, arena)
+
+fn xlsx_of(sheet: U8[], strings: U8[], styles: U8[], arena: Arena$@): U8[] //<
+    //< An Excel file of one sheet named `S`, with shared strings and styles where not empty
+    rels: =
+        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
+            Target=\"xl/workbook.xml\"/></Relationships>"
+    book: = "<workbook><sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"
+    book_rels: = arena.text()
+        .s("<Relationships><Relationship Id=\"rId1\" Type=\"x/worksheet\" Target=\"sheet.xml\"/>")
+    $entries: = List<|Entry_spec|>(arena)
+    entries.push(stored("_rels/.rels", rels))
+    entries.push(stored("xl/workbook.xml", book))
+    entries.push(stored("xl/sheet.xml", sheet))
+    if strings.len > 0
+        book_rels.s("<Relationship Id=\"rId2\" Type=\"x/sharedStrings\" Target=\"strings.xml\"/>")
+        entries.push(stored("xl/strings.xml", strings))
+    if styles.len > 0
+        book_rels.s("<Relationship Id=\"rId3\" Type=\"x/styles\" Target=\"styles.xml\"/>")
+        entries.push(stored("xl/styles.xml", styles))
+    entries
+        .push(stored("xl/_rels/workbook.xml.rels", book_rels.s("</Relationships>").take()))
+    return zip_of(entries.slice(), arena)

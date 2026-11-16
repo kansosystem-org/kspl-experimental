@@ -415,12 +415,16 @@ priv fn named_type_text(c: Sema_ctx$@, expr: Ast_node$@, declared_id: I32): U8[]
 
 priv fn cast_target_text(c: Sema_ctx$@, cast: Ast_node$@, declared_id: I32): U8[] //<
     //< An explicit cast's type, or empty where [I0301] asks to drop the cast instead
-    //< Caution: **Back off where the cast only widens.** There [I0301] says to delete the cast and
-    //< keep the annotation that drives the conversion; deleting both leaves the value's own type.
+    //< Caution: **Back off where the cast only widens or changes nothing.** There [I0301] says to
+    //< delete the cast and keep the annotation; deleting both can leave the value's own type.
     //< While instantiating, [I0301] says nothing, so the two cannot conflict.
     value: = cast.get_child(0)
     real_src: = c.env.get_real_type(value.type_id)
     real_dst: = c.env.get_real_type(declared_id)
+    // **Nor where the cast changes nothing**: [I0301] asks to drop it, so one fix per line.
+    if !c.is_instantiating() && value.type_id != 0 &&
+        sema_body_coerce.is_identity_cast(value, real_src, real_dst)
+        return ""
     if !c.is_instantiating() && value.type_id != 0 && real_src != real_dst
         kind: = sema_body_coerce.implicit_cast_kind(c, real_src, real_dst, value.type_id,
             declared_id)

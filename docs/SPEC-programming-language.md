@@ -1092,6 +1092,8 @@ trait Seqish<|E|>
 
 **A method including `Self` as a type argument in its return cannot be implemented** (`fn chain(r: Self): Wrap<|Self|>`; the error stands at each `impl`). Without a body, its table slot's type would differ per implementation. With a default body, the body could not be copied into a generic implementation, where `Self` is not yet known. Write such a chaining method separately on each type. A method that returns `Self` itself is another case (§5.3).
 
+**A trait's method takes no type parameters of its own** (`fn conv<|U|>(r: Self, …)` is a compile error at the trait), with a default body or without. A call through a trait value picks one implementation from its table, and a generic method has no single implementation to put there. Put the type parameter on the trait (`trait Conv<|U|>`), or write the method in the type's plain `impl` block, where a method can take its own ([3.3](#33-structs-struct)).
+
 **A method's visibility**: each method inherits the `trait`'s own visibility, and `pub` / `priv` written before it takes precedence (never wider than the `trait`). A `struct`'s fields, by contrast, do not inherit ("Visibility" in [3.3](#33-structs-struct)).
 
 The visibility controls calls through a trait value, not conformance, so the conforming `impl` chooses its methods' visibility independently. So a published trait can have methods only the compiler or the declaring file calls (§8.4.2's `Ref_counted`):
@@ -1886,7 +1888,7 @@ However it escapes, every `defer` registered along the way runs ([8.4.1](#841-th
 
 A function is defined with `fn`, always at the top level or inside an `impl` block. Each parameter's type is written out. A method receives the value it acts on as its first argument, in a shape written by hand ([5.2](#52-implementations-impl-and-receivers)).
 
-* **Generics and their constraints**: `fn name<|T|>(...): return type` declares a type parameter `T`, which each use fills with a real type. `<|T: Trait|>` admits only types implementing that trait, and `+` joins several constraints (`<|T: Drawable + Serializable|>`).
+* **Generics and their constraints**: `fn name<|T|>(...): return type` declares a type parameter `T`, which each use fills with a real type. `<|T: Trait|>` admits only types implementing that trait, and `+` joins several constraints (`<|T: Drawable + Serializable|>`). **A constraint can name any of the list's type parameters, in any order**: every one is bound before a constraint is checked, so `<|S: Seq<|E|>, E|>` means `<|E, S: Seq<|E|>|>`.
 * **A generic method body is checked when used.** A call or a function-value reference requires its body. A trait view requires all methods in its table. ARC requires `retain` and `release`. Signatures and trait requirements are checked independently of bodies. An unused copying method does not prevent storing a `Move_only` element in that type.
 
 ```kspl
@@ -2275,11 +2277,18 @@ import "std/mem"
 
 // make the conforming impl's methods priv too (otherwise a direct call on the concrete type would go through).
 impl My_handle: Ref_counted
-    priv fn retain($r: Self$@)
-        r.ctrl.count += 1
-    priv fn release($r: Self$@)
+    priv fn retain(r: Self@)
+        if r.ctrl != null
+            r.ctrl.count += 1
+    priv fn release(r: Self@)
+        if r.ctrl == null
+            return // the zero value owns nothing
         ...
 ```
+
+**The receiver is `r: Self@`.** The compiler's calls also pass the address of a binding that cannot be written, which a `Self$@` receiver would refuse.
+
+**`retain` and `release` must accept the zero value**, the one whose bytes are all zero, and do nothing on it. The compiler releases what a slot holds when it is replaced or leaves its scope. A slot never set holds the zero value: an array's unused element, or a field a literal left out. A `release` that follows a null pointer there stops the program.
 
 `Ref_counted` is **a trait known to the compiler**, but only conformance to `std.lang.Ref_counted` itself counts. A trait of the same name in your own file does not enable ARC. `std/mem` can be imported from a freestanding build too.
 

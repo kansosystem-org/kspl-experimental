@@ -81,6 +81,21 @@ impl Sema_ctx
             //< It also resolves the prototype's types. registry and mono read the result.
         m_kind: = sema_type_scope.Sym_kind.function(false)
         m_sym: = Sema_symbol(m_kind, m_name, m_node)
+        // **A trait method takes no type parameters of its own**, with a body or without. A call
+        // through a trait value picks one implementation from the table, and a generic method has
+        // no single one to put there. Its symbol stays out of the trait, so the trait's users and
+        // each `impl` add no "undefined type" or "does not implement" to the one error.
+        // Caution: **Do not throw here.** This is the registries' pass over every file; a throw
+        // leaves the files after this one without theirs.
+        gen: = m_node.find_child(.k_type_gen_params)
+        if gen != null
+            r.clear_scratch()
+                .s("trait method '\{m_name\}' cannot take type parameters of its own. A call \
+                    through a trait value picks one implementation, and a generic method has none \
+                    to pick. Put the type parameter on the trait ('trait Name<|U|>'), or move \
+                    '\{m_name\}' to the type's plain 'impl' block.")
+            r.err(gen, r.scratch.slice())
+            return m_sym
         m_sym.flags.is_method = true
         // A method inherits the trait's visibility unless it states its own
         // (`priv fn release(...);`, the grammar rule decl_trait). Ignoring that would let it be

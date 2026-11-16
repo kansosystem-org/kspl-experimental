@@ -398,8 +398,8 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
 
 priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     //< Whether any segment along `root/rel` is a link
-    //< A segment it cannot check counts as a link. **The root itself is not checked**: a root that
-    //< is a link is normal (macOS's `/tmp`).
+    //< A segment it cannot check counts as a link, save one too long to stand (`name_too_long_on`).
+    //< **The root itself is not checked**: a root that is a link is normal (macOS's `/tmp`).
     //< Caution: **Check every segment.** Checking only the last lets a link in the middle through.
     //< **Check the prefixes of the path `join` gives, the path the OS opens**, not segments joined
     //< again. On POSIX `\` is an ordinary byte, so a link named `x\y` re-joined as `x/y` is not
@@ -412,11 +412,36 @@ priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     $start: Sz = 0
     for start <= right.len
         end: = sys.segment_end(right, start)
-        empty: = end == start
+        seg: = right.sub(start, end - start)
         start = end + 1
-        if !empty && is_link(whole.sub(0, base + end))
-            return true
+        prefix: = whole.sub(0, base + end)
+        if seg.len == 0 || !is_link(prefix)
+            continue
+        // **A step longer than the OS allows names nothing, nor does anything below it.** The OS
+        // cannot look it up, so `is_link` cannot tell, yet no file can stand there to serve. Where
+        // something does stand (a file system with longer names), the link check holds.
+        if name_too_long_on(seg, sys.is_windows()) && !exists(prefix)
+            return false
+        return true
     return false
+
+priv const MAX_NAME_UNITS: Sz = 255 //< the longest name the common file systems hold
+    //< In bytes on Linux and macOS (`NAME_MAX`), in UTF-16 units on Windows (NTFS, exFAT).
+
+fn name_too_long_on(name: U8[], windows: Bool): Bool //<
+    //< Whether one name is longer than the file system holds, on Windows or on POSIX
+    //< **Each OS counts in its own unit**, so the same name can fit on one OS and not the other:
+    //< 100 kana are 300 bytes but 100 UTF-16 units. A test checks both answers on every OS.
+    if !windows
+        return name.len > MAX_NAME_UNITS
+    // A UTF-8 lead byte starts one UTF-16 unit, or two from `0xF0` (outside the BMP).
+    $units: Sz = 0
+    for b in name
+        if b < 0x80U8 || b >= 0xC0U8
+            units += 1
+        if b >= 0xF0U8
+            units += 1
+    return units > MAX_NAME_UNITS
 
 pub fn stays_under( //< whether a relative path really stays inside the root, links included
     //< It does both the text check (`sys.is_safe_relative`) and the check that no segment along

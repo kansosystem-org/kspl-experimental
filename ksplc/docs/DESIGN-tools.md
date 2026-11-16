@@ -112,6 +112,8 @@ The walk reaches files that cannot be built, such as the fixtures in `tests/nega
 
 **Files are narrowed by the whole identifier, not a substring** (`at` sits inside `that`). `mentions_ident` in `base/ast_spell.kspl` is the rule the rest of the compiler uses.
 
+**The word is the declaration's, resolved in the document first, not the word under the cursor** (`filter_word` in `lsp/uses.kspl`). Started on `Self`, the cursor's word names no other file. **A method the syntax calls is found by its type's name**: a type call (`Vector(1, 2)`) never spells `new`, and `a + b` never spells `add`.
+
 Caution: **Measure with the cache an ordinary session would have.** ksplc's own identity is in the key, so building the compiler empties the cache, and a full gate run right before fills it.
 
 **Each file is read as it stands at the request: an open document from its buffer, every other file from the disk.** An open document's buffer is in `source_map` (`populate_source_map_from_store`); positions taken from the saved file would land on the wrong lines. A file not open can change on disk with no notification, so no copy from an earlier request stands in for it. `run_fresh` in `ksplc/tests/support/lsp_fresh.kspl` changes the files between requests and checks each edit against the bytes the editor applies it to.

@@ -296,8 +296,10 @@ impl Sema_ctx
             r.env.instantiated_nodes_list.push(node)
 
     fn bind_generic_args(r: Self$@, params_node: Ast_node@, args: I32[], check_constraints: Bool) //<
-        //< Binds the type arguments.
+        //< Binds the type arguments, then checks each one's constraint
         //< check_constraints says whether this is **the instantiation's first binding**.
+        //< **Every parameter is bound before any constraint is checked**, so a constraint may name
+        //< a parameter written after it (`<|S: Seq<|E|>, E|>` as `<|E, S: Seq<|E|>|>`).
         //< Caution: **Pass false on a path that only rebinds**: the check's resolve_type caches
         //< its result in the node's type_id.
         if params_node == null
@@ -306,25 +308,32 @@ impl Sema_ctx
         for p in params_node.children
             param_id_node: Ast_node$@ = p.gen_param_id_node() catch
                 continue
-            $constraint_node: Ast_node$@ = null
-            is_const_param: = p.is_const_gen_param()
-
-            if p.kind_id == .k_type_gen_param
-                constraint_node = p.find_child(.k_type_constraint)
-
-            if p_idx < args.len
-                k_id: = r.env.get_or_add(param_id_node.text)
-                a_id: = args[p_idx]
-                r.generics.args
-                    .push(sema_session_state.Generic_arg::{ .param_name_id = k_id,
-                    .bound_type_id = a_id, .is_const = is_const_param })
-                if is_const_param && check_constraints
-                    r.check_const_arg(p, param_id_node.text, r.env.get_str(a_id))
-                if constraint_node != null && check_constraints
-                    // While suppressed, check_type_constraint does not decide but records and
-                    // returns (Pending_constraint in sema/session/state.kspl).
-                    constraint_node.check_type_constraint(r, a_id) catch {}
-                p_idx += 1
+            if p_idx >= args.len
+                break
+            r.generics.args
+                .push(sema_session_state.Generic_arg::{ .param_name_id = r.env
+                .get_or_add(param_id_node.text), .bound_type_id = args[p_idx],
+                .is_const = p.is_const_gen_param() })
+            p_idx += 1
+        if !check_constraints
+            return
+        p_idx = 0
+        for p in params_node.children
+            param_id_node: Ast_node$@ = p.gen_param_id_node() catch
+                continue
+            if p_idx >= args.len
+                break
+            a_id: = args[p_idx]
+            p_idx += 1
+            if p.is_const_gen_param()
+                r.check_const_arg(p, param_id_node.text, r.env.get_str(a_id))
+            if p.kind_id != .k_type_gen_param
+                continue
+            constraint_node: = p.find_child(.k_type_constraint)
+            if constraint_node != null
+                // While suppressed, check_type_constraint does not decide but records and returns
+                // (Pending_constraint in sema/session/state.kspl).
+                constraint_node.check_type_constraint(r, a_id) catch {}
 
     priv fn check_const_arg(r: Self$@, param: Ast_node$@, name: U8[], value: U8[]) //<
         //< Refuses a value type argument its `const` parameter's type does not hold, at the use

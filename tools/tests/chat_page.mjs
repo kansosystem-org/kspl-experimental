@@ -2,7 +2,8 @@
 // page appends it to the ask file, `ksagent watch` (started by the opener with `--show`) asks a
 // stand-in model server, the answer grows in the live file, and the checked answer replaces it.
 // The cases: the Markdown reader alone, on usual and on hostile text; asking; the answer growing;
-// the checked answer; a stopped answer; a model's answer holding markup, shown as text; Japanese;
+// the checked answer; a stopped answer; a model's answer holding markup, shown as text; Japanese,
+// with an Excel source placed by its sheet and row;
 // a save that meets another tab's write; a reload; a turn the reader cannot show; a question whose
 // save is never answered, or answered late; lines ksagent
 // refuses; an answer ksagent could not record; and an ask file past its cap. The browser and its
@@ -36,7 +37,9 @@ const REPLIES = [
     "[good](https://example.com/) and ![picture](https://example.com/p.png)", sources: [] },
   { when: "recorded", ms: 120, text: "This answer will not be recorded. ".repeat(4), sources: [] },
   { when: "有給休暇", ms: 60, text: "入社6か月後に**10日**です。",
-    sources: [{ path: "規程/休暇.md", from_line: 3, to_line: 3, quote: "入社6か月後に10日付与する" }] },
+    sources: [{ path: "規程/休暇.md", from_line: 3, to_line: 3, quote: "入社6か月後に10日付与する" },
+      // Line 8 of the Excel file's view is row 9: row 8 is empty.
+      { path: "規程/leave.xlsx", from_line: 8, to_line: 8, quote: "始業時刻 | 09:00" }] },
 ];
 
 function startOpener(exe, root, modelPort) {
@@ -148,6 +151,8 @@ async function main() {
   fs.mkdirSync(path.join(root, "規程"), { recursive: true });
   fs.writeFileSync(path.join(root, "rules/leave.md"), LEAVE);
   fs.writeFileSync(path.join(root, "規程/休暇.md"), KYUKA);
+  fs.copyFileSync(new URL("../../ksagent/tests/office_data/leave.xlsx", import.meta.url),
+    path.join(root, "規程/leave.xlsx"));
   const model = await standIn({ replies: REPLIES });
   const child = await startOpener(place(opener, work), root, model.port);
   const disk = (f) => { try { return fs.readFileSync(path.join(root, f), "utf8"); } catch (_) { return ""; } };
@@ -339,6 +344,10 @@ async function main() {
     check(await d.until(`${turn(3)}.querySelector('.q').textContent === '有給休暇は何日ですか?' &&
       ${turn(3)}.querySelector('.md strong').textContent === '10日'`, 15000),
       "the Japanese question and answer show as written", await d.js(`${turn(3)}.textContent`));
+    const excelSource = `(${turn(3)}.querySelectorAll('.sources li')[1] || {textContent: ''}).textContent`;
+    check(await d.until(`${excelSource}.startsWith('規程/leave.xlsx sheet 規程一覧, row 9')`, 15000),
+      "an Excel source shows the sheet and row Excel shows, not the view's line",
+      await d.js(excelSource));
     check(disk(`${name}.chat.jsonl`).includes("\"lang\":\"ja\""), "the chat file records its language");
 
     // A save that meets another tab's write: just before the page's write goes out, a write of

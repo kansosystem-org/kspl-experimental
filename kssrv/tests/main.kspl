@@ -4,6 +4,7 @@
 //< `make test` runs it and passes the server it built and a working directory.
 //< **On Windows the firewall prompt appears every time, and that is normal.** kssrv listens on
 //< 0.0.0.0, so Windows Defender asks permission for incoming connections.
+import "kssrv/tests/answers"
 import "kssrv/tests/build"
 import "kssrv/tests/client"
 import "kssrv/tests/guard"
@@ -294,6 +295,9 @@ priv fn bring_up_local( //< starts kssrv with `--local`, and checks that it put 
 priv fn serve_outward_and_check(at: Placed, arena: Arena$@) //< the outward-facing server's checks
     if !verdict.check("the files the guard asks for are placed", guard.place(at.root, arena),
         at.root)
+        return
+    if !verdict.check("the files the answers are checked on are placed",
+        answers.place(at.root, arena), at.root)
         return
     started: =
         bring_up(at.exe, at.root, at.tmp, "kssrv", U8[][]::{},
@@ -620,6 +624,7 @@ priv fn run_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end
     api_cases(port, root, arena)!
     keepalive_cases(port, arena)!
     kept.file_cases(port, arena)!
+    answers.cases(port, root, arena)!
 
 // --- static serving, percent-decoding, escaping outside the root ---
 priv fn serve_cases(port: I32, arena: Arena$@): Void!client.Http_end
@@ -645,7 +650,7 @@ priv fn serve_cases(port: I32, arena: Arena$@): Void!client.Http_end
     module_type: = client.header(module.head, "content-type")
     verdict.check("a .mjs module is sent as JavaScript",
         module_type.starts_with("text/javascript"), module_type)
-    sub: = client.get(port, "/sub", "", arena)!
+    sub: = client.get(port, "/sub/", "", arena)!
     ok4: = sub.status == 200 && sub.body.equals("sub index\n")
     d5: = client.shown(sub, arena)
     verdict.check("a directory returns the index.html below it", ok4, d5)

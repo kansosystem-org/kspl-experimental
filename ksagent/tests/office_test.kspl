@@ -1,15 +1,17 @@
 //< Word and Excel files: their text views, and the tools and the citation check on them
 //< The files in `office_data/` come from python-docx and openpyxl, with what those cannot write
 //< added by hand (`make_office_fixtures.py` beside this file says what). The tests need no Python.
-import "ksagent/answer" + { Source }
+import "ksagent/answer" + { Answer, Source }
+import "ksagent/chat"
 import "ksagent/files"
 import "ksagent/office/cell_format"
 import "ksagent/office/excel"
 import "ksagent/office/numbering"
 import "ksagent/office/word"
+import "ksagent/tests/office_files"
 import "ksagent/tests/stub"
 import "std/chars"
-import "std/ds"
+import "std/ds" { List }
 import "std/fs"
 import "std/mem" { Arena }
 import "std/str"
@@ -83,6 +85,73 @@ fn test_an_excel_file_reads_as_its_rows()
         view.find_str("旧規程").is_none() && view.find_str("15日").is_none() &&
         view.find_str("シャナイ").is_none(), view)
 
+fn test_an_excel_escape_shows_its_character()
+    verdict.start("[ksagent] an Excel cell's `_xHHHH_` shows the character it stands for")
+    // **Excel writes a carriage return or a tab in a cell as `_x000D_` or `_x0009_`**, and an
+    // underscore that would read as such as `_x005F_`. The person sees the character.
+    defer arena: = Arena(256 * 1024)
+    strings: = arena.text().s("<sst><si><t>Line1_x000D_\nLine2</t></si>")
+        .s("<si><t>Tab_x0009_here</t></si>")
+        .s("<si><r><t>a_x005F_</t></r><r><t>x0041_b</t></r></si>")
+        .s("<si><t>_x00G1_ and _x0041</t></si></sst>").take()
+    sheet: =
+        "<worksheet><sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" \
+            t=\"s\"><v>1</v></c><c r=\"C1\" t=\"s\"><v>2</v></c><c r=\"D1\" \
+            t=\"inlineStr\"><is><t>x_x0041_y_x00e9_</t></is></c><c r=\"E1\" \
+            t=\"str\"><f>A1</f><v>sum_x0020_text</v></c><c r=\"F1\" \
+            t=\"s\"><v>3</v></c></row></sheetData></worksheet>"
+    view: =
+        excel.text_of(office_files.xlsx_of(sheet, strings, "", arena), VIEW_CAP, arena) catch why
+            fallback why
+    want: = "S!1: Line1 Line2 | Tab here | a_x0041_b | xAyé | sum text | _x00G1_ and _x0041\n"
+    verdict.check("shared, inline and formula strings are decoded; `_x005F_` keeps what follows",
+        view.equals(want), view)
+
+fn test_word_leaves_out_furigana_and_text_a_style_hides()
+    verdict.start("[ksagent] Word's furigana, and text a style hides, are left out of the view")
+    defer arena: = Arena(256 * 1024)
+    styles: =
+        "<styles><style type=\"character\" styleId=\"Secret\"><name \
+            val=\"Secret\"/><rPr><vanish/></rPr></style><style type=\"character\" \
+            styleId=\"Child\"><basedOn val=\"Secret\"/></style><style type=\"paragraph\" \
+            styleId=\"Note\"><name val=\"Note\"/><rPr><vanish/></rPr></style></styles>"
+    doc: = arena.text().s("<document><body>")
+        .s("<p><r><t xml:space=\"preserve\">Ruby: </t></r><ruby><rubyPr/>")
+        .s("<rt><r><t>しゃない</t></r></rt><rubyBase><r><t>社内</t></r></rubyBase></ruby>")
+        .s("<r><t>規程</t></r></p>").s("<p><r><t xml:space=\"preserve\">Hidden by style: </t></r>")
+        .s("<r><rPr><rStyle val=\"Child\"/></rPr><t>SECRET</t></r><r><t>end</t></r></p>")
+        .s("<p><r><rPr><rStyle val=\"Secret\"/><vanish val=\"0\"/></rPr>")
+        .s("<t>Shown over the style</t></r></p>")
+        .s("<p><pPr><pStyle val=\"Note\"/></pPr><r><t>HIDDEN NOTE</t></r>")
+        .s("<r><rPr><vanish val=\"false\"/></rPr><t>Shown in a hidden style</t></r></p>")
+        .s("</body></document>").take()
+    view: =
+        word.text_of(office_files.docx_styled(doc, styles, arena), VIEW_CAP, arena) catch why
+            fallback why
+    want: =
+        "Ruby: 社内規程\nHidden by style: end\nShown over the style\nShown in a hidden style\n"
+    verdict.check("the base text without its furigana, and no text a style hides",
+        view.equals(want), view)
+
+fn test_a_word_symbol_shows_its_character()
+    verdict.start("[ksagent] a symbol Word inserts from a symbol font shows as its character")
+    // **Word writes a symbol from Insert > Symbol as `w:sym`**: a font, and the code of the
+    // character in it. Forms take their check boxes from Wingdings.
+    defer arena: = Arena(256 * 1024)
+    doc: =
+        "<document><body><p><r><t xml:space=\"preserve\">Sym </t></r><r><sym font=\"Wingdings\" \
+            char=\"F0FE\"/></r><r><t xml:space=\"preserve\"> done </t></r><r><sym font=\"Wingdings \
+            2\" char=\"54\"/><sym font=\"wingdings\" char=\"f0a8\"/></r><r><t \
+            xml:space=\"preserve\"> 5</t></r><r><sym font=\"Symbol\" \
+            char=\"F0B1\"/></r><r><t>1</t></r><r><sym font=\"Wingdings\" char=\"F04A\"/><sym \
+            font=\"MS Mincho\" char=\"2192\"/><sym font=\"MS Mincho\" \
+            char=\"F001\"/></r></p></body></document>"
+    view: =
+        word.text_of(office_files.docx_of(doc, "", arena), VIEW_CAP, arena) catch why
+            fallback why
+    verdict.check("a check box, a mark, and a plain font's character; an unknown symbol left out",
+        view.equals("Sym ☑ done ☒☐ 5±1→\n"), view)
+
 fn test_list_numbers_take_each_format()
     verdict.start("[ksagent] a list number is written in its format: kanji, kana, letters, roman")
     defer arena: = Arena(64 * 1024)
@@ -132,6 +201,10 @@ fn test_a_cell_number_is_shown_as_its_format_shows_it()
     for i in Range.asc(expected.len)
         verdict.check(arena.text().s("shows ").s(expected[i]).take(),
             results[i].equals(expected[i]), results[i])
+    // **A Japanese Excel names General `G/標準`**, and its `G` is no era letter.
+    for code in U8[][]::{ "G/標準", "G/標準\"個\"", "g/標準;-G/標準" }
+        got: = cell_format.show("12", cell_format.of_code(code), false, arena)
+        verdict.check(arena.text().s(code).s(" shows 12 as a number").take(), got.equals("12"), got)
 
 priv fn number(text: U8[]): I64 //< a test case's number
     $v: I64 = 0
@@ -148,8 +221,8 @@ priv fn number(text: U8[]): I64 //< a test case's number
 priv fn office_folder(work: U8[], arena: Arena$@): U8[] //<
     //< A fresh folder holding the two files, an old-format one, a damaged one and a locked one
     root: = fs.mkdir_unique(work, "office-", arena) catch panic("the test folder can be made")
-    rels: = U8[][]::{ "規程/rules.docx", "規程/leave.xlsx", "規程/old.doc",
-        "規程/broken.xlsx", "規程/locked.docx" }
+    rels: = U8[][]::{ "規程/rules.docx", "規程/leave.xlsx", "規程/old.doc", "規程/broken.xlsx",
+        "規程/locked.docx" }
     bodies: = U8[][]::{ rules_docx, leave_xlsx, ole(" an old Word file", arena), "not a zip at all",
         ole(" a file Office encrypted", arena) }
     fs.write_tree(root, rels, bodies, arena) catch panic("the test folder can be written")
@@ -163,14 +236,11 @@ fn test_the_tools_search_and_read_word_and_excel_files(work: U8[], arena: Arena$
     root: = office_folder(work, arena)
     hits: = files.tool_search(files.Folder(root), "有給休暇", "", ROOM, stub.GOING, arena)
     verdict.check("a search finds the Excel row, named by its sheet and row, and the Word paragraph",
-        hits
-        .find_str("規程/leave.xlsx:2: 規程一覧!2: 有給休暇 | 入社6か月後に付与")
-        .is_some() &&
+        hits.find_str("規程/leave.xlsx:2: 規程一覧!2: 有給休暇 | 入社6か月後に付与").is_some() &&
         hits.find_str("規程/rules.docx:6: 第2条 年次有給休暇は").is_some(), hits)
     numbered: = files.tool_search(files.Folder(root), "第3条", "", ROOM, stub.GOING, arena)
     verdict.check("a search finds an article by the number Word's list numbering writes",
-        numbered.find_str("規程/rules.docx:10: 第3条 特別休暇は、5日とする。")
-        .is_some(), numbered)
+        numbered.find_str("規程/rules.docx:10: 第3条 特別休暇は、5日とする。").is_some(), numbered)
     read: = files.tool_read(files.Folder(root), "規程/leave.xlsx", 7, 7, ROOM, arena)
     verdict.check("a read numbers the view's lines",
         read.find_str("7: 規程一覧!7: 割増賃金率 | 25%").is_some(), read)
@@ -189,14 +259,70 @@ fn test_a_citation_of_a_word_or_excel_file_is_checked(work: U8[], arena: Arena$@
         "割増賃金率 | 25%" }
     for k in Range.asc(cases.len / 2)
         s: = Source::{ .path = cases[2 * k], .from_line = 10I64 if k == 0 else 7I64,
-            .to_line = 10I64 if k == 0 else 7I64, .quote = cases[2 * k + 1] }
+            .to_line = 10I64 if k == 0 else 7I64, .quote = cases[2 * k + 1],
+            .rows = answer.NO_ROWS }
         $out: = s
         why: = answer.check_source(files.Folder(root), s, out@, arena)
         verdict.check(arena.text().s("a true quote from ").s(cases[2 * k]).s(" passes").take(),
             why.len == 0, why)
     deleted: = Source::{ .path = "規程/rules.docx", .from_line = 10I64, .to_line = 10I64,
-        .quote = "特別休暇は、3日とする" }
+        .quote = "特別休暇は、3日とする", .rows = answer.NO_ROWS }
     $out: = deleted
     why: = answer.check_source(files.Folder(root), deleted, out@, arena)
     verdict.check("a quote of deleted text fails, since the view holds the text as changed",
         why.len > 0, why)
+
+fn test_a_search_matches_an_excel_row_by_its_cells(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a search matches an Excel row by its cells, not by its sheet's name")
+    // **Every line of a sheet names the sheet**, so a word of the name would match each of them,
+    // and fill the list before the lines that hold it.
+    root: = office_folder(work, arena)
+    named: = files.tool_search(files.Folder(root), "規程一覧", "", ROOM, stub.GOING, arena)
+    verdict.check("the sheet's name alone matches no row",
+        named.find_str("leave.xlsx").is_none(), named)
+    both: = files.tool_search(files.Folder(root), "規程一覧 割増賃金率", "", ROOM, stub.GOING, arena)
+    verdict.check("a row whose cells hold the other word ranks with the lines holding the most",
+        both.find_str("no line holds every word").is_some() &&
+        both.find_str("規程/leave.xlsx:7: 規程一覧!7: 割増賃金率 | 25%").is_some(), both)
+
+fn test_an_excel_source_is_shown_by_its_sheet_and_rows(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] an Excel source is shown by the sheet and rows Excel shows")
+    // **Line 8 of the view is row 9**: row 8 is empty, so it has no line.
+    root: = office_folder(work, arena)
+    cited: = Source::{ .path = "規程/leave.xlsx", .from_line = 7I64, .to_line = 8I64,
+        .quote = "25% 規程一覧!9: 始業時刻 | 09:00", .rows = answer.NO_ROWS }
+    $out: = cited
+    why: = answer.check_source(files.Folder(root), cited, out@, arena)
+    verdict.check("the quote passes, and the source gets the sheet and rows of its lines",
+        why.len == 0 && out.rows.sheet.equals("規程一覧") && out.rows.from_row == 7I64 &&
+        out.rows.to_row == 9I64 && out.rows.to_sheet.equals("規程一覧"), why)
+    $a: = Answer.ended(.answered, .en, arena)
+    a.text = "It starts at 09:00."
+    a.sources.push(out)
+    shown: = arena.text()
+    answer.write_console(a@, shown, arena)
+    console: = shown.take()
+    verdict.check("the console names the sheet and rows",
+        console.find_str("- 規程/leave.xlsx sheet 規程一覧, rows 7–9\n").is_some(), console)
+    $one: = out
+    one.from_line = 8I64
+    one.rows.from_row = 9I64
+    words: = U8[][]::{ answer.span_words(one, .en, arena),
+        answer.span_words(one, .ja, arena), answer.span_words(out, .ja, arena) }
+    verdict.check("one row, and a range, in each language",
+        words[0].equals("sheet 規程一覧, row 9") &&
+        words[1].equals("シート「規程一覧」9行目") &&
+        words[2].equals("シート「規程一覧」7–9行目"), words[1])
+    none: = List<|answer.Turn|>(arena)
+    p: = chat.Pending::{ .id = "q1", .question = "When does work start?", .lang = .en,
+        .history = none }
+    record: = chat.turn_lines(p@, a@, "", arena)
+    verdict.check("the chat file's record names the sheet and rows, for the page",
+        record
+        .find_str("\"sheet\":\"規程一覧\",\"from_row\":7,\"to_sheet\":\"規程一覧\",\"to_row\":9")
+        .is_some(), record)
+    plain: = Source::{ .path = "規程/rules.docx", .from_line = 10I64, .to_line = 10I64,
+        .quote = "特別休暇は、5日とする", .rows = answer.NO_ROWS }
+    $word_out: = plain
+    _passed: = answer.check_source(files.Folder(root), plain, word_out@, arena)
+    verdict.check("a Word source gets no sheet", word_out.rows.sheet.len == 0, "")

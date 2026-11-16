@@ -215,6 +215,21 @@ fn main(): I32
     verdict.check("--emit-libs: a compile that fails writes no file",
         bad.starts_with("FAILED ") && !fs.exists(fs.join(dir, "out.libs", arena)), bad)
 
+fn case_asm_carried(arena: Arena$@) //<
+    //< An assembly string carried over a line reaches the C as the bytes it holds
+    //< **The C must not copy the spelling.** C keeps the next line's indent after a `\` at a line's
+    //< end, so `nop; \⏎ nop` reached the assembler with eight spaces inside it. Inside a quoted
+    //< directive (`.ascii "a b"`) that changes the program's bytes.
+    dir: = harness.sandbox("cli_asm_carried")
+    src: = fs.join(dir, "a.kspl", arena)
+    out_c: = fs.join(dir, "a.c", arena)
+    io.write_file(src,
+        "fn main(): I32\n  __kspl_asm_volatile(\"nop; \\\n        nop\")\n  return 0\n") catch {}
+    name: = "an assembly string carried over a line is written joined"
+    ok_case(name, U8[][]::{ std_flag(), src, out_c }, "")
+    body: = io.read_file(out_c, null) catch ""
+    verdict.check(name, body.find_str("__asm__ volatile(\"nop; nop\")").is_some(), body)
+
 fn case_output_is_input(arena: Arena$@) //<
     //< A compile or a build refuses to write over its own input, in whatever spelling it is named
     //< **The source must read the same after each refusal**: an exit code alone would also pass

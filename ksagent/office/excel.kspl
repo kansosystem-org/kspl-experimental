@@ -44,6 +44,34 @@ fn text_of(data: U8[], cap: Sz, arena: Arena$@): U8[]!U8[] //<
         read_sheet(book@, s.name, z.part(s.target, arena)!)!
     return view.take()
 
+struct Place //< the sheet and the row one line of the view names at its head
+    sheet: U8[]
+    row: I64 //< from 1, as Excel shows it
+
+fn place_of(line: U8[]): Place? //< the sheet and row a line of the view names; none without a head
+    //< The head is `<sheet>!<row>: `. A sheet's name may hold `!` but never `:`, so the first `:`
+    //< ends the head.
+    colon: = line.find_char(':') catch
+        return .none
+    if colon + 1 >= line.len || line[colon + 1] != ' '
+        return .none
+    $bang: = colon
+    for bang > 0 && line[bang - 1].is_digit()
+        bang -= 1
+    if bang == colon || bang < 2 || line[bang - 1] != '!' || colon - bang > 7
+        return .none
+    row: = whole(line.sub(bang, colon - bang))
+    if row < 1
+        return .none
+    return .some(Place::{ .sheet = line.sub(0, bang - 1), .row = row })
+
+fn cells_of(line: U8[]): U8[] //< a line of the view without its head, `<sheet>!<row>: `
+    //< **A search matches a line's words against its cells alone**: every line of a sheet names
+    //< the sheet, so a word in the name would match each of them.
+    if place_of(line).is_none()
+        return line
+    return line.sub_from(line.find_char(':').unwrap_or(0) + 2)
+
 priv struct Book //< what every sheet of a workbook shares
     strings: List<|U8[]|> //< the shared strings, by index
     formats: List<|Format|> //< each cell style's number format, by the style's index
@@ -143,7 +171,7 @@ priv fn read_strings(book: Book$@, src: U8[]): Void!U8[] //<
         else if x.name.equals("t")
             in_t = false
         else if x.name.equals("si")
-            book.strings.push(text.take())
+            book.strings.push(unescaped(text.take(), a))
 
 priv fn read_formats(book: Book$@, src: U8[]): Void!U8[] //<
     //< Each cell style's number format, from `styles.xml`'s `cellXfs`
@@ -291,7 +319,7 @@ priv fn show(book: Book$@, c: Value$@): U8[]!U8[] //< what a cell shows, from wh
     v: = c.v.take()
     f: = c.f.take()
     if c.kind.equals("inlineStr")
-        return c.inline.take()
+        return unescaped(c.inline.take(), a)
     if v.len == 0
         // A formula no program has computed yet, as libraries write them: its text is all there is.
         return "" if f.len == 0 else a.text().c('=').s(f).take()
@@ -307,7 +335,43 @@ priv fn show(book: Book$@, c: Value$@): U8[]!U8[] //< what a cell shows, from wh
             (book.formats.get(c.style) if c.style >= 0 && Sz::c.style < book.formats.len
             else cell_format.plain())
         return cell_format.show(v, format, book.date1904, a)
+    if c.kind.equals("str")
+        return unescaped(v, a)
     return v
+
+priv fn unescaped(text: U8[], arena: Arena$@): U8[] //<
+    //< The text with each of Excel's `_xHHHH_` escapes made the character it stands for
+    //< **Excel writes a character XML cannot hold this way** (ECMA-376's `ST_Xstring`): a carriage
+    //< return in a cell is `_x000D_`, a tab `_x0009_`. An underscore that would start one is
+    //< `_x005F_`, so `_x005F_x0041_` reads `_x0041_`. A control character but a tab or a line
+    //< break shows as a space, as a view holds none; half of a UTF-16 pair stays as written.
+    if text.find_str("_x").is_none()
+        return text
+    out: = arena.text()
+    $i: Sz = 0
+    for i < text.len
+        cp: = escape_at(text, i)
+        if cp < 0
+            out.c(text[i])
+            i += 1
+            continue
+        if cp < 0x20 && cp != 0x09 && cp != 0x0A && cp != 0x0D
+            out.c(' ')
+        else
+            for k in Range.asc(chars.codepoint_len(cp))
+                out.c(chars.codepoint_byte(cp, k))
+        i += 7
+    return out.take()
+
+priv fn escape_at(text: U8[], i: Sz): I32 //< the character an escape at `i` stands for; -1 for none
+    if i + 7 > text.len || text[i] != '_' || text[i + 1] != 'x' || text[i + 6] != '_'
+        return -1
+    $cp: I32 = 0
+    for k in Range.asc(4)
+        d: = text[i + 2 + k].hex_val() catch
+            return -1
+        cp = cp * 16 + d
+    return -1 if cp >= 0xD800 && cp <= 0xDFFF else cp
 
 priv fn column_of(ref: U8[]): I32 //< the column of a reference like `AB12`, from 1; -1 if none
     $col: I32 = 0

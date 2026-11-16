@@ -480,8 +480,7 @@ fn test_fs_join_under_refusals(arena: Arena$@) //<
         taken_under(root, "ABCDE~123", keep, arena) &&
         taken_under(root, "ABCDEFG~1", keep, arena) &&
         taken_under(root, "a~1.html", keep, arena) && taken_under(root, "a~1b", keep, arena) &&
-        taken_under(root, "~1", keep, arena) &&
-        taken_under(root, "日本語~1.md", keep, arena) &&
+        taken_under(root, "~1", keep, arena) && taken_under(root, "日本語~1.md", keep, arena) &&
         taken_under(root, "第1四半期(4~6月).xlsx", keep, arena)
     whole: = fs.join_under(root, "", keep, arena) catch "refused"
     joined: = fs.join_under(root, "sub/page.txt", keep, arena) catch "refused"
@@ -636,6 +635,42 @@ fn test_fs_lies_under() //< whether a path lies inside a folder, by its steps
     assert(fs.lies_under_on("\\\\srv\\sh\\", "\\\\srv\\sh", true, arena),
         "a share named without its last `\\` is the share itself")
     verdict.pass("A path lies inside by its steps: `/` and `\\` alike on Windows, case ignored.")
+
+fn test_fs_name_too_long() //< a name longer than the file system holds, on each OS's count
+    //< **Both OSes' answers on every OS**: POSIX counts bytes, Windows UTF-16 units. `join_under`
+    //< then joins such a name, so a server answers it as absent, not as refused.
+    verdict.start("[Fs] a name too long to stand is not found, not refused...")
+    defer arena: = Arena(16 * 1024)
+    ascii: = arena.text()
+    for _i in Range.asc(255)
+        ascii.c('a')
+    fits: = ascii.take()
+    over: = arena.text().s(fits).c('a').take()
+    kana: = arena.text() // 100 kana: 300 bytes, 100 UTF-16 units
+    for _i in Range.asc(100)
+        kana.s("か")
+    hundred: = kana.take()
+    pairs: = arena.text() // 128 characters outside the BMP: 256 UTF-16 units, 512 bytes
+    for _i in Range.asc(128)
+        pairs.s("😀")
+    wide: = pairs.take()
+    for win in Bool[2]::{ false, true }
+        assert(!fs.name_too_long_on(fits, win), "255 ASCII bytes fit on every OS")
+        assert(fs.name_too_long_on(over, win), "256 ASCII bytes are too long on every OS")
+        assert(fs.name_too_long_on(wide, win), "a character outside the BMP is two UTF-16 units")
+    assert(fs.name_too_long_on(hundred, false), "300 bytes are too long on POSIX")
+    assert(!fs.name_too_long_on(hundred, true), "100 UTF-16 units fit on Windows")
+    root: = "out/tmp/kspl_test_name_too_long"
+    fs.mkdir_all(root) catch panic("mkdir_all should succeed")
+    keep: = fs.Dot_names.refused(U8[][]::{})
+    alone: = fs.join_under(root, over, keep, arena) catch "refused"
+    below: =
+        fs.join_under(root, arena.text().s("sub/").s(over).s("/x.txt").take(), keep, arena)
+        catch "refused"
+    scratch.remove_tree(root, arena)
+    assert(!alone.equals("refused"), "a name too long to stand is joined, so it reads as absent")
+    assert(!below.equals("refused"), "so is a path through such a name")
+    verdict.pass("A name too long for the OS counts in its own unit and is joined as absent.")
 
 fn test_fs_runs_by_extension() //< which names Windows starts, by their extension
     //< **Checked on every OS**, since the answer touches no OS. `can_run` asks it on Windows.

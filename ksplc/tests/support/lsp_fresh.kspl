@@ -112,6 +112,7 @@ fn run_fresh(exe: U8[], arena: Arena$@) //<
     check_saved(ask)
     check_typed(ask)
     check_dependent(exe, arena)
+    check_close_and_disk(exe, arena)
     check_burst(exe, arena)
 
 priv fn check_saved(ask: Ask) //<
@@ -215,6 +216,50 @@ priv fn check_dependent(exe: U8[], arena: Arena$@) //<
     tail: = arena.text().s(c.err_tail()).take()
     verdict.check("a session that re-checked another open file ends with nothing left allocated",
         !c.alive() && tail.find_str("memory leak").is_none(), tail)
+
+priv fn check_close_and_disk(exe: U8[], arena: Arena$@) //<
+    //< A close and a change on disk refresh the marks of the open files, and a close clears its own
+    //< **The other files read a closed file from the disk again**, which may differ from the text
+    //< the editor discarded ("Don't Save"). A checkout or `make fmt` changes the disk with no
+    //< file open; the editor's watcher says so (`workspace/didChangeWatchedFiles`).
+    dir: = harness.sandbox("lsp_close_disk")
+    fs.write_tree(dir, U8[][]::{ LIB_REL, USER_REL }, U8[][]::{ LIB_OLD, USER_OLD }, arena) catch
+        verdict.check("the close-and-disk workspace can be laid out", false, dir)
+        return
+    defer $c: =
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+            verdict.check("the close-and-disk workspace's server starts", false, dir)
+            return
+    lsp_client.open(c@, USER_REL, USER_OLD, arena)
+    _user: = marks_of(c@, USER_REL, arena)
+    lsp_client.open(c@, LIB_REL, LIB_OLD, arena)
+    _lib: = marks_of(c@, LIB_REL, arena)
+    $b: = Json_builder(arena)
+    typed: = b.obj()
+        .set("textDocument", b.obj().set("uri", b.str_val(LIB_REL)).build())
+        .set("contentChanges",
+        b.arr().push(b.obj().set("text", b.str_val(LIB_GONE)).build()).build()).build()
+    c.notify("textDocument/didChange", typed, lsp_client.SEND_MS, arena) catch {}
+    broken: = marks_of(c@, USER_REL, arena)
+    lsp_client.close(c@, LIB_REL, arena)
+    cleared: = marks_of(c@, LIB_REL, arena)
+    verdict.check("a closed document's marks are cleared", cleared == 0,
+        lsp_client.why(c@, arena.text().s("\{cleared\} marks published for it").take(), arena))
+    mended: = marks_of(c@, USER_REL, arena)
+    counts: = arena.text().s("\{broken\} marks while open, \{mended\} after the close").take()
+    verdict.check("closing an unsaved file refreshes the marks of a file that imports it",
+        broken > 0 && mended == 0, lsp_client.why(c@, counts, arena))
+    fs.write_tree(dir, U8[][]::{ LIB_REL }, U8[][]::{ LIB_GONE }, arena) catch
+        verdict.check("the library can be saved over", false, dir)
+        return
+    change: = b.obj().set("uri", b.str_val(LIB_REL)).set("type", b.int_val(2)).build()
+    c.notify("workspace/didChangeWatchedFiles",
+        b.obj().set("changes", b.arr().push(change).build()).build(), lsp_client.SEND_MS, arena)
+        catch {}
+    on_disk: = marks_of(c@, USER_REL, arena)
+    verdict.check("a change on disk, told by the watcher, refreshes an open file's marks",
+        on_disk > 0,
+        lsp_client.why(c@, arena.text().s("\{on_disk\} marks after the change").take(), arena))
 
 // ==========================================
 // A burst of changes is analysed once, as its last text

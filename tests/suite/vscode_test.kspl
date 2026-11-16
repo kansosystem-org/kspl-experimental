@@ -342,6 +342,7 @@ priv struct Sent //< one message the fake server read
     method: U8[]
     version: I32 //< -1 where the message carries none
     text: U8[]
+    disk: U8[] //< a watched-files message's changes, `<uri>:<type>` by spaces; empty otherwise
 
 priv fn sent_by_client(root: U8[], arena: Arena$@): json.Value //<
     //< What `vscode_host.js` printed: the messages, and how often the panel came forward
@@ -367,7 +368,8 @@ priv fn check_client(root: U8[], arena: Arena$@) //<
         msgs
             .push(Sent::{ .method = m.get("method").as_str().unwrap_or(""),
             .version = m.get("version").as_int().unwrap_or(-1),
-            .text = m.get("text").as_str().unwrap_or("") })
+            .text = m.get("text").as_str().unwrap_or(""),
+            .disk = m.get("disk").as_str().unwrap_or("") })
     said: = arena.text().s("sent:").s(listed(msgs@, arena)).take()
     verdict.check("extension client: `initialized` follows initialize before anything else",
         msgs.len > 1 && msgs.get(0).method.equals("initialize") &&
@@ -393,10 +395,23 @@ priv fn check_client(root: U8[], arena: Arena$@) //<
         !discarded, said)
     verdict.check("extension client: a document opened again is announced again after its close",
         reopened, said)
+    // **The server reads a file that is not open from the disk**, so only the watcher can tell it
+    // that the open files' errors may have changed.
+    $watched: = List<|U8[]|>(arena)
+    for m in msgs
+        if m.method.equals("workspace/didChangeWatchedFiles")
+            watched.push(m.disk)
+    verdict.check("extension client: files changed on disk at once are told in one message",
+        watched.len == 1 && watched.get(0).equals("lib.kspl:2 new.kspl:1 old.kspl:3"),
+        arena.text().s(said).s(" watched:").s(listed_text(watched@, arena)).take())
     told: = got.get("refusal").as_str().unwrap_or("")
     verdict.check("extension client: a rename the server refuses reaches the editor with its reason",
         told.equals("refused by the fake server"),
         arena.text().s("told '\{told\}'").take())
+    formatted: = got.get("formatted").as_str().unwrap_or("")
+    verdict.check("extension client: Format Document applies the server's edit",
+        formatted.equals("formatted\n"),
+        arena.text().s("applied '\{formatted\}'").take())
     times: = got.get("shown").as_int().unwrap_or(-1)
     verdict.check("extension client: a start with the default settings keeps the output panel back",
         times == 0, arena.text().s("brought forward \{times\} times").take())
@@ -429,6 +444,12 @@ priv fn check_restarts(got: json.Value, arena: Arena$@) //<
     verdict.check("extension client: each restarted server is told `initialized` once",
         inits == 5 && readies == 4,
         arena.text().s("initialize \{inits\} times, initialized \{readies\} times").take())
+
+priv fn listed_text(items: List<|U8[]|>@, arena: Arena$@): U8[] //< the items, each in brackets
+    out: = arena.text()
+    for one in items
+        out.s(" [").s(one).c(']')
+    return out.take()
 
 priv fn listed(msgs: List<|Sent|>@, arena: Arena$@): U8[] //< the messages, one word each
     b: = arena.text()

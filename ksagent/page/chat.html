@@ -411,6 +411,22 @@ const ksagentMarkdown = (() => {
   const NAME = /^[\p{L}\p{N}._-]+$/u;
   const $ = (id) => document.getElementById(id);
   const ja = (navigator.language || "").startsWith("ja");
+  // **An Excel source is placed by the sheet and rows Excel shows**, which ksagent records with
+  // it; a line of the view is no row a person can find. Any other source, by its lines.
+  const placeWords = (s) => {
+    const span = (a, b) => (String(a) === String(b) ? String(a) : `${a}–${b}`);
+    if (typeof s.sheet !== "string" || s.sheet === "") {
+      return ja ? `${s.from_line}–${s.to_line}${W.lines}` : `${W.lines} ${s.from_line}–${s.to_line}`;
+    }
+    const sheet = String(s.sheet), last = String(s.to_sheet);
+    if (ja) {
+      return sheet === last ? `シート「${sheet}」${span(s.from_row, s.to_row)}行目` :
+        `シート「${sheet}」${s.from_row}行目〜シート「${last}」${s.to_row}行目`;
+    }
+    if (sheet !== last) return `sheet ${sheet}, row ${s.from_row} to sheet ${last}, row ${s.to_row}`;
+    return String(s.from_row) === String(s.to_row) ? `sheet ${sheet}, row ${s.from_row}` :
+      `sheet ${sheet}, rows ${s.from_row}–${s.to_row}`;
+  };
   const W = ja ? {
     checked: "出典を確認しました", unverified: "未確認", not_found: "見つかりません",
     stopped: "止まりました", failed: "回答できませんでした", writing: "書いています (出典は未確認)",
@@ -612,8 +628,7 @@ const ksagentMarkdown = (() => {
         for (const s of srcs) {
           const li = ol.appendChild(el("li"));
           li.appendChild(el("code", "", String(s.path)));
-          li.appendChild(document.createTextNode(ja ? ` ${s.from_line}–${s.to_line}${W.lines}` :
-            ` ${W.lines} ${s.from_line}–${s.to_line}`));
+          li.appendChild(document.createTextNode(" " + placeWords(s)));
           li.appendChild(el("blockquote", "", String(s.quote)));
         }
       }

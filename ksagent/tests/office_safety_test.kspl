@@ -8,6 +8,7 @@ import "ksagent/office/inflate"
 import "ksagent/office/word"
 import "ksagent/office/xml"
 import "ksagent/office/zip" { Zip }
+import "ksagent/tests/office_files" { Entry_spec, docx_of, stored, u16, u32, zip_of }
 import "std/bytes"
 import "std/chars"
 import "std/ds" { List }
@@ -73,75 +74,6 @@ fn test_deflate_unpacks_as_zlib_packed()
         small_out: = inflated(c.data, c.size - 1, arena)
         verdict.check(arena.text().s(c.name).s(": cut short, or given a wrong size, it is refused")
             .take(), short.is_err() && long_out.is_err() && small_out.is_err(), "")
-
-// ==========================================
-// Zip files made here, to hold what no fixture should
-// ==========================================
-
-priv struct Entry_spec //< one entry of a zip made for a test
-    name: U8[]
-    data: U8[] //< the bytes as stored
-    method: U16 //< 0 stored, 8 DEFLATE
-    size: Sz //< the size it declares unpacked
-    crc: U32
-
-priv fn stored(name: U8[], data: U8[]): Entry_spec //< an entry stored as it is
-    return Entry_spec::{ .name = name, .data = data, .method = 0U16, .size = data.len,
-        .crc = data.crc32(0xFFFFFFFFU32) ^ 0xFFFFFFFFU32 }
-
-priv fn zip_of(entries: Entry_spec[], arena: Arena$@): U8[] //< the entries as one zip file
-    out: = arena.text()
-    $at: Sz = 0
-    $offsets: = List<|Sz|>(arena)
-    for e in entries
-        offsets.push(at)
-        u32(out, 0x04034b50U32)
-        u16(out, 20)
-        u16(out, 0)
-        u16(out, e.method)
-        u32(out, 0U32)
-        u32(out, e.crc)
-        u32(out, U32::e.data.len)
-        u32(out, U32::e.size)
-        u16(out, I32::e.name.len)
-        u16(out, 0)
-        out.s(e.name).s(e.data)
-        at += 30 + e.name.len + e.data.len
-    cd_at: = at
-    for k in Range.asc(entries.len)
-        e: = entries[k]
-        u32(out, 0x02014b50U32)
-        u16(out, 20)
-        u16(out, 20)
-        u16(out, 0)
-        u16(out, e.method)
-        u32(out, 0U32)
-        u32(out, e.crc)
-        u32(out, U32::e.data.len)
-        u32(out, U32::e.size)
-        u16(out, I32::e.name.len)
-        for _z in Range.asc(4)
-            u16(out, 0)
-        u32(out, 0U32)
-        u32(out, U32::offsets.get(k))
-        out.s(e.name)
-        at += 46 + e.name.len
-    u32(out, 0x06054b50U32)
-    u16(out, 0)
-    u16(out, 0)
-    u16(out, I32::entries.len)
-    u16(out, I32::entries.len)
-    u32(out, U32::(at - cd_at))
-    u32(out, U32::cd_at)
-    u16(out, 0)
-    return out.take()
-
-priv fn u16(out: str.Arena_text$@, v: I32) //< two bytes, least significant first
-    out.c(U8::(v & 0xFF)).c(U8::((v >> 8) & 0xFF))
-
-priv fn u32(out: str.Arena_text$@, v: U32) //< four bytes, least significant first
-    out.c(U8::(v & 0xFFU32)).c(U8::((v >> 8U32) & 0xFFU32)).c(U8::((v >> 16U32) & 0xFFU32))
-        .c(U8::(v >> 24U32))
 
 fn test_a_zip_bomb_is_refused_before_it_unpacks()
     verdict.start("[ksagent] a zip that unpacks past the caps is refused, not unpacked")
@@ -344,22 +276,6 @@ priv fn repeated(text: U8[], n: Sz, arena: Arena$@): U8[] //< the text written `
     for _k in Range.asc(n)
         out.s(text)
     return out.take()
-
-priv fn docx_of(document: U8[], numbering: U8[], arena: Arena$@): U8[] //<
-    //< A Word file of a document part, and a numbering part where it is not empty
-    rels: =
-        "<Relationships><Relationship Id=\"rId1\" Type=\"x/officeDocument\" \
-            Target=\"word/document.xml\"/></Relationships>"
-    doc_rels: =
-        "<Relationships><Relationship Id=\"rId1\" Type=\"x/numbering\" \
-            Target=\"numbering.xml\"/></Relationships>"
-    $entries: = List<|Entry_spec|>(arena)
-    entries.push(stored("_rels/.rels", rels))
-    entries.push(stored("word/document.xml", document))
-    if numbering.len > 0
-        entries.push(stored("word/_rels/document.xml.rels", doc_rels))
-        entries.push(stored("word/numbering.xml", numbering))
-    return zip_of(entries.slice(), arena)
 
 priv fn worked(what: U8[], r: Reading, arena: Arena$@): U8[] //< a check's name, with the memory
     return arena.text().s(what).s(" (\{r.used / 1024\} KiB; at most \{SMALL_WORK / 1024\} KiB)")

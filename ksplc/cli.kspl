@@ -438,6 +438,12 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
             face.refuse_operands("one or more input files", in_files)
         for f in in_files
             source_input(f)
+        // **Standard input is formatted alone, to standard output**: it has no file to write back.
+        if in_files.get(0).equals(base_core.STDIN_NAME) &&
+            (in_files.len > 1 || o.fmt_in_place)
+            usage
+                .error_exit("ksplc fmt: `-` formats standard input to standard output, so it takes \
+                    no other file and no --in-place\n")
         return .fmt(in_files, o.fmt_in_place, o.fmt_config)
     case .lsp
         face.no_operand(in_files)
@@ -578,11 +584,13 @@ impl Mode
         in_files: = p.rest
         // The default subcommand (compile) is declared, so argparse always chooses one.
         face: = face_named(p.command.unwrap_or(""))
-        // Caution: **A bare `-` is standard input only as the source of a compile or a run.**
-        // argparse passes it on as "standard input"; anywhere else it is an accident of word
-        // splitting.
+        // Caution: **A bare `-` is standard input only as the source of a compile, a run, a lint
+        // or a format.** argparse passes it on as "standard input"; anywhere else it is an accident
+        // of word splitting.
         for i in Range.asc(in_files.len)
-            reads_stdin: = i == 0 && (face == Face.compile || face == Face.run)
+            reads_stdin: =
+                i == 0 &&
+                (face == Face.compile || face == Face.run || face == Face.lint || face == Face.fmt)
             if in_files.get(i).equals(base_core.STDIN_NAME) && !reads_stdin
                 io.err().s("Error: unknown option: -\n")
                 usage.usage_exit()

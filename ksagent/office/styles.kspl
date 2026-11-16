@@ -1,4 +1,5 @@
-//< Word's paragraph styles: which style is a heading, and which brings list numbering
+//< Word's paragraph and character styles: which is a heading, which brings list numbering, and
+//< which hides its text
 //< A style names its parent (`basedOn`), and takes from it what it does not set. **A heading is
 //< known by its outline level**, or by the built-in name `heading N` where no level is set: a
 //< style's id is translated (`見出し 1` in a Japanese Word), its name is not.
@@ -11,14 +12,15 @@ import "std/strnum"
 
 priv const MAX_CHAIN: Sz = 16 //< the most parents followed; a loop of `basedOn` stops here
 
-priv struct Style //< what one paragraph style sets itself
+priv struct Style //< what one paragraph or character style sets itself
     parent: U8[] //< the id of the style it is based on; empty for none
     name: U8[]
     outline: I32 //< its outline level, 0 to 8; -1 where it sets none
     num_id: U8[] //< the list number it brings; empty where it sets none
     level: I32 //< the list level it brings; -1 where it sets none
+    vanish: I32 //< 1 where it hides its text, 0 where it shows it, -1 where it sets neither
 
-struct Styles //< every paragraph style of a document, by id
+struct Styles //< every paragraph and character style of a document, by id
     priv list: List<|Style|>
     priv by_id: Index //< each style's id, to its place in `list`
 
@@ -32,7 +34,8 @@ fn read(src: U8[], arena: Arena$@): Styles!U8[] //< reads `styles.xml`
     $keys: = List<|Keyed|>(arena)
     $x: = xml.reader(src, arena)!
     $id: U8[] = ""
-    $s: = Style::{ .parent = "", .name = "", .outline = -1, .num_id = "", .level = -1 }
+    $s: = Style::{ .parent = "", .name = "", .outline = -1, .num_id = "", .level = -1,
+        .vanish = -1 }
     for
         ev: = x.next()!
         if ev == xml.Event.done
@@ -46,13 +49,19 @@ fn read(src: U8[], arena: Arena$@): Styles!U8[] //< reads `styles.xml`
             continue
         if x.name.equals("style")
             kind: = x.attr_or("type", "paragraph", arena)!
-            id = x.attr_or("styleId", "", arena)! if kind.equals("paragraph") else ""
-            s = Style::{ .parent = "", .name = "", .outline = -1, .num_id = "", .level = -1 }
+            id =
+                (x.attr_or("styleId", "", arena)!
+                if kind.equals("paragraph") || kind.equals("character") else "")
+            s = Style::{ .parent = "", .name = "", .outline = -1, .num_id = "", .level = -1,
+                .vanish = -1 }
             continue
         if id.len == 0
             continue
-        if x.name.equals("pPrChange") || x.name.equals("rPr")
+        // The record of earlier formatting (`pPrChange`, `rPrChange`) sets nothing now.
+        if x.name.ends_with("Change")
             x.skip()!
+        else if x.name.equals("vanish")
+            s.vanish = 1 if is_on(x.attr_or("val", "true", arena)!) else 0
         else if x.name.equals("basedOn")
             s.parent = x.attr_or("val", "", arena)!
         else if x.name.equals("name")
@@ -64,6 +73,9 @@ fn read(src: U8[], arena: Arena$@): Styles!U8[] //< reads `styles.xml`
         else if x.name.equals("ilvl")
             s.level = small(x.attr_or("val", "", arena)!)
     return Styles::{ .list = list, .by_id = sorted_names.sorted(keys@, arena) }
+
+fn is_on(val: U8[]): Bool //< whether an on-off property's `val` turns it on
+    return !val.equals("0") && !val.equals("false") && !val.equals("off")
 
 fn small(text: U8[]): I32 //< a level from 0 to 9, or -1 where the text is none
     v: = text.trim_spaces().to_i64() catch
@@ -98,6 +110,17 @@ impl Styles
                 return s.num_id
             at = s.parent
         return ""
+
+    fn hides(r: Self@, id: U8[]): Bool //< whether a style hides its text (`vanish`)
+        //< The nearest style in the chain that sets it decides.
+        $at: = id
+        for _k in Range.asc(MAX_CHAIN)
+            s: = r.style(at) catch
+                return false
+            if s.vanish >= 0
+                return s.vanish == 1
+            at = s.parent
+        return false
 
     fn numbering_level(r: Self@, id: U8[]): I32 //< the list level a style brings; 0 where unset
         $at: = id

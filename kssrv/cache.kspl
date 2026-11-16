@@ -1,0 +1,153 @@
+//< What a file's answer names so a client can keep it, check it again, and ask for a part of it
+//< **A file's answer names its validators** (`ETag`, `Last-Modified`), so a browser asks again
+//< with them and gets a 304 with no body. **A single range is answered in part** (206), so a video
+//< can be scrubbed and a download resumed. `kssrv/static.kspl` asks it for each file it serves.
+//< The rules are RFC 9110's sections 13 (conditions) and 14 (ranges).
+import "kssrv/conn"
+import "std/chars"
+import "std/ds"
+import "std/http"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt // the `:x` in the `ETag`
+
+struct Validators //< what tells one version of a file from another
+    etag: U8[] //< a strong entity tag, with its quotes: `"<time in ns, hex>-<size, hex>"`
+    last_modified: U8[] //< the time it was last changed, as an HTTP date
+    modified_s: I64 //< the same in seconds, to tell whether that time is a strong validator
+
+fn validators(f: conn.File_facts, arena: Arena$@): Validators //<
+    //< the file's validators, on the arena
+    //< **The tag is made from the time and the size**, as nginx and Apache make theirs: reading the
+    //< bytes to hash them would cost a whole read for every check. A save changes the time.
+    etag: = arena.text().s("\"\{f.modified_ns:x\}-\{f.size:x\}\"").take()
+    date: = arena.text().s("\{http.Http_date::{ .unix_s = f.modified_s }\}").take()
+    return Validators::{ .etag = etag, .last_modified = date, .modified_s = f.modified_s }
+
+enum Verdict //< what the request's conditions ask of the answer
+    serve //< no condition stops it: serve the file, or the part asked for
+    unchanged //< the client holds this version already: a 304 with no body
+    failed //< a condition the client set does not hold: a 412, and nothing is served
+
+fn judge(req: http.Request@, v: Validators): Verdict //<
+    //< Weighs the request's conditions against the file's validators, in RFC 9110 §13.2.2's order
+    //< **`If-None-Match` wins over `If-Modified-Since`**, as the RFC requires: a tag tells versions
+    //< apart where a time to the second may not. **`If-Modified-Since` matches only our own date,
+    //< written the same**, as nginx's default does. A browser sends back the date it was given.
+    //< `If-Unmodified-Since` is not read: a client that guards a change sends `If-Match`.
+    if want: = req.headers.find("If-Match")
+        if !listed(want, v.etag, true)
+            return .failed
+    if want_not: = req.headers.find("If-None-Match")
+        return .unchanged if listed(want_not, v.etag, false) else .serve
+    if since: = req.headers.find("If-Modified-Since")
+        if since.equals(v.last_modified)
+            return .unchanged
+    return .serve
+
+priv fn listed(value: U8[], etag: U8[], strong: Bool): Bool //<
+    //< Whether a list of entity tags (`If-Match`, `If-None-Match`) names `etag`, or is `*`
+    //< `strong` refuses a tag marked weak (`W/`), as `If-Match` must (RFC 9110 §8.8.3.2). A tag is
+    //< read between its quotes, so a comma inside one does not cut it.
+    if value.trim_spaces().equals("*")
+        return true
+    $i: Sz = 0
+    for i < value.len
+        if value[i] == ' ' || value[i] == '\t' || value[i] == ','
+            i += 1
+            continue
+        $weak: = false
+        if i + 2 <= value.len && value.sub(i, 2).equals("W/")
+            weak = true
+            i += 2
+        if i >= value.len || value[i] != '"'
+            return false // not a list of tags: nothing in it can match
+        close: = value.sub_from(i + 1).find_char('"') catch
+            return false
+        tag: = value.sub(i, close + 2)
+        if tag.equals(etag) && (!weak || !strong)
+            return true
+        i += close + 2
+    return false
+
+enum Part //< which bytes of the file the answer carries
+    whole //< all of them: no range was asked for, or one this server does not take
+    span(first: Sz, length: Sz) //< one range that the file holds, at least one byte long
+    unsatisfiable //< a range the file does not hold any byte of: a 416
+
+fn part_asked(req: http.Request@, size: Sz, v: Validators, now_s: I64): Part //<
+    //< The part of a `size`-byte file that a GET's `Range` asks for (RFC 9110 §14.2)
+    //< **One range is taken**: `bytes=a-b`, `bytes=a-` or `bytes=-n`. **Several ranges are
+    //< answered whole**, which the RFC allows: a body of several parts helps no browser. A range
+    //< that cannot be read is ignored. `If-Range` names the version the client holds a part of; for
+    //< another version, the whole file goes.
+    range: = req.headers.find("Range") catch
+        return .whole
+    if !req.method.equals("GET") || !range_still_holds(req, v, now_s)
+        return .whole
+    eq: = range.find_char('=') catch
+        return .whole
+    if !range.sub(0, eq).trim_spaces().equals_ignore_case("bytes")
+        return .whole
+    spec: = range.sub_from(eq + 1).trim_spaces()
+    if spec.find_char(',').is_some()
+        return .whole
+    dash: = spec.find_char('-') catch
+        return .whole
+    first_text: = spec.sub(0, dash).trim_spaces()
+    last_text: = spec.sub_from(dash + 1).trim_spaces()
+    if first_text.len == 0
+        // The last `n` bytes. A file shorter than `n` is sent whole, as a 206 naming it.
+        n: = count(last_text) catch
+            return .whole
+        if n == 0 || size == 0
+            return .unsatisfiable
+        take: = n if n < size else size
+        return .span(size - take, take)
+    first: = count(first_text) catch
+        return .whole
+    $last: = size - 1
+    if last_text.len > 0
+        named: = count(last_text) catch
+            return .whole
+        if named < first
+            return .whole // a range ending before it starts cannot be read (RFC 9110 §14.1.1)
+        if named < last
+            last = named
+    if first >= size
+        return .unsatisfiable
+    return .span(first, last - first + 1)
+
+priv fn range_still_holds(req: http.Request@, v: Validators, now_s: I64): Bool //<
+    //< Whether `If-Range`, where given, names the version served now
+    //< A tag must match strongly. A date must be our own, and at least a second older than now:
+    //< a file changed twice within its second keeps its date (RFC 9110 §8.8.2.2).
+    given: = req.headers.find("If-Range") catch
+        return true
+    if given.starts_with("\"")
+        return given.equals(v.etag)
+    return given.equals(v.last_modified) && v.modified_s < now_s
+
+priv const MAX_DIGITS: Sz = 18 //< the most digits `count` reads, so the number cannot wrap
+
+priv fn count(text: U8[]): Sz? //< a run of decimal digits as a number; none for anything else
+    if text.len == 0 || text.len > MAX_DIGITS
+        return .none
+    $n: Sz = 0
+    for ch in text
+        if !ch.is_digit()
+            return .none
+        n = n * 10 + Sz::(ch - '0')
+    return .some(n)
+
+fn file_headers(v: Validators, arena: Arena$@): http.Header_builder //<
+    //< The headers every answer with a file's bytes carries, or a 304 in their place
+    //< **`Cache-Control: no-cache` has the browser check again each time** (a 304 when nothing
+    //< changed). Without it a browser guesses how long a file stays fresh from its age. It then
+    //< shows a stale copy of a file just edited, even after a reload.
+    return http.headers(arena).add("ETag", v.etag).add("Last-Modified", v.last_modified)
+        .add("Cache-Control", "no-cache").add("Accept-Ranges", "bytes")
+
+fn content_range(first: Sz, length: Sz, size: Sz, arena: Arena$@): U8[] //<
+    //< A part's `Content-Range`: `bytes <first>-<last>/<size>`
+    return arena.text().s("bytes \{first\}-\{first + length - 1\}/\{size\}").take()

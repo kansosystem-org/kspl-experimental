@@ -317,3 +317,73 @@ fn check_completion_sibling(exe: U8[], arena: Arena$@)
     verdict.check(name, holds(rows@, "inner_one") && holds(rows@, "shown_one"), shown)
     verdict.check("completion beyond a sibling file's alias leaves out what is `priv`",
         !holds(rows@, "hidden_one"), shown)
+
+// ==========================================
+// Completion on a read-only value, and after a type's name
+// ==========================================
+
+// **A read-only value's type carries an immutability mark** (`Self@`, a `T@` parameter, a `for`
+// item), and a type's name is written as the file names it (`Mug`, `Shade`). Members are
+// registered under neither spelling, so each place is asked.
+priv const VIEW_SRC: U8[] =
+    """import "std/ds" { List }
+
+struct Mug //< holds tea
+  tea: I32
+
+
+enum Shade
+  dark
+  pale
+
+
+impl Mug
+  fn look(r: Self@): I32
+    _a: = r.
+    return 0
+
+
+fn sum(mugs: List<|Mug|>@): I32
+  _b: = mugs.
+  for m in mugs
+    _c: = m.
+  return 0
+
+
+fn make(): I32
+  _d: = Mug.
+  _e: = Shade.
+  return 0
+
+"""
+
+priv const VIEW_LINES: U8[][_] = ::{ "    _a: = r.", "  _b: = mugs.", "    _c: = m.",
+    "  _d: = Mug.", "  _e: = Shade." } //< where to ask
+        //< Caution: **Only one place may be half-typed** (see `PICK_HEAD`), so the others are
+        //< written whole in each text asked.
+priv const VIEW_WANT: U8[][_] = ::{ "tea", "contains", "tea", "tea", "dark" }
+priv const VIEW_NAMES: U8[][_] = ::{ "after a concrete `Self@` receiver",
+    "after a `List<|T|>@` parameter", "after a `for` item", "after a struct's name",
+    "after an enum's name" }
+
+fn check_completion_view(c: jsonrpc_client.Client$@, arena: Arena$@)
+    for i in Range.asc(VIEW_LINES.len)
+        line: = VIEW_LINES[i]
+        $text: = arena.text()
+        $at: Sz = 0
+        $n: Sz = 0
+        for got in VIEW_SRC.lines(arena)
+            if got.equals(line)
+                at = n
+                text = text.s(got).c('\n')
+            else if got.ends_with(".")
+                // The other places, whole: `_a: = 0` parses and leaves the value alone.
+                text = text.s(got.sub(0, got.find_char(':').unwrap_or(0))).s(": = 0\n")
+            else
+                text = text.s(got).c('\n')
+            n += 1
+        $rows: = picks_in(c, "lsp_pick_view.kspl", text.take(), at, line.len, arena)
+        $names: = labels(rows@, arena)
+        verdict.check(arena.text().s("completion ").s(VIEW_NAMES[i]).s(" returns its members")
+            .take(), holds(rows@, VIEW_WANT[i]),
+            lsp_client.why(c, lsp_client.join(names@, arena), arena))

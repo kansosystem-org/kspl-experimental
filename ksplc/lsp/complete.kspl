@@ -39,6 +39,7 @@ const KIND_FUNCTION: I32 = 3
 const KIND_METHOD: I32 = 2
 const KIND_STRUCT: I32 = 22
 const KIND_ENUM: I32 = 13
+const KIND_ENUM_MEMBER: I32 = 20
 const KIND_INTERFACE: I32 = 8
 const KIND_CONSTANT: I32 = 21
 const KIND_VARIABLE: I32 = 6
@@ -271,7 +272,9 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
         else if typed.len > 0
             picks_of_type(state.sema, typed, swapped.prefix, out@)
         else
-            picks_of_type(state.sema, head, swapped.prefix, out@)
+            named: = lsp_nav.named_type_name(state.sema, path, head)
+            add_variants(state.sema, named, swapped.prefix, out@)
+            picks_of_type(state.sema, named, swapped.prefix, out@)
     else
         picks_in_scope(state, path, mark, swapped.prefix, out@)
     // By name; picks of one name keep the order they were found in.
@@ -315,6 +318,14 @@ priv fn picks_of_type(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$
         add_methods(c, base_only, prefix, out)
     // A method with its own type arguments is not in the table; it is found by the template's name.
     add_by_dot_prefix(c.generics.templates, base_only, prefix, out, KIND_METHOD)
+
+priv fn add_variants(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@) //<
+    //< An enum's variants, which follow its name (`Color.red`) and never a value of it
+    switch c.env.get_enum_def(type_name)
+    case .some(ed)
+        for v in ed.variants_list
+            add_pick(out, v.name, KIND_ENUM_MEMBER, prefix, v.node, 0)
+    case .none {}
 
 priv fn add_fields(sd: sema_type_def.Struct_def@, prefix: U8[], out: List<|Pick|>$@)
     for f in sd.fields_list

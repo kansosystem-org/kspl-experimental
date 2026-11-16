@@ -89,7 +89,9 @@ priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) /
     if n == null || depth >= MAX_ARC_PLACE_DEPTH
         return
     if n.kind_id == .k_expr_postfix && lctx.sema.env.is_place_index_node(n)
-        n.lower_postfix_index_operator(lctx)
+        defer $ops: = Operand_order()
+        n.order_index_operands(lctx, ops@)
+        n.lower_postfix_index_operator(lctx, ops@)
         return
     for child in n.children
         expand_place_index_ops(lctx, child, depth + 1)
@@ -361,7 +363,7 @@ impl Arc_take
             return take
         if value.is_raw_value_read(lctx)
             return take
-        if src: = value.arc_bare_copy_source()
+        if src: = value.arc_bare_copy_source(lctx)
             take.src = src.clone()
         else
             take.once_lowered = value.arc_read_once_lowered(lctx)
@@ -457,7 +459,7 @@ impl Ast_node
             return false
         if r.is_raw_value_read(lctx)
             return true
-        if _src: = r.arc_bare_copy_source()
+        if _src: = r.arc_bare_copy_source(lctx)
             return false
         return !r.arc_read_once_lowered(lctx)
 
@@ -542,7 +544,7 @@ impl Ast_node
         recv: = node.get_postfix_receiver()
         return recv.is_arc_fresh(lctx) || recv.arc_part_of_fresh(lctx, depth + 1)
 
-    priv fn arc_bare_copy_source(r: Self$@): Ast_node$@? //<
+    priv fn arc_bare_copy_source(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@? //<
         //< It returns the expression itself where it reads existing memory (a place expression)
         //< That expression can be cloned as the retain's receiver, at its own type.
         //< A newly built value (a call, a compound literal) is already +1 and returns none.
@@ -556,7 +558,7 @@ impl Ast_node
         else if curr != null && curr.kind_id == .k_expr_postfix && curr.get_postfix_op() != null &&
             curr.get_postfix_op().text.equals("!")
             curr = curr.get_postfix_receiver().arc_unwrapped()
-        if curr != null && curr.is_arc_place_expr(0)
+        if curr != null && curr.is_arc_place_expr(lctx, 0)
             return .some(curr)
         return .none
 
@@ -627,7 +629,7 @@ impl Ast_node
                 return true
         return false
 
-    priv fn is_arc_place_expr(r: Self$@, depth: Sz): Bool //<
+    priv fn is_arc_place_expr(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Bool //<
         //< Whether it is a place expression, one pointing at existing memory
         //< The reference there remains when it is read.
         //< An identifier, a path, `s.f`, `a[i]` and `p$` are all place expressions.
@@ -640,7 +642,7 @@ impl Ast_node
         if k == .k_identifier || k == .k_expr_path || k == .k_type_path
             return true
         if k == .k_expr_primary && r.children.len > 0
-            return r.get_primary_inner_expr().is_arc_place_expr(depth + 1)
+            return r.get_primary_inner_expr().is_arc_place_expr(lctx, depth + 1)
         if k == .k_expr_postfix
             op: = r.get_postfix_op()
             if op == null
@@ -649,7 +651,12 @@ impl Ast_node
                 return !r.get_postfix_receiver().arc_has_call(depth + 1)
             if !op.text.equals(".") && !op.text.equals("[") && !op.text.equals("[]")
                 return false
-            return r.get_postfix_receiver().is_arc_place_expr(depth + 1)
+            // A subscript through `Index.get` is that call's new value, not memory in its receiver.
+            // Taken for a place, `x: = bag[1]` cloned the subscript into a retain that nothing
+            // lowered (an ICE in the backend), and its value was never released.
+            if r.def_node.is_fn_decl() && !lctx.sema.env.is_place_index_node(r)
+                return false
+            return r.get_postfix_receiver().is_arc_place_expr(lctx, depth + 1)
         return false
 
     fn lower_arc_aggregate_literal(r: Ast_node@, lctx: Lowering_ctx$@) //<
@@ -693,7 +700,7 @@ impl Ast_node
         if left == null || right == null || !lctx.sema.env.type_is_managed(left.type_id)
             return owed
         owed.type_id = left.type_id
-        switch left.arc_bare_copy_source()
+        switch left.arc_bare_copy_source(lctx)
         case .some(dst)
             owed.dst = dst.clone()
         case .none
@@ -724,11 +731,22 @@ impl Ast_node
         //< every managed parameter it takes by value, the receiver included (register_arc_params).
         //< Without the count, `key.hash()` on a struct holding an `Rc` frees what the caller holds.
         recv: = r.safe_get_child(0)
-        if recv == null || recv.kind_id != .k_method_access || recv.def_node == null
+        if recv == null || recv.kind_id != .k_method_access
             return false
-        $params: = base_ast_ext.Param_cursor(recv.def_node.get_fn_params(), false)
-        if p: = params.next()
-            return lctx.sema.env.type_is_managed(p.param_type_id())
+        return recv.def_node.arc_param_takes(0, lctx)
+
+    fn arc_param_takes(r: Self$@, pos: Sz, lctx: Lowering_ctx$@): Bool //<
+        //< Whether the declared function r's parameter at pos takes a count; a receiver is at 0
+        //< A managed value passed by value takes one, which the callee releases
+        //< (register_arc_params). An operator and a subscript build their call by hand, so they ask
+        //< here for each operand, as a written call does through add_arc_call_args.
+        if r == null
+            return false
+        $at: Sz = 0
+        for p in base_ast_ext.Param_cursor(r.get_fn_params(), false)
+            if at == pos
+                return lctx.sema.env.type_is_managed(p.param_type_id())
+            at += 1
         return false
 
     fn add_arc_call_args(r: Self$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
@@ -743,6 +761,21 @@ impl Ast_node
         $callee: Ast_node$@ = recv.def_node if recv != null else null
         if callee == null
             callee = r.def_node
+        // Caution: **A function value has no declaration to read: read its type.** Its node is a
+        // variable, a field or a parameter, which lists no parameters, so every argument went
+        // without its count while the callee still released it (`f: = keep; f(t)`).
+        if !callee.is_fn_decl() && recv != null
+            if sig: = lctx.sema.env.fn_sig_of(recv.type_id)
+                $at: Sz = 0
+                for i in Range.asc(args.children.len)
+                    if args.get_child(i).is_literal(",")
+                        continue
+                    takes: =
+                        at < sig.params.len &&
+                        lctx.sema.env.type_is_managed(sig.params.get(at))
+                    ops.add_value(args, i, takes, lctx)
+                    at += 1
+                return
         $params: = base_ast_ext.Param_cursor(callee.get_fn_params() if callee != null else null,
             recv != null && recv.kind_id == .k_method_access)
         for i in Range.asc(args.children.len)

@@ -71,6 +71,18 @@ impl Weighed: Bagish<|F64|>
     priv fn one(r: Self): F64
         return r.v
 
+priv fn head_of<|S: Seqish<|E|>, E|>(s: S, alt: E): E //<
+    //< A constraint that names the type parameter written after it
+    return s.head_or(alt)
+
+fn test_constraint_names_a_later_parameter()
+    verdict.start("[Trait] a constraint naming a later type parameter test...")
+    // Caution: **Bind every type parameter before checking a constraint.** Checked as each was
+    // bound, `Seqish<|E|>` was read with `E` still unbound, and a conforming type was refused.
+    assert(head_of(One<|I32|>::{ .v = 4 }, 0) == 4, "the constraint holds once `E` is bound")
+    assert(head_of(Blank::{ .unused = 0 }, 5) == -1, "the type's own method is reached through it")
+    verdict.pass("a constraint may name a type parameter written after it.")
+
 fn test_trait_default_body()
     verdict.start("[Trait] the default body is copied to the implementing side test...")
     assert(One<|I32|>::{ .v = 7 }.head_or(0) == 7, "it is copied to a generic implementation")
@@ -266,3 +278,34 @@ fn test_thunk_reads_through_a_returned_pointer()
     t: = Tally::{ .n = 41 }
     assert(count_through(t) == 41, "the caller receives the value the pointer points at")
     verdict.pass("a call through the trait reads through a pointer the implementation returns.")
+
+// ==========================================
+// A method with a default body holds no slot in a trait value's table, so the methods after it
+// are numbered past it. LLVM numbered every method, and a call to a later one indexed one slot
+// past the table's end: clang refused the IR ("invalid getelementptr indices").
+// ==========================================
+priv trait Labelled
+    fn first(r: Self): I32
+    fn doubled(r: Self): I32 //< has a body, so no slot
+        return r.first() * 2
+    fn last(r: Self): I32
+
+priv struct Label_pair
+    a: I32
+    b: I32
+
+impl Label_pair: Labelled
+    fn first(r: Self): I32
+        return r.a
+    fn last(r: Self): I32
+        return r.b
+
+priv fn last_through(l: Labelled): I32
+    return l.last()
+
+fn test_slot_after_a_default_body()
+    verdict.start("[Thunk] a method declared after one with a default body test...")
+    p: = Label_pair::{ .a = 3, .b = 7 }
+    assert(last_through(p) == 7, "the call reaches the method after the default body")
+    assert(p.doubled() == 6, "the default body still runs on the concrete type")
+    verdict.pass("a call through a trait value finds the slot of a method after a default body.")

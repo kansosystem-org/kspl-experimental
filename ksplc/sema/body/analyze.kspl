@@ -396,10 +396,12 @@ impl Ast_node
         return ok
 
     priv fn lint_release_method_spelling(r: Self$@, c: Sema_ctx$@) //<
-        //< [W0107] Warns at a declaration that releases through an untracked name or contract
-        //< **Two routes are tracked. Warn only when neither applies.** Visibility and the arguments
-        //< after the first are ignored (a `priv` can conform, and `free(r, arena)` releases too). A
-        //< free function is checked as well, since a release can be written that way too.
+        //< [W0107] Warns at a declaration that frees its receiver through an untracked name or contract
+        //< **Warn only where the advice fits**: the body frees the receiver (or a part of it),
+        //< alone or through a call one level down, and the receiver is the only parameter. A
+        //< `delete(key)` or a `shutdown()` that frees nothing has no `free` to become. Visibility
+        //< is ignored (a `priv` can conform). A free function is checked as well, since a release
+        //< can be written that way too.
         name: = r.get_decl_id_text()
         is_free: = name.equals("free")
         if !is_free && !sema_flow_release.is_untracked_release_name(name)
@@ -407,24 +409,43 @@ impl Ast_node
         params: = r.get_fn_params()
         if params == null || params.children.len == 0
             return
-        recv: = params.get_child(0)
-        if recv == null || !c.env.is_pointer(recv.type_id) ||
+        $recv: Ast_node$@ = null
+        $count: Sz = 0
+        for p in base_ast_ext.Param_cursor(params, false)
+            if count == 0
+                recv = p
+            count += 1
+        if recv == null || count != 1 || !c.env.is_pointer(recv.type_id) ||
             c.env.has_release_contract(recv.type_id)
             return
-        if r.body_frees_param_directly(recv.get_decl_id_text(), c, 0)
-            return // tracked by route 2
+        recv_name: = recv.get_decl_id_text()
+        if !r.body_releases_param(recv_name, 1)
+            return // frees nothing: nothing to track
+        if r.body_frees_param_directly(recv_name, c, 0)
+            return // tracked by route 3
         sb: = c.clear_scratch()
         if c.fn_ctx.impl_name.len > 0
+            // The name as the user writes it, without its package's path.
+            $type_name: = c.fn_ctx.impl_name
+            $args: U8[] = ""
+            if at: = type_name.find_char('<')
+                type_name = type_name.sub(0, at)
+                args = "<|…|>"
             sb
                 .s("[W0107] '\{name\}' releases the receiver, but its type does not conform to \
                     'Manual_free'. Use-after-free is therefore not tracked. Add 'impl \
-                    \{c.fn_ctx.impl_name\}: Manual_free {}'")
+                    \{type_name.fqn_last()\}\{args\}: Manual_free {}'")
                 .s(" and spell the method 'free'." if !is_free else ".")
         else
             sb
                 .s("[W0107] '\{name\}' releases its first parameter, but that type does not conform \
                     to 'Manual_free'. Use-after-free is therefore not tracked. Make it a 'free' \
                     method on the type and conform it to 'Manual_free'.")
+        if !sema_type_env.is_void(c.env.strip_result(c.fn_ctx.ret_id)) ||
+            c.env.is_result(c.fn_ctx.ret_id)
+            sb
+                .s(" 'free' returns nothing and cannot fail, so move the part whose result is \
+                    checked into a method of its own.")
         c.warn(r, c.scratch.slice())
 
     priv fn lint_nullable_pointer_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@,

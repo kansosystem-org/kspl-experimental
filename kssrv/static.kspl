@@ -1,9 +1,10 @@
 //< Every request's first step, and static serving: which file a request names under the root
-//< **`queue_for_request` takes each whole request**: it sends `/api/` to `kssrv/api.kspl` and
-//< serves the rest as a file. The accept loop in `kssrv/main.kspl` calls it.
+//< **`queue_for_request` takes each request**: it sends `/api/` to `kssrv/api.kspl` and serves the
+//< rest as a file. The accept loop in `kssrv/main.kspl` calls it.
 //< **Every check on a static path is here**: the page, the dot names and the climbs out of the
-//< root.
+//< root. What a file's answer names for caching and ranges is `kssrv/cache.kspl`.
 import "kssrv/api"
+import "kssrv/cache"
 import "kssrv/conn"
 import "std/chars"
 import "std/ds"
@@ -25,46 +26,90 @@ priv const INDEX_NAME: U8[] = "index.html" //<
 // Resolving a static file
 // ==========================================
 
+priv struct Typed //< one extension and the `Content-Type` a file with it is sent as
+    ext: U8[] //< with its dot, in lowercase
+    ctype: U8[]
+
+// The registered types (IANA) of the files a web site serves, as nginx's `mime.types` holds them.
+// **Text is sent as UTF-8**, which a browser would otherwise guess. Caution: **Name only a
+// registered type**: a receiver trusts it, so a wrong one has a file read as another kind.
+priv const TYPES: Typed[_] = ::{
+    Typed::{ .ext = ".html", .ctype = "text/html; charset=utf-8" },
+    Typed::{ .ext = ".htm", .ctype = "text/html; charset=utf-8" },
+    Typed::{ .ext = ".css", .ctype = "text/css; charset=utf-8" },
+    Typed::{ .ext = ".js", .ctype = "text/javascript; charset=utf-8" },
+    Typed::{ .ext = ".mjs", .ctype = "text/javascript; charset=utf-8" },
+    Typed::{ .ext = ".json", .ctype = "application/json" },
+    Typed::{ .ext = ".map", .ctype = "application/json" }, // a script's or a style's source map
+    Typed::{ .ext = ".webmanifest", .ctype = "application/manifest+json" },
+    Typed::{ .ext = ".jsonld", .ctype = "application/ld+json" },
+    Typed::{ .ext = ".txt", .ctype = "text/plain; charset=utf-8" },
+    Typed::{ .ext = ".md", .ctype = "text/plain; charset=utf-8" },
+    Typed::{ .ext = ".csv", .ctype = "text/csv; charset=utf-8" },
+    Typed::{ .ext = ".vtt", .ctype = "text/vtt; charset=utf-8" }, // a video's subtitles
+    Typed::{ .ext = ".ics", .ctype = "text/calendar; charset=utf-8" },
+    Typed::{ .ext = ".xml", .ctype = "application/xml" },
+    Typed::{ .ext = ".xhtml", .ctype = "application/xhtml+xml" },
+    Typed::{ .ext = ".atom", .ctype = "application/atom+xml" },
+    Typed::{ .ext = ".rss", .ctype = "application/rss+xml" },
+    Typed::{ .ext = ".wasm", .ctype = "application/wasm" },
+    Typed::{ .ext = ".svg", .ctype = "image/svg+xml" },
+    Typed::{ .ext = ".png", .ctype = "image/png" },
+    Typed::{ .ext = ".apng", .ctype = "image/apng" },
+    Typed::{ .ext = ".jpg", .ctype = "image/jpeg" },
+    Typed::{ .ext = ".jpeg", .ctype = "image/jpeg" },
+    Typed::{ .ext = ".gif", .ctype = "image/gif" },
+    Typed::{ .ext = ".webp", .ctype = "image/webp" },
+    Typed::{ .ext = ".avif", .ctype = "image/avif" },
+    Typed::{ .ext = ".bmp", .ctype = "image/bmp" },
+    Typed::{ .ext = ".tif", .ctype = "image/tiff" },
+    Typed::{ .ext = ".tiff", .ctype = "image/tiff" },
+    Typed::{ .ext = ".ico", .ctype = "image/vnd.microsoft.icon" },
+    Typed::{ .ext = ".woff", .ctype = "font/woff" },
+    Typed::{ .ext = ".woff2", .ctype = "font/woff2" },
+    Typed::{ .ext = ".ttf", .ctype = "font/ttf" },
+    Typed::{ .ext = ".otf", .ctype = "font/otf" },
+    Typed::{ .ext = ".mp3", .ctype = "audio/mpeg" },
+    Typed::{ .ext = ".ogg", .ctype = "audio/ogg" },
+    Typed::{ .ext = ".oga", .ctype = "audio/ogg" },
+    Typed::{ .ext = ".opus", .ctype = "audio/ogg" },
+    Typed::{ .ext = ".wav", .ctype = "audio/wav" },
+    Typed::{ .ext = ".flac", .ctype = "audio/flac" },
+    Typed::{ .ext = ".m4a", .ctype = "audio/mp4" },
+    Typed::{ .ext = ".mp4", .ctype = "video/mp4" },
+    Typed::{ .ext = ".m4v", .ctype = "video/mp4" },
+    Typed::{ .ext = ".webm", .ctype = "video/webm" },
+    Typed::{ .ext = ".ogv", .ctype = "video/ogg" },
+    Typed::{ .ext = ".mov", .ctype = "video/quicktime" },
+    Typed::{ .ext = ".pdf", .ctype = "application/pdf" },
+    Typed::{ .ext = ".epub", .ctype = "application/epub+zip" },
+    Typed::{ .ext = ".zip", .ctype = "application/zip" },
+    Typed::{ .ext = ".gz", .ctype = "application/gzip" },
+}
+
 priv fn content_type_for(path: U8[]): U8[] //< looks the Content-Type up from the extension
     //< An unknown extension is not guessed but given `application/octet-stream`: a receiver trusts
     //< a wrong type (misread as HTML, a script runs).
     //< **The extension's letter case does not count**: a camera on Windows names its files
     //< `PHOTO.JPG`, and a browser downloads a page or refuses a module sent as octet-stream.
-    $ext: U8[] = ""
-    if dot: = path.rfind_char('.')
-        ext = path.sub_from(dot)
-    if ext.equals_ignore_case(".html") || ext.equals_ignore_case(".htm")
-        return "text/html; charset=utf-8"
-    if ext.equals_ignore_case(".css")
-        return "text/css; charset=utf-8"
-    if ext.equals_ignore_case(".js") || ext.equals_ignore_case(".mjs")
-        return "text/javascript; charset=utf-8"
-    if ext.equals_ignore_case(".json")
-        return "application/json"
-    if ext.equals_ignore_case(".txt") || ext.equals_ignore_case(".md")
-        return "text/plain; charset=utf-8"
-    if ext.equals_ignore_case(".svg")
-        return "image/svg+xml"
-    if ext.equals_ignore_case(".png")
-        return "image/png"
-    if ext.equals_ignore_case(".jpg") || ext.equals_ignore_case(".jpeg")
-        return "image/jpeg"
-    if ext.equals_ignore_case(".gif")
-        return "image/gif"
-    if ext.equals_ignore_case(".webp")
-        return "image/webp"
-    if ext.equals_ignore_case(".ico")
-        return "image/vnd.microsoft.icon"
-    if ext.equals_ignore_case(".wasm")
-        return "application/wasm"
+    dot: = path.rfind_char('.') catch
+        return "application/octet-stream"
+    ext: = path.sub_from(dot)
+    for t in TYPES
+        if ext.equals_ignore_case(t.ext)
+            return t.ctype
     return "application/octet-stream"
 
 priv enum Rel_path //< what a percent-decoded path names under the root
     ok(path: U8[]) //< the file to serve, the root joined in, on the arena
+    // A folder named without its closing `/`, which holds an index: answered with a 301 to the
+    // name with the `/`, so the page's relative links resolve inside the folder.
+    folder
     // A path not accepted as a name under the root (a `..` step, a NUL, a Windows device name or
     // short name, a link in an intermediate folder: everything `fs.join_under` refuses).
     rejected
     hidden //< a name in it starts with a dot (`fs.join_under`'s `hidden`): answered as absent
+    not_folder //< a file named with a closing `/`, as a folder would be: answered as absent
 
 priv const SHOWN_DOT_NAMES: U8[][_] = ::{ ".well-known" } //< the one dot folder served (RFC 8615)
     //< Certificate issuance (ACME) and other discovery read under it, so hiding it would break
@@ -93,7 +138,23 @@ priv fn path_to_rel(decoded: U8[], root: U8[], is_page: Bool, arena: Arena$@): R
     switch got
     case .ok(path)
         if fs.is_dir(path)
-            return under(root, arena.text().s(t).c('/').s(INDEX_NAME).take(), arena)
+            index: =
+                under(root, arena.text().s(t).c('/').s(INDEX_NAME).take(), arena)
+            // **A folder named without its `/` is sent to the name with one**, as nginx, Caddy
+            // and Python's server do. Served as it is, the browser resolves the page's relative
+            // links against the folder above, and every image and script in it fails. **Only a
+            // folder with an index**: one without is a 404 either way, so it tells no more.
+            if !decoded.ends_with("/")
+                switch index
+                case .ok(found)
+                    if conn.regular_file_size(found).is_some()
+                        return .folder
+                default {}
+            return index
+        // **A file named as a folder is absent**, as nginx answers it. Served, its relative links
+        // resolve one level too deep, and one file gets two names in a cache.
+        if decoded.ends_with("/")
+            return .not_folder
     default {}
     return got
 
@@ -106,28 +167,44 @@ priv fn under(root: U8[], rel: U8[], arena: Arena$@): Rel_path //< `rel` checked
             return .hidden if why == .hidden else .rejected
     return .ok(path)
 
-fn names_this_server(req: http.Request@): Bool //<
-    //< Whether the `Host` header names this machine's loopback, as the token's URL does
+fn names_this_server(req: http.Request@, t: conn.Target): Bool //<
+    //< Whether the request names this machine's loopback as its host, as the token's URL does
     //< **The port is not compared**: a re-pointed page always sends its own name, so the name alone
     //< tells it apart. `http.parse_request` refuses a second `Host`, so the one found is the only
-    //< one.
-    host: = req.headers.find("Host").unwrap_or("")
+    //< one. Caution: **A target naming its host is judged by that host** (RFC 9112 §3.2.2 has the
+    //< server ignore `Host` then). Judged by `Host`, it would be served for a name never checked.
+    host: = t.authority.unwrap_or(req.headers.find("Host").unwrap_or(""))
     name: = host.sub(0, host.find_char(':').unwrap_or(host.len))
     return name.equals(LOCAL_HOST) || name.equals_ignore_case("localhost")
+
+fn takes_method(t: conn.Target, method: U8[], ctx: conn.Ctx@): Bool //<
+    //< Whether a request with that method and target would be taken, not refused for its method
+    //< or as an endpoint that does not exist here. Read before a body is asked for
+    //< (`waits_for_continue` in `kssrv/main.kspl`).
+    if t.path.starts_with(api.API_PREFIX)
+        return api.takes_method(t.path, method, ctx)
+    return method.equals("GET") || method.equals("HEAD")
 
 // ==========================================
 // Static files
 // ==========================================
 
-fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) //<
-    //< Builds the response to one complete request
+fn queue_for_request( //< builds the response to one request
+    c: conn.Conn$@,
+    req: http.Request$@,
+    ctx: conn.Ctx$@,
+    // Whether the request was read whole, its body included. **False only for a refusal answered
+    // before its body comes** (`refuse_early` in `kssrv/main.kspl`): the connection then closes,
+    // as no one knows where the next request starts.
+    whole: Bool,
+)
     conn.stats.requests += 1I64
     // **Every request shows someone is still there.** Stamped per endpoint, the next endpoint added
     // would forget it.
     conn.used_us = sys.mono_us()
     is_head: = req.method.equals("HEAD")
     is_get: = req.method.equals("GET")
-    keep_alive: = !req.wants_close()
+    keep_alive: = whole && !req.wants_close()
     t: = conn.split_target(req.target)
     // **Under `/api/` every answer is JSON, a refusal's included**: an API client reads one form.
     is_api: = t.path.starts_with(api.API_PREFIX)
@@ -136,7 +213,7 @@ fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) //<
         return
     // Static serving is GET/HEAD only (the API's POST branched off before this).
     if !is_get && !is_head
-        conn.queue_error(c, 405, "GET, HEAD")
+        conn.queue_error(c, 405, "GET, HEAD", keep_alive)
         return
 
     // **Use `decode_component`**, which keeps a `+`: a space written as `+` is a query's
@@ -149,7 +226,7 @@ fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) //<
     // `..` or an absolute path). The agreement is "Where it listens" in
     // `docs/SPEC-local-server.md`.
     is_page: = asks_for_page(decoded)
-    // A directory becomes its index (`/docs` and `/docs/` alike) in `path_to_rel`.
+    // A directory becomes its index (`/docs/`), or a 301 to that name (`/docs`), in `path_to_rel`.
     $target_path: U8[] = ""
     if is_page && ctx.page.len > 0
         // **The named page replaces the root's index, so that index is not checked.** Checked, a
@@ -159,31 +236,65 @@ fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) //<
         switch path_to_rel(decoded, ctx.root, is_page, c.arena)
         case .ok(path)
             target_path = path
+        case .folder
+            // **The raw path, not the decoded one**: it is sent back as the client wrote it, and
+            // the query goes with it.
+            to: = c.arena.text().s(t.path).c('/')
+            if t.query.len > 0
+                to.c('?').s(t.query)
+            conn.queue_redirect(c, to.take(), keep_alive)
+            return
         case .rejected
             // A path let through could return a file outside the root, or one Windows reads as
             // another name. A 403, not a 404: the form was refused, and whether the name exists is
             // not checked.
-            conn.queue_error(c, 403)
+            conn.queue_error(c, 403, "", keep_alive)
             return
-        case .hidden
-            conn.queue_error(c, 404)
+        case .hidden, .not_folder
+            conn.queue_error(c, 404, "", keep_alive)
             return
+    queue_static_file(c, req, target_path, keep_alive)
 
-    $size: Sz = 0
-    if found: = conn.regular_file_size(target_path)
-        size = found
+priv fn queue_static_file(c: conn.Conn$@, req: http.Request@, path: U8[], keep: Bool) //<
+    //< Answers a GET or a HEAD of the file at `path`: whole, in part, or "unchanged"
+    $facts: conn.File_facts = ::{}
+    if found: = conn.regular_file(path)
+        facts = found
     else
-        conn.queue_error(c, 404)
+        conn.queue_error(c, 404, "", keep)
         return
-
-    ctype: = content_type_for(target_path)
-    if is_head
-        // A HEAD's Content-Length names the real length; 0 would read as "an empty file".
-        conn.queue_to_head(c, 200, ctype, size, keep_alive)
+    ctype: = content_type_for(path)
+    v: = cache.validators(facts, c.arena)
+    switch cache.judge(req, v)
+    case .unchanged
+        conn.queue_unchanged(c, ctype, keep, cache.file_headers(v, c.arena).build())
         return
-
+    case .failed
+        conn.queue_error(c, 412, "", keep)
+        return
+    case .serve {}
+    $status: I32 = 200
+    $first: Sz = 0
+    $length: = facts.size
+    $more: = cache.file_headers(v, c.arena)
+    switch cache.part_asked(req, facts.size, v, sys.wall_seconds())
+    case .whole {}
+    case .span(start, n)
+        status = 206
+        first = start
+        length = n
+        more = more.add("Content-Range",
+            cache.content_range(start, n, facts.size, c.arena))
+    case .unsatisfiable
+        conn.queue_unsatisfiable(c, facts.size, keep)
+        return
+    // A HEAD's Content-Length names the real length; 0 would read as "an empty file". **No file is
+    // opened for it**, so a HEAD cannot hold one open.
+    if req.method.equals("HEAD")
+        conn.queue_file(c, status, ctype, io.File_stream::{}, first, length, keep, more.build())
+        return
     // The stat found it, so an open that fails is the server's fault, not a missing name.
-    file: = io.open(target_path, "rb") catch _e
+    file: = io.open(path, "rb") catch _e
         conn.queue_error(c, 500)
         return
-    conn.queue_file(c, ctype, file, size, keep_alive)
+    conn.queue_file(c, status, ctype, file, first, length, keep, more.build())

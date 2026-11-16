@@ -91,7 +91,8 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
             inst_name.free()
             if inst_def: = c.env.get_enum_def(c.env.get_str(cid))
                 switch inst_def.get_variant(member_name)
-                case .some
+                case .some(d)
+                    member_node.def_node = d.node
                     node.set_kind(.k_enum_init)
                     node.type_id = cid
                     return cid
@@ -110,6 +111,10 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
             case .none {}
 
         if variant_def != null
+            // The variant's name is linked to its declaration, as a `.red` is
+            // (`infer_implicit_enum_expr` in `expr.kspl`): go to definition, hover, references and
+            // rename read the link.
+            member_node.def_node = variant_def.node
             node.set_kind(.k_enum_init)
             node.type_id = sym_ptr.type_id
             return sym_ptr.type_id
@@ -503,9 +508,8 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
         c.clear_scratch()
             .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'\n  \
                 Note: a fixed-length array is not a slice. Slice methods are not available on it. \
-                View it as a slice with an explicit cast: \
-                '(\{elem\}[]::x).\{member_name_raw\}(…)', where x is the array. Use parentheses \
-                so that the cast covers only the array.")
+                View it as a slice with an explicit cast: '(\{elem\}[]::x).\{member_name_raw\}(…)', \
+                where x is the array. Use parentheses so that the cast covers only the array.")
         c.err(member_node, c.scratch.slice())
         return
 
@@ -570,9 +574,9 @@ priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, rec
         own_name = shown.sub_from(last_dot + 1)
     c.clear_scratch()
         .s("method '\{m\}' cannot be used as a value through a value of type '\{shown\}'. A \
-            function value holds no receiver\n  Hint: call the method with '.\{m\}(…)', or name \
-            it through its type with '\{own_name\}.\{m\}'. When naming it through its type, pass \
-            the receiver as its first argument")
+            function value holds no receiver\n  Hint: call the method with '.\{m\}(…)', or name it \
+            through its type with '\{own_name\}.\{m\}'. When naming it through its type, pass the \
+            receiver as its first argument")
     c.err(member_node, c.scratch.slice())
 
 priv fn is_declared_type(c: Sema_ctx@, type_id: I32): Bool //<

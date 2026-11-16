@@ -3,6 +3,7 @@
 //< the lines it names. A source that fails is removed and counted, never shown as evidence.
 //< The fixed lines ksagent adds itself come in the question's language (`Lang`).
 import "ksagent/files"
+import "ksagent/office/excel"
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -48,17 +49,15 @@ impl Lang
     fn unverified_line(r: Self): U8[] //< the mark on an answer that no checked source backs
         switch r
         case .ja
-            return "未確認: \
-                確認できた出典がありません。ファイルで確かめてください。"
+            return "未確認: 確認できた出典がありません。ファイルで確かめてください。"
         case .en
             return "Unverified: no cited source passed the check. Confirm it in the files."
 
     fn removed_line(r: Self, n: Sz, arena: Arena$@): U8[] //< how many sources the check removed
         switch r
         case .ja
-            return arena.text()
-                .s("示された行に引用が見つからない出典を \{n\} \
-                    件取り除きました。").take()
+            return arena.text().s("示された行に引用が見つからない出典を \{n\} 件取り除きました。")
+                .take()
         case .en
             return arena.text()
                 .s("Removed \{n\} cited source(s): the quote does not stand at the lines given.")
@@ -88,6 +87,19 @@ struct Source //< one place the answer cites
     from_line: I64 //< the first line cited, counting from 1
     to_line: I64 //< the last line cited
     quote: U8[] //< the words cited, as they stand in those lines
+    rows: Sheet_rows //< for an Excel file, the sheet and rows those lines name; set by the check
+
+struct Sheet_rows //< the place an Excel source stands, as Excel shows it
+    //< **A line number counts the view's lines, which Excel does not show**, and an empty row or
+    //< a second sheet puts it apart from the row. So an Excel source is shown by its sheet and
+    //< rows.
+    sheet: U8[] //< the first cited line's sheet; empty for a file that is not Excel
+    from_row: I64
+    to_sheet: U8[] //< the last cited line's sheet
+    to_row: I64
+
+const NO_ROWS: Sheet_rows = ::{ .sheet = "", .from_row = 0I64, .to_sheet = "", .to_row = 0I64 } //<
+    //< the place of a source in a file that is not Excel
 
 enum Outcome //< how the work on one question ended
     answered //< the model gave an answer: through `answer`, or as plain text
@@ -139,6 +151,8 @@ fn finish(folder: files.Folder, text: U8[], given: List<|Source|>@, lang: Lang, 
         why: = check_source(folder, s, checked@, one)
         if why.len == 0
             checked.path = arena.dup_str(checked.path)
+            checked.rows.sheet = arena.dup_str(checked.rows.sheet)
+            checked.rows.to_sheet = arena.dup_str(checked.rows.to_sheet)
             a.sources.push(checked)
         else
             a.removed
@@ -148,9 +162,11 @@ fn finish(folder: files.Folder, text: U8[], given: List<|Source|>@, lang: Lang, 
 
 fn check_source(folder: files.Folder, s: Source, out: Source$@, arena: Arena$@): U8[] //<
     //< Why the source fails the check, or empty when its quote stands in the lines it names
-    //< **The quote and the lines are compared with each run of whitespace made one space**, so a
-    //< line break or an indent in either does not matter. `out` gets the path as the root holds
-    //< it. Caution: **This shows that the words stand there, not that they back the answer.**
+    //< **The quote and the lines are compared with every space left out** (`without_spaces`), so
+    //< a line break, an indent or a full-width space in either does not matter. A Japanese file
+    //< often breaks a sentence across lines with no space, and a model copies it with none.
+    //< `out` gets the path as the root holds it, and an Excel file's sheet and rows. Caution:
+    //< **This shows that the words stand there, not that they back the answer.**
     quote: = collapse_spaces(s.quote, arena)
     if char_count(quote) < MIN_QUOTE_CHARS
         return arena.text().s("the quote is shorter than \{MIN_QUOTE_CHARS\} characters").take()
@@ -168,9 +184,16 @@ fn check_source(folder: files.Folder, s: Source, out: Source$@, arena: Arena$@):
         return arena.text().s("the file has only \{lines.len\} lines").take()
     cited: = arena.text()
     for k in Range.asc(Sz::(s.to_line - s.from_line + 1I64))
-        cited.s(lines.get(Sz::(s.from_line - 1I64) + k)).c(' ')
-    if collapse_spaces(cited.take(), arena).find_str(quote).is_none()
+        cited.s(lines.get(Sz::(s.from_line - 1I64) + k))
+    if without_spaces(cited.take(), arena).find_str(without_spaces(quote, arena)).is_none()
         return "the quote does not stand in those lines"
+    out.rows = NO_ROWS
+    if files.is_excel(at.full)
+        if first: = excel.place_of(lines.get(Sz::(s.from_line - 1I64)))
+            if last: = excel.place_of(lines.get(Sz::(s.to_line - 1I64)))
+                out.rows = Sheet_rows::{ .sheet = arena.dup_str(first.sheet),
+                    .from_row = first.row, .to_sheet = arena.dup_str(last.sheet),
+                    .to_row = last.row }
     return ""
 
 priv fn char_count(text: U8[]): Sz //< how many UTF-8 characters the text holds
@@ -180,6 +203,39 @@ priv fn char_count(text: U8[]): Sz //< how many UTF-8 characters the text holds
         if (c & 0xC0U8) != 0x80U8
             n += 1
     return n
+
+fn without_spaces(text: U8[], arena: Arena$@): U8[] //< the text with every space left out
+    //< Spaces, tabs and line breaks, and the Unicode spaces (`space_len`): a file can hold a
+    //< full-width or a no-break space where the model writes an ASCII one, or none.
+    out: = arena.text()
+    $i: Sz = 0
+    for i < text.len
+        n: = space_len(text, i)
+        if n == 0
+            out.c(text[i])
+        i += 1 if n == 0 else n
+    return out.take()
+
+priv fn space_len(text: U8[], i: Sz): Sz //< how many bytes the space at `i` takes; 0 for none
+    //< ASCII's, and every other character Unicode counts as white space: U+0085, U+00A0, U+1680,
+    //< U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F and U+3000, the full-width space.
+    c: = text[i]
+    if c.is_space() || c == 0x0BU8 || c == 0x0CU8
+        return 1
+    if c == 0xC2U8 && i + 1 < text.len && (text[i + 1] == 0x85U8 || text[i + 1] == 0xA0U8)
+        return 2
+    if i + 2 >= text.len
+        return 0
+    b: = text[i + 1]
+    d: = text[i + 2]
+    if (c == 0xE1U8 && b == 0x9AU8 && d == 0x80U8) || (c == 0xE3U8 && b == 0x80U8 && d == 0x80U8)
+        return 3
+    if c == 0xE2U8 && b == 0x80U8 &&
+        ((d >= 0x80U8 && d <= 0x8AU8) || d == 0xA8U8 || d == 0xA9U8 || d == 0xAFU8)
+        return 3
+    if c == 0xE2U8 && b == 0x81U8 && d == 0x9FU8
+        return 3
+    return 0
 
 fn collapse_spaces(text: U8[], arena: Arena$@): U8[] //<
     //< The text with each run of spaces, tabs and line breaks made one space, and none at the ends
@@ -202,7 +258,10 @@ fn collapse_spaces(text: U8[], arena: Arena$@): U8[] //<
 // ==========================================
 
 fn span_words(s: Source, lang: Lang, arena: Arena$@): U8[] //< the lines a source cites, as words
-    //< One line is named alone: `line 3`, not `lines 3–3`.
+    //< One line is named alone: `line 3`, not `lines 3–3`. An Excel source names its sheet and
+    //< rows instead (`rows_words`).
+    if s.rows.sheet.len > 0
+        return rows_words(s.rows, lang, arena)
     span: = arena.text()
     one: = s.from_line == s.to_line
     switch lang
@@ -217,17 +276,39 @@ fn span_words(s: Source, lang: Lang, arena: Arena$@): U8[] //< the lines a sourc
             span.s("–\{s.to_line\}")
     return span.take()
 
+priv fn rows_words(r: Sheet_rows, lang: Lang, arena: Arena$@): U8[] //<
+    //< An Excel source's place as words: `sheet 規程一覧, rows 9–12`, `シート「規程一覧」9–12行目`
+    //< A range over two sheets names both: `sheet A, row 9 to sheet B, row 2`.
+    out: = arena.text()
+    one: = r.sheet.equals(r.to_sheet)
+    switch lang
+    case .ja
+        out.s("シート「").s(r.sheet).s("」\{r.from_row\}")
+        if !one
+            out.s("行目〜シート「").s(r.to_sheet).s("」\{r.to_row\}")
+        else if r.to_row != r.from_row
+            out.s("–\{r.to_row\}")
+        out.s("行目")
+    case .en
+        out.s("sheet ").s(r.sheet)
+        if !one
+            out.s(", row \{r.from_row\} to sheet ").s(r.to_sheet).s(", row \{r.to_row\}")
+        else if r.to_row != r.from_row
+            out.s(", rows \{r.from_row\}–\{r.to_row\}")
+        else
+            out.s(", row \{r.from_row\}")
+    return out.take()
+
 fn ended_line(a: Answer@, arena: Arena$@): U8[] //<
     //< The one line an answer that did not finish says, or empty when it finished
     switch a.outcome
     case .stopped(why)
         return arena.text()
-            .s(("回答の途中で止まりました: " if a.lang == Lang.ja
-            else "Stopped without an answer: ")).s(why).take()
+            .s(("回答の途中で止まりました: " if a.lang == Lang.ja else "Stopped without an answer: "))
+            .s(why).take()
     case .failed(why)
-        return arena.text()
-            .s("回答できませんでした: " if a.lang == Lang.ja else "No answer: ").s(why)
-            .take()
+        return arena.text().s("回答できませんでした: " if a.lang == Lang.ja else "No answer: ")
+            .s(why).take()
     default
         return ""
 

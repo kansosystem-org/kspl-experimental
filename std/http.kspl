@@ -23,9 +23,13 @@ pub enum Http_error //< why a message could not be read, or cannot be trusted
     invalid_host //< `Host` is named twice, missing on HTTP/1.1 and later, or not a host and port
         //< RFC 9112 §3.2 asks a server to answer each with 400: two readers taking different ones,
         //< or reading one value differently, would send one request to two hosts.
-    unsupported_transfer_encoding //< a `Transfer-Encoding` other than a response's lone `chunked`
-        //< A request's is always refused, and so is one beside `Content-Length`. Ignoring it would
-        //< let it disagree with Content-Length (request smuggling).
+    unsupported_transfer_encoding //< a `Transfer-Encoding` other than a lone `chunked`
+        //< So is one beside `Content-Length`. Ignoring it would let it disagree with
+        //< Content-Length (request smuggling).
+    chunked_request //< a request whose body comes in chunks: a lone `chunked`, and no length
+        //< **A request is read by its length alone** ("Chunks are read in a response only" in
+        //< `std/docs/DESIGN-system.md`). Told apart from the codings no reader takes, so a server
+        //< can answer 411 and ask for a length (RFC 9110 §15.5.12), where those get a 400.
     invalid_chunk(why: U8[]) //< a chunked body breaks the chunked coding; `why` says how
         //< Each reason is a fixed sentence, such as "a chunk's size is not hexadecimal".
     length_mismatch //< what a head being built says of the body's length is not what is written
@@ -487,7 +491,7 @@ priv fn scan_request_head(src: U8[], max_body: Sz, arena: Arena$@): Request_head
     //< Reads a request's head as `scan_head` does, and checks its first line and its `Host`
     h: = scan_head(src, max_body, arena)!
     if h.chunked
-        throw .unsupported_transfer_encoding
+        throw .chunked_request
     line: = parse_request_line(h.first_line)!
     check_host(h.head, line.version)!
     return Request_head::{ .parts = h, .line = line }
@@ -669,7 +673,7 @@ priv struct Status_phrase //< one status number and its standard phrase
     status: I32
     phrase: U8[]
 
-priv const PHRASES: Status_phrase[24] = ::{ //< RFC 9110's phrase for each status known
+priv const PHRASES: Status_phrase[26] = ::{ //< RFC 9110's phrase for each status known
     Status_phrase::{ .status = 200, .phrase = "OK" },
     Status_phrase::{ .status = 201, .phrase = "Created" },
     Status_phrase::{ .status = 204, .phrase = "No Content" },
@@ -685,10 +689,12 @@ priv const PHRASES: Status_phrase[24] = ::{ //< RFC 9110's phrase for each statu
     Status_phrase::{ .status = 408, .phrase = "Request Timeout" },
     Status_phrase::{ .status = 409, .phrase = "Conflict" },
     Status_phrase::{ .status = 411, .phrase = "Length Required" },
+    Status_phrase::{ .status = 412, .phrase = "Precondition Failed" },
     // RFC 9110's name (RFC 7231's is "Payload Too Large").
     Status_phrase::{ .status = 413, .phrase = "Content Too Large" },
     Status_phrase::{ .status = 414, .phrase = "URI Too Long" },
     Status_phrase::{ .status = 415, .phrase = "Unsupported Media Type" },
+    Status_phrase::{ .status = 416, .phrase = "Range Not Satisfiable" },
     Status_phrase::{ .status = 429, .phrase = "Too Many Requests" },
     Status_phrase::{ .status = 431, .phrase = "Request Header Fields Too Large" },
     Status_phrase::{ .status = 500, .phrase = "Internal Server Error" },
@@ -708,6 +714,54 @@ pub fn reason_phrase( //< the standard phrase for a status number, so the two ca
         if p.status == status
             return .some(p.phrase)
     return .none
+
+// ---------------------------------------------------------
+// The date a message names (`Date`, `Last-Modified`)
+// ---------------------------------------------------------
+
+pub struct Http_date //< a time as an HTTP date, such as `Sun, 06 Nov 1994 08:49:37 GMT`
+    //< RFC 9110 §5.6.7's IMF-fixdate, the one form a sender may write. **It is worked out from the
+    //< seconds alone**, with no C library and no time zone, so every OS writes the same text.
+    pub unix_s: I64 //< seconds since 1970-01-01T00:00:00Z, as `sys.wall_seconds` gives them
+
+priv const LAST_DATE_S: I64 = 253402300799I64 //< 9999-12-31T23:59:59Z, the last 4-digit year's end
+priv const S_PER_DAY: I64 = 86400I64
+priv const WEEKDAYS: U8[][7] = ::{ "Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed" } //<
+    //< the day names in turn from 1970-01-01, a Thursday
+priv const MONTHS: U8[][12] = ::{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
+    "Oct", "Nov", "Dec" }
+
+impl Http_date: Formattable //< so a date can be written straight into a header's value
+    pub fn fmt(r: Self, w: Writer): Writer //< writes the 29 bytes of the date
+        //< **A time outside 1970 to 9999 is written as the nearer end.** The form has four digits
+        //< for the year and no sign, so the text would otherwise not be a date at all.
+        $t: = r.unix_s
+        if t < 0I64
+            t = 0I64
+        if t > LAST_DATE_S
+            t = LAST_DATE_S
+        days: = t / S_PER_DAY
+        secs: = t % S_PER_DAY
+        // The civil date from the day count (Howard Hinnant's `civil_from_days`). Its years start
+        // in March, so the leap day comes last. No day here is before 1970, so no step is negative.
+        z: = days + 719468I64
+        era: = z / 146097I64
+        doe: = z - era * 146097I64
+        yoe: = (doe - doe / 1460I64 + doe / 36524I64 - doe / 146096I64) / 365I64
+        doy: = doe - (365I64 * yoe + yoe / 4I64 - yoe / 100I64)
+        mp: = (5I64 * doy + 2I64) / 153I64
+        day: = doy - (153I64 * mp + 2I64) / 5I64 + 1I64
+        month: = mp + 3I64 if mp < 10I64 else mp - 9I64
+        year: = yoe + era * 400I64 + (1I64 if month <= 2I64 else 0I64)
+        $out: = w.s(WEEKDAYS[Sz::(days % 7I64)]).s(", ")
+        out = two_digits(out, day).c(' ').s(MONTHS[Sz::(month - 1I64)]).c(' ')
+        out = two_digits(two_digits(out, year / 100I64), year % 100I64).c(' ')
+        out = two_digits(out, secs / 3600I64).c(':')
+        out = two_digits(out, secs / 60I64 % 60I64).c(':')
+        return two_digits(out, secs % 60I64).s(" GMT")
+
+priv fn two_digits(w: Writer, n: I64): Writer //< writes 0 to 99 as two digits, `07` for 7
+    return w.c(U8::(n / 10I64) + '0').c(U8::(n % 10I64) + '0')
 
 pub fn format_response( //< builds one whole response as bytes, for the caller to send
     //< Appends the status line, the headers, an empty line and the body to b, **leaving the bytes

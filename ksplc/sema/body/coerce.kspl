@@ -38,12 +38,7 @@ impl Ast_node
                 if original_id != 0 && cast_id != 0
                     real_src: = c.env.get_real_type(original_id)
                     real_dst: = c.env.get_real_type(cast_id)
-                    // A literal I32 does not hold took its type from the cast
-                    // (cast_operand_type_id in literal.kspl): without it, `I64::0x80000000` is
-                    // out of range.
-                    from_cast: = !sema_type_env
-                        .is_unknown(sema_body_literal.cast_operand_type_id(r.get_child(0)))
-                    if real_src == real_dst && !from_cast
+                    if is_identity_cast(r.get_child(0), real_src, real_dst)
                         // An identity cast. **Only here is the expected type ignored**: without the
                         // cast the expression infers to the same type, even in `x: = T::f();`.
                         c.information(r,
@@ -308,6 +303,13 @@ impl Ast_node
             r.add_child(clone)
             return .some(expected_id)
         return .none
+
+fn is_identity_cast(value: Ast_node$@, real_src: I32, real_dst: I32): Bool //<
+    //< Whether a cast of value changes nothing, which [I0301] reports and [H0302] then backs off on
+    //< A literal I32 does not hold takes its type from the cast (cast_operand_type_id in
+    //< `literal.kspl`): without it, `I64::0x80000000` is out of range, so that cast is needed.
+    return real_src == real_dst &&
+        sema_type_env.is_unknown(sema_body_literal.cast_operand_type_id(value))
 
 enum Implicit_cast //< what a type-changing `::` does that the language would do by itself
     none //< a real conversion: the cast is wanted

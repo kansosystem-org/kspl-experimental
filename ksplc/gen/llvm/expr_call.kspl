@@ -2,6 +2,7 @@
 //< The postfix `(`.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as _base_ast_place // `has_vtable_slot`
 import "ksplc/base/core" as base_core
 import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
 import "ksplc/gen/llvm/expr" as gen_llvm_expr
@@ -23,8 +24,15 @@ impl Genllvm_ctx
         $idx_map: = r.trait_method_idx_cache.get(cache_key).unwrap_or(null)
         if idx_map == null
             idx_map = base_core.arena.create(Map<|U8[], I32|>(base_core.arena))
-            for im in Range.asc(d.methods_list.len)
-                idx_map.set(d.methods_list.get(im).name, I32::im)
+            // Caution: **Number only the methods that have a slot**, by the predicate the table's
+            // type uses (`types.kspl`). A method with a body has none; counting it points a later
+            // call one slot past the table's end.
+            $slot: I32 = 0
+            for method in d.methods_list
+                if !method.node.has_vtable_slot()
+                    continue
+                idx_map.set(method.name, slot)
+                slot += 1
             r.trait_method_idx_cache.set(cache_key, idx_map)
         return idx_map.get(name).unwrap_or(-1)
 

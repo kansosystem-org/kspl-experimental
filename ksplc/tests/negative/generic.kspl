@@ -168,6 +168,23 @@ struct Point
 fn main(): I32
   m: = Map<|Point, I32|>(null)
   return I32::m.len
+// ==== case generic_constraint_once
+//< One missing conformance on a map's key is one error, however the map is then used
+//< The type's instance and its constructor's instance bind the same constraint, and each reported
+//< it. The instance then has no `Manual_free` for `defer` and no `get` to type, and each said so.
+// EXPECT: generic_constraint_once.kspl:13:15: error: type 'generic_constraint_once.Point' does not explicitly implement trait 'std.ds.Hashable<|generic_constraint_once.Point|>'
+// EXPECT: Finished with 1 error(s)
+import "std/ds" { Map }
+
+// It holds no hash/equals, so it does not satisfy ds.Hashable.
+struct Point
+  x: I32
+
+fn main(): I32
+  defer $m: = Map<|Point, I32|>(null)
+  if v: = m.get(Point::{ .x = 1 })
+    return v
+  return 0
 // ==== case generic_decl_checked_as_plain
 //< A generic struct's or enum's instance is refused where the same non-generic declaration is
 //< An instance fills its fields and variants through the same functions as a plain declaration

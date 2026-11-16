@@ -176,6 +176,10 @@ priv fn parse_error(src: U8[], max_body: Sz, arena: Arena$@): U8[] //<
             return "body_too_large"
         case .invalid_host
             return "invalid_host"
+        case .chunked_request
+            return "chunked_request"
+        case .unsupported_transfer_encoding
+            return "unsupported_transfer_encoding"
         default
             return "another error"
     return "accepted"
@@ -279,6 +283,17 @@ fn test_http_reject_smuggling()
         assert(!head_ok, "parse_request_head must refuse what parse_request refuses")
     assert(parse_error("GET / HTTP/1.1\r\n\r\n", http.DEFAULT_MAX_BODY_BYTES, arena_h)
         .equals("invalid_host"), "an HTTP/1.1 request naming no Host must be refused")
+    // **A lone `chunked` is told apart** from a coding no reader takes, and from one beside a
+    // length: a server asks the first for a length (411), and refuses the others (400).
+    chunked: =
+        parse_error("PUT / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n",
+        http.DEFAULT_MAX_BODY_BYTES, arena_h)
+    assert(chunked.equals("chunked_request"), "a chunked request must be refused as chunked_request")
+    for coded in U8[][]::{ "PUT / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: gzip\r\n\r\n",
+        "PUT / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\nContent-Length: 1\r\n\r\nx" }
+        why: = parse_error(coded, http.DEFAULT_MAX_BODY_BYTES, arena_h)
+        assert(why.equals("unsupported_transfer_encoding"),
+            "another coding, or chunked beside a length, must be refused as it was")
     // Caution: **HTTP/1.0 can leave it out**, which a refusal of every missing Host would break.
     assert(parse_error("GET / HTTP/1.0\r\n\r\n", http.DEFAULT_MAX_BODY_BYTES, arena_h)
         .equals("accepted"), "an HTTP/1.0 request naming no Host must be read")
@@ -800,3 +815,25 @@ fn test_http_request_head()
             fallback null
         assert(refused, "a head enforces body limits and rejects ambiguous headers")
     verdict.pass("Request heads expose validated metadata without waiting for the body.")
+
+priv fn date_text(unix_s: I64, arena: Arena$@): U8[] //< `Http_date` written into the arena
+    return arena.text().s("\{http.Http_date::{ .unix_s = unix_s }\}").take()
+
+fn test_http_date() //< a time is written as RFC 9110's IMF-fixdate, the same on every OS
+    verdict.start("[Http] a time written as an HTTP date...")
+    defer arena: = Arena(4096)
+    // RFC 9110's own example, the epoch, a leap day, a century not a leap year, and the year's end.
+    cases: = U8[][]::{ "Sun, 06 Nov 1994 08:49:37 GMT", "Thu, 01 Jan 1970 00:00:00 GMT",
+        "Thu, 29 Feb 2024 23:59:59 GMT", "Mon, 01 Mar 2100 00:00:00 GMT",
+        "Fri, 31 Dec 1999 23:59:59 GMT" }
+    times: = I64[]::{ 784111777I64, 0I64, 1709251199I64, 4107542400I64, 946684799I64 }
+    for i in Range.asc(cases.len)
+        got: = date_text(times[i], arena)
+        assert(got.equals(cases[i]),
+            arena.text().s("the date written: ").s(got).take())
+    // **A time outside what four digits hold is written as the nearer end**, never as no date.
+    assert(date_text(-5I64, arena).equals("Thu, 01 Jan 1970 00:00:00 GMT"),
+        "a time before 1970 is written as the epoch")
+    assert(date_text(999999999999I64, arena).equals("Fri, 31 Dec 9999 23:59:59 GMT"),
+        "a time past 9999 is written as its last second")
+    verdict.pass("Known times, a leap day, a century and both ends are written as HTTP dates.")

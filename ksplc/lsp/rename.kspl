@@ -3,7 +3,8 @@
 //< refused with a message naming why, in these cases. ① The grammar does not read the new
 //< name as an identifier (`Identifier` in `../kspl.kspeg`). ② A place lies in a file the
 //< workspace walk does not list (`holds` in `workspace.kspl`). ③ The new name is already
-//< declared where it would land. ④ A type call selects the function (`place_refusal`).
+//< declared where it would land. ④ A type call selects the function (`place_refusal`). ⑤ A trait
+//< declares the method, or the method implements one (`trait_refusal`).
 //< `prepareRename` asks ② of the declaration alone, so the editor refuses before a name is typed.
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast" { Ast_node }
@@ -17,6 +18,7 @@ import "ksplc/lsp/workspace" as lsp_workspace
 import "ksplc/parse/load" as parse_load
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/session/import_table" as _sema_session_import_table
+import "ksplc/sema/type/display" as _sema_type_display // `display`
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
@@ -71,6 +73,8 @@ fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Val
     spots: = lsp_uses.collect_spots(ws_state, t, base_locate.uri_style_of(uri), arena)
     if why.len == 0
         why = place_refusal(spots@, old_name, arena)
+    if why.len == 0 && ws_state.sema != null
+        why = trait_refusal(ws_state.sema, spots@, old_name, arena)
     if why.len == 0 && !new_name.equals(old_name) && ws_state.sema != null
         why = Clash::{ .c = ws_state.sema, .old_name = old_name, .new_name = new_name,
             .arena = arena }.refusal(spots@)
@@ -314,3 +318,39 @@ priv fn shown(logical: U8[], arena: Arena$@): U8[] //< a file as a diagnostic na
     defer $out: = Str_builder()
     base_locate.recorded_name_to(logical, out@)
     return arena.dup_str(out.slice())
+
+// ==========================================
+// ⑤ A trait's method is renamed with every implementation, so not here
+// ==========================================
+
+priv fn trait_refusal(c: Sema_ctx$@, spots: List<|Spot|>@, name: U8[], arena: Arena$@): U8[] //<
+    //< Why a method a trait declares, or one that implements a trait, is not renamed; empty where
+    //< the target is neither
+    //< **The trait and each implementation are matched by the name alone**, and calls through the
+    //< trait (`a.area()` on a `Shape@`, `a + b` for `Add`) name only the trait's. Renamed on one
+    //< side, the program stops compiling. Renaming every side at once is left undone: std's
+    //< traits (`Add`) cannot change anyway.
+    for i in Range.asc(spots.len)
+        s: = spots.get(i)
+        if !s.is_decl || s.path.len < 2
+            continue
+        decl: = s.path.get(s.path.len - 1)
+        block: = s.path.get(s.path.len - 2)
+        if !decl.is_fn_decl()
+            continue
+        if block.kind_id == .k_decl_trait
+            id: = block.find_child(.k_identifier)
+            return arena.text().s("'\{name\}' is declared by the trait '")
+                .s(id.text if id != null else "?").s("'; ").s(TRAIT_ADVICE).take()
+        type_node: = block.get_decl_type_node()
+        if block.kind_id != .k_decl_impl || type_node == null
+            continue
+        trait_id: = lsp_uses.trait_with_method(c, type_node.type_id, name)
+        if trait_id != 0
+            return arena.text().s("'\{name\}' implements the trait '\{c.env.display(trait_id)\}'; ")
+                .s(TRAIT_ADVICE).take()
+    return ""
+
+priv const TRAIT_ADVICE: U8[] =
+    "the trait and every implementation share the name, so renaming one alone would break the \
+        program. Rename them all by hand"

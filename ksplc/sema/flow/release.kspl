@@ -77,6 +77,22 @@ priv fn may_exit_body(node: Ast_node$@): Bool //< an earlier exit makes a later 
             return true
     return false
 
+priv fn is_rooted_at(e: Ast_node$@, name: U8[]): Bool //<
+    //< Whether the expression is the binding `name` or a part reached through it
+    //< `r`, `r.buf`, `r.rows[i]`, `r$` and `Void$@::r.ptr` all count: freeing any of them leaves
+    //< the value `r` stands for unusable.
+    $curr: = e
+    for curr != null && curr.kind_id == .k_expr_postfix
+        op: = curr.postfix_op_text()
+        if !(op.equals("@") || op.equals("::") || op.equals(".") || op.equals("[") ||
+            op.equals("$"))
+            break
+        curr = curr.get_postfix_receiver()
+    if curr == null
+        return false
+    return (curr.kind_id == .k_identifier || curr.kind_id == .k_expr_path) &&
+        curr.text.equals(name)
+
 fn call_arg_for_param(callee: Ast_node$@, args_node: Ast_node$@, param_idx: Sz, is_method: Bool):
     Ast_node$@? //<
         //< The actual-argument node for the formal parameter param_idx, or none
@@ -196,6 +212,61 @@ impl Ast_node
                 continue
             if inner.frees_named_receiver(param_name, c, arg_type_id)
                 return true
+        return false
+
+    fn body_releases_param(r: Self$@, param_name: U8[], depth: I32): Bool //<
+        //< Whether the function's body frees the parameter, or a part of it, anywhere in it
+        //< Unlike body_frees_param_directly, a release inside a branch counts, and so does a call
+        //< that hands the parameter to a function whose body frees it (depth levels deep). It
+        //< decides whether [W0107] has anything to warn about, not what the use-after-free check
+        //< tracks.
+        block: = r.find_child(.k_stmt_block)
+        return block != null && block.releases_param_in(param_name, depth)
+
+    priv fn releases_param_in(r: Self$@, param_name: U8[], depth: I32): Bool //<
+        //< Whether a call in this subtree frees param_name or a part of it
+        //< A function literal or a nested declaration is a body of its own, so it is not looked
+        //< into.
+        if r == null || r.kind_id == .k_expr_fn_lit || r.kind_id == .k_decl_fn
+            return false
+        if r.kind_id == .k_expr_postfix && r.postfix_op_text().equals("(") &&
+            r.call_releases_param(param_name, depth)
+            return true
+        for ch in r.children
+            if ch.releases_param_in(param_name, depth)
+                return true
+        return false
+
+    priv fn call_releases_param(r: Self$@, param_name: U8[], depth: I32): Bool //<
+        //< Whether this call is `dealloc(p…)`, `p….free()`, or hands `p…` to a function that frees it
+        if arg: = r.get_free_fn_arg()
+            if is_rooted_at(arg, param_name)
+                return true
+        callee: = r.get_postfix_receiver()
+        if callee == null
+            return false
+        if callee.is_free_call_access(true)
+            member: = callee.get_postfix_member()
+            if member != null && member.text.equals("free") &&
+                is_rooted_at(callee.get_postfix_receiver(), param_name)
+                return true
+        fn_node: = callee.def_node
+        args_node: = r.find_child(.k_expr_args)
+        if depth <= 0 || fn_node == null || fn_node.kind_id != .k_decl_fn || args_node == null
+            return false
+        params: = fn_node.get_fn_params()
+        if params == null
+            return false
+        is_method: = callee.kind_id == .k_method_access
+        $idx: Sz = 0
+        for p in base_ast_ext.Param_cursor(params, false)
+            if arg: = call_arg_for_param(callee, args_node, idx, is_method)
+                if is_rooted_at(arg, param_name) &&
+                    fn_node.body_releases_param(p.get_decl_id_text(), depth - 1)
+                    return true
+            else
+                break
+            idx += 1
         return false
 
     priv fn is_free_call_access(r: Self$@, as_written: Bool): Bool //<

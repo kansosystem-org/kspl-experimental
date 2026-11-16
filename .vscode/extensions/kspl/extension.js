@@ -93,7 +93,8 @@ function sendDidOpenOnce(document) {
 
 // Caution: **Tell the server a document is closed.** It analyses every other file against an open
 // document's text, not the disk's; left open, a file changed on disk afterwards (a checkout, `make
-// fmt`) stays the old text for every other file's errors, references and renames.
+// fmt`) stays the old text for every other file's errors, references and renames. The server then
+// clears the closed document's marks and checks the open ones again.
 // **A change still waiting belongs to text the editor has discarded**, so it is dropped, not sent.
 function sendDidClose(document) {
     if (!isKsplDoc(document)) return;
@@ -492,10 +493,39 @@ function disposePreviousActivation() {
     reqId = 1;
     hoverRequestSeq = 0;
     serverStops = [];
+    if (diskChangeTimeout) clearTimeout(diskChangeTimeout);
+    diskChangeTimeout = null;
+    pendingDiskChanges.clear();
     for (const d of activeDisposables) {
         try { d.dispose(); } catch (e) {}
     }
     activeDisposables = [];
+}
+
+// The files changed on disk that the server has not been told of yet, by URI, and the timer that
+// sends them as one message. **A checkout changes hundreds at once**; one message per file would
+// have the server check every open document again for each.
+let pendingDiskChanges = new Map();
+let diskChangeTimeout = null;
+const DISK_CHANGE_DELAY_MS = 300;
+
+// The LSP's numbers for a watched file's change (`FileChangeType`).
+const FILE_CREATED = 1;
+const FILE_CHANGED = 2;
+const FILE_DELETED = 3;
+
+// **A file changed on disk changes the errors of the open files that import it**, and nothing
+// else tells the server: it reads a file that is not open from the disk at each analysis.
+function noteDiskChange(uri, type) {
+    pendingDiskChanges.set(getRelativeUri(uri), type);
+    if (diskChangeTimeout) clearTimeout(diskChangeTimeout);
+    diskChangeTimeout = setTimeout(function () {
+        diskChangeTimeout = null;
+        const changes = [];
+        for (const [one, kind] of pendingDiskChanges) changes.push({ uri: one, type: kind });
+        pendingDiskChanges.clear();
+        if (changes.length > 0) sendNotification("workspace/didChangeWatchedFiles", { changes });
+    }, DISK_CHANGE_DELAY_MS);
 }
 
 // VS Code runs every extension in one Node process, so an extension loaded twice (an old install
@@ -568,19 +598,8 @@ exports.activate = function (context) {
 
         track(vsc.languages.registerDefinitionProvider(KSPL_SELECTOR, {
             async provideDefinition(document, position, token) {
-                const lineText = document.lineAt(position.line).text;
-                const importMatch = lineText.match(/import\s+["']([^"']+)["']/);
-                if (importMatch) {
-                    const importPath = importMatch[1];
-                    const stringStart = lineText.indexOf(importPath);
-                    if (position.character >= stringStart && position.character <= stringStart + importPath.length) {
-                        // An import writes no extension; ksplc adds `.kspl` (`base/locate.kspl`).
-                        const searchPattern = `**/${importPath}.kspl`;
-                        const files = await vsc.workspace.findFiles(searchPattern, '**/out/**');
-                        if (files.length > 0) return new vsc.Location(files[0], new vsc.Position(0, 0));
-                    }
-                }
-
+                // On an import's path the server answers the file the compiler reads, resolved as
+                // the compiler resolves it.
                 const result = await sendRequest("textDocument/definition", {
                     textDocument: { uri: getRelativeUri(document.uri) },
                     position: { line: position.line, character: position.character }
@@ -613,6 +632,13 @@ exports.activate = function (context) {
             sendDidClose(document);
         }))
     );
+    const watcher = track(vsc.workspace.createFileSystemWatcher('**/*.' + KSPL_LANG));
+    context.subscriptions.push(
+        watcher,
+        track(watcher.onDidCreate(uri => noteDiskChange(uri, FILE_CREATED))),
+        track(watcher.onDidChange(uri => noteDiskChange(uri, FILE_CHANGED))),
+        track(watcher.onDidDelete(uri => noteDiskChange(uri, FILE_DELETED)))
+    );
     vsc.window.visibleTextEditors.forEach(editor => {
         sendDidOpenOnce(editor.document);
     });
@@ -625,6 +651,18 @@ exports.activate = function (context) {
                     textDocument: { uri: getRelativeUri(document.uri) }
                 }, token);
                 return Array.isArray(result) ? result.map(toDocumentSymbol) : [];
+            }
+        })),
+        // "Format Document" and format-on-save: the server formats as `ksplc fmt` does. **The
+        // editor's tab size is not sent on**: KSPL's layout has one form, as Go's has.
+        track(vsc.languages.registerDocumentFormattingEditProvider(KSPL_SELECTOR, {
+            async provideDocumentFormattingEdits(document, options, token) {
+                const result = await sendRequest("textDocument/formatting", {
+                    textDocument: { uri: getRelativeUri(document.uri) },
+                    options: { tabSize: options.tabSize, insertSpaces: options.insertSpaces }
+                }, token);
+                if (!Array.isArray(result)) return [];
+                return result.map(e => vsc.TextEdit.replace(toRange(e.range), e.newText));
             }
         })),
         // The list of what can be written here.

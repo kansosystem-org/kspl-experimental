@@ -499,6 +499,30 @@ impl Own: Marker {}
 fn main()
   $o: = Own::{ .v = 1 }
   o.close()
+// ==== case trait_method_own_type_params
+//< A trait method that declares type parameters of its own, with a default body and without
+//< **One error, at the trait.** Before, the prototype gave "undefined type 'U'" twice and each
+//< `impl` "does not implement required method", none naming the cause.
+// EXPECT: trait_method_own_type_params.kspl:10:10: error: trait method 'conv' cannot take type parameters of its own
+// EXPECT: 0 warning(s)
+// EXPECT-NOT: undefined type
+// EXPECT-NOT: does not implement required method
+trait Conv
+  fn val(r: Self): I32
+  fn conv<|U|>(r: Self, f: fn(x: I32): U): U
+
+struct A
+  v: I32
+
+impl A: Conv
+  fn val(r: Self): I32
+    return r.v
+  fn conv<|U|>(r: Self, f: fn(x: I32): U): U
+    return f(r.v)
+
+fn main(): I32
+  a: = A::{ .v = 4 }
+  return a.val() - 4
 // ==== case trait_proto_missing_param_type
 //< A trait method prototype that omits a parameter's type annotation
 //< A prototype holds no body and skips infer_fn, which rejects this in an ordinary function, so

@@ -443,14 +443,17 @@ fn main(): I32
     runs: U8[] = "a run of spaces must never be cut in the middle of itself:      six of them stand there, and the seam goes behind the last"
     tight: U8[] = "a_word_far_longer_than_the_whole_column_limit_with_nowhere_at_all_in_it_for_a_seam_to_be_put"
     io.out().s("an interpolation holds \{ 1 + 2 \} and the spaces inside it are an expression's, so no seam may be put among them\n")
-    return I32::(long.len + runs.len + tight.len) - 373
+    url: U8[] = "see https://example.com/a/path/far/too/long/for/any/line/to/hold/whole/at/the/default/width/of/a/hundred then the words after it break at spaces again, as any text in a literal does"
+    wide: U8[] = "日本語の 文字列では 一字が 二桁を 占めるので、 幅は バイト ではなく 表示の 桁で 測る。 そうでないと 行は 早く 折れてしまう。"
+    return I32::(long.len + runs.len + tight.len + url.len + wide.len) - 733
 """
 
 // The expected result.
 // Caution: **Test the three shapes that must not break, beside the one that must.** A break inside
 // a run of spaces loses one to the indent the mark swallows. One inside `\{ … \}` lands in code.
-// A word longer than the line has nowhere to break and is written as is. The continuation is
-// one level in from the line that opened it.
+// A word longer than the line has nowhere to break and is written as is, and the words after it
+// break again. The continuation is one level in from the line that opened it. CJK text is
+// measured in display columns: two a character, not three bytes.
 const SRC_CARRIED_STRING: U8[] =
     """import "std/io"
 fn main(): I32
@@ -465,7 +468,14 @@ fn main(): I32
     io.out()
         .s("an interpolation holds \{ 1 + 2 \} and the spaces inside it are an expression's, so no \
             seam may be put among them\n")
-    return I32::(long.len + runs.len + tight.len) - 373
+    url: U8[] =
+        "see \
+            https://example.com/a/path/far/too/long/for/any/line/to/hold/whole/at/the/default/width/of/a/hundred \
+            then the words after it break at spaces again, as any text in a literal does"
+    wide: U8[] =
+        "日本語の 文字列では 一字が 二桁を 占めるので、 幅は バイト ではなく 表示の 桁で 測る。 \
+            そうでないと 行は 早く 折れてしまう。"
+    return I32::(long.len + runs.len + tight.len + url.len + wide.len) - 733
 """
 
 // A chain holding a string carried onto two lines that fits on one once joined.

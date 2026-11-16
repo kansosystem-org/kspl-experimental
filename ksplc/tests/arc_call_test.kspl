@@ -1,0 +1,188 @@
+//< ARC (automatic reference counting) where a call is not written as a plain call
+//< A call through a function value, a trait value's thunk, a user operator and a subscript
+//< through `Index` or `Index_mut`. Each passes its operands as the method's call would, so each
+//< reads back an exact count: a leak shows as a count left over, an early release as one missing.
+// ==========================================
+// Caution: **Count with a block the test owns, never with freed memory**, as
+// `arc_branch_test.kspl` does. A Tally's last release frees nothing, so a missing retain reads as
+// a count one short on every platform.
+// ==========================================
+import "std/ds" { Map }
+import "std/verdict"
+
+priv struct Tally_block //< the count one Tally value has, owned by the test reading it
+    count: Sz
+
+struct Tally //< an ARC type whose release only counts down
+    priv block: Tally_block$@
+
+impl Tally
+    fn on(b: Tally_block$@): Tally //< the first owner of b, at count 1
+        b.count = 1
+        return ::{ .block = b }
+    fn peek(r: Self@): Sz //< a read through a borrowed receiver
+        return r.block.count
+
+impl Tally: Ref_counted //< the zero value (no block) owns nothing, as std's handles
+    priv fn retain(r: Self@)
+        if r.block != null
+            r.block.count += 1
+    priv fn release(r: Self@)
+        if r.block != null
+            r.block.count -= 1
+
+// ==========================================
+// A call through a function value takes each argument's count, as a direct call does. The callee
+// releases what it takes by value, whatever names it: a variable, a field, a parameter, a
+// generic's parameter, an anonymous function or a method used as a value.
+// ==========================================
+priv fn tally_seen(t: Tally): Sz //< the count seen while t is held by value
+    return t.peek()
+
+priv fn tally_keep(t: Tally): Tally //< hands t back
+    return t
+
+priv struct Tally_caller
+    f: fn(t: Tally): Sz
+
+priv struct Tally_box
+    t: Tally
+
+impl Tally_box
+    fn seen(r: Self): Sz
+        return r.t.peek()
+
+priv fn call_given(f: fn(t: Tally): Sz, t: Tally@): Sz
+    return f(t$)
+
+priv fn map_one<|T, U|>(f: fn(x: T): U, x: T): U
+    return f(x)
+
+fn test_arc_fn_value_call_takes_a_count()
+    verdict.start("[ARC] a call through a function value takes the argument's count test...")
+    $b: = Tally_block::{}
+    t: = Tally.on(b@)
+    f: = tally_seen
+    assert(f(t) == 2 && b.count == 1, "a variable holding a function")
+    h: = Tally_caller::{ .f = tally_seen }
+    assert(h.f(t) == 2 && b.count == 1, "a field holding a function")
+    assert(call_given(tally_seen, t@) == 2 && b.count == 1, "a parameter of a function type")
+    assert(map_one(tally_seen, t) == 3 && b.count == 1, "a generic's parameter, one count each")
+    g: = fn(x: Tally): Sz
+        return x.peek()
+    assert(g(t) == 2 && b.count == 1, "an anonymous function")
+    box: = Tally_box::{ .t = t }
+    m: = Tally_box.seen
+    assert(m(box) == 3 && b.count == 2, "a method used as a value")
+    k: = tally_keep
+    kept: = k(t)
+    assert(kept.peek() == 3, "a value handed back keeps the count it was given")
+    verdict.pass("each kind of function value gave its argument a count, and took none away.")
+
+// ==========================================
+// A trait value's thunk copies the value where it reads one through a pointer: a receiver the
+// method takes by value, and a pointer the method returns where the trait returns a value. Each
+// copy takes a count, or every call frees what the owner still holds.
+// ==========================================
+priv trait Tally_reads
+    fn seen(r: Self): Sz
+    fn handle(r: Self): Tally
+
+priv struct Tally_by_value
+    t: Tally
+
+impl Tally_by_value: Tally_reads
+    fn seen(r: Self): Sz
+        return r.t.peek()
+    fn handle(r: Self): Tally
+        return r.t
+
+priv struct Tally_by_pointer
+    t: Tally
+
+impl Tally_by_pointer: Tally_reads
+    fn seen(r: Self@): Sz
+        return r.t.peek()
+    fn handle(r: Self@): Tally@ //< a pointer where the trait returns a value
+        return r.t@
+
+priv fn seen_through(x: Tally_reads): Sz //< the count seen through the trait's receiver
+    return x.seen()
+
+priv fn held_through(x: Tally_reads): Sz //< the count seen while the handle is held
+    h: = x.handle()
+    return h.peek()
+
+fn test_arc_thunk_copy_takes_a_count()
+    verdict.start("[ARC] a trait value's thunk retains what it copies test...")
+    $b: = Tally_block::{}
+    t: = Tally.on(b@)
+    by_value: = Tally_by_value::{ .t = t }
+    assert(seen_through(by_value) == 3 && b.count == 2, "a receiver taken by value")
+    assert(held_through(by_value) == 3 && b.count == 2, "a value returned from such a receiver")
+    by_pointer: = Tally_by_pointer::{ .t = t }
+    assert(seen_through(by_pointer) == 3 && b.count == 3, "a receiver taken by pointer")
+    assert(held_through(by_pointer) == 4 && b.count == 3,
+        "a pointer returned where the trait returns a value")
+    verdict.pass("a receiver taken by value and a returned pointer each took their count.")
+
+// ==========================================
+// A user operator and a subscript through `Index` or `Index_mut` call a method, so their operands
+// take counts as that call's arguments would. A subscript's result is that call's new value, not
+// a place in the receiver.
+// ==========================================
+priv struct Amount
+    t: Tally
+    n: I32
+
+impl Amount: Add<|Amount, Amount|>
+    fn add(r: Self, rhs: Amount): Amount
+        return ::{ .t = r.t, .n = r.n + rhs.n }
+
+impl Amount: Neg<|Amount|>
+    fn neg(r: Self): Amount
+        return ::{ .t = r.t, .n = -r.n }
+
+impl Amount: Eq<|Amount|>
+    fn eq(r: Self, other: Amount): Bool
+        return r.n == other.n
+    fn ne(r: Self, other: Amount): Bool
+        return r.n != other.n
+
+priv struct Shelf
+    ts: Tally[2]
+
+impl Shelf: Index<|Sz, Tally|>
+    fn get(r: Self@, i: Sz): Tally
+        return r.ts[i]
+
+impl Shelf: Index_mut<|Sz, Tally|>
+    fn set(r: Self$@, i: Sz, v: Tally)
+        r.ts[i] = v
+
+priv fn peek_shelf(s: Shelf@): Sz //< the count seen while a subscript's copy is held
+    return s[1].peek()
+
+fn test_arc_operator_takes_a_count()
+    verdict.start("[ARC] an operator's and a subscript's operands take counts test...")
+    $ba: = Tally_block::{}
+    $bb: = Tally_block::{}
+    a: = Amount::{ .t = Tally.on(ba@), .n = 2 }
+    other: = Amount::{ .t = Tally.on(bb@), .n = 3 }
+    sum: = a + other
+    assert(sum.n == 5 && ba.count == 2 && bb.count == 1, "`+` takes both sides with a count")
+    neg: = -a
+    assert(neg.n == -2 && ba.count == 3, "unary `-` takes its operand with a count")
+    assert(a != other && ba.count == 3 && bb.count == 1, "`!=` gives back what it takes")
+    $shelf: = Shelf::{}
+    shelf[1] = other.t
+    assert(bb.count == 2, "`set` takes the value it stores with a count")
+    x: = shelf[1]
+    assert(x.peek() == 3, "`get`'s value is a new owner")
+    assert(peek_shelf(shelf@) == 4 && bb.count == 3, "a subscript's copy read once is released")
+    $m: = Map<|I32, Tally|>(null)
+    m[7] = other.t
+    assert(bb.count == 4, "a Map's `m[k] = v` takes the value with a count")
+    m.free()
+    assert(bb.count == 3, "and gives it back when the Map goes")
+    verdict.pass("`+`, unary `-`, `!=`, `get` and `set` passed their operands with their counts.")

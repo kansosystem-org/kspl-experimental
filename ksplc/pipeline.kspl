@@ -9,6 +9,8 @@ import "ksplc/base/lint_codes" as base_lint_codes
 import "ksplc/base/locate" as base_locate
 import "ksplc/base/package" as base_package
 import "ksplc/base/stats" as base_stats
+import "ksplc/fmt/file" as fmt_file
+import "ksplc/fmt/style" as fmt_style
 import "ksplc/gen/c/ctx" as gen_c_ctx + { Genc_ctx }
 import "ksplc/gen/c/root" as gen_c_root
 import "ksplc/gen/llvm/ctx" { Genllvm_ctx }
@@ -18,7 +20,6 @@ import "ksplc/lower/abi" as lower_abi
 import "ksplc/lower/prune" as lower_prune
 import "ksplc/lower/root" as lower_root
 import "ksplc/lower/verify" as lower_verify
-import "ksplc/lower/vtable" as lower_vtable
 import "ksplc/parse/ast_cache" as parse_ast_cache
 import "ksplc/parse/desugar" as parse_desugar
 import "ksplc/parse/load" as parse_load
@@ -37,6 +38,7 @@ import "ksplc/sema/session/prof" as sema_session_prof
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "ksplc/source_checks"
+import "std/chars"
 import "std/ds" { List, Map }
 import "std/fs"
 import "std/io"
@@ -244,6 +246,23 @@ impl Staged_outputs: Manual_free
             if tmp.len > 0
                 fs.remove_path(tmp) catch {}
 
+fn format_source(raw: U8[], name: U8[], base_parser: kspeg.Target$@): U8[]!fmt_file.Fmt_error //<
+    //< A source formatted as `ksplc fmt` writes it with its default style, for the editor
+    //< **The language server reaches the formatter through here**, as it reaches every stage: it
+    //< drives the compiler from outside (the layers in `README.md`).
+    return fmt_file.format_bytes(raw, name, base_parser, fmt_style.Config.default_fmt())!
+
+priv fn note_std_missing(entry: U8[], note: U8[]) //<
+    //< In the editor, it puts the note on the document's first line too
+    //< **Without it the editor goes silent**: no diagnostic, and no hover or jump either. The
+    //< standard error reaches only the server's log, which the editor hides by default.
+    if !base_core.config.is_lsp || base_core.arena == null
+        return
+    base_diag.lsp_diags.list
+        .push(base_diag.Lsp_diagnostic::{ .file = base_core.arena
+        .dup_str(base_diag.shown_file(entry)), .severity = .error, .line = 0, .col = 0, .len = 0,
+        .msg = base_core.arena.dup_str(note.strip_suffix("\n")) })
+
 struct Compiler
     base_parser: kspeg.Target$@
     source_map: Map<|U8[], U8$[]|>$@
@@ -309,7 +328,9 @@ impl Compiler
                     case .io(io_err)
                         switch io_err
                         case .file_not_found
-                            io.err().s(base_locate.std_missing_note())
+                            note: = base_locate.std_missing_note()
+                            io.err().s(note)
+                            note_std_missing(perm_file, note)
                         default {}
                     default {}
                     throw .parse(e)
@@ -412,7 +433,6 @@ impl Compiler
 
         t3: = sys.mono_us()
         lower_root.run(r.sema, r.root_file)
-        lower_vtable.generate_trait_thunks(r.root_file, r.sema)
         defer $runtime_names: = gen_runtime.c_names()
         lower_abi.run(r.root_file, r.sema, runtime_names.slice())
         // Caution: **Call it after all synthesis is done** (the reason is at

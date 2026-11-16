@@ -324,22 +324,44 @@ priv fn hint_prefix_form(c: Sema_ctx$@, block: Ast_node$@, i: Sz, name: U8[]) //
     if next.kind_id != .k_stmt_defer || next.made_by_compiler() ||
         !next.frees_only(c, block.get_child(i))
         return
-    shown: = written_name(block.get_child(i), name)
+    shown: = written_name(c, block.get_child(i), name)
     c.clear_scratch()
         .s("[H0303] 'defer \{name\}.free()' follows the declaration of '\{name\}'. Put 'defer' in \
             front of the declaration instead ('defer \{shown\}: = …'), and remove this line.")
     c.hint(next, c.scratch.slice())
 
-priv fn written_name(decl: Ast_node$@, name: U8[]): U8[] //<
-    //< The name as its declaration writes it, with the `$` of a mutable binding
+priv fn written_name(c: Sema_ctx$@, decl: Ast_node$@, name: U8[]): U8[] //<
+    //< The name as `defer` in front of its declaration needs it, with a `$` where it must be mutable
+    //< It is mutable where its declaration says so, or where the type's `free` writes its receiver
+    //< (`Self$@`): without the `$`, the suggested line would not compile.
     kw: = decl.safe_get_child(1)
-    if kw != null && kw.text.equals("var")
+    if (kw != null && kw.text.equals("var")) || free_writes_receiver(c, decl.type_id)
         return base_core.arena.text().s("$").s(name).take()
     return name
 
+priv fn free_writes_receiver(c: Sema_ctx@, type_id: I32): Bool //<
+    //< Whether the type's `free` takes its receiver as a writable pointer (`Self$@`)
+    //< A binding that holds a pointer (`Arena(…)`'s result) is passed as it is, so it never needs
+    //< one.
+    if type_id == 0 || sema_type_env.is_unknown(type_id) || c.env.is_pointer(type_id)
+        return false
+    entry: = c.env.id_to_type.get(c.env.receiver_base_id(type_id))
+    if entry == null
+        return false
+    free_sym: = entry.peek_method("free").unwrap_or(null)
+    if free_sym == null || free_sym.node == null
+        return false
+    p_list: = free_sym.node.get_fn_params()
+    if p_list == null
+        return false
+    for p in base_ast_ext.Param_cursor(p_list, false)
+        type_node: = p.get_decl_type_node()
+        return type_node != null && type_node.spells_writable_ptr()
+    return false
+
 priv fn report_open_end(c: Sema_ctx$@, decl: Ast_node$@, name: U8[], ended_somewhere: Bool) //<
     //< Reports [W0109] at the declaration of a value that reaches its block's end unfreed
-    shown: = written_name(decl, name)
+    shown: = written_name(c, decl, name)
     c.clear_scratch()
     if ended_somewhere
         c.scratch
@@ -471,7 +493,7 @@ impl Scan
         w.c.warn(way, w.c.scratch.slice())
 
     priv fn shown(w: Self$@): U8[] //< the name as its declaration writes it
-        return written_name(w.decl, w.name)
+        return written_name(w.c, w.decl, w.name)
 
     priv fn later_defer(w: Self$@): Ast_node$@? //<
         //< a `defer` later in the declaring block that frees it

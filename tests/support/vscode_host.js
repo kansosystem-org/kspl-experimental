@@ -44,7 +44,7 @@ for (const key of Object.keys(declared)) settings[key] = declared[key].default;
 // **The program started is a fake**, so the path need only exist.
 settings['kspl.serverPath'] = extPath;
 
-const seen = { sent: [], shown: 0, refusal: '', starts: [], errors: [] };
+const seen = { sent: [], shown: 0, refusal: '', formatted: '', starts: [], errors: [] };
 let server = null;
 const refusal = 'refused by the fake server';
 let definitionUri;
@@ -80,6 +80,10 @@ function fakeServer() {
                         delete answer.result;
                         answer.error = { code: -32803, message: refusal };
                     }
+                    if (msg.method === 'textDocument/formatting') {
+                        answer.result = [{ range: { start: { line: 0, character: 0 },
+                            end: { line: 1, character: 0 } }, newText: 'formatted\n' }];
+                    }
                     if (msg.method === 'textDocument/definition') {
                         answer.result = { uri: definitionUri, range: {
                             start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } };
@@ -104,7 +108,7 @@ class Uri {
     static parse(s) { return new Uri(s.replace(/^file:\/\//, '')); }
 }
 
-const listeners = { open: [], change: [], close: [], config: [] };
+const listeners = { open: [], change: [], close: [], config: [], disk: [] };
 const providers = {};
 const disposable = { dispose() {} };
 const on = (kind) => (fn) => { listeners[kind].push(fn); return disposable; };
@@ -114,6 +118,7 @@ const on = (kind) => (fn) => { listeners[kind].push(fn); return disposable; };
 const stubType = class { constructor(...args) { this.args = args; } };
 const vscode = new Proxy({
     Uri,
+    TextEdit: { replace: (range, newText) => ({ range, newText }) },
     workspace: {
         workspaceFolders: [{ uri: Uri.file(root) }],
         textDocuments: [],
@@ -127,7 +132,14 @@ const vscode = new Proxy({
         onDidChangeTextDocument: on('change'),
         onDidCloseTextDocument: on('close'),
         onDidChangeConfiguration: on('config'),
-        findFiles: async () => [],
+        // One watcher stands for every pattern; each of its three events reaches `disk` with its
+        // kind, as the LSP numbers it.
+        createFileSystemWatcher: () => ({
+            onDidCreate: (fn) => on('disk')((uri) => uri.kind === 1 && fn(uri)),
+            onDidChange: (fn) => on('disk')((uri) => uri.kind === 2 && fn(uri)),
+            onDidDelete: (fn) => on('disk')((uri) => uri.kind === 3 && fn(uri)),
+            dispose() {},
+        }),
     },
     window: {
         visibleTextEditors: [],
@@ -161,7 +173,7 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 const token = { isCancellationRequested: false, onCancellationRequested: () => disposable };
 
 // One session: open during the handshake, edit, ask, ask to rename, edit and close at once, open
-// again. The last wait outlasts the extension's own delay before it sends a change. So a change it
+// again, then three files change on disk. Formatting is asked between the rename and the close. The last wait outlasts the extension's own delay before it sends a change. So a change it
 // kept for the closed document would arrive before the end.
 async function session() {
     const ext = require(extPath);
@@ -185,9 +197,19 @@ async function session() {
             doc('a.kspl', 2, 'second'), { line: 0, character: 0 }, token);
         if (location.args[0].fsPath !== expected) throw Error('definition resolved to another file');
     }
+    const edits = await providers.registerDocumentFormattingEditProvider
+        .provideDocumentFormattingEdits(doc('a.kspl', 2, 'second'), { tabSize: 4, insertSpaces: true },
+            token);
+    seen.formatted = edits.map((e) => e.newText).join('');
     fire('change', { document: doc('a.kspl', 3, 'unsaved') });
     fire('close', doc('a.kspl', 3, 'unsaved'));
     fire('open', doc('a.kspl', 1, 'from disk'));
+    // **A checkout changes many files at once**: they go to the server as one message.
+    for (const [name, kind] of [['lib.kspl', 2], ['new.kspl', 1], ['old.kspl', 3]]) {
+        const uri = Uri.file(path.join(root, name));
+        uri.kind = kind;
+        fire('disk', uri);
+    }
     await wait(2000);
     const session_sent = seen.sent.slice();
     const session_shown = seen.shown;
@@ -206,9 +228,11 @@ async function session() {
         const td = (m.params && m.params.textDocument) || {};
         const change = m.params && m.params.contentChanges && m.params.contentChanges[0];
         return { method: m.method, uri: td.uri, version: td.version,
-            text: td.text !== undefined ? td.text : change && change.text };
+            text: td.text !== undefined ? td.text : change && change.text,
+            disk: m.params && m.params.changes && m.params.changes.map((c) => c.uri + ':' + c.type).join(' ') };
     });
     process.stdout.write(JSON.stringify({ sent, shown: session_shown, refusal: seen.refusal,
+        formatted: seen.formatted,
         starts: seen.starts, errors: seen.errors,
         restarted: seen.sent.slice(session_sent.length).map((m) => m.method) }) + '\n');
 }

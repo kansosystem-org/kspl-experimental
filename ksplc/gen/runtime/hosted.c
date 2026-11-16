@@ -499,6 +499,16 @@ KSPL_LINK int64_t kspl_file_size(void* stream) {
     return end < 0 ? -1 : end;
 }
 
+/* Moves an open stream to `offset` bytes from its start, for std/io.kspl's File_stream.seek_to:
+ * 0 = moved, -1 = refused (a pipe, or an offset past what the OS takes). The 64-bit pair above is
+ * used for the reason given there: past 2 GiB, Windows's fseek fails. */
+KSPL_LINK int32_t kspl_file_seek(void* stream, int64_t offset) {
+    if (offset < 0) {
+        return -1;
+    }
+    return kspl_fseek64((FILE*)stream, offset, SEEK_SET) == 0 ? 0 : -1;
+}
+
 /* The check that standard output was written whole ("Standard output that could not be written
  * fails the exit" in hosted_io.c). */
 static void kspl_check_stdout_at_exit(void);

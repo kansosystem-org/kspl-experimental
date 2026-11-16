@@ -6,6 +6,7 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/decl/mono_queue" as _sema_decl_mono_queue // `type_failed_constraint`
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/display" as sema_type_display
@@ -27,6 +28,9 @@ fn refuse_unfreeable(c: Sema_ctx$@, made: Ast_node$@): Void!Sema_error //<
         throw .analysis_failed
     if c.env.has_release_contract(t_id)
         return
+    // An instance whose constraint failed has no conformances; that error is already reported.
+    if c.type_failed_constraint(t_id)
+        throw .analysis_failed
     shown: = c.env.display(t_id)
     c.clear_scratch()
         .s("'\{shown\}' does not conform to 'Manual_free', so 'defer' on the declaration of \

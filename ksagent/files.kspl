@@ -187,6 +187,9 @@ priv enum Kind //< how a file is read, by the ending of its name
     old_word //< `.doc`: refused, with what to do
     old_excel //< `.xls`: refused, with what to do
 
+fn is_excel(path: U8[]): Bool //< whether the file is read as an Excel file's view
+    return kind_of(sys.get_file_name(path)) == Kind.excel
+
 priv fn kind_of(name: U8[]): Kind //< how a file of that name is read
     if ends_ignoring_case(name, ".docx") || ends_ignoring_case(name, ".docm")
         return .word
@@ -302,9 +305,9 @@ fn tool_search(folder: Folder, text: U8[], given: U8[], room: Sz, going: Going, 
         //< `given`, in at most `room` bytes of the request (`sent_len`)
         //< `going` is asked before each file is read.
         //< **A line matches when it holds every word, in any order**, ASCII case ignored. A word is
-        //< found inside a longer one, so `quote` finds `quoted`. Japanese has no spaces, so a
-        //< Japanese text is one word, found as it is written. With no line holding every word, the
-        //< lines that hold the most of them come first, under a line that says so.
+        //< found inside a longer one, so `quote` finds `quoted`. A Japanese text is one word. With
+        //< no line holding every word, the lines that hold the most of them come first. An Excel
+        //< line is matched by its cells (`excel.cells_of`).
     $words: = words_of(text, arena)
     if words.len == 0
         return "refused: give some words to search for"
@@ -335,9 +338,12 @@ fn tool_search(folder: Folder, text: U8[], given: U8[], room: Sz, going: Going, 
                 return arena.text().s("refused: ").s(why).take()
             continue
         lines: = split_lines(body, one)
+        sheet: = is_excel(path)
         $shown: U8[] = ""
         for i in Range.asc(lines.len)
-            held: = words_held(lines.get(i), words.slice())
+            held: =
+                words_held(excel.cells_of(lines.get(i)) if sheet else lines.get(i),
+                words.slice())
             if held == 0 || whole.len > MAX_HITS ||
                 (held < words.len && !partial.takes(held))
                 continue

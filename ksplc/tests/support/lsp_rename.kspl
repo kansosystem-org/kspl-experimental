@@ -82,6 +82,98 @@ fn closes(): I32
     return apply(add, limit)
 """
 
+// An enum used through a selective import and through an alias, a type with a type call and an
+// operator, and a trait. Each name is used in a file that never spells the declaration's word at
+// the cursor where the rename starts (`Self`), or never spells the method (`new`, `add`).
+priv const SHADE_URI: U8[] = "shade.kspl"
+priv const SHADE_SRC: U8[] =
+    """pub enum Shade
+    dark
+    pale
+
+pub fn pick_shade(s: Shade): I32
+    if s == .pale
+        return 1
+    return 0
+
+fn first_shade(): Shade
+    return Shade.dark
+"""
+priv const PAINT_URI: U8[] = "paint.kspl"
+priv const PAINT_SRC: U8[] =
+    """import "shade" { Shade, pick_shade }
+
+fn paint(): I32
+    a: = Shade.dark
+    return pick_shade(a)
+"""
+priv const TINT_SRC: U8[] =
+    """import "shade" as sh
+
+fn tint(): I32
+    return sh.pick_shade(sh.Shade.dark)
+"""
+priv const VEC_URI: U8[] = "vec.kspl"
+priv const VEC_SRC: U8[] =
+    """pub struct Vec2
+    x: I32
+
+impl Vec2: Add<|Vec2, Vec2|>
+    pub fn add(r: Self, rhs: Vec2): Vec2
+        return Vec2::{ .x = r.x + rhs.x }
+
+impl Vec2
+    pub fn new(x: I32): Self
+        return Self::{ .x = x }
+
+    pub fn len_of(r: Self@): I32
+        return r.x
+
+pub trait Sized2
+    fn size2(r: Self): I32
+"""
+priv const SHAPE_URI: U8[] = "shape.kspl" //< a trait's block holding two of its methods
+priv const SHAPE_SRC: U8[] =
+    """pub trait Measured
+    fn area(r: Self): I32
+    fn side(r: Self): I32
+
+pub struct Tile
+    w: I32
+
+impl Tile: Measured
+    pub fn area(r: Self): I32
+        return r.w * r.w
+
+    pub fn side(r: Self): I32
+        return r.w
+
+fn tile_total(): I32
+    t: = Tile::{ .w = 2 }
+    return t.area() + t.side()
+"""
+priv const STRAY_URI: U8[] = "stray.kspl" //<
+    //< Opened and never written: its trait's block holds a method the trait does not declare
+priv const STRAY_SRC: U8[] =
+    """pub struct Cup2
+    n: I32
+
+impl Cup2: Add<|Cup2, Cup2|>
+    pub fn add(r: Self, rhs: Cup2): Cup2
+        return Cup2::{ .n = r.n + rhs.n }
+
+    pub fn make(n: I32): Self
+        return Self::{ .n = n }
+"""
+priv const SUM_SRC: U8[] =
+    """import "vec" as vc
+
+fn sum_up(): I32
+    a: = vc.Vec2(1)
+    b: = a + a
+    return b.len_of()
+"""
+
 priv struct Ask //< one client, and where the probe's names stand in its document
     c: jsonrpc_client.Client$@
     arena: Arena$@
@@ -124,8 +216,11 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
         plain_caps.get("renameProvider").as_bool().unwrap_or(false),
         lsp_client.dump(plain_caps, arena))
     dir: = harness.sandbox("lsp_rename")
-    fs.write_tree(dir, U8[][]::{ "lib.kspl", USER_URI, PICK_URI },
-        U8[][]::{ LIB_SRC, USER_SRC, PICK_SRC }, arena) catch
+    fs.write_tree(dir,
+        U8[][]::{ "lib.kspl", USER_URI, PICK_URI, SHADE_URI, PAINT_URI, "tint.kspl", VEC_URI,
+        "sum.kspl", SHAPE_URI },
+        U8[][]::{ LIB_SRC, USER_SRC, PICK_SRC, SHADE_SRC, PAINT_SRC, TINT_SRC, VEC_SRC, SUM_SRC,
+        SHAPE_SRC }, arena) catch
             verdict.check("the rename workspace can be laid out", false, dir)
             return
     defer $c: =
@@ -156,6 +251,11 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     check_type_calls(ask)
     check_captures(ask)
     check_closure_params(ask)
+    check_import_jump(ask)
+    check_variants(ask)
+    check_other_files(ask)
+    check_traits(ask)
+    check_call_items(ask)
 
 priv fn check_prepare(ask: Ask) //< prepareRename: the name's range here, a refusal on std's
     local: = lsp_client.answer(ask.c, "textDocument/prepareRename",
@@ -233,7 +333,8 @@ fn places(found: List<|json.Value|>@, arena: Arena$@): U8[] //<
         if uri.len > 0
             out.s(uri).c(':')
         out
-            .s("\{start.get("line").as_int().unwrap_or(-1)\}:\{start.get("character").as_int().unwrap_or(-1)\} ")
+            .s("\{start.get("line").as_int().unwrap_or(-1)\}:\{start.get("character").as_int().unwrap_or(-1)\} \
+                ")
     return out.take()
 
 priv fn check_selected(ask: Ask) //<
@@ -340,3 +441,113 @@ priv fn check_closure_params(ask: Ask) //<
         start.get("line").as_int().unwrap_or(-1) == closure_line &&
         start.get("character").as_int().unwrap_or(-1) == param_col,
         lsp_client.dump(jump, ask.arena))
+
+priv fn check_variants(ask: Ask) //<
+    //< An enum's variant is renamed where it is written `Shade.dark`, in every file
+    //< **Sema links the `dark` of `Shade.dark` to the variant**, as it links a `.dark`. Missed, the
+    //< rename leaves a program that does not compile.
+    lsp_client.open(ask.c, SHADE_URI, SHADE_SRC, ask.arena)
+    defer lsp_client.close(ask.c, SHADE_URI, ask.arena)
+    renamed: = ask.rename_in(SHADE_URI, SHADE_SRC, "    dark", "dark", "deep")
+    own: = edits_in(renamed, SHADE_URI, ask.arena)
+    verdict.check("a variant is renamed where its own file writes it after the enum's name",
+        own.len == 2 &&
+        starts_at(own@, decl_line(SHADE_SRC, "    return Shade.dark", ask.arena), 17),
+        lsp_client.why(ask.c, lsp_client.dump(renamed, ask.arena), ask.arena))
+    verdict.check("a variant is renamed through a selective import and through an alias",
+        edits_in(renamed, PAINT_URI, ask.arena).len == 1 &&
+        edits_in(renamed, "tint.kspl", ask.arena).len == 1,
+        lsp_client.why(ask.c, lsp_client.dump(renamed, ask.arena), ask.arena))
+    lsp_client.open(ask.c, PAINT_URI, PAINT_SRC, ask.arena)
+    defer lsp_client.close(ask.c, PAINT_URI, ask.arena)
+    refs: = lsp_client.answer(ask.c, "textDocument/references",
+        ask.at_in(PAINT_URI, PAINT_SRC, "    a: =", "dark"), lsp_client.WALK_MS, ask.arena)
+    found: = refs.get("result").arr_list(ask.arena)
+    // The declaration and the three uses.
+    verdict.check("the references of a variant count the uses after the enum's name",
+        found.len == 4,
+        lsp_client.why(ask.c, places(found@, ask.arena), ask.arena))
+    // **A generic's instance copies std's nodes with the enum put in** (`Index_place`'s `Output`
+    // for the array `variants()` returns), at std's places. They are no uses.
+    whole: = ask.rename_in(SHADE_URI, SHADE_SRC, "pub enum Shade", "Shade", "Hue")
+    verdict.check("an enum is renamed, with nothing in std taken for a use of it",
+        is_missing(whole.get("error")) && edits_in(whole, SHADE_URI, ask.arena).len == 4,
+        lsp_client.why(ask.c, lsp_client.dump(whole, ask.arena), ask.arena))
+
+priv fn check_other_files(ask: Ask) //<
+    //< The files searched are those spelling the declaration, not the word at the cursor
+    //< **Started on `Self`, the word names no other file**; and a file calling `new` through a
+    //< type call never spells `new`. Either way, the rename used to miss what such a file holds.
+    lsp_client.open(ask.c, VEC_URI, VEC_SRC, ask.arena)
+    defer lsp_client.close(ask.c, VEC_URI, ask.arena)
+    from_self: = ask.rename_in(VEC_URI, VEC_SRC, "    pub fn new", "Self", "Pair2")
+    verdict.check("a type renamed from `Self` is renamed in the other files too",
+        edits_in(from_self, "sum.kspl", ask.arena).len == 1,
+        lsp_client.why(ask.c, lsp_client.dump(from_self, ask.arena), ask.arena))
+    ask.refuses("renaming new refuses where only another file calls it through the type",
+        ask.rename_in(VEC_URI, VEC_SRC, "    pub fn new", "new", "make"), "type call")
+    ok: = ask.rename_in(VEC_URI, VEC_SRC, "    pub fn len_of", "len_of", "width")
+    verdict.check("a plain method beside them is renamed in the other files",
+        edits_in(ok, "sum.kspl", ask.arena).len == 1,
+        lsp_client.why(ask.c, lsp_client.dump(ok, ask.arena), ask.arena))
+    // **An operator is a call of the method it is rewritten to**, in another file too.
+    $b: = Json_builder(ask.arena)
+    prep: = lsp_client.answer(ask.c, "textDocument/prepareCallHierarchy",
+        ask.at_in(VEC_URI, VEC_SRC, "    pub fn add", "add"), lsp_client.READ_MS, ask.arena)
+    item: = prep.get("result").arr_list(ask.arena)
+    $callers: U8[] = ""
+    if item.len > 0
+        got: = lsp_client.answer(ask.c, "callHierarchy/incomingCalls",
+            b.obj().set("item", item.get(0)).build(), lsp_client.WALK_MS, ask.arena)
+        callers = lsp_client.dump(got, ask.arena)
+    verdict.check("the callers of an operator's method include another file's `a + a`",
+        callers.find_str("sum_up").is_some(), lsp_client.why(ask.c, callers, ask.arena))
+
+priv fn check_traits(ask: Ask) //<
+    //< A trait's method, and a method implementing a trait, are refused with the reason
+    //< **The trait and its implementations share the name**; renamed on one side, the program
+    //< stops compiling.
+    lsp_client.open(ask.c, VEC_URI, VEC_SRC, ask.arena)
+    defer lsp_client.close(ask.c, VEC_URI, ask.arena)
+    ask.refuses("a method that implements a std trait is refused",
+        ask.rename_in(VEC_URI, VEC_SRC, "    pub fn add", "add", "plus"), "implements the trait")
+    ask.refuses("a method a trait declares is refused",
+        ask.rename_in(VEC_URI, VEC_SRC, "    fn size2", "size2", "area2"),
+        "is declared by the trait")
+
+priv fn check_call_items(ask: Ask) //<
+    //< Each method of a trait's block is a starting point of the call hierarchy
+    //< **A program the analysis stops on answers an error**, not an item that finds no callers.
+    lsp_client.open(ask.c, SHAPE_URI, SHAPE_SRC, ask.arena)
+    defer lsp_client.close(ask.c, SHAPE_URI, ask.arena)
+    $b: = Json_builder(ask.arena)
+    for head in U8[][]::{ "    pub fn area", "    pub fn side" }
+        word: = head.sub_from(head.len - 4)
+        prep: = lsp_client.answer(ask.c, "textDocument/prepareCallHierarchy",
+            ask.at_in(SHAPE_URI, SHAPE_SRC, head, word), lsp_client.READ_MS, ask.arena)
+        item: = prep.get("result").arr_list(ask.arena)
+        $callers: = lsp_client.dump(prep, ask.arena)
+        if item.len > 0
+            got: = lsp_client.answer(ask.c, "callHierarchy/incomingCalls",
+                b.obj().set("item", item.get(0)).build(), lsp_client.WALK_MS, ask.arena)
+            callers = lsp_client.dump(got, ask.arena)
+        verdict.check(ask.arena.text().s("the callers of a trait block's `").s(word)
+            .s("` are found").take(), callers.find_str("tile_total").is_some(),
+            lsp_client.why(ask.c, callers, ask.arena))
+    lsp_client.open(ask.c, STRAY_URI, STRAY_SRC, ask.arena)
+    defer lsp_client.close(ask.c, STRAY_URI, ask.arena)
+    stray: = lsp_client.answer(ask.c, "textDocument/prepareCallHierarchy",
+        ask.at_in(STRAY_URI, STRAY_SRC, "    pub fn add", "add"), lsp_client.READ_MS, ask.arena)
+    ask.refuses("a function the analysis stopped before answers an error, not an empty item", stray,
+        "was not analysed")
+
+priv fn check_import_jump(ask: Ask) //<
+    //< A jump from an import's path lands on the file the compiler read for it
+    //< **The server resolves it as the loader does**; a search by file name would pick any file
+    //< of that name, one in `out/` included.
+    lsp_client.open(ask.c, PICK_URI, PICK_SRC, ask.arena)
+    jump: = lsp_client.answer(ask.c, "textDocument/definition",
+        ask.at_in(PICK_URI, PICK_SRC, "import", "lib"), lsp_client.READ_MS, ask.arena)
+    verdict.check("a jump from an import's path lands on the file it names",
+        jump.get("result").get("uri").as_str().unwrap_or("").equals("lib.kspl"),
+        lsp_client.why(ask.c, lsp_client.dump(jump, ask.arena), ask.arena))

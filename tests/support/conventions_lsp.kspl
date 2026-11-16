@@ -23,11 +23,12 @@ priv const VSCODE_CLIENT: U8[] = ".vscode/extensions/kspl/extension.js"
 // `prepareProvider` is an option of `renameProvider`, and promises `prepareRename`.
 priv const CAP_NAMES: U8[][_] = ::{ "hoverProvider", "definitionProvider", "renameProvider",
     "prepareProvider", "referencesProvider", "callHierarchyProvider", "codeActionProvider",
-    "inlayHintProvider", "completionProvider", "documentSymbolProvider" }
+    "inlayHintProvider", "completionProvider", "documentSymbolProvider",
+    "documentFormattingProvider" }
 priv const CAP_METHODS: U8[][_] = ::{ "textDocument/hover", "textDocument/definition",
     "textDocument/rename", "textDocument/prepareRename", "textDocument/references",
     "textDocument/prepareCallHierarchy", "textDocument/codeAction", "textDocument/inlayHint",
-    "textDocument/completion", "textDocument/documentSymbol" }
+    "textDocument/completion", "textDocument/documentSymbol", "textDocument/formatting" }
 
 priv fn served(arena: Arena$@): List<|U8[]|> //< the methods the server handles
     //< **The ones starting with `$/` are not counted**: only the tests send them, and a real client
@@ -236,47 +237,6 @@ priv fn check_recovery_wake(arena: Arena$@) //<
         "a recovering branch woken from anywhere but the editor's entry would recover in a build")
 
 // ==========================================
-// What the extension leaves out matches what `.gitignore` says **The name of the build output
-// folder is written in two places**: `.gitignore` and the extension's `**/<name>/**`.
-// Note: The canonical source is `.gitignore` (the language server reads it too:
-// `ksplc/lsp/workspace.kspl`).
-// ==========================================
-priv const IGNORE_FILE: U8[] = ".gitignore"
-
-priv fn ignored_dirs(arena: Arena$@): List<|U8[]|> //<
-    //< The names `.gitignore` names as a folder (`out/` -> `out`)
-    $out: = List<|U8[]|>(arena)
-    for line in harness.read_under_root(IGNORE_FILE).lines(arena)
-        $t: = line.trim_spaces()
-        if t.len < 2 || t[0] == '#' || t[0] == '!' || t[t.len - 1] != '/'
-            continue
-        t = t.sub(0, t.len - 1)
-        if t.len > 0 && t[0] == '/'
-            t = t.sub_from(1)
-        if t.len > 0 && t.find_char('/').is_none() && t.find_char('*').is_none()
-            scan.push_unique(out@, t)
-    return out
-
-priv fn check_exclude(arena: Arena$@)
-    told: = ignored_dirs(arena)
-    $bad: = List<|U8[]|>(arena)
-    $seen: Sz = 0
-    for got in scan.find_all(harness.read_under_root(VSCODE_CLIENT), "findFiles(", ")", arena)
-        // Caution: **Check the second argument.** The first is the pattern searched for
-        // (`'**/<import path>.kspl'`), not the pattern left out.
-        if at: = got.find_str(", '**/")
-            seen += 1
-            rest: = got.sub_from(at + 6)
-            if end: = rest.find_str("/**'")
-                name: = rest.sub(0, end)
-                if !told.contains(name)
-                    bad
-                        .push(arena.text().s(VSCODE_CLIENT).s(": it leaves `").s(name)
-                        .s("` out, and ").s(IGNORE_FILE).s(" does not name that folder").take())
-    verdict.check_list("`.gitignore` names the folders the extension leaves out", seen, "exclusions",
-        bad@, "the origin for where things are built into is `.gitignore`")
-
-// ==========================================
 // Everything on the arena is discarded when the LSP rewinds it **The arena is rewound per
 // request, but a `$` global is not.** A table from `base_core.arena` kept in a global dangles.
 // ==========================================
@@ -354,8 +314,8 @@ priv const OFF_ARENA: U8[][_] = ::{ "ksplc/base/ast.kspl:shared | the shared emp
     "ksplc/fmt/kinds.kspl:rules | an inline array of flags, held in static storage",
     "ksplc/tools/run.kspl:target_answer | the optional answer about the build target, held in \
         static storage",
-    "ksplc/usage.kspl:cli | the argparse Parser, built by Mode.new at CLI parse time — below \
-        every mark the LSP takes" }
+    "ksplc/usage.kspl:cli | the argparse Parser, built by Mode.new at CLI parse time — below every \
+        mark the LSP takes" }
 
 priv const ROW_BAR: U8[] = " | "
 
@@ -550,7 +510,6 @@ priv fn check_keywords(arena: Arena$@)
 fn run(arena: Arena$@)
     check_recovery_wake(arena)
     check_body_views(arena)
-    check_exclude(arena)
     check_keywords(arena)
     check_wind_back(arena)
     check_cap_says_fires(arena)

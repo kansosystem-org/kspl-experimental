@@ -196,9 +196,14 @@ Bytes not yet read stay in the socket and come back as readable at the next `wai
 
 Note: The check is "requests past the cap in one write are all answered" in `kssrv/tests/main.kspl`, once with the sending side left open and once closed. The records TLS holds are checked by `records_cases` in `kssrv/tests/https.kspl`.
 
-### With no free slot, a new connection is closed
+### At a cap, the connection idle the longest makes room
 
-With no free slot, an accepted connection is closed without a response. Making it wait would mean tracking who is waiting, since when, and how many.
+**A browser keeps up to six connections to a host open, idle, for its next request.** Held against the caps, they would shut out a newcomer, or a second browser behind the same address, until the idle timer ran out. So at the table's cap, or at an address's (below), the connection idle the longest is closed and the newcomer takes its place (`make_room` in `kssrv/main.kspl`).
+
+* **Idle means waiting with nothing under way** (`idle_kept`). No request is partly read and nothing is left to send. No page holds it, and no close or TLS work is in progress. Closing any other would cut something short. A client whose idle connection closes sends its next request on a new one (RFC 9112 §9.3.1).
+* **The one quiet the longest goes** (`moved_us`): the one a client spoke on last is the likeliest to be used again.
+
+**With none idle, an accepted connection is closed without a response.** Making it wait would mean tracking who is waiting, since when, and how many.
 
 **The refusal is not silent.** The log says once that every slot is taken, and again when one comes free, with how many were refused meanwhile. `/api/status` counts them (`connections_refused`).
 
@@ -218,7 +223,7 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 ### One address holds only a few connections, facing outward
 
-**A connection from an address that already holds `MAX_CONNS_PER_PEER` is closed at accept**, and counted in `connections_refused`. Without it one machine takes every slot. A browser opens six per host, so the cap leaves room for a few behind one address (a NAT). With `--local` every peer is this machine, so only the table's cap applies.
+**A connection from an address that already holds `MAX_CONNS_PER_PEER` busy ones is closed at accept**, and counted in `connections_refused`. Where one of that address's is idle, the one idle the longest is closed instead (above). Without the cap one machine takes every slot. With `--local` every peer is this machine, so only the table's cap applies.
 
 **Accepting comes last in each wakeup**, after its closes and the sweep (`accept_all` in `kssrv/main.kspl`). Accepted first, a connection already gone would still count against its address. So a client that closes one and reconnects at once would be refused.
 
@@ -226,9 +231,50 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 **`conn_build` checks the head once it ends** (`head_decided`), including local authorization, before waiting for the declared body (`need`). `http.parse_request_head` uses the same parser as `http.parse_request`. So nothing is parsed again on every incoming byte.
 
+**The head decides what can be answered before the body comes:**
+
+* **Empty lines before a request line are dropped** (`skip_blank_lines`), as RFC 9112 §2.2 asks. A client may end a body with an extra CRLF.
+* **Only HTTP/1.x is read.** A line naming `HTTP/2.0` gets a 505: read as 1.1, it would be answered in a protocol it did not ask for.
+* **A body is asked for only where it would be taken.** A client waiting on `Expect: 100-continue` gets `100 Continue` only for a method its path takes (`static.takes_method`). Otherwise the refusal goes at once and the connection closes (`refuse_early`). Asked for, a body that a 405 then throws away would come in full, up to the cap.
+* **A body in chunks gets a 411** whose body says to send a `Content-Length`. `std/http` reads no chunked request ("Chunks are read in a response only" in [`../../std/docs/DESIGN-system.md`](../../std/docs/DESIGN-system.md)). It tells a lone `chunked` (`chunked_request`) from the codings that stay a 400.
+
+### A refusal of a whole request keeps the connection
+
+**After a 403, 404, 405, 412 or 416, the connection stays open** (`keeps_after` in `kssrv/conn.kspl`). Each refuses what was asked for, of a request read whole, so the next request starts where it ended. A missing image would otherwise cost the browser its connection, and a request pipelined behind it would go unanswered.
+
+Caution: **Close after any other refusal.** After a request that could not be read (a 400, a 411, a 413, a 431, a 505), there is no telling where the next one starts. A refusal answered before its body comes (`refuse_early`) closes too, for the same reason.
+
 ### A file is sent in chunks as the connection drains
 
 **A file's body is read 16 KiB at a time as `outbuf` empties** (`queue_file`, `refill_from_file`), so a connection holds one chunk, not the file. Slow readers of a large file read whole would each hold a copy of it. The head names the size `stat` gave, and a file that shrinks meanwhile ends the connection short. The chunks per notification are capped, as reads are.
+
+**A part of a file starts with a seek** (`io.File_stream.seek_to`), before the head is queued. A seek that fails can then still become a 500; after the head it could only cut the answer short.
+
+### Every answer names its time, a file's its version
+
+**Every answer carries `Date`** (`dated` in `kssrv/conn.kspl`), as RFC 9110 §6.6.1 asks of a server with a clock. `std/http`'s `Http_date` writes it from the seconds alone, with no C library, so every OS writes the same text.
+
+**A file's answer names its validators** (`kssrv/cache.kspl`): a strong `ETag` and `Last-Modified`. A client sends them back and gets a 304 with no body while the file is unchanged.
+
+* **The tag is the change time, to the nanosecond, and the size.** Hashing the bytes would cost a whole read for every check. Times to the second, as nginx keeps them, give two saves of one length in one second the same tag. The browser then keeps showing the first.
+* **`Cache-Control: no-cache` makes the browser ask each time.** Without it a browser guesses how long a copy stays fresh from the file's age. A style edited and reloaded would then still show the old copy.
+* **`If-Modified-Since` matches only the date sent, written the same**, as nginx's default does. A browser sends back what it was given, and a tag decides first anyway.
+
+**One range is answered in part** (206, with `Content-Range`), so a video can be scrubbed and a download resumed. **Several ranges get the whole file**, which RFC 9110 §14.2 allows. A body of many parts serves no browser, and many overlapping ranges once exhausted Apache. A range that holds no byte gets a 416 naming the size.
+
+### A folder named without its `/` is redirected
+
+**`GET /sub` answers a 301 to `/sub/` where `sub` is a folder holding an `index.html`** (`path_to_rel`'s `folder` in `kssrv/static.kspl`). A browser resolves a page's relative links against its address, so `/sub` would fetch `/sub`'s images from the folder above.
+
+* **The `Location` is the path as the client wrote it**, a `/` and the query, with no host. A host named there would be wrong behind a proxy or on another port.
+* **Only a folder with an index is sent on.** One without is a 404 either way, so the redirect tells no more than before. The page under `--local` is `/`, which needs none.
+
+### A file named with a `/` at its end is absent
+
+**`GET /sub/f.txt/` answers 404 where `f.txt` is a file** (`path_to_rel`'s `not_folder` in `kssrv/static.kspl`). A `/` at the end names a folder, and the file is not one.
+
+* **Served, the page would break.** Its relative links would resolve one level too deep, as `/sub/f.txt/pic.svg`.
+* **A 404, not a redirect to `/sub/f.txt`.** The link that adds the `/` is the mistake, and a 404 shows it at once. A redirect would hide it, and give the file a second name that works.
 
 ### A name starting with a dot is not served
 
@@ -293,7 +339,11 @@ Kssrv serves files from under its root and answers JSON under `/api/`. Every pat
 
 Caution: **Decode a path with `decode_component`, which keeps a `+`.** `+` means a space only in a query or a form (`parse_query` reads it so). Mistaking one for the other makes a file with `+` in its name unreachable.
 
-**A refused path returns 403, not 404.** What was refused is the path's shape; whether a file of that name exists was never checked. `fs.join_under` also refuses every spelling that Windows reads as another name, on every OS: a `\`, a short name's `~1`, a wildcard, a device name and the rest. A read of `COM1` never returns when nothing is attached, so one request would stop this single-loop server. The forms and their reasons are "A path from outside goes through one door" in `std/docs/DESIGN-system.md`.
+**A target may name the server too** (`GET http://host/path`, the absolute form), which RFC 9112 §3.2.2 asks a server to take. `conn.split_target` takes the host out of it. Under `--local`, the host check then judges that host, not `Host`, as the RFC has the server ignore `Host` here.
+
+**A refused path returns 403, not 404.** What was refused is the path's shape; whether a file of that name exists was never checked.
+
+**A name longer than the file system holds returns 404, not 403**, on every OS. No file can stand there, so it is not found; nothing was refused. The OS cannot look such a name up, so `fs.join_under` takes it as absent. The rule is "A path stays under the root by refusal, not comparison" in `std/docs/DESIGN-system.md`. `fs.join_under` also refuses every spelling that Windows reads as another name, on every OS: a `\`, a short name's `~1`, a wildcard, a device name and the rest. A read of `COM1` never returns when nothing is attached, so one request would stop this single-loop server. The forms and their reasons are "A path from outside goes through one door" in `std/docs/DESIGN-system.md`.
 
 Caution: **Do not add a check of a path's parts here.** Each of the four Windows holes that kssrv once fixed alone was a form that one check missed. A form found later is added to `fs.join_under`, which ksagent shares.
 

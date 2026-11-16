@@ -120,8 +120,18 @@ priv fn reject_parse(c: conn.Conn$@, error: http.Http_error) //<
         conn.queue_error(c, 431)
     case .body_too_large
         conn.queue_error(c, 413)
+    case .chunked_request
+        // **Asked for a length, not refused outright**: curl and Python resend with one, and a
+        // person reading the answer learns what to change.
+        conn.queue_error(c, 411, "", false, CHUNKED_WHY)
     default
         conn.queue_error(c, 400)
+
+// Why a chunked request gets a 411, in its body. **A request is read by its length alone**
+// ("Chunks are read in a response only" in `std/docs/DESIGN-system.md`): a chunked one is the
+// usual way to smuggle a second request in.
+priv const CHUNKED_WHY: U8[] =
+    "Send the body with a Content-Length: this server does not read a request body sent in chunks."
 
 priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx@): Bool //<
     //< checks before buffering a body
@@ -130,7 +140,7 @@ priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx@): Bool /
     target: = conn.split_target(req.target)
     is_api: = target.path.starts_with(api.API_PREFIX)
     $status: I32 = 0
-    if !static.names_this_server(req)
+    if !static.names_this_server(req, target)
         status = 403
     else if !api.authorized(req, ctx.token)
         decoded: = url.decode_component(target.path, c.arena) catch target.path
@@ -152,6 +162,8 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
     //< Caution: Do not move on to the next request until `outbuf` is empty, or two responses mix.
     if c.outbuf.len > 0 || c.inbuf.len == 0
         return
+    if c.need == 0 && !skip_blank_lines(c)
+        return
     // Caution: **Parse only once there is something new to decide.** Parsed from the start on
     // every read, a request trickling in a byte at a time costs its length squared.
     if c.inbuf.len < c.need || (c.need == 0 && !head_decided(c))
@@ -165,11 +177,23 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
                 c.arena.restore(base)
                 return
         c.answers_head = head.method.equals("HEAD")
+        // **Only HTTP/1.x is spoken here.** A request naming 2.0 or 3.0 in its line is not
+        // read as 1.1, which it is not (RFC 9110 §15.6.6).
+        if head.version[5] != '1'
+            conn.queue_error(c, 505)
+            c.arena.restore(base)
+            return
         if !accept_head(c, head, ctx)
             c.arena.restore(base)
             return
         c.need = head.consumed + head.body_length
         if c.inbuf.len < c.need && waits_for_continue(head)
+            // Caution: **Ask for a body only where it would be taken.** Asked for, a body a 405
+            // or a 404 then refuses comes in full, up to the cap, for nothing.
+            if !static.takes_method(conn.split_target(head.target), head.method, ctx)
+                refuse_early(c, head, ctx)
+                c.arena.restore(base)
+                return
             c.outbuf.s(CONTINUE)
         c.arena.restore(base)
         if c.inbuf.len < c.need
@@ -180,7 +204,7 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
             c.arena.restore(base)
             return
     c.answers_head = req.method.equals("HEAD")
-    static.queue_for_request(c, req, ctx)
+    static.queue_for_request(c, req, ctx, true)
     // Caution: Drop only what the finished parse used. Emptied completely, the start of the next
     // request that came in the same read is lost.
     c.inbuf.drop_prefix(req.consumed)
@@ -192,14 +216,38 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
     // connection's arena grows with every request.
     c.arena.restore(base)
 
+priv fn skip_blank_lines(c: conn.Conn$@): Bool //<
+    //< Drops the empty lines before a request line; whether anything is left to read
+    //< RFC 9112 §2.2 asks a server to ignore at least one: a client may end a body with an extra
+    //< CRLF, which then stands before the next request. **Every one is dropped**, as nginx does.
+    s: = c.inbuf.slice()
+    $lead: Sz = 0
+    for lead + 1 < s.len && s[lead] == '\r' && s[lead + 1] == '\n'
+        lead += 2
+    if lead > 0
+        c.inbuf.drop_prefix(lead)
+        c.head_from = 0
+    return c.inbuf.len > 0
+
+priv fn refuse_early(c: conn.Conn$@, head: http.Request$@, ctx: conn.Ctx$@) //<
+    //< Answers a request waiting to send its body with the refusal it would get, then closes
+    //< Its body never comes, so where the next request starts is not known: the connection closes,
+    //< and what still arrives is read and thrown away (`conn.Conn.lingering_since_us`).
+    static.queue_for_request(c, head, ctx, false)
+    c.inbuf.clear()
+    c.need = 0
+    c.head_from = 0
+    c.request_since_us = 0I64
+
 priv const CONTINUE: U8[] = "HTTP/1.1 100 Continue\r\n\r\n" //<
     //< The interim answer that lets a client waiting on `Expect: 100-continue` send its body
 
 priv fn waits_for_continue(head: http.Request@): Bool //<
     //< Whether the client holds back the body until it reads `CONTINUE` (RFC 9110 §10.1.1)
     //< Without that answer, curl waits a second before each upload. A 1.0 client's `Expect` is
-    //< ignored, as the RFC requires. The answer goes only after `accept_head` took the head, so a
-    //< refused upload is never asked for.
+    //< ignored, as the RFC requires. The answer goes only after `accept_head` took the head, and
+    //< only for a method its path takes (`static.takes_method`), so a refused upload is never
+    //< asked for.
     if !http.is_1_1_or_later(head.version)
         return false
     for h in head.headers.each()
@@ -435,11 +483,14 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
         peer: = U8[]::{ .ptr = host[0]@, .len = p.host_len }
         // Caution: **Count by address before taking a slot.** Otherwise one machine holding them
         // all shuts everyone else out, however short the time it can hold each.
-        if outward && conn.peer_count(t, peer) >= conn.MAX_CONNS_PER_PEER
+        if outward && conn.peer_count(t, peer) >= conn.MAX_CONNS_PER_PEER &&
+            !make_room(t, .some(peer), lg)
             say_refused(lg, true)
             stream.free()
             continue
-        slot: = conn.table_find_free(t)
+        $slot: = conn.table_find_free(t)
+        if slot < 0 && make_room(t, .none, lg)
+            slot = conn.table_find_free(t)
         if slot < 0
             // The cap is reached. Refusing holds less state than waiting for a free slot.
             say_refused(lg, false)
@@ -465,6 +516,40 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
         fresh.peer_len = p.host_len
         if h != null && !https.start(fresh, h, lg)
             conn.table_drop(t, slot, lg)
+
+priv fn make_room(t: conn.Conn_table$@, peer: U8[]?, lg: Log$@): Bool //<
+    //< Closes the connection idle the longest, from `peer`, or from anyone for none
+    //< **A browser keeps up to six connections to a host open, idle, for the next request.** Held
+    //< against the caps, they shut out a newcomer, or a second browser behind the same address (a
+    //< NAT), for as long as the idle timer runs. nginx closes its idle kept connections the same
+    //< way when it runs out. False where none is idle: then the newcomer is refused.
+    $oldest: Sz = -1
+    for i in Range.asc(conn.MAX_CONNS)
+        if t.slots[i].is_empty()
+            continue
+        c: = t.slots[i].get()
+        if !idle_kept(c)
+            continue
+        if from: = peer
+            if !conn.from_peer(c, from)
+                continue
+        if oldest < 0 || c.moved_us < t.slots[oldest].get().moved_us
+            oldest = i
+    if oldest < 0
+        return false
+    if ln: = lg.at(.information)
+        ln.s("conn #\{t.slots[oldest].get().serial\} was idle; closed to take a new one")
+    conn.table_drop(t, oldest, lg)
+    return true
+
+priv fn idle_kept(c: conn.Conn$@): Bool //<
+    //< Whether a connection waits for its client's next request with nothing in hand
+    //< Caution: **Close none that is in the middle of something**: a request partly read, an answer
+    //< or a file still going out, a page's hold, a close under way, or TLS still at work. Each
+    //< would be cut short. A client whose idle connection closes sends its next request on a new
+    //< one (RFC 9112 §9.3.1).
+    return c.inbuf.len == 0 && c.outbuf.len == 0 && c.file_left == 0 && !c.holding && !c.backlog &&
+        !c.peer_done && !c.close_after_send && c.lingering_since_us == 0I64 && https.idle(c)
 
 priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener@, t: conn.Conn_table@) //<
     //< Rebuilds the watch set and the interests from the table, every time it is called

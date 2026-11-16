@@ -67,7 +67,8 @@ priv fn cited(from: I64, to: I64, arena: Arena$@): Answer //< an answer citing t
     $a: = Answer.ended(.answered, .en, arena)
     a.text = "Ten days."
     a.sources
-        .push(Source::{ .path = "rules/leave.md", .from_line = from, .to_line = to, .quote = "x" })
+        .push(Source::{ .path = "rules/leave.md", .from_line = from, .to_line = to, .quote = "x",
+        .rows = answer.NO_ROWS })
     return a
 
 fn test_the_table_reaches_the_console_with_no_control_code()
@@ -113,8 +114,7 @@ fn test_eval_runs_each_question(work: U8[], arena: Arena$@)
     doc: = evaluate.ksmd(rows@, arena)
     verdict.check("the ksmd form is a table clause with quoted text",
         doc.starts_with("%ksmd 2\n") && doc.find_str(":::table name=\"eval\"").is_some() &&
-        doc.find_str("| 2 | \"社員食堂は何時に開きますか?\" | \"none\" | \"pass\" |")
-        .is_some(), doc)
+        doc.find_str("| 2 | \"社員食堂は何時に開きますか?\" | \"none\" | \"pass\" |").is_some(), doc)
 
 fn test_eval_leaves_out_its_questions_and_its_table(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] eval's tools leave out its questions file and its table's file")
@@ -139,9 +139,10 @@ fn test_eval_leaves_out_its_questions_and_its_table(work: U8[], arena: Arena$@)
         got: = files.tool_read(folder, name, 1I64, 5I64, stub.ROOM, arena)
         verdict.check(arena.text().s("reading ").s(name).s(" is refused").take(),
             got.starts_with("refused: eval leaves this file out"), got)
-    $out: = Source::{ .path = "", .from_line = 0I64, .to_line = 0I64, .quote = "" }
+    $out: = Source::{ .path = "", .from_line = 0I64, .to_line = 0I64, .quote = "",
+        .rows = answer.NO_ROWS }
     cited: = Source::{ .path = "rules/questions.md", .from_line = 3I64, .to_line = 3I64,
-        .quote = "How much paid leave does a new employee get?" }
+        .quote = "How much paid leave does a new employee get?", .rows = answer.NO_ROWS }
     why: = answer.check_source(folder, cited, out@, arena)
     verdict.check("a source in the questions file fails the check",
         why.starts_with("eval leaves"), why)

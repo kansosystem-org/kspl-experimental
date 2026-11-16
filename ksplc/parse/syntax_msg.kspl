@@ -293,6 +293,27 @@ priv fn next_code_line(src: U8[], after: Code_line): Code_line //<
         l = code_line(src, l.next_at)
     return l
 
+priv fn append_deeper_line_hint(msg: Str_builder$@, src: U8[], pos: Sz) //<
+    //< A note where the line after the failing one is indented deeper, so it was read as a continuation
+    //< **A deeper line continues the one above it** (or opens a level under a heading). A
+    //< statement indented one space too far is then read as more of the line above, and the
+    //< error lands at that line's end, naming neither. A shallower line has its own note
+    //< (`report_layout_notes` in `../source_checks.kspl`).
+    if pos < 0 || pos > src.len
+        return
+    s: = line_start(src, pos)
+    here: = code_line(src, s)
+    if here.code.len == 0 || pos < s + here.indent + here.code.len
+        return
+    next: = next_code_line(src, here)
+    if next.code.len == 0 || next.indent <= here.indent
+        return
+    line: = src.sub(0, next.next_at - 1).count_str("\n") + 1
+    msg
+        .s("\n  Note: line \{line\} is indented \{next.indent\} columns, deeper than the \
+            \{here.indent\} of the line above it, so it is read as that line's continuation. If it \
+            is a statement of its own, indent it \{here.indent\} columns, as its sibling lines are.")
+
 priv fn ends_with_word(code: U8[], w: U8[]): Bool //< whether the code's last word is `w`
     if code.len < w.len || !code.sub_from(code.len - w.len).equals(w)
         return false
@@ -847,5 +868,12 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
         return msg
     if append_statement_word_hint(msg@, src, pos)
         return msg
-    msg.s(forbidden_spelling_hint(src, pos))
+    spelling: = forbidden_spelling_hint(src, pos)
+    if spelling.len > 0
+        msg.s(spelling)
+        return msg
+    // **Last**: a deeper line is the general case, and the notes above each name a narrower one
+    // (a `switch`'s arms indented under it).
+    if laid_out
+        append_deeper_line_hint(msg@, src, pos)
     return msg

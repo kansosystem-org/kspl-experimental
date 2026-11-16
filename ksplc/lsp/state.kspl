@@ -77,6 +77,10 @@ impl Doc_store
 struct Server
     base_parser: kspeg.Target$@
     docs: Doc_store //< the open documents, as converted into the brace notation
+    sent: Doc_store //<
+        //< The open documents as the editor sent them, which formatting starts from
+        //< **The formatter needs the bytes as written**: their line ends, and a shebang, come back
+        //< on its output (`format_bytes` in `../fmt/file.kspl`).
     latest_state: Doc_state$@
     base_arena_state: mem.Arena_state
 
@@ -96,8 +100,8 @@ fn wind_back(mark: mem.Arena_state) //<
 impl Server
     fn new(base_parser: kspeg.Target$@): Server$@
         s: = mem
-            .new(Server::{ .base_parser = base_parser, .docs = Doc_store(), .latest_state = null,
-            .base_arena_state = base_core.arena.save() })
+            .new(Server::{ .base_parser = base_parser, .docs = Doc_store(), .sent = Doc_store(),
+            .latest_state = null, .base_arena_state = base_core.arena.save() })
         return s
 
     fn reset_current_state(r: Self$@)
@@ -123,5 +127,6 @@ impl Doc_store: Manual_free
 impl Server: Manual_free
     fn free(r: Self$@)
         r.docs.free()
+        r.sent.free()
         r.reset_current_state()
         dealloc(Void$@::r)

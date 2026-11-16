@@ -4,10 +4,12 @@
 //< routed in one place** (`dispatch`), each named once. Its own branch builds the state it is
 //< answered from: the document's (`document_state`) or the workspace's (`workspace_state`).
 import "kspeg/engine" as kspeg
+import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/cfg_inactive" as base_cfg_inactive
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/lines" as _base_lines // `line_starts`, `get_line_char`
 import "ksplc/base/locate" as _base_locate // `strip_file_uri`
 import "ksplc/base/package" as base_package
 import "ksplc/lsp/call_hier" as lsp_call_hier
@@ -86,12 +88,13 @@ priv fn init_doc_compiler(server: Server$@, ptr: Doc_state$@, src: U8[]?): pipel
 
 priv fn search_word(hint: U8[], src: U8[], params: json.Value): U8[] //<
     //< The name used to pre-filter the files to read
-    //< Where `hint` is empty it is taken from the source at `params`' position. **The source holds
-    //< only the bare identifier**. So the fully qualified name that the call hierarchy sends is
-    //< cut to its last part: searched whole, it matches no file. Off a name the answer is empty,
-    //< and only the entry file's import tree is read.
+    //< `hint` is the target's word (`filter_word` in `uses.kspl`), or the full name the call
+    //< hierarchy sends. **The source holds only the bare identifier**, so a full name is cut to
+    //< its last part: searched whole, it matches no file. Where `hint` is empty the word is taken
+    //< from the source at `params`' position. Off a name the answer is empty, and only the entry
+    //< file's import tree is read.
     if hint.len > 0
-        return hint.fqn_last()
+        return hint.get_generic_base_name().fqn_last()
     switch params.get("position")
     case .null_val
         return ""
@@ -282,6 +285,10 @@ impl Server
             r.handle_did_open_change(method, params)
         else if method.equals("textDocument/didClose")
             r.handle_did_close(params)
+        else if method.equals("workspace/didChangeWatchedFiles")
+            // A file changed on disk: the state built from the old bytes is dropped. The supervisor
+            // has the open documents analysed again (`observe` in `server.kspl`).
+            r.reset_current_state()
         else if method.equals(lsp_msg.RESTORE_METHOD)
             r.handle_restore(params)
         else if method.equals("textDocument/completion")
@@ -295,6 +302,8 @@ impl Server
         else if method.equals("textDocument/prepareCallHierarchy")
             if st: = r.document_state(params, id_val, arena)
                 lsp_call_hier.prepare_call_hierarchy(st, params, id_val, arena)
+        else if method.equals("textDocument/formatting")
+            r.handle_formatting(params, id_val, arena)
         else if method.equals("textDocument/documentSymbol")
             if st: = r.document_state(params, id_val, arena)
                 lsp_outline.handle(st, id_val, arena)
@@ -302,16 +311,16 @@ impl Server
             if st: = r.document_state(params, id_val, arena)
                 lsp_rename.handle_prepare(st, params, id_val, arena)
         else if method.equals("textDocument/rename")
-            ws: = r.workspace_state(params)
+            ws: = r.workspace_state(params, arena)
             defer r.drop_workspace_state(ws)
             lsp_rename.handle_rename(ws, r.base_parser, params, id_val, arena)
         else if method.equals("textDocument/references")
-            ws: = r.workspace_state(params)
+            ws: = r.workspace_state(params, arena)
             defer r.drop_workspace_state(ws)
             lsp_uses.handle_references(ws, params, id_val, arena)
         else if method.equals("callHierarchy/incomingCalls") ||
             method.equals("callHierarchy/outgoingCalls")
-            ws: = r.workspace_state(params)
+            ws: = r.workspace_state(params, arena)
             defer r.drop_workspace_state(ws)
             is_incoming: = method.equals("callHierarchy/incomingCalls")
             lsp_call_hier.handle_calls(ws, params, id_val, is_incoming, arena)
@@ -329,7 +338,7 @@ impl Server
         lsp_msg.send_null_response(id_val, arena)
         return .none
 
-    priv fn workspace_state(r: Self$@, params: json.Value): Doc_state$@ //<
+    priv fn workspace_state(r: Self$@, params: json.Value, arena: Arena$@): Doc_state$@ //<
         //< The workspace analysed for one request; the caller frees it (`drop_workspace_state`)
         //< Caution: **Do not ask the client for the filter's search word.** The server holds the
         //< position and the source; asking would keep the same thing in two places. Only the call
@@ -343,8 +352,31 @@ impl Server
         uri: =
             (uri_node.get("uri").as_str().unwrap_or("") if has_doc
             else params.get("item").get("uri").as_str().unwrap_or(""))
-        target_fqn: = "" if has_doc else lsp_call_hier.item_fqn(params)
-        return build_workspace_state(r, uri, target_fqn, params)
+        $word: = r.target_name(uri, params, arena)
+        if word.len == 0 && !has_doc
+            word = lsp_call_hier.item_fqn(params)
+        return build_workspace_state(r, uri, word, params)
+
+    priv fn target_name(r: Self$@, uri: U8[], params: json.Value, arena: Arena$@): U8[] //<
+        //< The word the files are filtered by: the target's, resolved in its document; else empty
+        //< **The files are filtered by the declaration's name, not the word under the cursor.**
+        //< Started on `Self`, the word names no other file, and the type's uses there were left
+        //< behind. The call hierarchy's target is the function its item names.
+        r.ensure_latest_state(uri)
+        st: = r.latest_state
+        if st == null || !st.uri_perm.equals(uri) || st.sema == null
+            return ""
+        $def: Ast_node$@ = null
+        switch params.get("textDocument")
+        case .null_val
+            sym: = st.sema.symtab.resolve_fqn(lsp_call_hier.item_fqn(params)).unwrap_or(null)
+            def = sym.node if sym != null else null
+        default
+            t: = lsp_uses.target_at(st, params, arena) catch
+                return ""
+            def = t.def
+        // The table and the tree go at the next rewind, so the word is copied out.
+        return arena.dup_str(lsp_uses.filter_word(st.sema, st.root_file, def))
 
     priv fn drop_workspace_state(r: Self$@, ws: Doc_state$@) //<
         //< It frees a workspace state, and the document state built before it
@@ -392,6 +424,41 @@ impl Server
             r.reset_current_state()
             r.latest_state = build_document_state(r, text, uri, false)
         default {}
+
+    priv fn handle_formatting(r: Self$@, params: json.Value, id_val: json.Value, arena: Arena$@) //<
+        //< `textDocument/formatting`: the document as `ksplc fmt` writes it, as one edit
+        //< **The same code as `ksplc fmt` formats it** (`format_bytes`), with its default style:
+        //< like `gofmt`, the layout has no per-editor settings, so the request's options are not
+        //< read. **Text that does not parse gets no edit** (`null`); its diagnostic already says
+        //< why, and a format-on-save must not stop the save.
+        uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
+        $raw: U8[] = ""
+        switch r.sent.open_text(uri)
+        case .some(t)
+            raw = t
+        default
+            lsp_msg.send_null_response(id_val, arena)
+            return
+        r.reset_current_state()
+        defer r.reset_current_state()
+        // Caution: **Format without the editor's recovery from a syntax error.** A recovered tree
+        // is a guess at what was meant, and written back it would replace the text.
+        recovering: = base_core.config.recover_syntax
+        base_core.config.recover_syntax = false
+        defer base_core.config.recover_syntax = recovering
+        out: = pipeline.format_source(raw, doc_name(uri), r.base_parser) catch
+            lsp_msg.send_null_response(id_val, arena)
+            return
+        $b: = Json_builder(arena)
+        $edits: = b.arr()
+        if !out.equals(raw)
+            // **One edit replaces the whole text**, up to its very end. An editor narrows it to the
+            // lines that changed (VS Code does), so the caret and the folds stay.
+            end: = raw.get_line_char(raw.len, raw.line_starts(base_core.arena))
+            edits = edits
+                .push(b.obj().set("range", b.range(0, 0, end.line, end.character))
+                .set("newText", b.str_val(arena.dup_str(out))).build())
+        lsp_msg.send_response(id_val, edits.build(), arena)
 
     priv fn handle_did_open_change(r: Self$@, method: U8[], params: json.Value)
         text_doc: = params.get("textDocument")
@@ -449,15 +516,22 @@ impl Server
             return .none
         // A reopened document lands here too (the entry is kept; see `Doc_cache`).
         r.docs.put(uri, src)
+        r.sent.put(uri, sent)
         r.reset_current_state()
         return .some(src)
 
-    priv fn handle_did_close(r: Self$@, params: json.Value)
+    priv fn handle_did_close(r: Self$@, params: json.Value) //<
+        //< It forgets a closed document's text, and clears its diagnostics on screen
+        //< **A closed document's diagnostics are cleared**, as the protocol asks of a server: no
+        //< later analysis publishes for it, so they would stay in the problems list for good.
         uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         if uri.len > 0
             r.docs.close(uri)
-            if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
-                r.reset_current_state()
+            r.sent.close(uri)
+            // Every state built while it was open read its buffer, not the disk.
+            r.reset_current_state()
+            defer $none: = List<|base_diag.Lsp_diagnostic|>(null)
+            lsp_msg.send_diagnostics_list(uri, none@)
 
 priv fn answer_initialize(params: json.Value, id_val: json.Value, arena: Arena$@)
     $b: = Json_builder(arena)
@@ -472,6 +546,7 @@ priv fn answer_initialize(params: json.Value, id_val: json.Value, arena: Arena$@
         .set("inlayHintProvider", b.bool_val(false))
         .set("callHierarchyProvider", b.bool_val(true))
         .set("documentSymbolProvider", b.bool_val(true))
+        .set("documentFormattingProvider", b.bool_val(true))
         .set("completionProvider", completion_options(b)).build()
 
     result: = b.obj().set("capabilities", cap).build()

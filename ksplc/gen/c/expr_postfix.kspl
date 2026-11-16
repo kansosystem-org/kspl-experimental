@@ -10,6 +10,7 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/core" as base_core
+import "ksplc/base/literal" // `append_literal_bytes`
 import "ksplc/gen/c/ctx" { Genc_ctx }
 import "ksplc/gen/c/expr" as gen_c_expr
 import "ksplc/gen/c/literal" as gen_c_literal
@@ -345,7 +346,10 @@ priv fn emit_intrinsic_call(c: Genc_ctx$@, intr: sema_body_call.Intrinsic, args_
     return true
 
 priv fn emit_asm_volatile(c: Genc_ctx$@, args_node: Ast_node@) //<
-    //< `asm_volatile(…)`: GCC's `__asm__ volatile(…)`, its strings written as they are
+    //< `asm_volatile(…)`: GCC's `__asm__ volatile(…)`, each string written as the bytes it holds
+    //< Caution: **Do not copy the spelling.** A line continuation (`\` at a line's end, which
+    //< `ksplc fmt` puts in a long string) stands for no byte, but C keeps the next line's indent
+    //< inside the assembly text. The LLVM backend writes the bytes too.
     c.s("__asm__ volatile(")
     if args_node != null
         $is_first: = true
@@ -355,7 +359,9 @@ priv fn emit_asm_volatile(c: Genc_ctx$@, args_node: Ast_node@) //<
             if !is_first
                 c.s(", ")
             if ch.kind_id == .k_string
-                c.s(ch.text)
+                c.c('"')
+                ch.text.append_literal_bytes(c, gen_c_literal.append_c_string_byte)
+                c.c('"')
             else
                 ch.emit_expr(c)
             is_first = false

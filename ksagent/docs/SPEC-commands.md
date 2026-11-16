@@ -35,6 +35,8 @@ Sources:
   > A new employee receives 10 days of paid leave after six months of work.
 ```
 
+**An Excel source names the sheet and rows Excel shows**, not the lines of its text view: `- 規程/leave.xlsx sheet 規程一覧, rows 7–9`. The chat page shows it the same way.
+
 **An answer with no checked source says so** in a line of its own ("Unverified"). A source whose quote does not stand at its lines is removed, and a line says how many were removed.
 
 ### What standard error shows
@@ -61,7 +63,8 @@ A model that thinks first (Qwen3.5) shows its thinking after `thinking:`. Neithe
 | Excel (`.xlsx`, `.xlsm`) | A row, opening with its sheet and row number | `規程一覧!7: 割増賃金率 \| 25%` |
 
 * **A line holds what the person who opens the file sees**: list numbers written out, tracked changes applied, a formula's result, a date as `2024-04-01`. Hidden text, comments, headers, footers, hidden sheets and furigana are left out.
-* **Word does not number these lines**, so find a Word source's place by its quote. In an Excel file, each line names its own sheet and row.
+* **Word does not number these lines**, so find a Word source's place by its quote. In an Excel file, each line names its own sheet and row, and a source names them too.
+* **A search matches an Excel line by its cells.** The sheet's name at the head of each line is left out, so a word of it does not match every row.
 * **Some files are refused, with a line that says what to do**: old `.doc` and `.xls` files, files protected by a password, and damaged files.
 
 ## The chat page

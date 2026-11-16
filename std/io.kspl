@@ -50,6 +50,14 @@ impl File_stream: Move_only //< copying it would close one file twice
             throw .invalid_arg
         return read_into(r.stream, buf)!
 
+    pub fn seek_to(r: Self$@, offset: I64): Void!Io_error //< moves to `offset` bytes from the start
+        //< The next read starts there. **It fails on a stream that cannot move** (a pipe), and for
+        //< a negative offset. An offset past the end is taken, and a read there finds the end.
+        if r.stream == null
+            throw .invalid_arg
+        if kspl_file_seek(r.stream, offset) != 0
+            throw .read_failed("")
+
     pub fn sync(r: Self$@): Void!Io_error //< flushes buffered data and reports a failure
         //< It does not mean the data reached the disk: `sync_to_disk()` waits for that.
         //< `Writer.flush()` returns `Self$@` for chaining, so only this method can report a
@@ -293,6 +301,8 @@ extern fn kspl_file_size(stream: Void$@): I64 //< an open stream's size in bytes
     //< -1 when the size cannot be read. After a seek that succeeded the position is back at the
     //< start. A stream that cannot seek (a pipe) stays where it was, so reading on is still
     //< right.
+extern fn kspl_file_seek(stream: Void$@, offset: I64): I32 //< moves to `offset`; 0 = moved
+    //< The runtime's 64-bit seek, for the reason at `kspl_file_size`: KSPL cannot write `long`.
 extern fn kspl_path_info(path_ptr: U8@, path_len: Sz, size_out: I64$@, kind_out: I32$@,
     mtime_out: I64$@): Bool //< `kind_out` in `fs.File_kind`'s order, from 0
 pub fn set_line_buffered(): Void //< flushes standard output at every newline from here on

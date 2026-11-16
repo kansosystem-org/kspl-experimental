@@ -477,7 +477,7 @@ Caution: **Do not list here a kind that nothing makes.** It only adds reading br
 | `kind` | `children`'s order and the elements expected | notes |
 | :--- | :--- | :--- |
 | **`method_access`** | `[0]: expr` (the receiver)<br>`[1]: Identifier` (the method's name) | the `.` operator resolved as a dynamic method call on an instance. Lower expands it into a flat function call with the receiver as the first argument (the ABI conversion). |
-| **`enum_init`** | `[0]: type_expr / Identifier` (the resolved type name)<br>`[1]: Identifier` (the variant's name) | makes an enum value carrying no accompanying data. |
+| **`enum_init`** | `[0]: type_expr / Identifier` (the resolved type name)<br>`[1]: Identifier` (the variant's name) | makes an enum value carrying no accompanying data. The variant's name links `def_node` to its declaration, written `Color.red` or `.red`. |
 | **`enum_init_call`** | `[0]: type_expr / Identifier`<br>`[1]: Identifier` (the variant's name)<br>`[2]: expr_args` | initializes a tagged union carrying accompanying data. |
 | **`generic_path`** | `[0...]: Identifier` | the resolved flat name of an instantiated generic function or struct. |
 | **`generic_method`** | `[0...]: Identifier` | an instantiated generic method. |
