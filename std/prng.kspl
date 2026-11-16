@@ -27,26 +27,27 @@ impl Prng
     pub fn next_f64(r: Self$@): F64 //< a uniform number in [0.0, 1.0) with 53 bits of precision
         return F64::(r.next_u64() >> 11) / 9007199254740992.0
 
-    pub fn below( //< a number in [0, n)
+    pub fn below( //< a number in [0, `count`)
         //< **Every value is equally likely.** A plain remainder favours the low values, so a raw
-        //< value past the last whole multiple of n is retried (as OpenBSD's `arc4random_uniform`
-        //< does).
-        //< **n of 0 or less stops the program**, as a division by zero does. There is no number to
-        //< choose, and any answer would be out of the range the caller asked for.
+        //< value past the last whole multiple of `count` is retried (as OpenBSD's
+        //< `arc4random_uniform` does).
+        //< **A `count` of 0 or less stops the program**, as a division by zero does. There is no
+        //< number to choose, and any answer would be out of the range the caller asked for.
         r: Self$@,
-        n: Sz, //< how many values there are to choose from; at least 1
+        count: Sz, //< how many values there are to choose from; at least 1
     ): Sz
-        if n <= 0
+        if count <= 0
             panic("Prng.below: n must be at least 1, since [0, n) is empty")
-        return Sz::r.below_u64(U64::n)
+        return Sz::r.below_u64(U64::count)
 
-    priv fn below_u64(r: Self$@, n: U64): U64 //< `below` over the full range of `U64`; n above 0
-        // 2^64 mod n, computed with U64 wrapping: how many low values would come up one extra time.
-        floor: = (0U64 - n) % n
+    priv fn below_u64(r: Self$@, count: U64): U64 //<
+        //< `below` over the full range of `U64`; `count` above 0
+        // 2^64 mod `count`, in U64 wrapping: how many low values would come up one extra time.
+        floor: = (0U64 - count) % count
         $x: = r.next_u64()
         for x < floor
             x = r.next_u64()
-        return x % n
+        return x % count
 
     pub fn between( //< a number from lo to hi, both ends included
         //< **Both ends can come up.** For the full range of `I64` the count does not fit in a

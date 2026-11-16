@@ -47,17 +47,17 @@ priv fn bindings_of(gen_params: Ast_node@, callee: U8[]): Bindings //<
         b.bound_by.push(::{})
     return b
 
-priv fn bind_name(b: Bindings$@, name: U8[], arg_id: I32) //<
+priv fn bind_name(bindings: Bindings$@, name: U8[], arg_id: I32) //<
     //< Binds the type parameter called name to arg_id; the first argument to reach it wins
     //< **The type is taken with its immutability.** `pick(v@)` on an immutable `v` binds `T` of
     //< `a: T$@` to the immutable type. So the call is accepted, and a write through `a` is refused
     //< in the instance. With the immutability dropped, the same call would be refused at the call.
-    for i in Range.asc(b.names.len)
-        if b.names.get(i).equals(name) && !b.is_value.get(i) &&
-            sema_type_env.is_unknown(b.ids.get(i))
-            b.ids.set(i, arg_id)
+    for i in Range.asc(bindings.names.len)
+        if bindings.names.get(i).equals(name) && !bindings.is_value.get(i) &&
+            sema_type_env.is_unknown(bindings.ids.get(i))
+            bindings.ids.set(i, arg_id)
 
-priv fn bind_value(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, value_id: I32) //<
+priv fn bind_value(ctx: Sema_ctx$@, bindings: Bindings$@, written: Ast_node$@, value_id: I32) //<
     //< Binds the `const` parameter written names to the value the argument has there
     //< The value is an array's length or a generic's value argument, one type id per value (`8`).
     //< So an array of 8 and a `Buf<|8|>` fix it alike.
@@ -66,25 +66,26 @@ priv fn bind_value(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, value_id: 
     name: = written.bare_written_name()
     if name.len == 0 || sema_type_env.is_unknown(value_id)
         return
-    for i in Range.asc(b.names.len)
-        if !b.names.get(i).equals(name) || !b.is_value.get(i)
+    for i in Range.asc(bindings.names.len)
+        if !bindings.names.get(i).equals(name) || !bindings.is_value.get(i)
             continue
-        if sema_type_env.is_unknown(b.ids.get(i))
-            b.ids.set(i, value_id)
-            b.bound_by.set(i, b.pair)
-        else if b.ids.get(i) != value_id && !b.is_refused
-            b.is_refused = true
-            first: = b.bound_by.get(i)
-            c.clear_scratch()
-                .s("cannot infer the const parameter '\{name\}' of '\{b.callee\}'. The argument for \
-                    '\{first.param.get_decl_id_text()\}' (type '\{c.env.display(first.arg_id)\}') \
-                    fixes it to \{c.env.display(b.ids.get(i))\}. The argument for \
-                    '\{b.pair.param.get_decl_id_text()\}' (type '\{c.env.display(b.pair.arg_id)\}') \
-                    fixes it to \{c.env.display(value_id)\}\n  Hint: pass arguments that agree on \
-                    '\{name\}'")
-            c.err(b.pair.arg, c.scratch.slice())
+        if sema_type_env.is_unknown(bindings.ids.get(i))
+            bindings.ids.set(i, value_id)
+            bindings.bound_by.set(i, bindings.pair)
+        else if bindings.ids.get(i) != value_id && !bindings.is_refused
+            bindings.is_refused = true
+            first: = bindings.bound_by.get(i)
+            ctx.clear_scratch()
+                .s("cannot infer the const parameter '\{name\}' of '\{bindings.callee\}'. The \
+                    argument for '\{first.param.get_decl_id_text()\}' (type \
+                    '\{ctx.env.display(first.arg_id)\}') fixes it to \
+                    \{ctx.env.display(bindings.ids.get(i))\}. The argument for \
+                    '\{bindings.pair.param.get_decl_id_text()\}' (type \
+                    '\{ctx.env.display(bindings.pair.arg_id)\}') fixes it to \
+                    \{ctx.env.display(value_id)\}\n  Hint: pass arguments that agree on '\{name\}'")
+            ctx.err(bindings.pair.arg, ctx.scratch.slice())
 
-priv fn bind_type(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, arg_id: I32) //<
+priv fn bind_type(ctx: Sema_ctx$@, bindings: Bindings$@, written: Ast_node$@, arg_id: I32) //<
     //< Walks a written parameter type against its argument's type, binding the names it meets
     //< Where the two shapes part, the walk stops. Then the arguments' check after the instantiation
     //< reports the mismatch, or no binding is left for the refusal of an unbound parameter.
@@ -93,25 +94,25 @@ priv fn bind_type(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, arg_id: I32
     switch written.kind_id
     case .k_type_arg
         // `$T`: the mark is a literal before the type.
-        bind_type(c, b, written.last_child(), arg_id)
+        bind_type(ctx, bindings, written.last_child(), arg_id)
     case .k_type_expr
-        bind_type_expr(c, b, written, arg_id)
+        bind_type_expr(ctx, bindings, written, arg_id)
     case .k_type_atom
         // An atom holds one type, a function type's `fn` keyword or a group's `(` before it.
         for ch in written.children
             if ch.kind_id != .k_literal && ch.kind_id != .k_keyword
-                bind_type(c, b, ch, arg_id)
+                bind_type(ctx, bindings, ch, arg_id)
                 return
-        bind_name(b, written.text, arg_id)
+        bind_name(bindings, written.text, arg_id)
     case .k_type_path, .k_expr_path
-        bind_path(c, b, written, arg_id)
+        bind_path(ctx, bindings, written, arg_id)
     case .k_type_fn_sig
-        bind_fn_sig(c, b, written, arg_id)
+        bind_fn_sig(ctx, bindings, written, arg_id)
     case .k_identifier
-        bind_name(b, written.text, arg_id)
+        bind_name(bindings, written.text, arg_id)
     default {}
 
-priv fn bind_type_expr(c: Sema_ctx$@, b: Bindings$@, written: Ast_node@, arg_id: I32) //<
+priv fn bind_type_expr(ctx: Sema_ctx$@, bindings: Bindings$@, written: Ast_node@, arg_id: I32) //<
     //< A type and its postfixes: each postfix, outermost first, peels one level off the argument
     $base: Ast_node$@ = null
     $posts: = List<|Ast_node$@|>(base_core.arena)
@@ -124,7 +125,7 @@ priv fn bind_type_expr(c: Sema_ctx$@, b: Bindings$@, written: Ast_node@, arg_id:
     for $i: = posts.len; i > 0; i -= 1
         p: = posts.get(i - 1)
         pt: = p.text.strip_prefix("$")
-        switch c.env.get_info(c.env.get_clean_real_type(cur))
+        switch ctx.env.get_info(ctx.env.get_clean_real_type(cur))
         case .pointer(pointee)
             if !pt.equals("@")
                 return
@@ -133,40 +134,40 @@ priv fn bind_type_expr(c: Sema_ctx$@, b: Bindings$@, written: Ast_node@, arg_id:
             if !pt.starts_with("[")
                 return
             if p.children.len > 0 && size >= 0
-                bind_value(c, b, p.get_child(0),
-                    c.env.get_or_add(c.clear_scratch().s("\{size\}").slice()))
+                bind_value(ctx, bindings, p.get_child(0),
+                    ctx.env.get_or_add(ctx.clear_scratch().s("\{size\}").slice()))
             cur = elem
         default
             return
     if base == null
-        bind_name(b, written.text, cur)
+        bind_name(bindings, written.text, cur)
     else
-        bind_type(c, b, base, cur)
+        bind_type(ctx, bindings, base, cur)
 
-priv fn bind_path(c: Sema_ctx$@, b: Bindings$@, path: Ast_node$@, arg_id: I32) //<
+priv fn bind_path(ctx: Sema_ctx$@, bindings: Bindings$@, path: Ast_node$@, arg_id: I32) //<
     //< A named type: a type parameter itself, or a generic whose arguments are walked in turn
     //< The argument's own instance answers when it is one of the same generic, else the instance
     //< of that generic trait it conforms to (a closure's `Callable1<|I32, I64|>`). The generic is
     //< named by `read_written_type`, so an import alias or a renamed import reads as its FQN.
     //< Where the generic's own parameter is `const`, the argument there is a value (`Buf<|8|>`).
-    written: = c.read_written_type(path)
+    written: = ctx.read_written_type(path)
     if written.args == null
         if written.member == null && written.alias_file.len == 0
-            bind_name(b, written.name, arg_id)
+            bind_name(bindings, written.name, arg_id)
         return
     $fqn: = written.fqn
     if path.is_sugar_made()
         fqn =
             (base_core.OPTION_FQN if written.name.equals(base_core.option_ident())
             else base_core.SLICE_FQN)
-    real: = c.env.get_clean_real_type(arg_id)
-    $args: = c.env.instance_args(real)
-    if !c.env.instance_base(real).equals(fqn)
-        conformed: = c.env.implemented_trait_instance(c.env.strip_const_deep(real), fqn)
+    real: = ctx.env.get_clean_real_type(arg_id)
+    $args: = ctx.env.instance_args(real)
+    if !ctx.env.instance_base(real).equals(fqn)
+        conformed: = ctx.env.implemented_trait_instance(ctx.env.strip_const_deep(real), fqn)
         if conformed == 0
             return
-        args = c.env.instance_args(conformed)
-    tmpl: = c.generics.templates.get(fqn).unwrap_or(null)
+        args = ctx.env.instance_args(conformed)
+    tmpl: = ctx.generics.templates.get(fqn).unwrap_or(null)
     tmpl_params: = tmpl.find_child(.k_type_gen_params) if tmpl != null else null
     $own_params: = List<|Ast_node$@|>(base_core.arena)
     if tmpl_params != null
@@ -180,22 +181,22 @@ priv fn bind_path(c: Sema_ctx$@, b: Bindings$@, path: Ast_node$@, arg_id: I32) /
         if pos >= args.len
             return
         if pos < own_params.len && own_params.get(pos).is_const_gen_param()
-            bind_value(c, b, w, args[pos])
+            bind_value(ctx, bindings, w, args[pos])
         else
-            bind_type(c, b, w, args[pos])
+            bind_type(ctx, bindings, w, args[pos])
         pos += 1
 
-priv fn bind_fn_sig(c: Sema_ctx$@, b: Bindings$@, sig_node: Ast_node$@, arg_id: I32) //<
+priv fn bind_fn_sig(ctx: Sema_ctx$@, bindings: Bindings$@, sig_node: Ast_node$@, arg_id: I32) //<
     //< A function type: its parameters' types and its result's, against the argument's
-    switch c.env.fn_sig_of(arg_id)
+    switch ctx.env.fn_sig_of(arg_id)
     case .some(sig)
         $pos: Sz = 0
         for p in base_ast_ext.Param_cursor(sig_node.get_fn_params(), false)
             if pos >= sig.params.len
                 return
-            bind_type(c, b, p.get_decl_type_node(), sig.params.get(pos))
+            bind_type(ctx, bindings, p.get_decl_type_node(), sig.params.get(pos))
             pos += 1
-        bind_type(c, b, sig_node.get_decl_type_node(), sig.ret_id)
+        bind_type(ctx, bindings, sig_node.get_decl_type_node(), sig.ret_id)
     case .none {}
 
 priv fn mentions(written: Ast_node$@, name: U8[]): Bool //<
@@ -250,19 +251,19 @@ priv fn arithmetic_on(written: Ast_node$@, name: U8[]): Ast_node$@? //<
             return .some(found)
     return .none
 
-priv fn spell_value(c: Sema_ctx$@, node: Ast_node@) //<
+priv fn spell_value(ctx: Sema_ctx$@, node: Ast_node@) //<
     //< Appends a value written in a type (`N + 1`) to scratch, from its tokens
     //< An operator stands between spaces, a parenthesis against what it holds.
     for ch in node.children
-        spell_value(c, ch)
+        spell_value(ctx, ch)
     if node.children.len > 0 || node.text.len == 0
         return
-    last: = c.scratch.slice()
+    last: = ctx.scratch.slice()
     if !last.ends_with("'") && !last.ends_with("(") && !node.text.equals(")")
-        c.scratch.c(' ')
-    c.scratch.s(node.text)
+        ctx.scratch.c(' ')
+    ctx.scratch.s(node.text)
 
-fn write_gen_param_names(c: Sema_ctx$@, gen_params: Ast_node@) //<
+fn write_gen_param_names(ctx: Sema_ctx$@, gen_params: Ast_node@) //<
     //< Appends the type parameters' names to scratch, quoted and joined by commas (`'A', 'B'`)
     if gen_params == null
         return
@@ -272,23 +273,23 @@ fn write_gen_param_names(c: Sema_ctx$@, gen_params: Ast_node@) //<
         if name.len == 0
             continue
         if !is_first
-            c.scratch.s(", ")
-        c.scratch.s("'\{name\}'")
+            ctx.scratch.s(", ")
+        ctx.scratch.s("'\{name\}'")
         is_first = false
 
-priv fn refuse_unbound(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], gen_params: Ast_node$@,
-    b: Bindings@, pairs: List<|Pairing|>@, at: Sz) //<
+priv fn refuse_unbound(ctx: Sema_ctx$@, call: Ast_node$@, callee: U8[], gen_params: Ast_node$@,
+    bindings: Bindings@, pairs: List<|Pairing|>@, at: Sz) //<
         //< Reports the type parameter at `at` that no argument bound, with the form to write
         //< A parameter's type can mention it (a `const` one: where a value stands). Then its
         //< argument did not have that type's shape, and the error stands on it. Otherwise nothing
         //< in the call could fix it.
-    name: = b.names.get(at)
+    name: = bindings.names.get(at)
     $where: = call
     $has_value: = false
-    for v in b.is_value
+    for v in bindings.is_value
         has_value = has_value || v
-    is_value: = b.is_value.get(at)
-    c.clear_scratch()
+    is_value: = bindings.is_value.get(at)
+    ctx.clear_scratch()
         .s("cannot infer the \{"const parameter" if is_value else "type argument"\} '\{name\}' of \
             '\{callee\}'. ")
     $missed: = false
@@ -299,15 +300,15 @@ priv fn refuse_unbound(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], gen_params
             continue
         missed = true
         where = pair.arg
-        c.scratch
+        ctx.scratch
             .s("The argument for '\{pair.param.get_decl_id_text()\}' has type \
-                '\{c.env.display(pair.arg_id)\}'. That type ")
+                '\{ctx.env.display(pair.arg_id)\}'. That type ")
         if is_value
-            c.scratch
+            ctx.scratch
                 .s("has no length or value fixed at translation time where that parameter's type \
                     has '\{name\}'")
         else
-            c.scratch.s("does not have the shape of that parameter's type")
+            ctx.scratch.s("does not have the shape of that parameter's type")
     if !missed && is_value
         for pair in pairs
             if missed
@@ -316,35 +317,35 @@ priv fn refuse_unbound(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], gen_params
             if inside: = arithmetic_on(written, name)
                 missed = true
                 where = pair.arg
-                c.scratch
+                ctx.scratch
                     .s("The parameter '\{pair.param.get_decl_id_text()\}' has '\{name\}' only \
                         inside arithmetic, '")
-                spell_value(c, inside)
-                c.scratch.s("'. The compiler does not solve this expression for '\{name\}'")
+                spell_value(ctx, inside)
+                ctx.scratch.s("'. The compiler does not solve this expression for '\{name\}'")
     if !missed && is_value
-        c.scratch
+        ctx.scratch
             .s("No parameter's type has '\{name\}' as an array's length or a generic's value \
                 argument. Inference reads const parameters from these positions")
     else if !missed
-        c.scratch
+        ctx.scratch
             .s("No parameter's type mentions '\{name\}'. The type of the call's result does not fix \
                 '\{name\}'")
-    c.scratch.s("\n  Hint: call one specialization with '\{callee\}<|…|>(…)'. Write ")
-    c.scratch.s("an argument" if has_value else "a type")
-    c.scratch.s(" for each of ")
-    write_gen_param_names(c, gen_params)
-    c.err(where, c.scratch.slice())
+    ctx.scratch.s("\n  Hint: call one specialization with '\{callee\}<|…|>(…)'. Write ")
+    ctx.scratch.s("an argument" if has_value else "a type")
+    ctx.scratch.s(" for each of ")
+    write_gen_param_names(ctx, gen_params)
+    ctx.err(where, ctx.scratch.slice())
 
-priv fn as_received(c: Sema_ctx$@, written: Ast_node$@, arg_id: I32): I32 //<
+priv fn as_received(ctx: Sema_ctx$@, written: Ast_node$@, arg_id: I32): I32 //<
     //< The type a parameter written as a bare name (`x: T`) receives: a copy of the argument
     //< **A copy drops the outermost immutability**, as `$a: = p$` does (`copy_value_type`). So
     //< `box(p$)` through a read-only `p` binds `T` to the writable type, and `box(p.f)` alike.
     //< What a pointer or a type argument carries is kept (`bind_name`).
     if written != null && written.bare_written_name().len > 0
-        return c.env.copy_value_type(arg_id)
+        return ctx.env.copy_value_type(arg_id)
     return arg_id
 
-fn inferred_type_args(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], def_node: Ast_node$@,
+fn inferred_type_args(ctx: Sema_ctx$@, call: Ast_node$@, callee: U8[], def_node: Ast_node$@,
     args_node: Ast_node@, is_method: Bool): I32[] //<
         //< The type arguments a generic call binds from its arguments, one per type parameter
         //< Empty where it is refused. That is a type parameter no argument binds (reported here),
@@ -364,31 +365,31 @@ fn inferred_type_args(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], def_node: A
                 continue
             param: = params.next() catch
                 break
-            arg_id: = c.own_type_of_name(arg_node)
+            arg_id: = ctx.own_type_of_name(arg_node)
             saw_unknown = saw_unknown || sema_type_env.is_unknown(arg_id)
             pairs.push(Pairing::{ .param = param, .arg = arg_node, .arg_id = arg_id })
     // The parameters' types are read in the declaring file, where their names resolve. **A
     // function's name binds last**: it takes its type from where it is written. So where the other
     // arguments fixed the parameter's type, the name is checked against it rather than fixing it.
-    old_file: = c.file_name
+    old_file: = ctx.file_name
     if def_node.loc.file().len > 0
-        c.set_current_file(def_node.loc.file())
-    name_mark: = c.env.generic_fn_value_type_id()
+        ctx.set_current_file(def_node.loc.file())
+    name_mark: = ctx.env.generic_fn_value_type_id()
     for pair in pairs
         if pair.arg.type_id != name_mark
             b.pair = pair
             written: = pair.param.get_decl_type_node()
-            bind_type(c, b@, written, as_received(c, written, pair.arg_id))
+            bind_type(ctx, b@, written, as_received(ctx, written, pair.arg_id))
     for pair in pairs
         if pair.arg.type_id == name_mark
             b.pair = pair
-            bind_type(c, b@, pair.param.get_decl_type_node(), pair.arg_id)
-    c.set_current_file(old_file)
+            bind_type(ctx, b@, pair.param.get_decl_type_node(), pair.arg_id)
+    ctx.set_current_file(old_file)
     if b.is_refused
         return I32[]::{}
     for i in Range.asc(b.ids.len)
         if sema_type_env.is_unknown(b.ids.get(i))
             if !saw_unknown
-                refuse_unbound(c, call, callee, gen_params, b@, pairs, i)
+                refuse_unbound(ctx, call, callee, gen_params, b@, pairs, i)
             return I32[]::{}
     return b.ids.slice()

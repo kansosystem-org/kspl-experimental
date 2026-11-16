@@ -68,36 +68,36 @@ priv struct File_stats //< the result of reading one file
 // Splitting the text
 // ==========================================
 
-priv fn is_name_char(c: U8): Bool //<
+priv fn is_name_char(byte: U8): Bool //<
     //< Whether it is a character allowed in an LLVM name (`@name` / `%reg` / a label)
-    return c.is_alnum() || c == '_' || c == '.' || c == '$'
+    return byte.is_alnum() || byte == '_' || byte == '.' || byte == '$'
 
-priv fn is_word_char(c: U8): Bool //< whether it is a character used to find a word boundary
+priv fn is_word_char(byte: U8): Bool //< whether it is a character used to find a word boundary
     //< Caution: Keep it separate from `is_name_char`, whose `.` and `$` would read `ret.foo` as a
     //< longer word than `ret` and miss a terminator.
-    return c.is_alnum() || c == '_'
+    return byte.is_alnum() || byte == '_'
 
-priv fn starts_word(s: U8[], w: U8[]): Bool //<
-    //< Whether the text starts with the word `w` followed by a space
+priv fn starts_word(text: U8[], word: U8[]): Bool //<
+    //< Whether the text starts with the word `word` followed by a space
     //< **A prefix match is not enough** — `defineX` would pass.
-    return s.starts_with(w) && s.len > w.len && s[w.len].is_space()
+    return text.starts_with(word) && text.len > word.len && text[word.len].is_space()
 
-priv fn starts_value(t: U8[]): Bool
+priv fn starts_value(text: U8[]): Bool
     for h in VALUE_HEADS
-        if t.starts_with(h)
+        if text.starts_with(h)
             return true
-    if t.starts_with("c\"")
+    if text.starts_with("c\"")
         return true
     $i: Sz = 0
-    if t.len > 0 && t[0] == '-'
+    if text.len > 0 && text[0] == '-'
         i = 1
-    return i < t.len && (t[i].is_digit() || t[i] == '.')
+    return i < text.len && (text[i].is_digit() || text[i] == '.')
 
-priv fn is_type_attr(t: U8[]): Bool
+priv fn is_type_attr(text: U8[]): Bool
     for a in TYPE_ATTRS
-        if t.equals(a)
+        if text.equals(a)
             return true
-    return t.starts_with("align") || t.starts_with("dereferenceable")
+    return text.starts_with("align") || text.starts_with("dereferenceable")
 
 priv fn type_of(operand: U8[]): U8[] //<
     //< Cuts only the type out of `i64 %3` / `ptr @g` / `[2 x i64] zeroinitializer`
@@ -130,37 +130,37 @@ priv fn type_of(operand: U8[]): U8[] //<
         n += 1
     return "" if begin < 0 else operand.sub(begin, end - begin)
 
-priv fn next_top_level(s: U8[], pos: Sz$@, out_part: U8[]$@): Bool //<
+priv fn next_top_level(text: U8[], pos: Sz$@, out_part: U8[]$@): Bool //<
     //< Returns the next element delimited by a top-level comma
     //< A comma inside `{i64, i64}` or `[2 x i64]` is not counted.
     //< Caution: **Do not return a trailing empty element** (`a,` is one; counted, a trailing comma
     //< adds an argument).
     from: = pos$
-    if from >= s.len
+    if from >= text.len
         return false
     $depth: I32 = 0
     $i: = from
-    for i < s.len
-        c: = s[i]
+    for i < text.len
+        c: = text[i]
         if c == '[' || c == '{' || c == '(' || c == '<'
             depth += 1
         else if c == ']' || c == '}' || c == ')' || c == '>'
             depth -= 1
         else if c == ',' && depth == 0
-            out_part$ = s.sub(from, i - from).trim_spaces()
+            out_part$ = text.sub(from, i - from).trim_spaces()
             pos$ = i + 1
             return true
         i += 1
-    tail: = s.sub_from(from).trim_spaces()
-    pos$ = s.len
+    tail: = text.sub_from(from).trim_spaces()
+    pos$ = text.len
     if tail.len == 0
         return false
     out_part$ = tail
     return true
 
-priv fn top_level_count(s: U8[]): Sz //< the count of top-level elements
+priv fn top_level_count(text: U8[]): Sz //< the count of top-level elements
     //< Empty and `void` count as 0.
-    body: = s.trim_spaces()
+    body: = text.trim_spaces()
     if body.len == 0 || body.equals("void")
         return 0
     $n: Sz = 0
@@ -170,22 +170,22 @@ priv fn top_level_count(s: U8[]): Sz //< the count of top-level elements
         n += 1
     return n
 
-priv fn callee_at(s: U8[], from: Sz, out_name: U8[]$@, out_open: Sz$@): Bool //<
+priv fn callee_at(text: U8[], from: Sz, out_name: U8[]$@, out_open: Sz$@): Bool //<
     //< Searches for the `@name(` form and returns the name and its `(`'s position
     //< Caution: **Check only the first `@`.** In a call through a function pointer (`call void
     //< %12(ptr @g)`) it is an argument, not followed by `(`, so it fails here. Search further, and
     //< **the function passed as an argument is mistaken for the callee**.
-    switch s.sub_from(from).find_char('@')
+    switch text.sub_from(from).find_char('@')
     case .none
         return false
     case .some(rel)
         start: = from + rel + 1
         $i: = start
-        for i < s.len && is_name_char(s[i])
+        for i < text.len && is_name_char(text[i])
             i += 1
-        if i == start || i >= s.len || s[i] != '('
+        if i == start || i >= text.len || text[i] != '('
             return false
-        out_name$ = s.sub(start, i - start)
+        out_name$ = text.sub(start, i - start)
         out_open$ = i
         return true
 
@@ -305,24 +305,24 @@ priv fn join_define(lines: List<|U8[]|>, at: Sz, used: Sz$@, arena: Arena$@): U8
 priv fn add_bad(bad: List<|Bad|>$@, lineno: Sz, name: U8[], why: U8[], raw: U8[])
     bad.push(Bad::{ .lineno = lineno, .name = name, .why = why, .raw = raw })
 
-priv fn check_call(c: Call, want: Def_params, bad: List<|Bad|>$@, arena: Arena$@) //<
+priv fn check_call(call: Call, want: Def_params, bad: List<|Bad|>$@, arena: Arena$@) //<
     //< Matches the callee's parameters against the caller's actual arguments
     //< With opaque pointers a call's signature comes from the call itself, so `define void @f(i64
     //< %n)` next to `call void @f(i32 2)` passes the verifier. In a register it comes out right.
     //< On the stack (the fifth argument on Win64), the upper 4 bytes keep the slot's old value.
     //< Only windows-ucrt64 breaks ("Why it differs between platforms" in
     //< `ksplc/docs/DESIGN-backends.md`).
-    got_n: = top_level_count(c.args)
+    got_n: = top_level_count(call.args)
     if got_n != want.count
         wb: = arena.text()
         why: = wb.s("the argument count is \{got_n\} and the definition side's is \{want.count\}")
             .take()
-        add_bad(bad, c.lineno, c.name, why, c.raw)
+        add_bad(bad, call.lineno, call.name, why, call.raw)
         return
     if want.count == 0
         return
     pw: = want.text.trim_spaces()
-    pg: = c.args.trim_spaces()
+    pg: = call.args.trim_spaces()
     $wpos: Sz = 0
     $gpos: Sz = 0
     $w: U8[] = ""
@@ -334,7 +334,7 @@ priv fn check_call(c: Call, want: Def_params, bad: List<|Bad|>$@, arena: Arena$@
         if !gt.equals(wt)
             wb: = arena.text()
             why: = wb.s("argument \{i\} is '\{gt\}' and the definition side's is '\{wt\}'").take()
-            add_bad(bad, c.lineno, c.name, why, c.raw)
+            add_bad(bad, call.lineno, call.name, why, call.raw)
         i += 1
 
 priv fn check(path: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$@): Bool //<

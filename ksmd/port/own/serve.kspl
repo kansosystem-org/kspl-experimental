@@ -19,7 +19,7 @@ import "std/str" { Str_builder }
 extern fn ksmd_own_stopped(msg: U8@, msg_len: Sz) //<
     //< Throws in the worker's script with the reason the function stopped; it does not return
 
-pub typedef Table_fn = fn(name: U8[], a: Raw_args$@): Value? //< the generated table's `call`
+pub typedef Table_fn = fn(name: U8[], args: Raw_args$@): Value? //< the generated table's `call`
 
 const HEAP_BYTES: Sz = 64 * 1024 * 1024 //< the fixed buffer that stands in for a heap
 $heap: U8[64*1024*1024] = ::{}
@@ -39,17 +39,18 @@ priv fn ensure() //< sets up the heap and the output, once
     panic_hook = stopped
     ready = true
 
-extern fn ksmd_own_in(n: Sz): U8$@ //< a buffer of at least `n` bytes for the script to write into
+extern fn ksmd_own_in(size: Sz): U8$@ //<
+    //< a buffer of at least `size` bytes for the script to write into
     ensure()
-    if n > input_cap
+    if size > input_cap
         // Caution: **Forget the old buffer before asking for a new one**, as the page's bridge
         // does: a request that fails stops the module, and a freed buffer would be written again.
         if input != null
             dealloc(Void$@::input)
         input = null
         input_cap = 0
-        input = U8$@::mem.alloc(n)
-        input_cap = n
+        input = U8$@::mem.alloc(size)
+        input_cap = size
     return input
 
 extern fn ksmd_own_out_ptr(): U8@ //< the last answer's bytes; ask after the call

@@ -365,8 +365,8 @@ priv fn freestanding_heap_dealloc(ptr: Void$@)
     _fh.used -= freed_size
     fh_unlock()
 
-// ============================ The heap's usage ============================ The only way to
-// ask how much of the global heap is in use now.
+// ============================ The heap's usage ============================
+// The only way to ask how much of the global heap is in use now.
 // Caution: **Do not read the counter variables directly.** Where the counting happens differs by
 // build: the free-list allocator on freestanding, the libc.malloc wrapper on hosted.
 // **"How big is the whole heap" exists on one build only.**
@@ -491,13 +491,13 @@ pub fn move( //< copies a range of bytes that can overlap the destination
 // the callers.
 #cfg(freestanding)
 pub extern fn memcmp( //< C's `memcmp`, written here so freestanding needs no libc
-    a: Void$@, //< one range
-    b: Void$@, //< the other
-    n: Sz, //< how many bytes to compare
-): I32 //< 0 when equal, else the first differing byte of `a` minus that of `b`
-    pa: = U8$@::a
-    pb: = U8$@::b
-    for i in Range.asc(n)
+    left: Void$@, //< one range
+    right: Void$@, //< the other
+    count: Sz, //< how many bytes to compare
+): I32 //< 0 when equal, else the first differing byte of `left` minus that of `right`
+    pa: = U8$@::left
+    pb: = U8$@::right
+    for i in Range.asc(count)
         da: = (pa + i)$
         db: = (pb + i)$
         if da != db
@@ -507,12 +507,12 @@ pub extern fn memcmp( //< C's `memcmp`, written here so freestanding needs no li
 #cfg(freestanding)
 pub extern fn memchr( //< C's `memchr`, written here so freestanding needs no libc
     buf: Void$@, //< the bytes to search
-    c: I32, //< the byte to find; only its low 8 bits count, as in C
-    n: Sz, //< how many bytes to search
+    byte: I32, //< the byte to find; only its low 8 bits count, as in C
+    count: Sz, //< how many bytes to search
 ): Void$@ //< where the byte first appears, or null
     p: = U8$@::buf
-    want: = U8::(c & 0xFF)
-    for i in Range.asc(n)
+    want: = U8::(byte & 0xFF)
+    for i in Range.asc(count)
         if (p + i)$ == want
             return Void$@::(p + i)
     return null
@@ -550,7 +550,7 @@ priv fn release_tail(chunk: Arena_chunk$@, from: Sz) //<
     chunk.used = from
 pub struct Arena //< a bump allocator: everything it allocated is freed at once
     priv head: Arena_chunk$@
-    pub default_chunk_size: Sz //< the largest size a chunk grows to; 0 marks a fixed buffer.
+    pub default_chunk_size: Sz //< the largest size a chunk grows to; 0 marks a fixed buffer
         //< from_buffer() sets 0: running out panics without calling malloc, and free() does nothing
         //< (the chunk and the Arena are the caller's memory).
     priv resets: Sz //< how many times reset() has run, so restore() can refuse a mark from before
@@ -855,7 +855,7 @@ impl Arena
         ptr: = T$@::r.alloc(sizeof(T))
         init_at(ptr, init_val)
         return ptr
-impl Arena: Manual_free //< it owns its resources and releases them with `free()`.
+impl Arena: Manual_free //< it owns its resources and releases them with `free()`
     pub fn free(r: Self$@) //< frees every chunk, and the arena itself
         if r.default_chunk_size == 0
             // from_buffer(): both the chunk and the Arena itself are the caller's memory. The

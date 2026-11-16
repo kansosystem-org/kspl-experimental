@@ -337,15 +337,15 @@ priv fn case_exit_code_propagates(work: U8[], arena: Arena$@): Void!run_case.Sto
             .failed(arena.text().s("the exit code was \{r.code.unwrap_or(-1)\} rather than 7\n")
             .s(r.out).take())
 
-priv fn main_ret_ok(r: verdict.Run_out, arena: Arena$@): Void!run_case.Stop //<
+priv fn main_ret_ok(run: verdict.Run_out, arena: Arena$@): Void!run_case.Stop //<
     //< Whether `main`'s return became the process's exit code unchanged
-    if r.out.find_str("ran").is_none()
-        throw run_case.broke("the program is not running", r.out, arena)
-    if !r.exited_with(7)
+    if run.out.find_str("ran").is_none()
+        throw run_case.broke("the program is not running", run.out, arena)
+    if !run.exited_with(7)
         throw run_case
             .failed(arena.text()
-            .s("main's return 7 has not become the exit code (code=\{r.code.unwrap_or(-1)\})\n")
-            .s(r.out).take())
+            .s("main's return 7 has not become the exit code (code=\{run.code.unwrap_or(-1)\})\n")
+            .s(run.out).take())
 
 priv fn case_main_return_is_exit_code_c(work: U8[], arena: Arena$@): Void!run_case.Stop
     path: = fs.join(work, "r.kspl", arena)
@@ -425,10 +425,10 @@ priv fn case_compile_error_is_reported(work: U8[], arena: Arena$@): Void!run_cas
         if fs.exists(fs.join(dir, "prog.exe", arena))
             throw run_case.failed("it failed yet the executable is left in the cache")
 
-priv fn version_src(n: Sz, arena: Arena$@): U8[] //<
+priv fn version_src(count: Sz, arena: Arena$@): U8[] //<
     //< A program that changes only one line, the version
     return arena.text()
-        .s("import \"std/io\"\n\nfn main(): I32\n  io.out().s(\"VERSION-\{n\}\\n\")\n")
+        .s("import \"std/io\"\n\nfn main(): I32\n  io.out().s(\"VERSION-\{count\}\\n\")\n")
         .s("  return 0\n\n").take()
 
 priv fn case_cc_failure_does_not_leave_stale_exe(work: U8[], arena: Arena$@): Void!run_case.Stop //<

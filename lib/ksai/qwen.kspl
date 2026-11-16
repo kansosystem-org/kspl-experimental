@@ -115,11 +115,11 @@ impl Qwen_config
     pub fn read( //< the settings of the model a GGUF file holds, each checked
         //< `Qwen.load` reads them too. A program reads them first to check its own options
         //< against them, such as a context longer than the model was trained on.
-        g: Gguf@, //< the parsed file
+        gguf: Gguf@, //< the parsed file
         arena: Arena$@, //< where the keys' names are built
     ): Qwen_config!Qwen_error
         seen: = arena.create(Map<|U8[], Bool|>(arena)) // keys from the model
-        $l: = Loader::{ .g = g, .seen = seen, .arena = arena }
+        $l: = Loader::{ .g = gguf, .seen = seen, .arena = arena }
         return read_config(l@)!
 
 priv struct Attention //< an attention block's weights and its cache
@@ -180,9 +180,9 @@ impl Loader
         return t.matrix() catch
             throw .bad_shape(name)
 
-    priv fn vector(r: Self$@, name: U8[], n: Sz): Tensor<|F32|>!Qwen_error //< `n` F32 numbers
+    priv fn vector(r: Self$@, name: U8[], len: Sz): Tensor<|F32|>!Qwen_error //< `len` F32 numbers
         t: = r.tensor(name)!
-        if t.n_dims != 1 || t.dims[0] != n
+        if t.n_dims != 1 || t.dims[0] != len
             throw .bad_shape(name)
         return t.vector(r.arena) catch
             throw .bad_shape(name)
@@ -265,12 +265,12 @@ impl Qwen
         //< Every tensor's shape is checked against the settings, and every tensor must be read.
         //< The cache's size is in `Qwen_config.attention_blocks`; each delta net's state takes
         //< `Delta_shape.state_len()` F32 numbers, whatever the context.
-        g: Gguf@, //< the parsed file; its bytes must outlive the model
+        gguf: Gguf@, //< the parsed file; its bytes must outlive the model
         context: Sz, //< the positions the cache holds, from 1 to the trained context
         arena: Arena$@, //< where the cache, the states, the shapes and the lists go
     ): Qwen!Qwen_error
         seen: = arena.create(Map<|U8[], Bool|>(arena)) // keys from the model
-        $l: = Loader::{ .g = g, .seen = seen, .arena = arena }
+        $l: = Loader::{ .g = gguf, .seen = seen, .arena = arena }
         cfg: = read_config(l@)!
         if context < 1 || context > cfg.trained_context
             throw .bad_setting(l.key(cfg.arch, "context_length"))
@@ -300,9 +300,9 @@ impl Qwen
         out_norm: = l.vector("output_norm.weight", cfg.hidden)!
         // A tied model has no `output.weight`: its scores are the embedding's rows times the state.
         $output: = embedding
-        if g.has_tensor("output.weight")
+        if gguf.has_tensor("output.weight")
             output = l.matrix("output.weight", cfg.vocab, cfg.hidden)!
-        for t in g.tensors()
+        for t in gguf.tensors()
             if l.seen.get(t.name).is_none()
                 throw .unread(t.name)
         return Qwen::{ .cfg = cfg, .context = context, .embedding = embedding, .blocks = blocks,
@@ -355,42 +355,43 @@ impl Qwen
         h: = one.rmsnorm(r.out_norm, r.cfg.eps) catch panic("Qwen.forward: the final norm")
         return product(r.output@, h)
 
-    priv fn block(r: Self@, b: Block$@, $x: Tensor<|F32|>, start_pos: Sz): Tensor<|F32|> //<
-        //< One decoder block over every row of `x`
+    priv fn block(r: Self@, block: Block$@, $input: Tensor<|F32|>, start_pos: Sz): Tensor<|F32|> //<
+        //< One decoder block over every row of `input`
         eps: = r.cfg.eps
-        $h: = x.rmsnorm(b.attn_norm, eps) catch panic("Qwen.block: the attention norm")
-        if d: = b.delta
-            x = x + d.forward(h)
-        else if a: = b.attn
+        $h: = input.rmsnorm(block.attn_norm, eps) catch panic("Qwen.block: the attention norm")
+        if d: = block.delta
+            input = input + d.forward(h)
+        else if a: = block.attn
             $at: = a
-            x = x + r.attend(at@, h, start_pos)
-        h = x.rmsnorm(b.ffn_norm, eps) catch panic("Qwen.block: the feed-forward norm")
-        $g: = product(b.gate@, h)
-        u: = product(b.up@, h)
+            input = input + r.attend(at@, h, start_pos)
+        h = input.rmsnorm(block.ffn_norm, eps) catch panic("Qwen.block: the feed-forward norm")
+        $g: = product(block.gate@, h)
+        u: = product(block.up@, h)
         gu: = g.silu() * u
-        return x + product(b.down@, gu)
+        return input + product(block.down@, gu)
 
-    priv fn attend(r: Self@, a: Attention$@, h: Tensor<|F32|>, start_pos: Sz): Tensor<|F32|> //<
-        //< An attention block's output for every row of the normalized `h`
+    priv fn attend(r: Self@, attention: Attention$@, hidden: Tensor<|F32|>, start_pos: Sz):
+        Tensor<|F32|> //<
+            //< An attention block's output for every row of the normalized `hidden`
         eps: = r.cfg.eps
-        $q: = product(a.wq@, h)
-        $gate: = empty(h.arena)
+        $q: = product(attention.wq@, hidden)
+        $gate: = empty(hidden.arena)
         if r.cfg.gated
             gate = gate_side(q, r.cfg.n_heads, r.cfg.head_dim, 1)
             q = gate_side(q, r.cfg.n_heads, r.cfg.head_dim, 0)
-        $k: = product(a.wk@, h)
-        $v: = product(a.wv@, h)
+        $k: = product(attention.wk@, hidden)
+        $v: = product(attention.wv@, hidden)
         if r.cfg.qkv_bias
-            q = q.add_bias(a.bq) catch panic("Qwen.block: the query bias")
-            k = k.add_bias(a.bk) catch panic("Qwen.block: the key bias")
-            v = v.add_bias(a.bv) catch panic("Qwen.block: the value bias")
+            q = q.add_bias(attention.bq) catch panic("Qwen.block: the query bias")
+            k = k.add_bias(attention.bk) catch panic("Qwen.block: the key bias")
+            v = v.add_bias(attention.bv) catch panic("Qwen.block: the value bias")
         if r.cfg.qk_norm
-            q = head_norm(q, a.q_norm, eps)
-            k = head_norm(k, a.k_norm, eps)
-        $out: = a.cache.attend(q, k, v, start_pos)
+            q = head_norm(q, attention.q_norm, eps)
+            k = head_norm(k, attention.k_norm, eps)
+        $out: = attention.cache.attend(q, k, v, start_pos)
         if r.cfg.gated
             out = out * sigmoid(gate)
-        return product(a.wo@, out)
+        return product(attention.wo@, out)
 
     priv fn reset_states(r: Self$@) //< empties every delta net's state, for position 0
         for i in Range.asc(r.cfg.n_layers)
@@ -439,41 +440,44 @@ impl Qwen
                 at += n
         r.state_at = from.tokens
 
-priv fn product(w: Quant_matrix@, x: Tensor<|F32|>): Tensor<|F32|> //< `w` times each row of `x`
+priv fn product(weights: Quant_matrix@, input: Tensor<|F32|>): Tensor<|F32|> //<
+    //< `weights` times each row of `input`
     //< The shapes were checked when the model was loaded, so a refusal here is a fault in this
     //< file.
-    return w.mul_mat(x) catch panic("Qwen: a weight refused an input whose shape was checked")
+    return weights.mul_mat(input)
+        catch panic("Qwen: a weight refused an input whose shape was checked")
 
-priv fn head_norm(t: Tensor<|F32|>, w: Tensor<|F32|>, eps: F32): Tensor<|F32|> //<
-    //< Each head of each row RMS-normalized on its own, with the gain `w` of one head's width
-    width: = w.size
-    rows: = t.size / width
+priv fn head_norm(input: Tensor<|F32|>, weights: Tensor<|F32|>, eps: F32): Tensor<|F32|> //<
+    //< Each head of each row RMS-normalized on its own, with the gain `weights` of one head's width
+    width: = weights.size
+    rows: = input.size / width
     heads: Sz[2] = ::{ rows, width }
-    $view: = Tensor<|F32|>.from_raw_parts(t.data, Sz$@::(Sz[]::heads).ptr, 2, t.size, t.arena)
-    normed: = view.rmsnorm(w, eps) catch panic("Qwen: a head norm's width is not the head's")
-    return Tensor<|F32|>.from_raw_parts(normed.data, t.shape.ptr, 2, t.size, t.arena)
+    $view: = Tensor<|F32|>.from_raw_parts(input.data, Sz$@::(Sz[]::heads).ptr, 2, input.size,
+        input.arena)
+    normed: = view.rmsnorm(weights, eps) catch panic("Qwen: a head norm's width is not the head's")
+    return Tensor<|F32|>.from_raw_parts(normed.data, input.shape.ptr, 2, input.size, input.arena)
 
-priv fn gate_side(t: Tensor<|F32|>, heads: Sz, width: Sz, side: Sz): Tensor<|F32|> //<
+priv fn gate_side(input: Tensor<|F32|>, heads: Sz, width: Sz, side: Sz): Tensor<|F32|> //<
     //< One side of a gated query weight's rows: side 0 the queries, side 1 the gates
     //< Each head's `width` queries stand before its `width` gates, as llama.cpp splits them.
-    rows: = t.shape[0]
+    rows: = input.shape[0]
     shape: Sz[2] = ::{ rows, heads * width }
-    out: = Tensor<|F32|>(Sz[]::shape, t.arena)
+    out: = Tensor<|F32|>(Sz[]::shape, input.arena)
     for s in Range.asc(rows)
         for h in Range.asc(heads)
-            src: = t.data + (s * heads + h) * 2 * width + side * width
+            src: = input.data + (s * heads + h) * 2 * width + side * width
             mem.copy(Void$@::(out.data + (s * heads + h) * width), Void$@::src, width * 4)
     return out
 
-priv fn sigmoid(t: Tensor<|F32|>): Tensor<|F32|> //< `1 / (1 + e^-x)` of each number
-    out: = Tensor<|F32|>(t.shape, t.arena)
-    for i in Range.asc(t.size)
-        e: = tensor.exp_f32(-(t.data + i)$)
+priv fn sigmoid(input: Tensor<|F32|>): Tensor<|F32|> //< `1 / (1 + e^-x)` of each number
+    out: = Tensor<|F32|>(input.shape, input.arena)
+    for i in Range.asc(input.size)
+        e: = tensor.exp_f32(-(input.data + i)$)
         (out.data + i)$ = 1.0F32 / (1.0F32 + e)
     return out
 
-priv fn read_config(l: Loader$@): Qwen_config!Qwen_error //< the settings, each checked
-    arch: = l.g.text("general.architecture") catch e
+priv fn read_config(loader: Loader$@): Qwen_config!Qwen_error //< the settings, each checked
+    arch: = loader.g.text("general.architecture") catch e
         throw .gguf(e)
     $found: Family? = .none
     for f in FAMILIES
@@ -481,90 +485,92 @@ priv fn read_config(l: Loader$@): Qwen_config!Qwen_error //< the settings, each 
             found = .some(f)
     fam: = found catch
         throw .not_qwen(arch)
-    hidden: = l.setting(l.key(arch, "embedding_length"), 1I64)!
-    n_heads: = l.setting(l.key(arch, "attention.head_count"), 1I64)!
-    n_kv: = l.setting(l.key(arch, "attention.head_count_kv"), 1I64)!
+    hidden: = loader.setting(loader.key(arch, "embedding_length"), 1I64)!
+    n_heads: = loader.setting(loader.key(arch, "attention.head_count"), 1I64)!
+    n_kv: = loader.setting(loader.key(arch, "attention.head_count_kv"), 1I64)!
     // The key length is absent where it is the width split evenly over the heads.
     $head_dim: = hidden / n_heads
-    if l.g.has(l.key(arch, "attention.key_length"))
-        head_dim = l.setting(l.key(arch, "attention.key_length"), 2I64)!
-    if l.g.has(l.key(arch, "attention.value_length"))
-        if l.setting(l.key(arch, "attention.value_length"), 2I64)! != head_dim
-            throw .bad_setting(l.key(arch, "attention.value_length"))
+    if loader.g.has(loader.key(arch, "attention.key_length"))
+        head_dim = loader.setting(loader.key(arch, "attention.key_length"), 2I64)!
+    if loader.g.has(loader.key(arch, "attention.value_length"))
+        if loader.setting(loader.key(arch, "attention.value_length"), 2I64)! != head_dim
+            throw .bad_setting(loader.key(arch, "attention.value_length"))
     if n_heads % n_kv != 0 || head_dim % 2 != 0 || head_dim < 2
-        throw .bad_setting(l.key(arch, "attention.head_count_kv"))
+        throw .bad_setting(loader.key(arch, "attention.head_count_kv"))
     // RoPE turns the whole head unless the file names fewer of its numbers.
     $rope_dims: = head_dim
-    if l.g.has(l.key(arch, "rope.dimension_count"))
-        rope_dims = l.setting(l.key(arch, "rope.dimension_count"), 2I64)!
+    if loader.g.has(loader.key(arch, "rope.dimension_count"))
+        rope_dims = loader.setting(loader.key(arch, "rope.dimension_count"), 2I64)!
         if rope_dims % 2 != 0 || rope_dims > head_dim
-            throw .bad_setting(l.key(arch, "rope.dimension_count"))
+            throw .bad_setting(loader.key(arch, "rope.dimension_count"))
     if fam.rope_sections
-        check_sections(l, arch, rope_dims, head_dim)!
-    theta: = l.g.float(l.key(arch, "rope.freq_base")) catch e
+        check_sections(loader, arch, rope_dims, head_dim)!
+    theta: = loader.g.float(loader.key(arch, "rope.freq_base")) catch e
         throw .gguf(e)
-    eps: = l.g.float(l.key(arch, "attention.layer_norm_rms_epsilon")) catch e
-        throw .gguf(e)
+    eps: =
+        loader.g.float(loader.key(arch, "attention.layer_norm_rms_epsilon")) catch e
+            throw .gguf(e)
     if !(theta > 1.0)
-        throw .bad_setting(l.key(arch, "rope.freq_base"))
+        throw .bad_setting(loader.key(arch, "rope.freq_base"))
     if !(eps > 0.0 && eps < 1.0)
-        throw .bad_setting(l.key(arch, "attention.layer_norm_rms_epsilon"))
-    n_layers: = l.setting(l.key(arch, "block_count"), 1I64)!
+        throw .bad_setting(loader.key(arch, "attention.layer_norm_rms_epsilon"))
+    n_layers: = loader.setting(loader.key(arch, "block_count"), 1I64)!
     // Each block holds several tensors, so a count past the file's tensors cannot be true.
-    if n_layers > l.g.tensors().len
-        throw .bad_setting(l.key(arch, "block_count"))
-    table: = l.g.tensor("token_embd.weight") catch e
+    if n_layers > loader.g.tensors().len
+        throw .bad_setting(loader.key(arch, "block_count"))
+    table: = loader.g.tensor("token_embd.weight") catch e
         throw .gguf(e)
     $cfg: = Qwen_config::{ .arch = arch, .n_layers = n_layers, .hidden = hidden, .n_heads = n_heads,
         .n_kv_heads = n_kv, .head_dim = head_dim, .rope_dims = rope_dims,
-        .ffn = l.setting(l.key(arch, "feed_forward_length"), 1I64)!, .vocab = table.rows(),
-        .trained_context = l.setting(l.key(arch, "context_length"), 1I64)!, .rope_theta = theta,
-        .eps = F32::eps, .qk_norm = fam.qk_norm, .qkv_bias = fam.qkv_bias, .gated = fam.gated,
-        .attention_every = 1,
+        .ffn = loader.setting(loader.key(arch, "feed_forward_length"), 1I64)!,
+        .vocab = table.rows(),
+        .trained_context = loader.setting(loader.key(arch, "context_length"), 1I64)!,
+        .rope_theta = theta, .eps = F32::eps, .qk_norm = fam.qk_norm, .qkv_bias = fam.qkv_bias,
+        .gated = fam.gated, .attention_every = 1,
         .delta = Delta_shape::{ .k_heads = 0, .v_heads = 0, .head_dim = 0, .kernel = 0 },
         .ffn_norm = fam.ffn_norm }
     if fam.delta_net
-        read_delta(l, cfg@)!
+        read_delta(loader, cfg@)!
     return cfg
 
-priv fn read_delta(l: Loader$@, cfg: Qwen_config$@): Void!Qwen_error //<
+priv fn read_delta(loader: Loader$@, cfg: Qwen_config$@): Void!Qwen_error //<
     //< The delta nets' settings, and which blocks are delta nets
     arch: = cfg.arch
     // A list of which blocks are delta nets, or a draft block for speculation, is not computed.
     for part in U8[][]::{ "attention.recurrent_layers", "nextn_predict_layers" }
-        if l.g.has(l.key(arch, part))
-            throw .bad_setting(l.key(arch, part))
+        if loader.g.has(loader.key(arch, part))
+            throw .bad_setting(loader.key(arch, part))
     $every: = DEFAULT_INTERVAL
-    if l.g.has(l.key(arch, "full_attention_interval"))
-        every = l.setting(l.key(arch, "full_attention_interval"), 1I64)!
+    if loader.g.has(loader.key(arch, "full_attention_interval"))
+        every = loader.setting(loader.key(arch, "full_attention_interval"), 1I64)!
     if Sz::every > cfg.n_layers
-        throw .bad_setting(l.key(arch, "full_attention_interval"))
+        throw .bad_setting(loader.key(arch, "full_attention_interval"))
     cfg.attention_every = Sz::every
-    s: = Delta_shape::{ .k_heads = l.setting(l.key(arch, "ssm.group_count"), 1I64)!,
-        .v_heads = l.setting(l.key(arch, "ssm.time_step_rank"), 1I64)!,
-        .head_dim = l.setting(l.key(arch, "ssm.state_size"), 8I64)!,
-        .kernel = l.setting(l.key(arch, "ssm.conv_kernel"), 2I64)! }
+    s: = Delta_shape::{ .k_heads = loader.setting(loader.key(arch, "ssm.group_count"), 1I64)!,
+        .v_heads = loader.setting(loader.key(arch, "ssm.time_step_rank"), 1I64)!,
+        .head_dim = loader.setting(loader.key(arch, "ssm.state_size"), 8I64)!,
+        .kernel = loader.setting(loader.key(arch, "ssm.conv_kernel"), 2I64)! }
     // A row of the state is read 8 numbers at a time, and each value head takes a key head.
     if s.head_dim % 8 != 0
-        throw .bad_setting(l.key(arch, "ssm.state_size"))
+        throw .bad_setting(loader.key(arch, "ssm.state_size"))
     if s.v_heads % s.k_heads != 0
-        throw .bad_setting(l.key(arch, "ssm.time_step_rank"))
-    if l.setting(l.key(arch, "ssm.inner_size"), 1I64)! != s.inner()
-        throw .bad_setting(l.key(arch, "ssm.inner_size"))
+        throw .bad_setting(loader.key(arch, "ssm.time_step_rank"))
+    if loader.setting(loader.key(arch, "ssm.inner_size"), 1I64)! != s.inner()
+        throw .bad_setting(loader.key(arch, "ssm.inner_size"))
     // `state_len` stays far below `Sz`'s range, as each factor is capped; the count of blocks
     // is divided into the cap rather than multiplied.
     delta_blocks: = cfg.n_layers - cfg.attention_blocks()
     if delta_blocks > 0 && I64::s.state_len() > MAX_STATE_BYTES / 4I64 / I64::delta_blocks
-        throw .bad_setting(l.key(arch, "ssm.state_size"))
+        throw .bad_setting(loader.key(arch, "ssm.state_size"))
     cfg.delta = s
 
-priv fn check_sections(l: Loader$@, arch: U8[], rope_dims: Sz, head_dim: Sz): Void!Qwen_error //<
+priv fn check_sections(loader: Loader$@, arch: U8[], rope_dims: Sz, head_dim: Sz): Void!Qwen_error //<
     //< Refuses multimodal RoPE sections a text position does not fill
     //< llama.cpp's interleaved sections (`ggml_mrope_cache_init`) give pair `s` of a head the
     //< time, height or width position, which a text token sets alike, or a fourth one it sets to
     //< 0. So the rotation is the plain one, unless a pair falls to the fourth: that is refused.
-    key: = l.key(arch, "rope.dimension_sections")
-    sec: = l.g.ints(key, l.arena) catch e
+    key: = loader.key(arch, "rope.dimension_sections")
+    sec: = loader.g.ints(key, loader.arena) catch e
         throw .gguf(e)
     if sec.len != 4
         throw .bad_setting(key)

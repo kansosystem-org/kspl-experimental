@@ -343,7 +343,7 @@ function ksmdCellBox(ks, table) {
     const start = table.stepColumn(block, back ? s.columns : -1, by);
     if (r < -1) return null;
     if (r < s.rows) return moveTo(block, r, start);
-    const added = ks.act("ksmd_web_table_edit", block, 0, s.rows, 1, ks.put(""));
+    const added = ks.act("ksmd_web_table_edit", block, ks.TABLE_EDIT.INSERT_ROWS, s.rows, 1, ks.put(""));
     if (!added || !added.ok) return null;
     return moveTo(block, s.rows, start);
   }

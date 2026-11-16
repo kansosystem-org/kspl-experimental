@@ -26,12 +26,12 @@ import "std/chars" // for its single-character methods
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-fn vis_rank(v: sema_type_scope.Visibility): I32 //<
+fn vis_rank(vis: sema_type_scope.Visibility): I32 //<
     //< A visibility's breadth (narrowest first, file_private < internal < public)
     //< The enum's numbers follow declaration order, not breadth.
-    if v == sema_type_scope.Visibility.file_private
+    if vis == sema_type_scope.Visibility.file_private
         return 0
-    return 1 if v == sema_type_scope.Visibility.internal else 2
+    return 1 if vis == sema_type_scope.Visibility.internal else 2
 
 fn narrower_vis(outer: sema_type_scope.Visibility, inner: sema_type_scope.Visibility):
     sema_type_scope.Visibility //<
@@ -624,7 +624,7 @@ impl Sema_ctx
 
     fn check_type_vis_leak(r: Self$@, node: Ast_node$@, owner_vis: sema_type_scope.Visibility,
         position: U8[], owner: U8[]) //<
-            //< Checks that a type exposed outside is no less visible than its position.
+            //< Checks that a type exposed outside is no less visible than its position
             //< Such a type is a return value or a struct's field. owner_vis is the position's
             //< **effective visibility**, from the caller. It is min(impl target, function) for a
             //< method, and min(struct, field) for a field. Without it, a closed type's `pub`
@@ -875,34 +875,34 @@ priv fn field_symbol(field: Struct_field$@): Sema_symbol$@ //<
 // 5). **The extra width widens nothing, even where it can be written.**
 // ==========================================
 
-priv fn check_one_member(c: Sema_ctx$@, member: Ast_node$@, limit: I32, kind: U8[], owner: U8[]) //<
+priv fn check_one_member(ctx: Sema_ctx$@, member: Ast_node$@, limit: I32, kind: U8[], owner: U8[]) //<
     //< Reports one member whose written visibility is wider than limit
     if !member.has_explicit_visibility() || vis_rank(member.get_visibility()) <= limit
         return
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("this visibility is wider than '\{owner\}' itself, so it widens nothing. The \{kind\} \
             cannot be reached from anywhere '\{owner\}' cannot be named. Remove the visibility \
             marker, or widen '\{owner\}'")
-    c.err(member, c.scratch.slice())
+    ctx.err(member, ctx.scratch.slice())
 
-fn impl_target_symbol(c: Sema_ctx$@, impl_node: Ast_node$@): Sema_symbol$@? //<
+fn impl_target_symbol(ctx: Sema_ctx$@, impl_node: Ast_node$@): Sema_symbol$@? //<
     //< An `impl`'s target type's declaration (none for a built-in or extern target)
     //< Caution: **Look it up by name.** The target's type node gets its type id only in body
     //< analysis. So while declarations are collected it is still 0 (collect_impl_decl looks it up
     //< the same way).
     if impl_node.get_decl_type_node() == null
         return .none
-    sym: = c.symtab.resolve_fqn(c.impl_target_fqn(impl_node)).unwrap_or(null)
+    sym: = ctx.symtab.resolve_fqn(ctx.impl_target_fqn(impl_node)).unwrap_or(null)
     if sym == null || !sym.kind.is_type()
         return .none
     return .some(sym)
 
-fn check_member_visibility_width(root: Ast_node@, c: Sema_ctx$@) //< checks every member's width
+fn check_member_visibility_width(root: Ast_node@, ctx: Sema_ctx$@) //< checks every member's width
     //< Caution: **Call it after all types are registered** (an `impl`'s target is looked up by
     //< name).
     for top_node in root.children
         n: = top_node.unwrap_top_level()
-        c.set_current_file(n.loc.file())
+        ctx.set_current_file(n.loc.file())
         $owner_rank: I32 = -1
         $owner: = ""
         $kind: = "method"
@@ -916,7 +916,7 @@ fn check_member_visibility_width(root: Ast_node@, c: Sema_ctx$@) //< checks ever
             owner = n.get_decl_id_text()
         case .k_decl_impl
             // An `impl` has no name, so the message names its target type.
-            if sym: = impl_target_symbol(c, n)
+            if sym: = impl_target_symbol(ctx, n)
                 owner_rank = vis_rank(sym.vis)
                 owner = sym.name
         default {}
@@ -925,5 +925,5 @@ fn check_member_visibility_width(root: Ast_node@, c: Sema_ctx$@) //< checks ever
         for member in n.children
             switch member.kind_id
             case .k_struct_field, .k_decl_fn, .k_decl_fn_proto
-                check_one_member(c, member, owner_rank, kind, owner)
+                check_one_member(ctx, member, owner_rank, kind, owner)
             default {}

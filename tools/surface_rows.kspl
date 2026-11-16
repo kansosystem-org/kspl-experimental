@@ -50,7 +50,7 @@ struct Parts //< one row taken apart into its four fields
         //< The key of the declaration this row describes part of (a parameter, or the return value)
         //< **Empty where the row is the declaration itself.**
     part: U8[] //<
-        //< A parameter's name. **Empty with a non-empty `owner`, the row is the return value.**
+        //< A parameter's name. **Empty with a non-empty `owner`, the row is the return value**
         //< Caution: **Read `owner` first.** Empty here means two different things on its own.
     of_file: Bool //<
         //< Whether the row is the file's own description (**the text is in `doc`**)
@@ -60,13 +60,13 @@ priv const PART_MARK: U8 = '~' //<
     //< **The compiler decides it** (`ksplc/tools/surface.kspl`). No name contains it, so a key
     //< holding one is a part.
 
-fn parts_of(r: Row): Parts //< takes one row apart
+fn parts_of(row: Row): Parts //< takes one row apart
     //< Caution: **Split rows here and nowhere else**; a second place that splits on tabs goes wrong
     //< the day a column is added.
     // With no tab, the whole half is the first field and the second is empty.
-    at: = r.key.find_char('\t').unwrap_or(r.key.len)
-    cut: = r.text.find_char('\t').unwrap_or(r.text.len)
-    key: = r.key.sub_from(at + 1)
+    at: = row.key.find_char('\t').unwrap_or(row.key.len)
+    cut: = row.text.find_char('\t').unwrap_or(row.text.len)
+    key: = row.key.sub_from(at + 1)
     $owner: U8[] = ""
     $part: U8[] = ""
     // **The mark alone is the file's own row**; a part has its owner's key in front of the mark.
@@ -79,20 +79,20 @@ fn parts_of(r: Row): Parts //< takes one row apart
             if dot: = rest.find_char('.')
                 part = rest.sub_from(dot + 1)
     return Parts::{
-        .file = r.key.sub(0, at),
+        .file = row.key.sub(0, at),
         .key = key,
-        .text = r.text.sub(0, cut),
-        .doc = r.text.sub_from(cut + 1),
+        .text = row.text.sub(0, cut),
+        .doc = row.text.sub_from(cut + 1),
         .owner = owner,
         .part = part,
         .of_file = key.len == 1 && key[0] == PART_MARK,
     }
 
-fn is_declaration(r: Row): Bool //< whether the row is a declaration in its own right
+fn is_declaration(row: Row): Bool //< whether the row is a declaration in its own right
     //< False for a parameter, the return value, and the file's own description.
     //< **The record keeps only these**; `ksplc doc` shows everything ("Why the record and the
     //< reference are two renderings" in [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md)).
-    p: = parts_of(r)
+    p: = parts_of(row)
     return !p.of_file && p.owner.len <= 0
 
 priv fn text_of(rows: List<|Row|>@, key: U8[]): U8[] //< looks up by key
@@ -109,12 +109,12 @@ priv fn has_key(rows: List<|Row|>@, key: U8[]): Bool //< whether the key is ther
             return true
     return false
 
-priv fn write_row(b: Str_builder$@, mark: U8[], key: U8[]) //<
+priv fn write_row(out: Str_builder$@, mark: U8[], key: U8[]) //<
     //< Writes one line in the form "mark logical-name key"
-    b.s("  ").s(mark).s("  ")
+    out.s("  ").s(mark).s("  ")
     for ch in key
-        b.c(' ' if ch == '\t' else ch)
-    b.c('\n')
+        out.c(' ' if ch == '\t' else ch)
+    out.c('\n')
 
 fn undocumented( //< lists the published entries with no description, and returns how many
     //< `ksplc doc --emit-surface` writes the summary as a fourth column, so a row whose text holds
@@ -123,20 +123,20 @@ fn undocumented( //< lists the published entries with no description, and return
     //< Caution: **Check the current sources, not the record** (what was committed). A declaration
     //< added in the same change is not in it. So the entry that most needs a sentence gets through.
     rows: List<|Row|>@, //< the package as it is now
-    b: Str_builder$@, //< where their names are written
+    out: Str_builder$@, //< where their names are written
 ): Sz
     $n: Sz = 0
     for r in rows
         if r.text.find_char('\t').is_some()
             continue
-        write_row(b, "no summary", r.key)
+        write_row(out, "no summary", r.key)
         n += 1
     return n
 
-fn signature_only(r: Row): Row //< the row without its fourth column, the summary
+fn signature_only(row: Row): Row //< the row without its fourth column, the summary
     //< **The record keeps the signature alone.** With the summary in it, rewording a `//<` would
     //< show as an API change.
-    return Row::{ .key = r.key, .text = parts_of(r).text }
+    return Row::{ .key = row.key, .text = parts_of(row).text }
 
 priv fn twin_spelling(text: U8[], arena: Arena$@): U8[] //<
     //< A signature with the unused mark taken off its parameters' names
@@ -148,7 +148,7 @@ fn drifted_twins( //< lists the names declared once per `#cfg` whose signatures 
     //< **A caller is checked only against the twin its own build picks.** So a twin that drifts
     //< breaks just the builds that pick it (a freestanding one, which no hosted run compiles).
     rows: List<|Row|>@, //< the package as it is now
-    b: Str_builder$@, //< where their names are written
+    out: Str_builder$@, //< where their names are written
     arena: Arena$@,
 ): Sz
     $names: = List<|U8[]|>(arena)
@@ -164,9 +164,9 @@ fn drifted_twins( //< lists the names declared once per `#cfg` whose signatures 
                 if !found && names.get(i).equals(name)
                     found = true
                     if !texts.get(i).equals(text)
-                        write_row(b, "twin differs", r.key)
-                        b.s("          first:  \{texts.get(i)\}\n")
-                        b.s("          this:   \{text\}\n")
+                        write_row(out, "twin differs", r.key)
+                        out.s("          first:  \{texts.get(i)\}\n")
+                        out.s("          this:   \{text\}\n")
                         n += 1
             if !found
                 names.push(name)
@@ -179,13 +179,13 @@ fn classify( //< writes the differences out and returns how many there were
     //< also decides how far the version is raised.
     old_rows: List<|Row|>$@, //< the record as committed
     new_rows: List<|Row|>$@, //< the package as it is now
-    b: Str_builder$@, //< where the differences are written
+    out: Str_builder$@, //< where the differences are written
 ): Sz
     $n: Sz = 0
     for o in old_rows
         if !has_key(new_rows, o.key)
-            write_row(b, "removed", o.key)
-            b.s("          record: \{o.text\}\n")
+            write_row(out, "removed", o.key)
+            out.s("          record: \{o.text\}\n")
             n += 1
     for w in new_rows
         if !has_key(old_rows, w.key)
@@ -193,14 +193,14 @@ fn classify( //< writes the differences out and returns how many there were
         had: = text_of(old_rows, w.key)
         if had.equals(w.text)
             continue
-        write_row(b, "changed", w.key)
-        b.s("          record: \{had\}\n")
-        b.s("          now:    \{w.text\}\n")
+        write_row(out, "changed", w.key)
+        out.s("          record: \{had\}\n")
+        out.s("          now:    \{w.text\}\n")
         n += 1
     for w in new_rows
         if has_key(old_rows, w.key)
             continue
-        write_row(b, "added", w.key)
-        b.s("          now:    \{w.text\}\n")
+        write_row(out, "added", w.key)
+        out.s("          now:    \{w.text\}\n")
         n += 1
     return n

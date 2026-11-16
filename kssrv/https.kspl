@@ -54,11 +54,11 @@ priv fn key_is_private(path: U8[], lg: Log$@): Bool //<
             ln.s("no key file can be read at \{path\}")
     return false
 
-priv fn say_refused(e: Tls_setup_error, cert: U8[], key: U8[], lg: Log$@) //<
+priv fn say_refused(error: Tls_setup_error, cert: U8[], key: U8[], lg: Log$@) //<
     //< Says why the certificate and key cannot serve, then what to do
     ln: = lg.at(.error) catch
         return
-    switch e
+    switch error
     case .no_certificate
         ln.s("no PEM certificate is in \{cert\}")
     case .certificate_refused
@@ -81,18 +81,18 @@ priv fn say_refused(e: Tls_setup_error, cert: U8[], key: U8[], lg: Log$@) //<
     case .ctx_failed
         ln.s("OpenSSL could not be set up for TLS")
 
-priv fn dates_fit(s: Tls_server@, cert: U8[], lg: Log$@): Bool //<
+priv fn dates_fit(server: Tls_server@, cert: U8[], lg: Log$@): Bool //<
     //< Whether the certificate is valid now; says why not where it is not
     //< Caution: **Refuse an expired certificate at start.** Served, it makes every browser show
     //< a warning page, and the server's own log would show nothing wrong.
     now: = sys.wall_seconds()
-    if now < s.starts_at
+    if now < server.starts_at
         if ln: = lg.at(.error)
             ln.s("the certificate in \{cert\} is not valid yet; check this machine's clock")
         return false
-    if now >= s.expires_at
+    if now >= server.expires_at
         if ln: = lg.at(.error)
-            ln.s("the certificate in \{cert\} expired on \{s.expiry\}. Renew it")
+            ln.s("the certificate in \{cert\} expired on \{server.expiry\}. Renew it")
         return false
     return true
 
@@ -133,15 +133,15 @@ fn load(cert: U8[], key: U8[], lg: Log$@, arena: Arena$@): Https? //<
     watch_expiry(h@, lg)
     return .some(h)
 
-fn watch_expiry(h: Https$@, lg: Log$@) //<
+fn watch_expiry(tls: Https$@, lg: Log$@) //<
     //< Says once when the certificate's expiry comes near, and once when it has passed
     //< **A server stays up for months**, so the start's check alone cannot see the day come.
-    left: = h.expires_at - sys.wall_seconds()
-    if left <= 0I64 && h.warned < 2
-        h.warned = 2
+    left: = tls.expires_at - sys.wall_seconds()
+    if left <= 0I64 && tls.warned < 2
+        tls.warned = 2
         lg.say(.error, "the certificate has expired: clients now refuse it. Renew it and restart")
-    else if left < SOON_S && h.warned < 1
-        h.warned = 1
+    else if left < SOON_S && tls.warned < 1
+        tls.warned = 1
         if ln: = lg.at(.warning)
             ln.s("the certificate expires in \{left / 86400I64\} days: renew it before then")
 
@@ -154,33 +154,37 @@ enum Io_end //< why a read or a write on a connection stopped short
     broken //< the connection cannot go on: close it
     plain_http //< plain HTTP came to the HTTPS port: answer it in plain text, then close
 
-fn start(c: conn.Conn$@, h: Https$@, lg: Log$@): Bool //< starts the TLS of a connection accepted
-    s: = Tls_session.start(h.server) catch
+fn start(connection: conn.Conn$@, tls: Https$@, lg: Log$@): Bool //<
+    //< starts the TLS of a connection accepted
+    s: = Tls_session.start(tls.server) catch
         lg.say(.error, "cannot start TLS on an accepted connection")
         return false
-    c.tls = s
+    connection.tls = s
     return true
 
-fn handshake_late(c: conn.Conn$@, now: I64): Bool //< whether its handshake ran past its time
-    return c.tls != null && !c.tls.ready() && c.lingering_since_us == 0I64 &&
-        now - c.accepted_us >= HANDSHAKE_TIME_US
+fn handshake_late(connection: conn.Conn$@, now: I64): Bool //<
+    //< whether its handshake ran past its time
+    return connection.tls != null && !connection.tls.ready() &&
+        connection.lingering_since_us == 0I64 && now - connection.accepted_us >= HANDSHAKE_TIME_US
 
-fn idle(c: conn.Conn$@): Bool //<
+fn idle(connection: conn.Conn$@): Bool //<
     //< Whether TLS has nothing under way: its handshake done, and no bytes held either way
-    return c.tls == null ||
-        (c.tls.ready() && !c.tls.pending() && !c.tls.buffered())
+    return connection.tls == null ||
+        (connection.tls.ready() && !connection.tls.pending() && !connection.tls.buffered())
 
-fn pending(c: conn.Conn$@): Bool //< whether TLS holds bytes the socket has not taken yet
-    return c.tls != null && c.tls.pending()
+fn pending(connection: conn.Conn$@): Bool //< whether TLS holds bytes the socket has not taken yet
+    return connection.tls != null && connection.tls.pending()
 
-fn buffered(c: conn.Conn$@): Bool //< whether TLS holds bytes received that are not read yet
+fn buffered(connection: conn.Conn$@): Bool //<
+    //< whether TLS holds bytes received that are not read yet
     //< **No socket notification comes for them** (`Tls_session.buffered`). A lingering connection
     //< reads the socket raw, so it has none.
-    return c.tls != null && c.lingering_since_us == 0I64 && c.tls.buffered()
+    return connection.tls != null && connection.lingering_since_us == 0I64 &&
+        connection.tls.buffered()
 
-priv fn session_end(c: conn.Conn@, e: Tls_session_error, lg: Log$@): Io_end //<
+priv fn session_end(connection: conn.Conn@, error: Tls_session_error, lg: Log$@): Io_end //<
     //< The connection's answer to a TLS error, logged where a person can act on it
-    switch e
+    switch error
     case .would_block
         return .wait
     case .not_tls
@@ -188,51 +192,53 @@ priv fn session_end(c: conn.Conn@, e: Tls_session_error, lg: Log$@): Io_end //<
     case .handshake_failed
         // The peer may be an old client: the log names the connection, so the case can be found.
         if ln: = lg.at(.information)
-            ln.s("conn #\{c.serial\}: the TLS handshake failed")
+            ln.s("conn #\{connection.serial\}: the TLS handshake failed")
     default {}
     return .broken
 
-fn read_some(c: conn.Conn$@, buf: U8$[], lg: Log$@): Sz!Io_end //<
+fn read_some(connection: conn.Conn$@, buf: U8$[], lg: Log$@): Sz!Io_end //<
     //< Reads what has arrived: through TLS, except while lingering, when bytes are only drained
     //< 0 means the peer has ended.
-    if c.tls == null || c.lingering_since_us != 0I64
-        n: = c.stream.read(buf) catch e
+    if connection.tls == null || connection.lingering_since_us != 0I64
+        n: = connection.stream.read(buf) catch e
             throw .wait if e == net.Net_error.would_block else .broken
         return n
-    n: = c.tls.read(c.stream, buf) catch e
-        throw session_end(c, e, lg)
+    n: = connection.tls.read(connection.stream, buf) catch e
+        throw session_end(connection, e, lg)
     return n
 
-fn write_some(c: conn.Conn$@, bytes: U8[], lg: Log$@): Sz!Io_end //<
+fn write_some(connection: conn.Conn$@, bytes: U8[], lg: Log$@): Sz!Io_end //<
     //< Writes what the socket takes, through TLS where the connection has it; never 0
-    if c.tls == null
-        n: = c.stream.write(bytes) catch e
+    if connection.tls == null
+        n: = connection.stream.write(bytes) catch e
             throw .wait if e == net.Net_error.would_block else .broken
         if n == 0
             throw .broken
         return n
-    n: = c.tls.write(c.stream, bytes) catch e
-        throw session_end(c, e, lg)
+    n: = connection.tls.write(connection.stream, bytes) catch e
+        throw session_end(connection, e, lg)
     return n
 
-fn flush(c: conn.Conn$@, lg: Log$@): Void!Io_end //< sends what TLS holds for the socket
-    if c.tls == null
+fn flush(connection: conn.Conn$@, lg: Log$@): Void!Io_end //< sends what TLS holds for the socket
+    if connection.tls == null
         return
-    c.tls.flush(c.stream) catch e
-        throw session_end(c, e, lg)
+    connection.tls.flush(connection.stream) catch e
+        throw session_end(connection, e, lg)
 
-fn close_notify(c: conn.Conn$@): Bool //< queues the close_notify once; whether it waits to go
+fn close_notify(connection: conn.Conn$@): Bool //<
+    //< queues the close_notify once; whether it waits to go
     //< Caution: **Do not shut the sending side while it waits**: the peer would read a cut stream.
-    if c.tls == null
+    if connection.tls == null
         return false
-    if !c.tls_closed
-        c.tls_closed = true
-        c.tls.close(c.stream)
-    return c.tls.pending()
+    if !connection.tls_closed
+        connection.tls_closed = true
+        connection.tls.close(connection.stream)
+    return connection.tls.pending()
 
-fn answer_plain(c: conn.Conn$@) //< drops the TLS and queues the plain-text 400 for plain HTTP
+fn answer_plain(connection: conn.Conn$@) //<
+    //< drops the TLS and queues the plain-text 400 for plain HTTP
     //< **Answered, not just closed**: a closed connection shows nothing, and a person would not
     //< know to type https.
-    c.tls.free()
-    c.tls = null
-    conn.queue_response(c, 400, "text/plain; charset=utf-8", PLAIN_ANSWER, false)
+    connection.tls.free()
+    connection.tls = null
+    conn.queue_response(connection, 400, "text/plain; charset=utf-8", PLAIN_ANSWER, false)

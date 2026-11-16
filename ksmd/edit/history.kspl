@@ -83,13 +83,13 @@ impl Change
         return Change::{ .from = doc.blocks.len, .tail = doc.blocks.len, .tables = false,
             .any = false }
 
-    fn note(c: Self$@, doc: Document@, at: Sz, count: Sz) //< blocks from `at`, `count` now, changed
-        c.any = true
-        if at < c.from
-            c.from = at
+    fn note(r: Self$@, doc: Document@, at: Sz, count: Sz) //< blocks from `at`, `count` now, changed
+        r.any = true
+        if at < r.from
+            r.from = at
         after: = doc.blocks.len - at - count
-        if after < c.tail
-            c.tail = after
+        if after < r.tail
+            r.tail = after
 
 struct History
     done: List<|Transaction|> //< the last one is undone first
@@ -202,22 +202,23 @@ fn record_tables(doc: Document@, before: List<|Table|>@, tx: Transaction$@, aren
     //< Records how each table differs from its copy in `before`
     //< A table added since is recorded against an empty table with no name, which is what the
     //< document holds at its place once the edit is undone.
-    for u in Range.asc(doc.tables.len)
-        if u >= before.len
-            tx.tables.push(Table_swap::{ .table = u, .version = Table("", arena) })
+    for table in Range.asc(doc.tables.len)
+        if table >= before.len
+            tx.tables.push(Table_swap::{ .table = table, .version = Table("", arena) })
             continue
-        t: = doc.tables[u]@
-        b: = before[u]@
+        t: = doc.tables[table]@
+        b: = before[table]@
         if !keeps_shape(t, b)
-            tx.tables.push(Table_swap::{ .table = u, .version = copied(b, arena) })
+            tx.tables.push(Table_swap::{ .table = table, .version = copied(b, arena) })
             continue
         for i in Range.asc(b.cells.len)
             if !same_cell(t.cells[i], b.cells[i])
-                tx.cells.push(Cell_swap::{ .table = u, .index = i, .cell = b.cells[i] })
+                tx.cells
+                    .push(Cell_swap::{ .table = table, .index = i, .cell = b.cells[i] })
         for i in Range.asc(b.pieces.len)
             if !same_piece(t.pieces[i]@, b.pieces[i]@)
                 tx.pieces
-                    .push(Piece_swap::{ .table = u, .index = i, .piece = b.pieces[i] })
+                    .push(Piece_swap::{ .table = table, .index = i, .piece = b.pieces[i] })
         if !same_ids(t.widths@, b.widths@) || !same_formats(t.formats@, b.formats@) ||
             !same_texts(t.choices@, b.choices@) || !same_rules(t.rules@, b.rules@) ||
             !same_groups(t.groups@, b.groups@) ||
@@ -225,7 +226,7 @@ fn record_tables(doc: Document@, before: List<|Table|>@, tx: Transaction$@, aren
             !same_heights(t.heights@, b.heights@) ||
             !same_filters(t.filters@, b.filters@)
             tx.columns
-                .push(Columns_swap::{ .table = u, .widths = copied_ids(b.widths@, arena),
+                .push(Columns_swap::{ .table = table, .widths = copied_ids(b.widths@, arena),
                 .formats = copied_formats(b.formats@, arena),
                 .choices = copied_texts(b.choices@, arena),
                 .rules = copied_rules(b.rules@, arena),
@@ -234,28 +235,29 @@ fn record_tables(doc: Document@, before: List<|Table|>@, tx: Transaction$@, aren
                 .row_colors = b.row_colors, .heights = copied_heights(b.heights@, arena),
                 .filters = copied_filters(b.filters@, arena) })
 
-priv fn copied(t: Table@, arena: Arena$@): Table //< the table with its lists copied into `arena`
-    $c: = Table(t.name, arena)
-    c.next_id = t.next_id
-    for cell in t.cells
+priv fn copied(table: Table@, arena: Arena$@): Table //<
+    //< the table with its lists copied into `arena`
+    $c: = Table(table.name, arena)
+    c.next_id = table.next_id
+    for cell in table.cells
         c.cells.push(cell)
-    for id in t.rows
+    for id in table.rows
         c.rows.push(id)
-    for id in t.columns
+    for id in table.columns
         c.columns.push(id)
-    for p in t.pieces
+    for p in table.pieces
         c.pieces.push(p)
-    c.widths = copied_ids(t.widths@, arena)
-    c.formats = copied_formats(t.formats@, arena)
-    c.choices = copied_texts(t.choices@, arena)
-    c.rules = copied_rules(t.rules@, arena)
-    c.groups = copied_groups(t.groups@, arena)
-    c.column_groups = copied_groups(t.column_groups@, arena)
-    c.row_colors = t.row_colors
-    c.caption = t.caption
-    c.merged = copied_ids(t.merged@, arena)
-    c.heights = copied_heights(t.heights@, arena)
-    c.filters = copied_filters(t.filters@, arena)
+    c.widths = copied_ids(table.widths@, arena)
+    c.formats = copied_formats(table.formats@, arena)
+    c.choices = copied_texts(table.choices@, arena)
+    c.rules = copied_rules(table.rules@, arena)
+    c.groups = copied_groups(table.groups@, arena)
+    c.column_groups = copied_groups(table.column_groups@, arena)
+    c.row_colors = table.row_colors
+    c.caption = table.caption
+    c.merged = copied_ids(table.merged@, arena)
+    c.heights = copied_heights(table.heights@, arena)
+    c.filters = copied_filters(table.filters@, arena)
     return c
 
 priv fn copied_texts(texts: List<|U8[]|>@, arena: Arena$@): List<|U8[]|> //<
@@ -272,19 +274,19 @@ priv fn copied_rules(rules: List<|Rule|>@, arena: Arena$@): List<|Rule|> //<
         c.push(r)
     return c
 
-priv fn same_rules(a: List<|Rule|>@, b: List<|Rule|>@): Bool
-    if a.len != b.len
+priv fn same_rules(left: List<|Rule|>@, right: List<|Rule|>@): Bool
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if !same_rule(a[i], b[i])
+    for i in Range.asc(left.len)
+        if !same_rule(left[i], right[i])
             return false
     return true
 
-priv fn same_texts(a: List<|U8[]|>@, b: List<|U8[]|>@): Bool
-    if a.len != b.len
+priv fn same_texts(left: List<|U8[]|>@, right: List<|U8[]|>@): Bool
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if !a[i].equals(b[i])
+    for i in Range.asc(left.len)
+        if !left[i].equals(right[i])
             return false
     return true
 
@@ -295,12 +297,12 @@ priv fn copied_groups(groups: List<|Group|>@, arena: Arena$@): List<|Group|> //<
         c.push(g)
     return c
 
-priv fn same_groups(a: List<|Group|>@, b: List<|Group|>@): Bool
-    if a.len != b.len
+priv fn same_groups(left: List<|Group|>@, right: List<|Group|>@): Bool
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if a[i].first != b[i].first || a[i].last != b[i].last ||
-            a[i].closed != b[i].closed
+    for i in Range.asc(left.len)
+        if left[i].first != right[i].first || left[i].last != right[i].last ||
+            left[i].closed != right[i].closed
             return false
     return true
 
@@ -311,11 +313,12 @@ priv fn copied_filters(filters: List<|Column_filter|>@, arena: Arena$@): List<|C
         c.push(f)
     return c
 
-priv fn same_filters(a: List<|Column_filter|>@, b: List<|Column_filter|>@): Bool
-    if a.len != b.len
+priv fn same_filters(left: List<|Column_filter|>@, right: List<|Column_filter|>@): Bool
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if a[i].column != b[i].column || !a[i].entry.equals(b[i].entry)
+    for i in Range.asc(left.len)
+        if left[i].column != right[i].column ||
+            !left[i].entry.equals(right[i].entry)
             return false
     return true
 
@@ -326,11 +329,11 @@ priv fn copied_heights(heights: List<|Row_height|>@, arena: Arena$@): List<|Row_
         c.push(h)
     return c
 
-priv fn same_heights(a: List<|Row_height|>@, b: List<|Row_height|>@): Bool
-    if a.len != b.len
+priv fn same_heights(left: List<|Row_height|>@, right: List<|Row_height|>@): Bool
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if a[i].row != b[i].row || a[i].points != b[i].points
+    for i in Range.asc(left.len)
+        if left[i].row != right[i].row || left[i].points != right[i].points
             return false
     return true
 
@@ -341,11 +344,11 @@ priv fn copied_formats(formats: List<|Number_format|>@, arena: Arena$@): List<|N
         c.push(f)
     return c
 
-priv fn same_formats(a: List<|Number_format|>@, b: List<|Number_format|>@): Bool
-    if a.len != b.len
+priv fn same_formats(left: List<|Number_format|>@, right: List<|Number_format|>@): Bool
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if !same_format(a[i], b[i])
+    for i in Range.asc(left.len)
+        if !same_format(left[i], right[i])
             return false
     return true
 
@@ -355,32 +358,34 @@ priv fn copied_ids(ids: List<|Sz|>@, arena: Arena$@): List<|Sz|> //< the list co
         c.push(id)
     return c
 
-priv fn keeps_shape(t: Table@, b: Table@): Bool //<
+priv fn keeps_shape(table: Table@, copy: Table@): Bool //<
     //< Whether a table has the rows, columns, name and cell count of its copy, and kept every piece
     //< Its column widths, formats, choices, rules and filters, its groups, the column that
     //< colours its rows, and its heights of rows can differ: `Columns_swap` records them. A new
     //< caption or merged columns, which change seldom, take a copy of the whole table.
-    return t.name.equals(b.name) && t.caption.equals(b.caption) &&
-        same_ids(t.merged@, b.merged@) && t.next_id == b.next_id &&
-        t.cells.len == b.cells.len && t.pieces.len >= b.pieces.len &&
-        same_ids(t.rows@, b.rows@) && same_ids(t.columns@, b.columns@)
+    return table.name.equals(copy.name) && table.caption.equals(copy.caption) &&
+        same_ids(table.merged@, copy.merged@) && table.next_id == copy.next_id &&
+        table.cells.len == copy.cells.len && table.pieces.len >= copy.pieces.len &&
+        same_ids(table.rows@, copy.rows@) && same_ids(table.columns@, copy.columns@)
 
-priv fn same_ids(a: List<|Sz|>@, b: List<|Sz|>@): Bool
-    if a.len != b.len
+priv fn same_ids(left: List<|Sz|>@, right: List<|Sz|>@): Bool
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if a[i] != b[i]
+    for i in Range.asc(left.len)
+        if left[i] != right[i]
             return false
     return true
 
-priv fn same_cell(a: Cell, b: Cell): Bool
-    return a.kind == b.kind && a.text.equals(b.text) && a.first == b.first && a.count == b.count &&
-        same_look(a.look, b.look) && a.note.equals(b.note) && a.link.equals(b.link)
+priv fn same_cell(left: Cell, right: Cell): Bool
+    return left.kind == right.kind && left.text.equals(right.text) && left.first == right.first &&
+        left.count == right.count && same_look(left.look, right.look) &&
+        left.note.equals(right.note) && left.link.equals(right.link)
 
-priv fn same_piece(a: Piece@, b: Piece@): Bool
-    return a.kind == b.kind && a.text.equals(b.text) && a.table == b.table && a.named == b.named &&
-        same_corner(a.from, b.from) && same_corner(a.to, b.to)
+priv fn same_piece(left: Piece@, right: Piece@): Bool
+    return left.kind == right.kind && left.text.equals(right.text) && left.table == right.table &&
+        left.named == right.named && same_corner(left.from, right.from) &&
+        same_corner(left.to, right.to)
 
-priv fn same_corner(a: Corner, b: Corner): Bool
-    return a.row == b.row && a.column == b.column && a.fixed_row == b.fixed_row &&
-        a.fixed_column == b.fixed_column
+priv fn same_corner(left: Corner, right: Corner): Bool
+    return left.row == right.row && left.column == right.column &&
+        left.fixed_row == right.fixed_row && left.fixed_column == right.fixed_column

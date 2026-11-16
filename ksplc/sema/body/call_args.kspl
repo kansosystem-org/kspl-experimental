@@ -22,7 +22,7 @@ import "ksplc/sema/type/def" { Fn_sig }
 import "ksplc/sema/type/env" as sema_type_env
 import "std/ds"
 
-fn check_args_against_instance(c: Sema_ctx$@, args_node: Ast_node@, inst_node: Ast_node$@,
+fn check_args_against_instance(ctx: Sema_ctx$@, args_node: Ast_node@, inst_node: Ast_node$@,
     is_method_access: Bool)
     if args_node == null || inst_node == null
         return
@@ -38,7 +38,7 @@ fn check_args_against_instance(c: Sema_ctx$@, args_node: Ast_node@, inst_node: A
         p_type_node: = param_node.find_child(.k_type_expr)
         if p_type_node == null
             continue
-        p_id: = p_type_node.resolve_type_in_own_file(c) catch 0
+        p_id: = p_type_node.resolve_type_in_own_file(ctx) catch 0
         if p_id == 0 || sema_type_env.is_unknown(p_id)
             continue
         a_id: = arg_node.type_id
@@ -48,16 +48,16 @@ fn check_args_against_instance(c: Sema_ctx$@, args_node: Ast_node@, inst_node: A
         // signature**. A generic call passes no expected type (value_of_fn in
         // sema/body/resolve_path.kspl). Now the parameter's type is known, so the function is
         // checked against it.
-        if a_id == c.env.generic_fn_value_type_id()
-            arg_node.type_id = arg_node.infer_expr(c, p_id) catch a_id
+        if a_id == ctx.env.generic_fn_value_type_id()
+            arg_node.type_id = arg_node.infer_expr(ctx, p_id) catch a_id
             continue
         // apply_type_coercion inserts the conversions it allows (widening, an upcast, a Result
         // wrap) and anything else is reported, as on the non-generic route.
-        if arg_node.apply_type_coercion(c, a_id, p_id) == p_id
+        if arg_node.apply_type_coercion(ctx, a_id, p_id) == p_id
             continue
-        c.report_type_mismatch(arg_node, p_id, a_id)
-fn infer_value_call_args(c: Sema_ctx$@, call_node: Ast_node$@, args_node: Ast_node$@, sig: Fn_sig@):
-    Void!Sema_error //<
+        ctx.report_type_mismatch(arg_node, p_id, a_id)
+fn infer_value_call_args(ctx: Sema_ctx$@, call_node: Ast_node$@, args_node: Ast_node$@,
+    sig: Fn_sig@): Void!Sema_error //<
         //< Matches the arguments of a call through a function value against its type's parameters
         //< A function type holds no defaults and no variadic tail, so the count must be exact.
     $a_count: Sz = 0
@@ -66,9 +66,9 @@ fn infer_value_call_args(c: Sema_ctx$@, call_node: Ast_node$@, args_node: Ast_no
             if !arg_node.is_literal(",")
                 a_count += 1
     if a_count != sig.params.len
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("argument count mismatch. Expected \{sig.params.len\}, but got \{a_count\}")
-        c.err(args_node if args_node != null else call_node, c.scratch.slice())
+        ctx.err(args_node if args_node != null else call_node, ctx.scratch.slice())
     if args_node == null
         return
     $pos: Sz = 0
@@ -78,12 +78,12 @@ fn infer_value_call_args(c: Sema_ctx$@, call_node: Ast_node$@, args_node: Ast_no
         $expected_id: = I32::sema_type_env.Builtin_type_id.unknown
         if pos < sig.params.len
             expected_id = sig.params.get(pos)
-        arg_node.infer_expr(c, expected_id)!
-        sema_body_lint_stmt.lint_type_given(c, arg_node, expected_id,
+        arg_node.infer_expr(ctx, expected_id)!
+        sema_body_lint_stmt.lint_type_given(ctx, arg_node, expected_id,
             "The parameter's type already gives it.")
         pos += 1
 
-fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
+fn infer_call_args(ctx: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
     is_method_access: Bool, op_text: U8[], is_generic_call: Bool): Void!Sema_error
     $fn_sig: Ast_node$@ = null
     $param_list: Ast_node$@ = null
@@ -110,28 +110,28 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
 
         if is_variadic
             if actual_args < expected_args
-                c.clear_scratch()
+                ctx.clear_scratch()
                     .s("not enough arguments for a function call. Expected at least \
                         \{expected_args\}, but got \{actual_args\}")
                 if args_node != null
-                    c.err(args_node, c.scratch.slice())
+                    ctx.err(args_node, ctx.scratch.slice())
                 else
-                    c.err(def_node, c.scratch.slice())
+                    ctx.err(def_node, ctx.scratch.slice())
         else if args_node != null && actual_args < expected_args &&
             expected_args - actual_args <= sema_body_call_defaults
             .trailing_default_count(param_list)
             // Fills the missing arguments with the declaration's defaults. **Once filled, the
             // counts match, so a second analysis does not enter here** (a copied body gets no
             // second copy).
-            sema_body_call_defaults.fill_default_args(c, args_node, param_list,
+            sema_body_call_defaults.fill_default_args(ctx, args_node, param_list,
                 expected_args - actual_args)
         else if actual_args != expected_args
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("argument count mismatch. Expected \{expected_args\}, but got \{actual_args\}")
             if args_node != null
-                c.err(args_node, c.scratch.slice())
+                ctx.err(args_node, ctx.scratch.slice())
             else
-                c.err(def_node, c.scratch.slice())
+                ctx.err(def_node, ctx.scratch.slice())
 
     $cursor: = base_ast_ext.Param_cursor(param_list, is_method_access)
 
@@ -146,19 +146,19 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
             // A generic call has no expected type yet (`T` / `U` are unbound); it is checked right
             // after the instantiation (check_args_against_instance).
             if param_type_node != null && !is_generic_call
-                expected_arg_id = param_type_node.resolve_type_in_own_file(c)!
+                expected_arg_id = param_type_node.resolve_type_in_own_file(ctx)!
         else
             in_tail = is_variadic
 
-        eval_id: = arg_node.infer_expr(c, expected_arg_id)!
+        eval_id: = arg_node.infer_expr(ctx, expected_arg_id)!
         if in_tail
             // C reads a `...` value as the type its format names, so 11.1 holds here too.
-            c.check_variadic_arg(eval_id, arg_node)
-        sema_body_lint_stmt.lint_type_given(c, arg_node, expected_arg_id,
+            ctx.check_variadic_arg(eval_id, arg_node)
+        sema_body_lint_stmt.lint_type_given(ctx, arg_node, expected_arg_id,
             "The parameter's type already gives it.")
 
         if !sema_type_env.is_unknown(expected_arg_id) && !sema_type_env.is_unknown(eval_id) &&
             expected_arg_id != eval_id
             if op_text.len > 0 && !op_text.equals("postfix") && !op_text.equals("enum_init") &&
                 !op_text.equals("(")
-                c.report_type_mismatch(arg_node, expected_arg_id, eval_id)
+                ctx.report_type_mismatch(arg_node, expected_arg_id, eval_id)

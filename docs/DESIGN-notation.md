@@ -174,6 +174,28 @@ Caution: **Where the spelling is the same but the behavior differs, the specific
 
 **An abbreviation earns its place through frequent use or an established meaning.** `len`, `str`, `buf` and `fmt` are familiar, and `Rc` and `Arc` name established ownership patterns. Less familiar public names use full words: `Conversion`, `Options`, and JSON's `Value`, `Array` and `Object_builder`.
 
+### A parameter is named with a word
+
+**A parameter has a one-letter name only where the letter has a meaning every reader knows.** That holds for a function's, a method's and an anonymous function's parameters alike:
+
+| Letter | Its meaning |
+| :-- | :-- |
+| `i`, `j` | a loop's index, or a position being counted |
+| `x`, `y` | a coordinate |
+| `r` | a method's receiver, as the specification writes it (`r: Self@`) |
+
+**Every other parameter gets a word that says what it holds**: `node` for a syntax node, `count` for a count, `left` and `right` for two values of one kind. A name that is only the type's first letter becomes the type's word (`a: Answer@` becomes `answer`). Where the same thing already has a name in the package, the parameter takes that name.
+
+* **Do not make a new abbreviation instead.** `nd`, `nm` and `val` save nothing over the word, and the reader must learn them ("When an abbreviation is useful").
+* **An unused parameter keeps its `_` in front of the word** (`_node`).
+* **A field's established notation keeps its letters**, as "When an abbreviation is useful" admits. BLAS's matrix product writes `C = A·B` with `A` of `m` by `k`, so a GEMM kernel's `a`, `b`, `c`, `m`, `k` and `n` stay. Such a file turns the hint off with `##lint(H0501 = off)` and a comment that names the notation.
+
+**Why**: a reader who meets `n` in the middle of a long body must go back to the signature to learn what it is. A model, which reads one part of a file at a time, often cannot go back at all. A word answers the question where the name stands. Field names, locals and generic type parameters are left to the writer, since their declaration is usually close by.
+
+**The hint [H0501] holds the rule** ([`SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md#h0501-a-parameter-named-with-one-letter)). It cannot tell a coordinate from another value, so it lets every `x` and `y` through, and a writer decides those.
+
+**What is given up**: a signature grows longer, and a short body written in the style of a formula (`fn lt(a: Num, b: Num)`) reads less like the formula.
+
 ### Why the size type is named `Sz`
 
 **`Sz` keeps common type annotations short and text searches distinct.** Lengths and indices occur often, so `count: Sz` stays compact beside `I32` and `U64`. `Size` stays free as a domain name, and a search for `Sz` rarely finds unrelated identifiers.

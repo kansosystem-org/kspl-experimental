@@ -28,29 +28,30 @@ priv const FD_EPS: F64 = 1.0e-5 //< the finite difference's step
 priv const PROBE_LR: F64 = 1.0e-2 //< the SGD step used to recover the analytic gradient
     //< **If it is too small, the difference is lost in rounding.**
 
-fn spread(t: Tensor<|F64|>, seed: Sz) //<
+fn spread(values: Tensor<|F64|>, seed: Sz) //<
     //< Sets one weight to deterministic, **non-uniform** values
     //< Caution: **Do not fill it with the same value.** `nn.Linear.new`'s default is 0.1 in every
     //< element, and then every output unit gets the same value. **A gradient with rows and columns
     //< swapped then matches anyway**, so the mistake cannot be found.
-    for i in Range.asc(t.size)
+    for i in Range.asc(values.size)
         k: = (i * 7 + seed * 13) % 11
-        (t.data + i)$ = 0.09 * (F64::k) - 0.4
+        (values.data + i)$ = 0.09 * (F64::k) - 0.4
 
-priv fn grad_from_step(w: Tensor<|F64|>, before: Tensor<|F64|>, arena: Arena$@): Tensor<|F64|> //<
-    //< Recovers the gradient from how far SGD moved the weight, then restores the weight
-    //< Caution: **Restore it.** Otherwise the finite difference after this measures the gradient at
-    //< a different point.
-    g: = Tensor<|F64|>(w.shape, arena)
-    for i in Range.asc(w.size)
-        (g.data + i)$ = ((before.data + i)$ - (w.data + i)$) / PROBE_LR
-        (w.data + i)$ = (before.data + i)$
+priv fn grad_from_step(weights: Tensor<|F64|>, before: Tensor<|F64|>, arena: Arena$@):
+    Tensor<|F64|> //<
+        //< Recovers the gradient from how far SGD moved the weight, then restores the weight
+        //< Caution: **Restore it.** Otherwise the finite difference after this measures the
+        //< gradient at a different point.
+    g: = Tensor<|F64|>(weights.shape, arena)
+    for i in Range.asc(weights.size)
+        (g.data + i)$ = ((before.data + i)$ - (weights.data + i)$) / PROBE_LR
+        (weights.data + i)$ = (before.data + i)$
     return g
 
-priv fn ones_like(t: Tensor<|F64|>, arena: Arena$@): Tensor<|F64|> //<
+priv fn ones_like(like: Tensor<|F64|>, arena: Arena$@): Tensor<|F64|> //<
     //< A dout filled with 1
     //< The loss is L = Σ out, so the output-side gradient is 1 everywhere.
-    d: = Tensor<|F64|>(t.shape, arena)
+    d: = Tensor<|F64|>(like.shape, arena)
     d.fill(1.0)
     return d
 
@@ -61,9 +62,9 @@ priv struct Param //< one weight to match
     before: Tensor<|F64|> //< the weight as it was before the step
     g: Tensor<|F64|> //< the gradient the step took (`recover`); until then the weight itself
 
-priv fn snap(name: U8[], $w: Tensor<|F64|>, work: Arena$@): Param //<
+priv fn snap(name: U8[], $weights: Tensor<|F64|>, work: Arena$@): Param //<
     //< A weight to match, with its value kept from before the step
-    return Param::{ .name = name, .w = w, .before = w.dup(work), .g = w }
+    return Param::{ .name = name, .w = weights, .before = weights.dup(work), .g = weights }
 
 priv fn recover(ps: Param$[], work: Arena$@) //<
     //< each weight's gradient, from how far the step moved it
@@ -592,24 +593,26 @@ fn test_lora_raw_persist()
 // Caution: **A field left out of an `accumulate` still lowers the loss**, only more slowly. So a
 // test that watches the loss lets it through; this test checks each field's sum.
 // ==========================================
-priv fn grad_of(n: Sz, v: F64, arena: Arena$@): Tensor<|F64|> //< a vector of n, every element v
+priv fn grad_of(count: Sz, value: F64, arena: Arena$@): Tensor<|F64|> //<
+    //< a vector of `count`, every element `value`
     //< Each field gets its own length. Then a field added into the wrong one is refused by
     //< `Tensor.accumulate`'s size check.
-    shape: Sz[1] = ::{ n }
+    shape: Sz[1] = ::{ count }
     t: = Tensor<|F64|>(Sz[]::shape, arena)
-    t.fill(v)
+    t.fill(value)
     return t
 
-priv fn block_grads_of(v: F64, arena: Arena$@): ai_block_train.Block_grads<|F64|> //<
-    //< A block's gradients with every element of every field set to v
+priv fn block_grads_of(value: F64, arena: Arena$@): ai_block_train.Block_grads<|F64|> //<
+    //< A block's gradients with every element of every field set to `value`
     return ai_block_train.Block_grads<|F64|>::{ .attention_norm = ai_nn_grad.Rms_norm_grads<|F64|>::{ .dw
-        = grad_of(2, v, arena) },
-        .attention = ai_attn_train.Attention_grads<|F64|>::{ .wq = grad_of(3, v, arena),
-        .wk = grad_of(4, v, arena), .wv = grad_of(5, v, arena), .wo = grad_of(6, v, arena) },
-        .ffn_norm = ai_nn_grad.Rms_norm_grads<|F64|>::{ .dw = grad_of(7, v, arena) },
+        = grad_of(2, value, arena) },
+        .attention = ai_attn_train.Attention_grads<|F64|>::{ .wq = grad_of(3, value, arena),
+        .wk = grad_of(4, value, arena), .wv = grad_of(5, value, arena),
+        .wo = grad_of(6, value, arena) },
+        .ffn_norm = ai_nn_grad.Rms_norm_grads<|F64|>::{ .dw = grad_of(7, value, arena) },
         .ffn = ai_nn_grad.Mlp_grads<|F64|>::{ .fc1 = ai_nn_grad.Linear_grads<|F64|>::{ .dw =
-        grad_of(8, v, arena) },
-        .fc2 = ai_nn_grad.Linear_grads<|F64|>::{ .dw = grad_of(9, v, arena) } } }
+        grad_of(8, value, arena) },
+        .fc2 = ai_nn_grad.Linear_grads<|F64|>::{ .dw = grad_of(9, value, arena) } } }
 
 fn test_block_grads_accumulate(arena: Arena$@) //<
     //< `Block_grads.accumulate` adds every field, through each smaller gradient's `accumulate`

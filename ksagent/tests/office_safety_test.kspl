@@ -154,19 +154,19 @@ priv struct Damage //< what the trials of one file came to
     refused: Sz //< refused with a reason
     over: Sz //< read past the cap, or refused with no reason: each one a failure
 
-priv fn convert(is_word: Bool, data: U8[], cap: Sz, d: Damage$@, arena: Arena$@) //<
+priv fn convert(is_word: Bool, data: U8[], cap: Sz, damage: Damage$@, arena: Arena$@) //<
     //< Reads one damaged file, and counts how it went
     view: =
         (word.text_of(data, cap, arena) if is_word else excel.text_of(data, cap, arena)) catch why
             if why.len > 0
-                d.refused += 1
+                damage.refused += 1
             else
-                d.over += 1
+                damage.over += 1
             return
     if view.len <= cap
-        d.read += 1
+        damage.read += 1
     else
-        d.over += 1
+        damage.over += 1
 
 priv fn damaged(data: U8[], rng: prng.Prng$@, arena: Arena$@): U8[] //<
     //< A copy with a few bytes changed: to random bytes, to markup, or cut short
@@ -271,15 +271,16 @@ priv fn reading(is_word: Bool, data: U8[], cap: Sz, arena: Arena$@): Reading //<
     r.used = own.get_total_used()
     return r
 
-priv fn repeated(text: U8[], n: Sz, arena: Arena$@): U8[] //< the text written `n` times
+priv fn repeated(text: U8[], times: Sz, arena: Arena$@): U8[] //< the text written `times` times
     out: = arena.text()
-    for _k in Range.asc(n)
+    for _k in Range.asc(times)
         out.s(text)
     return out.take()
 
-priv fn worked(what: U8[], r: Reading, arena: Arena$@): U8[] //< a check's name, with the memory
-    return arena.text().s(what).s(" (\{r.used / 1024\} KiB; at most \{SMALL_WORK / 1024\} KiB)")
-        .take()
+priv fn worked(what: U8[], reading: Reading, arena: Arena$@): U8[] //<
+    //< a check's name, with the memory
+    return arena.text().s(what)
+        .s(" (\{reading.used / 1024\} KiB; at most \{SMALL_WORK / 1024\} KiB)").take()
 
 fn test_a_sheet_listed_many_times_is_refused()
     verdict.start("[ksagent] a workbook that lists one sheet many times is refused, at once")

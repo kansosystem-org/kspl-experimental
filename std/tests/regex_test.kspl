@@ -23,9 +23,9 @@ priv fn rejected_with(pattern: U8[], want: regex.Regex_error): Bool //<
     r.free()
     return false
 
-priv fn spans(r: regex.Regex$@, text: U8[], start: Sz, end: Sz): Bool //<
+priv fn spans(compiled: regex.Regex$@, text: U8[], start: Sz, end: Sz): Bool //<
     //< Whether the first match is exactly `[start, end)`; false where there is none
-    if m: = r.find(text)
+    if m: = compiled.find(text)
         return m.start == start && m.end == end
     return false
 
@@ -124,12 +124,12 @@ fn test_regex_match()
 
     verdict.pass("compile/is_match/find behave correctly against real input.")
 
-priv fn group_of(pattern: U8[], text: U8[], n: Sz): U8[] //<
-    //< The string of the n-th capture group of one match: `-` if it did not take part, `!` if none
+priv fn group_of(pattern: U8[], text: U8[], group: Sz): U8[] //<
+    //< The string of capture group `group` of one match: `-` if it did not take part, `!` if none
     defer r: = regex.Regex.compile(pattern) catch
         return "!"
     if m: = r.find(text)
-        return m.group(n, text).unwrap_or("-")
+        return m.group(group, text).unwrap_or("-")
     return "!"
 
 priv fn group_count_of(pattern: U8[], text: U8[]): Sz //<
@@ -218,14 +218,14 @@ priv fn spans_of(pattern: U8[], text: U8[], arena: Arena$@): U8[] //<
         b.s("\{m.start\},\{m.end\} ")
     return b.take()
 
-priv fn nth_group(pattern: U8[], text: U8[], n: Sz, g: Sz, arena: Arena$@): U8[] //<
-    //< The g-th capture group of the n-th match (0 based), `-` if there is none
+priv fn nth_group(pattern: U8[], text: U8[], which_match: Sz, group: Sz, arena: Arena$@): U8[] //<
+    //< Capture group `group` of the match at index `which_match` (from 0), `-` if there is none
     defer r: = regex.Regex.compile(pattern) catch
         return "!"
     ms: = r.find_all(text, arena)
-    if n >= ms.len
+    if which_match >= ms.len
         return "-"
-    return ms.get(n).group(g, text).unwrap_or("-")
+    return ms.get(which_match).group(group, text).unwrap_or("-")
 
 // ==========================================
 // std/regex: `find_all`, which collects every match.
@@ -514,20 +514,21 @@ fn test_regex_long_text() //< a search through a long text is no ReDoS, and is a
     assert(spans(r, text.slice(), 1500000, 1500003), "the match is found at the end")
     verdict.pass("A search failing cheaply at 1.5 million starts finds the match at the end.")
 
-priv fn work_of(r: regex.Regex$@, n: Sz): Sz //<
-    //< the states one search visits over n `a`s, then `!`
+priv fn work_of(compiled: regex.Regex$@, count: Sz): Sz //<
+    //< the states one search visits over `count` `a`s, then `!`
     defer $text: = Str_builder()
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         text.c('a')
     text.c('!')
-    return r.visits(text.slice())
+    return compiled.visits(text.slice())
 
-priv fn answered_no(r: regex.Regex$@, n: Sz): Bool //< whether n `a`s, then `!`, gets "no match"
+priv fn answered_no(compiled: regex.Regex$@, count: Sz): Bool //<
+    //< whether `count` `a`s, then `!`, gets "no match"
     defer $text: = Str_builder()
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         text.c('a')
     text.c('!')
-    return r.find(text.slice()).is_none()
+    return compiled.find(text.slice()).is_none()
 
 fn test_regex_linear() //<
     //< the patterns that hang a backtracking matcher are answered in linear time

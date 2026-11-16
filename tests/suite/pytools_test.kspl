@@ -85,14 +85,15 @@ priv fn check_listed() //< that every Python file of the tools and examples is r
     verdict.check_list("every Python file of the tools and the examples is a tool run here",
         found.len, "files", missing@, "add it to `tools`, with a self-test run by no argument")
 
-priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
+priv fn check_tool(tool: Tool@) //< runs one tool's self-test and reports it
     arena: = ksplc_harness.arena()
-    name: = arena.text().s(t.path).s("'s self-test passes").take()
-    if t.needs.len > 0 && !importable(t.needs)
+    name: = arena.text().s(tool.path).s("'s self-test passes").take()
+    if tool.needs.len > 0 && !importable(tool.needs)
         verdict.skip_check(name,
-            arena.text().s(t.needs).s(" is absent (put it in this environment and it runs)").take())
+            arena.text().s(tool.needs).s(" is absent (put it in this environment and it runs)")
+            .take())
         return
-    argv: = U8[][]::{ PYTHON, t.path }
+    argv: = U8[][]::{ PYTHON, tool.path }
     r: = ksplc_harness.run_capped(argv, harness.root(), SELFTEST_TIMEOUT_MS)
     if !r.exited_with(0)
         verdict.check(name, false,
@@ -103,7 +104,7 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
     // self-test run (a wrong entry point printing its usage, and the like).
     verdict.check(name, ran_one(r.out),
         arena.text().s("not one self-test ran\n").s(r.out).take())
-    pass_on_skips(t.path, r.out)
+    pass_on_skips(tool.path, r.out)
 
 priv fn pass_on_skips(path: U8[], out: U8[]) //< reports each `SKIP` line a self-test printed
     //< Caution: **Do not leave them inside a passing run's output**, shown only on failure. A

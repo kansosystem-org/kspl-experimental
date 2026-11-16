@@ -1,0 +1,95 @@
+/* ksagent's chat page: the conversations, the turns and the box to ask in. The build puts it inside
+   the page (`kssrv/page/bundle.kspl`). Each colour is a role here, so the convention check measures
+   each pair that meets on the page. */
+:root {
+  --bg: #ffffff;
+  --side: #f5f4ef;
+  --text: #1f1e1b;
+  --muted: #6b6a64;
+  --line: #e3e1d9;
+  --bubble: #efede6;
+  --accent: #b4552d;
+  --on-accent: #ffffff;
+  --ok: #2f7a3e;
+  --warn: #9a6400;
+  --bad: #b3261e;
+  --code: #f4f3ee;
+  --unchecked: #8a8880;
+  font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+
+/* The same roles when the system asks for a dark scheme. The light text on the accent fell to
+   2.6:1 on the lighter accent, so the dark scheme writes the ground's colour on it. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1d1b;
+    --side: #262522;
+    --text: #ecebe6;
+    --muted: #a3a29b;
+    --line: #3a3934;
+    --bubble: #33322e;
+    --accent: #e08a5f;
+    --on-accent: #1e1d1b;
+    --ok: #7cc68a;
+    --warn: #e2b55c;
+    --bad: #f08a80;
+    --code: #2b2a27;
+    --unchecked: #8f8d86;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+body { display: flex; }
+#side { width: 15rem; flex: none; background: var(--side); border-right: 1px solid var(--line);
+  padding: 0.75rem; overflow-y: auto; }
+#side button { width: 100%; }
+#chats { list-style: none; margin: 0.75rem 0 0; padding: 0; }
+#chats a { display: block; padding: 0.35rem 0.5rem; border-radius: 0.4rem; color: inherit;
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chats a[aria-current] { background: var(--bubble); font-weight: 600; }
+main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#log { flex: 1; overflow-y: auto; padding: 1rem 1rem 2rem; }
+.turn, #notice, #ask { max-width: 46rem; margin: 0 auto; }
+.q { display: flex; justify-content: flex-end; margin: 1.25rem 0 0.75rem; }
+.q .bubble { background: var(--bubble); padding: 0.6rem 0.9rem; border-radius: 1rem;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-width: 85%; }
+.a { line-height: 1.6; overflow-wrap: anywhere; }
+.badge { display: inline-block; font-size: 0.8rem; padding: 0.1rem 0.5rem; border-radius: 1rem;
+  border: 1px solid currentColor; margin-bottom: 0.4rem; }
+.checked .badge { color: var(--ok); } .unverified .badge { color: var(--warn); }
+.failed .badge, .stopped .badge { color: var(--bad); } .not_found .badge { color: var(--muted); }
+.writing .badge, .pending .badge { color: var(--muted); }
+.unchecked { border-left: 3px dashed var(--unchecked); padding-left: 0.75rem; color: var(--muted); }
+.phase { color: var(--muted); font-size: 0.9rem; }
+.md p, .md ul, .md ol, .md pre, .md blockquote, .md table { margin: 0.5rem 0; }
+.md h3, .md h4, .md h5, .md h6 { margin: 0.9rem 0 0.4rem; font-size: 1rem; }
+.md h3 { font-size: 1.15rem; }
+.md code { background: var(--code); padding: 0.05rem 0.3rem; border-radius: 0.25rem;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.9em; }
+.md pre { background: var(--code); padding: 0.6rem 0.8rem; border-radius: 0.5rem; overflow-x: auto; }
+.md pre code { padding: 0; background: none; }
+.md blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 0.8rem; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 0.25rem 0.6rem; }
+.md a, .sources a { color: var(--accent); }
+.sources { font-size: 0.9rem; margin: 0.5rem 0; padding-left: 1.25rem; }
+.sources blockquote { margin: 0.2rem 0 0.5rem; padding-left: 0.6rem; color: var(--muted);
+  border-left: 3px solid var(--ok); }
+.notes { font-size: 0.9rem; color: var(--muted); padding-left: 1.25rem; }
+.actions button { font-size: 0.85rem; }
+#notice { color: var(--bad); padding: 0 1rem; white-space: pre-wrap; }
+#ask { width: 100%; display: flex; gap: 0.5rem; padding: 0.75rem 1rem 1rem; }
+#ask textarea { flex: 1; resize: none; min-height: 2.8rem; max-height: 12rem; font: inherit;
+  padding: 0.6rem 0.8rem; border: 1px solid var(--line); border-radius: 0.8rem;
+  background: var(--bg); color: inherit; }
+button { font: inherit; padding: 0.45rem 0.9rem; border-radius: 0.6rem; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); color: inherit; }
+button.main { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+#latest { position: sticky; bottom: 0.5rem; display: none; margin: 0 auto; }
+@media (max-width: 640px) {
+  body { flex-direction: column; }
+  #side { width: auto; border-right: 0; border-bottom: 1px solid var(--line); max-height: 9rem; }
+  #log { padding: 0.75rem 1rem 1.5rem; }
+}

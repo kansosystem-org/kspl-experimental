@@ -190,7 +190,7 @@ priv const CASES: Case[] = Case[]::{
             it as '_p'. Write '_p.Plain'" },
 }
 
-priv fn prepare(c: Case, index: Sz, arena: Arena$@): Job //<
+priv fn prepare(case_row: Case, index: Sz, arena: Arena$@): Job //<
     //< It makes one case's directory, writes the files, and builds the Job to run there
     defer $nb: = Str_builder()
     name: = U8[]::arena.dup_str(nb.s("vis_\{index\}").slice())
@@ -201,11 +201,11 @@ priv fn prepare(c: Case, index: Sz, arena: Arena$@): Job //<
     bodies: = List<|U8[]|>.create(arena)
     rels.push("alpha/deep/lib.kspl")
     bodies.push(LIB_BODY)
-    for i in Range.asc(c.extra_rels.len)
-        rels.push(c.extra_rels[i])
-        bodies.push(c.extra_bodies[i])
+    for i in Range.asc(case_row.extra_rels.len)
+        rels.push(case_row.extra_rels[i])
+        bodies.push(case_row.extra_bodies[i])
     fs.write_tree(dir, rels.slice(), bodies.slice(), arena) catch {}
-    return Job::{ .argv = harness.ksplc_argv(U8[][]::{ c.entry, "out.c" }), .cwd = dir }
+    return Job::{ .argv = harness.ksplc_argv(U8[][]::{ case_row.entry, "out.c" }), .cwd = dir }
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
@@ -257,7 +257,7 @@ priv const LIB_PLAIN: U8[] = """pub fn helper(): I32
 
 priv fn check_main_case(slot: U8[], name: U8[], lib_src: U8[], expect: U8[][], deny: U8[][],
     arena: Arena$@) //<
-        //< One case: the base and main.kspl in the working directory, one run, the marks matched.
+        //< One case: the base and main.kspl in the working directory, one run, the marks matched
         //< Caution: Make cwd the working directory. Resolving `import "lib"` starts from cwd.
     dir: = harness.sandbox(arena.text().s("onemain_\{slot\}").take())
     names: = U8[][]::{ "lib.kspl", "main.kspl" }

@@ -10,11 +10,11 @@ import "std/ds"
 import "std/str" { Str_builder }
 
 impl Ast_node
-    fn replace_type_vars(r: Ast_node$@, c: Sema_ctx$@)
-        if r == null || r.replace_type_var_leaf(c)
+    fn replace_type_vars(r: Ast_node$@, ctx: Sema_ctx$@)
+        if r == null || r.replace_type_var_leaf(ctx)
             return
         for child in r.children
-            child.replace_type_vars(c)
+            child.replace_type_vars(ctx)
         if r.kind_id == .k_expr_path || r.kind_id == .k_type_path
             if r.respell_path()
                 return
@@ -33,18 +33,18 @@ impl Ast_node
             if is_type_node && r.text.len > 0
                 r.type_id = 0
 
-    priv fn replace_type_var_leaf(r: Ast_node$@, c: Sema_ctx$@): Bool //<
+    priv fn replace_type_var_leaf(r: Ast_node$@, ctx: Sema_ctx$@): Bool //<
         //< It replaces a leaf naming a type parameter with its argument; true where it did
         if r.children.len > 0 || r.text.len == 0
             return false
         if r.kind_id != .k_identifier && r.kind_id != .k_primitive_type &&
             r.kind_id != .k_type_atom
             return false
-        if c.env.type_to_id.get(r.text).unwrap_or(0) == 0
+        if ctx.env.type_to_id.get(r.text).unwrap_or(0) == 0
             return false
-        if g_arg: = c.find_generic_arg(r.text)
+        if g_arg: = ctx.find_generic_arg(r.text)
             v_id: = g_arg.bound_type_id
-            v_str: = c.env.get_str(v_id)
+            v_str: = ctx.env.get_str(v_id)
             // A const generic argument (`<|const N: Sz|>`) becomes an integer or boolean literal
             // node; if only the text were replaced, `v % N` would look up "a symbol named '10'".
             if g_arg.is_const

@@ -7,7 +7,7 @@
 import { ALT, CTRL, H, SHIFT, cellAt, cellText, check, rowsShown } from "./drive.mjs";
 
 
-export function tables({ page, js, settle, press, type, select, click, menu, load, saves, rightClick,
+export function tables({ page, media, js, settle, press, type, select, click, menu, load, saves, rightClick,
   openCell }) {
   const sel = () => js("JSON.stringify(ksmd.selection().f)");
   // A row's number and a column's letter, which choose the whole row or column.
@@ -392,10 +392,10 @@ export function tables({ page, js, settle, press, type, select, click, menu, loa
       check(await js("document.querySelector('.filter-panel .filter-ok').disabled"),
         "with no value ticked, OK cannot be pressed, as in Excel");
       await press("Escape");
-      await page("Emulation.setEmulatedMedia", { media: "print" });
+      await media("print");
       check(await js("Array.from(document.querySelectorAll('#doc tbody tr')).map((r) => getComputedStyle(r).display === 'none' ? 0 : 1).join('')") === "010",
         "print shows the rows the filter shows");
-      await page("Emulation.setEmulatedMedia", { media: "" });
+      await media("");
       await click(".filter-note .filter-clear");
       await saves("Show all rows takes the filter out of the file", table(""));
       check(await shown() === "111" && await note() === "", "and every row shows again, with no line above");

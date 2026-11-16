@@ -3,6 +3,7 @@
 # `make test` wants nothing of a repository around it: a `ksplc` and the `std` it carries, and the
 # `ksai` and `ksdb` it uses. The demos and the gates on them want more, named above each.
 #   make test [KSPLC=/path/to/ksplc]                             # ksos's tests, from this folder
+#   make test-fuzz                                               # broken frames at the network path
 #   make ksos / ksos-<demo> / ksos-cm-<demo> / ksos-cm0-<demo> / ksos-nrf51-<demo> /
 #        ksos-rp2040-<demo>                                       # one demo (README.md lists them)
 #   make test-ksos-posix / test-ksos-qemu / test-ksos-link        # the gates, each over every demo
@@ -73,6 +74,27 @@ test:
 	"$(KSPLC)" run tests/main.kspl "$(KSPLC_EXE)" "$(OUT)/ksos_test"
 
 .PHONY: test
+
+# The network receive path fed broken NCM blocks and frames (`tests/fuzz_main.kspl`).
+# Handed to the fuzz as they stand: `--trials=N`, `--seed=N`.
+FUZZ_ARGS ?=
+# 1 fails a reader built without the address sanitizer (Linux CI holds its runtime); else a SKIP.
+KANSO_REQUIRE_ASAN ?=
+# -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
+ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
+fuzz_build = "$(KSPLC)" build $(1) tests/read_prog.kspl "$(OUT)/fuzz/read_prog.exe"
+# Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.
+test-fuzz:
+	@mkdir -p "$(OUT)/fuzz"
+	rm -rf "$(OUT)/fuzz/work"
+	@if $(call fuzz_build,$(ASAN_BUILD)) > "$(OUT)/fuzz/asan.log" 2>&1; then asan=--asan; \
+		echo "# the reader: with the address sanitizer"; \
+	else asan=; echo "# the reader: without the address sanitizer ($(OUT)/fuzz/asan.log says why)"; \
+		$(call fuzz_build,--cflags=-O0) || exit 1; fi; \
+	"$(KSPLC)" run tests/fuzz_main.kspl "$(OUT)/fuzz/read_prog.exe" "$(OUT)/fuzz/work" $$asan \
+		$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan) $(FUZZ_ARGS)
+
+.PHONY: test-fuzz
 
 # --- The toolchain for Cortex-M (cross compiling for an ARM Cortex-M3) ---
 # One section per symbol, so --gc-sections drops the uncalled libc references that `ksai` carries.

@@ -88,63 +88,64 @@ struct Gen //< the generator's whole state
 // Small helpers
 // ==========================================
 
-fn signed(t: Sz): Bool
-    return t < 4 || t == SZ
+fn signed(type_index: Sz): Bool
+    return type_index < 4 || type_index == SZ
 
 fn widens(from: Sz, to: Sz): Bool //< whether a `from` converts to a `to` with no cast
     if from >= INTS || to >= INTS || BITS[to] <= BITS[from]
         return false
     return signed(to) || !signed(from)
 
-fn mask(t: Sz): U64 //< every bit the type holds
-    if BITS[t] >= 64
+fn mask(type_index: Sz): U64 //< every bit the type holds
+    if BITS[type_index] >= 64
         return 0xFFFFFFFFFFFFFFFFU64
-    return (1U64 << U64::BITS[t]) - 1U64
+    return (1U64 << U64::BITS[type_index]) - 1U64
 
-fn line(g: Gen$@, text: U8[]) //< one line of the function, at the current indent
-    for _i in Range.asc(g.indent)
-        g.out.s("    ")
-    g.out.s(text).c('\n')
+fn line(gen: Gen$@, text: U8[]) //< one line of the function, at the current indent
+    for _i in Range.asc(gen.indent)
+        gen.out.s("    ")
+    gen.out.s(text).c('\n')
 
-fn fresh(g: Gen$@, prefix: U8[]): U8[] //< a name no other declaration takes
-    g.next += 1
-    return g.arena.text().s(prefix).s("\{g.next\}").take()
+fn fresh(gen: Gen$@, prefix: U8[]): U8[] //< a name no other declaration takes
+    gen.next += 1
+    return gen.arena.text().s(prefix).s("\{gen.next\}").take()
 
-fn paren(g: Gen$@, a: U8[], op: U8[], b: U8[]): U8[] //< `(a op b)`
-    return g.arena.text().s("(").s(a).s(" ").s(op).s(" ").s(b).s(")").take()
+fn paren(gen: Gen$@, left: U8[], op: U8[], right: U8[]): U8[] //< `(left op right)`
+    return gen.arena.text().s("(").s(left).s(" ").s(op).s(" ").s(right).s(")").take()
 
-fn int_ty(g: Gen$@): Sz
-    return g.rng.below(INTS)
+fn int_ty(gen: Gen$@): Sz
+    return gen.rng.below(INTS)
 
-fn narrow_or_same(g: Gen$@, t: Sz): Sz //< t, or now and then a type that widens to it
-    if t >= INTS || g.rng.chance(60)
-        return t
-    $c: = List<|Sz|>(g.arena)
+fn narrow_or_same(gen: Gen$@, type_index: Sz): Sz //<
+    //< `type_index`, or now and then a type that widens to it
+    if type_index >= INTS || gen.rng.chance(60)
+        return type_index
+    $c: = List<|Sz|>(gen.arena)
     for s in Range.asc(INTS)
-        if widens(s, t)
+        if widens(s, type_index)
             c.push(s)
     if c.len == 0
-        return t
-    return c.get(g.rng.below(c.len))
+        return type_index
+    return c.get(gen.rng.below(c.len))
 
-fn lowest(t: Sz): I64 //< the type's smallest value
-    if !signed(t)
+fn lowest(type_index: Sz): I64 //< the type's smallest value
+    if !signed(type_index)
         return 0I64
-    return 0I64 - I64::(mask(t) >> 1U64) - 1I64
+    return 0I64 - I64::(mask(type_index) >> 1U64) - 1I64
 
-fn highest(t: Sz): I64 //< the type's largest value, `I64`'s for `U64`
-    if signed(t) || BITS[t] >= 64
-        return I64::(mask(t) >> 1U64)
-    return I64::mask(t)
+fn highest(type_index: Sz): I64 //< the type's largest value, `I64`'s for `U64`
+    if signed(type_index) || BITS[type_index] >= 64
+        return I64::(mask(type_index) >> 1U64)
+    return I64::mask(type_index)
 
 // ==========================================
 // Literals
 // ==========================================
 
-fn raw_value(g: Gen$@, t: Sz): U64 //< a value's bits, an edge value now and then
-    m: = mask(t)
+fn raw_value(gen: Gen$@, type_index: Sz): U64 //< a value's bits, an edge value now and then
+    m: = mask(type_index)
     top: = (m >> 1U64) + 1U64
-    switch g.rng.below(9)
+    switch gen.rng.below(9)
     case 0
         return 0U64
     case 1
@@ -156,287 +157,300 @@ fn raw_value(g: Gen$@, t: Sz): U64 //< a value's bits, an edge value now and the
     case 4
         return top
     case 5
-        return U64::g.rng.below(20)
+        return U64::gen.rng.below(20)
     case 6
         return (top + 1U64) & m
     default
-        return g.rng.next_u64() & m
+        return gen.rng.next_u64() & m
 
-fn lit_text(g: Gen$@, t: Sz, v: U64): U8[] //< the bits v as a literal of t
-    if t == BOOL
-        return "true" if (v & 1U64) != 0U64 else "false"
-    m: = mask(t)
-    if signed(t) && (v & ((m >> 1U64) + 1U64)) != 0U64
-        mag: = (0U64 - v) & m
-        return g.arena.text().s("(-\{mag\}").s(NAMES[t]).s(")").take()
-    return g.arena.text().s("\{v & m\}").s(NAMES[t]).take()
+fn lit_text(gen: Gen$@, type_index: Sz, value: U64): U8[] //<
+    //< the bits `value` as a literal of `type_index`
+    if type_index == BOOL
+        return "true" if (value & 1U64) != 0U64 else "false"
+    m: = mask(type_index)
+    if signed(type_index) && (value & ((m >> 1U64) + 1U64)) != 0U64
+        mag: = (0U64 - value) & m
+        return gen.arena.text().s("(-\{mag\}").s(NAMES[type_index]).s(")").take()
+    return gen.arena.text().s("\{value & m\}").s(NAMES[type_index]).take()
 
-fn lit(g: Gen$@, t: Sz): U8[] //< a literal of t
-    if t == SZ
-        return g.arena.text().s("\{g.rng.below(50)\}Sz").take()
-    return lit_text(g, t, raw_value(g, t))
+fn lit(gen: Gen$@, type_index: Sz): U8[] //< a literal of `type_index`
+    if type_index == SZ
+        return gen.arena.text().s("\{gen.rng.below(50)\}Sz").take()
+    return lit_text(gen, type_index, raw_value(gen, type_index))
 
-fn i64_lit(g: Gen$@, t: Sz, v: I64): U8[] //< the number v as a literal of t
-    return lit_text(g, t, U64::v)
+fn i64_lit(gen: Gen$@, type_index: Sz, value: I64): U8[] //<
+    //< the number `value` as a literal of `type_index`
+    return lit_text(gen, type_index, U64::value)
 
 // ==========================================
 // Expressions: each returns text of exactly the type asked for
 // ==========================================
 
-fn leaf(g: Gen$@, t: Sz): U8[] //< a variable of type t, or a literal
-    if !g.rng.chance(25)
+fn leaf(gen: Gen$@, type_index: Sz): U8[] //< a variable of type `type_index`, or a literal
+    if !gen.rng.chance(25)
         $n: Sz = 0
-        for v in g.vars
-            if v.ty == t
+        for v in gen.vars
+            if v.ty == type_index
                 n += 1
         if n > 0
-            $k: = g.rng.below(n)
-            for v in g.vars
-                if v.ty == t
+            $k: = gen.rng.below(n)
+            for v in gen.vars
+                if v.ty == type_index
                     if k == 0
                         return v.text
                     k -= 1
-    return lit(g, t)
+    return lit(gen, type_index)
 
-fn hidden(g: Gen$@, t: Sz, e: U8[]): U8[] //< e passed through `gid`, whose value C cannot see
-    return g.arena.text().s("gid<|").s(NAMES[t]).s("|>(").s(e).s(")").take()
+fn hidden(gen: Gen$@, type_index: Sz, operand: U8[]): U8[] //<
+    //< `operand` passed through `gid`, whose value C cannot see
+    return gen.arena.text().s("gid<|").s(NAMES[type_index]).s("|>(").s(operand).s(")").take()
 
-fn test(g: Gen$@, d: Sz): U8[] //<
+fn test(gen: Gen$@, depth: Sz): U8[] //<
     //< A statement's condition, passed through `gid` so ksplc cannot work out its value
     //< A constant one (`if true` before `continue`) leaves code after it that never runs, and
     //< ksplc rightly reports that ([W0201]). A comparison inside it stays open to the C compiler.
-    return hidden(g, BOOL, expr(g, BOOL, d))
+    return hidden(gen, BOOL, expr(gen, BOOL, depth))
 
-fn expr(g: Gen$@, t: Sz, depth: Sz): U8[] //< an expression of type t
-    if t == BOOL
-        return cond(g, depth)
-    if t == SZ || depth == 0 || g.rng.chance(20)
-        return leaf(g, t)
+fn expr(gen: Gen$@, type_index: Sz, depth: Sz): U8[] //< an expression of type `type_index`
+    if type_index == BOOL
+        return cond(gen, depth)
+    if type_index == SZ || depth == 0 || gen.rng.chance(20)
+        return leaf(gen, type_index)
     d: = depth - 1
-    a: = g.arena
-    switch g.rng.below(17)
+    a: = gen.arena
+    switch gen.rng.below(17)
     case 0, 1, 2
-        return binary(g, t, ARITH[g.rng.below(3)], d)
+        return binary(gen, type_index, ARITH[gen.rng.below(3)], d)
     case 3, 4
-        return binary(g, t, BITWISE[g.rng.below(3)], d)
+        return binary(gen, type_index, BITWISE[gen.rng.below(3)], d)
     case 5
-        return divide(g, t, d)
+        return divide(gen, type_index, d)
     case 6
-        return shift(g, t, d)
+        return shift(gen, type_index, d)
     case 7
-        s: = g.rng.below(SZ + 1)
-        return a.text().s(NAMES[t]).s("::(").s(expr(g, s, d)).s(")").take()
+        s: = gen.rng.below(SZ + 1)
+        return a.text().s(NAMES[type_index]).s("::(").s(expr(gen, s, d)).s(")").take()
     case 8
-        e: = expr(g, t, d)
-        if signed(t) && g.rng.chance(50)
+        e: = expr(gen, type_index, d)
+        if signed(type_index) && gen.rng.chance(50)
             return a.text().s("-(").s(e).s(")").take()
         return a.text().s("~(").s(e).s(")").take()
     case 9
-        x: = expr(g, t, d)
-        c: = cond(g, d)
-        y: = expr(g, t, d)
+        x: = expr(gen, type_index, d)
+        c: = cond(gen, d)
+        y: = expr(gen, type_index, d)
         return a.text().s("(").s(x).s(" if ").s(c).s(" else ").s(y).s(")").take()
     case 10, 11
-        return call(g, t, d)
+        return call(gen, type_index, d)
     case 12, 13
-        return generic(g, t, d)
+        return generic(gen, type_index, d)
     case 14
-        return element(g, t, d)
+        return element(gen, type_index, d)
     case 15
-        return from_enum(g, t)
+        return from_enum(gen, type_index)
     default
-        return leaf(g, t)
+        return leaf(gen, type_index)
 
-fn binary(g: Gen$@, t: Sz, op: U8[], d: Sz): U8[] //< `a op b`, b maybe of a narrower type
-    a: = expr(g, t, d)
-    b: = other_side(g, narrow_or_same(g, t), d, a, op)
-    if g.rng.chance(50)
-        return paren(g, b, op, a)
-    return paren(g, a, op, b)
+fn binary(gen: Gen$@, type_index: Sz, op: U8[], depth: Sz): U8[] //<
+    //< `a op b`, b maybe of a narrower type
+    a: = expr(gen, type_index, depth)
+    b: = other_side(gen, narrow_or_same(gen, type_index), depth, a, op)
+    if gen.rng.chance(50)
+        return paren(gen, b, op, a)
+    return paren(gen, a, op, b)
 
-fn constant(e: U8[]): Bool //< whether an operand is a literal or a constant's name
-    if e.len == 0
+fn constant(operand: U8[]): Bool //< whether an operand is a literal or a constant's name
+    if operand.len == 0
         return false
-    return e[0] == 'K' || (e[0] >= '0' && e[0] <= '9') ||
-        (e.len > 2 && e[0] == '(' && e[1] == '-' && e[2] >= '0' && e[2] <= '9')
+    return operand[0] == 'K' || (operand[0] >= '0' && operand[0] <= '9') ||
+        (operand.len > 2 && operand[0] == '(' && operand[1] == '-' && operand[2] >= '0' &&
+        operand[2] <= '9')
 
-fn other_side(g: Gen$@, t: Sz, d: Sz, a: U8[], op: U8[]): U8[] //<
-    //< The second operand of `a op …`, written differently from the first
+fn other_side(gen: Gen$@, type_index: Sz, depth: Sz, left: U8[], op: U8[]): U8[] //<
+    //< The second operand of `left op …`, written differently from the first
     //< `x - x` or `x & x` is the program's own slip: a person writes 0 or x. Two constants are
     //< kept apart but under `^`: their value can wrap, the open finding `WRAPPED_CONSTANT`.
-    $b: = expr(g, t, d)
-    if g.open
+    $b: = expr(gen, type_index, depth)
+    if gen.open
         return b
     for _try in Range.asc(3)
-        if !b.equals(a) && (op.equals("^") || !(constant(a) && constant(b)))
+        if !b.equals(left) && (op.equals("^") || !(constant(left) && constant(b)))
             return b
-        b = expr(g, t, d)
-    return hidden(g, t, b)
+        b = expr(gen, type_index, depth)
+    return hidden(gen, type_index, b)
 
-fn divide(g: Gen$@, t: Sz, d: Sz): U8[] //< `/` or `%`, the divisor made odd
-    a: = expr(g, t, d)
-    s: = narrow_or_same(g, t)
-    b: = paren(g, expr(g, s, d), "|", lit_text(g, s, 1U64))
-    return paren(g, a, "/" if g.rng.chance(50) else "%", b)
+fn divide(gen: Gen$@, type_index: Sz, depth: Sz): U8[] //< `/` or `%`, the divisor made odd
+    a: = expr(gen, type_index, depth)
+    s: = narrow_or_same(gen, type_index)
+    b: = paren(gen, expr(gen, s, depth), "|", lit_text(gen, s, 1U64))
+    return paren(gen, a, "/" if gen.rng.chance(50) else "%", b)
 
-fn shift(g: Gen$@, t: Sz, d: Sz): U8[] //< `<<` or `>>`, the amount masked into range
-    $a: = expr(g, t, d)
-    if !g.open && a[0] == 'K'
-        a = hidden(g, t, a)
-    s: = int_ty(g)
-    amt: = paren(g, expr(g, s, d), "&", lit_text(g, s, U64::(BITS[t] - 1)))
-    return paren(g, a, "<<" if g.rng.chance(50) else ">>", amt)
+fn shift(gen: Gen$@, type_index: Sz, depth: Sz): U8[] //< `<<` or `>>`, the amount masked into range
+    $a: = expr(gen, type_index, depth)
+    if !gen.open && a[0] == 'K'
+        a = hidden(gen, type_index, a)
+    s: = int_ty(gen)
+    amt: =
+        paren(gen, expr(gen, s, depth), "&",
+        lit_text(gen, s, U64::(BITS[type_index] - 1)))
+    return paren(gen, a, "<<" if gen.rng.chance(50) else ">>", amt)
 
-fn cond(g: Gen$@, depth: Sz): U8[] //< an expression of type `Bool`
-    if depth == 0 || g.rng.chance(20)
-        return leaf(g, BOOL)
+fn cond(gen: Gen$@, depth: Sz): U8[] //< an expression of type `Bool`
+    if depth == 0 || gen.rng.chance(20)
+        return leaf(gen, BOOL)
     d: = depth - 1
-    a: = g.arena
-    switch g.rng.below(8)
+    a: = gen.arena
+    switch gen.rng.below(8)
     case 0, 1, 2
-        t: = int_ty(g)
-        x: = expr(g, t, d)
-        return paren(g, x, COMPARE[g.rng.below(6)], expr(g, t, d))
+        t: = int_ty(gen)
+        x: = expr(gen, t, d)
+        return paren(gen, x, COMPARE[gen.rng.below(6)], expr(gen, t, d))
     case 3, 4
-        x: = cond(g, d)
-        return paren(g, x, "&&" if g.rng.chance(50) else "||", cond(g, d))
+        x: = cond(gen, d)
+        return paren(gen, x, "&&" if gen.rng.chance(50) else "||", cond(gen, d))
     case 5
-        return a.text().s("!(").s(cond(g, d)).s(")").take()
+        return a.text().s("!(").s(cond(gen, d)).s(")").take()
     case 6
-        x: = expr(g, BOOL, d)
-        return paren(g, x, BOOL_OPS[g.rng.below(5)], expr(g, BOOL, d))
+        x: = expr(gen, BOOL, d)
+        return paren(gen, x, BOOL_OPS[gen.rng.below(5)], expr(gen, BOOL, d))
     default
-        return leaf(g, BOOL)
+        return leaf(gen, BOOL)
 
-fn call(g: Gen$@, t: Sz, d: Sz): U8[] //< a call of an earlier function that returns t
-    $cands: = List<|Sz|>(g.arena)
-    for i in Range.asc(g.fns.len)
-        f: = g.fns.get(i)
-        if f.ret == t && g.cost + g.mult * f.cost <= COST_CAP &&
-            struct_arg(g, f@, false).len > 0
+fn call(gen: Gen$@, type_index: Sz, depth: Sz): U8[] //<
+    //< a call of an earlier function that returns `type_index`
+    $cands: = List<|Sz|>(gen.arena)
+    for i in Range.asc(gen.fns.len)
+        f: = gen.fns.get(i)
+        if f.ret == type_index && gen.cost + gen.mult * f.cost <= COST_CAP &&
+            struct_arg(gen, f@, false).len > 0
             cands.push(i)
     if cands.len == 0
-        return leaf(g, t)
-    f: = g.fns.get(cands.get(g.rng.below(cands.len)))
-    g.cost += g.mult * f.cost
-    b: = g.arena.text().s(f.name).s("(")
+        return leaf(gen, type_index)
+    f: = gen.fns.get(cands.get(gen.rng.below(cands.len)))
+    gen.cost += gen.mult * f.cost
+    b: = gen.arena.text().s(f.name).s("(")
     for i in Range.asc(f.params.len)
         p: = f.params.get(i)
-        b.s(", " if i > 0 else "").s(expr(g, narrow_or_same(g, p), d))
+        b.s(", " if i > 0 else "").s(expr(gen, narrow_or_same(gen, p), depth))
     if f.st != NONE
-        b.s(", " if f.params.len > 0 else "").s(struct_arg(g, f@, true))
+        b.s(", " if f.params.len > 0 else "").s(struct_arg(gen, f@, true))
     return b.s(")").take()
 
-fn struct_arg(g: Gen$@, f: Func@, draw: Bool): U8[] //<
+fn struct_arg(gen: Gen$@, func: Func@, draw: Bool): U8[] //<
     //< What a call hands f's struct parameter, empty where nothing fits
     //< Without draw it answers only whether something fits ("-" for a function with no such
     //< parameter), and draws nothing.
-    if f.st == NONE
+    if func.st == NONE
         return "-"
-    $cands: = List<|Svar|>(g.arena)
-    for s in g.svars
-        if s.shape == f.st && (s.place || s.ptr || !f.by_ptr)
+    $cands: = List<|Svar|>(gen.arena)
+    for s in gen.svars
+        if s.shape == func.st && (s.place || s.ptr || !func.by_ptr)
             cands.push(s)
     if cands.len == 0
         return ""
     if !draw
         return "-"
-    s: = cands.get(g.rng.below(cands.len))
-    if f.by_ptr
-        return s.text if s.ptr else g.arena.text().s(s.text).s("@").take()
-    return g.arena.text().s(s.text).s("$").take() if s.ptr else s.text
+    s: = cands.get(gen.rng.below(cands.len))
+    if func.by_ptr
+        return s.text if s.ptr else gen.arena.text().s(s.text).s("@").take()
+    return gen.arena.text().s(s.text).s("$").take() if s.ptr else s.text
 
-fn generic(g: Gen$@, t: Sz, d: Sz): U8[] //< a call of one of the prelude's generics at t
-    a: = g.arena
-    ty: = NAMES[t]
-    switch g.rng.below(7)
+fn generic(gen: Gen$@, type_index: Sz, depth: Sz): U8[] //<
+    //< a call of one of the prelude's generics at `type_index`
+    a: = gen.arena
+    ty: = NAMES[type_index]
+    switch gen.rng.below(7)
     case 0
-        x: = expr(g, t, d)
-        return a.text().s("gmix<|").s(ty).s("|>(").s(x).s(", ").s(expr(g, t, d)).s(")").take()
-    case 1
-        x: = expr(g, t, d)
-        return a.text().s("gap<|").s(ty).s("|>(gmix<|").s(ty).s("|>, ").s(x).s(", ")
-            .s(expr(g, t, d)).s(")").take()
-    case 2
-        c: = cond(g, d)
-        x: = expr(g, t, d)
-        return a.text().s("gsel<|").s(ty).s("|>(").s(c).s(", ").s(x).s(", ").s(expr(g, t, d)).s(")")
-            .take()
-    case 3
-        x: = expr(g, t, d)
-        c: = cond(g, d)
-        return a.text().s("(gmay<|").s(ty).s("|>(").s(x).s(", ").s(c).s(") catch ").s(lit(g, t))
+        x: = expr(gen, type_index, depth)
+        return a.text().s("gmix<|").s(ty).s("|>(").s(x).s(", ").s(expr(gen, type_index, depth))
             .s(")").take()
+    case 1
+        x: = expr(gen, type_index, depth)
+        return a.text().s("gap<|").s(ty).s("|>(gmix<|").s(ty).s("|>, ").s(x).s(", ")
+            .s(expr(gen, type_index, depth)).s(")").take()
+    case 2
+        c: = cond(gen, depth)
+        x: = expr(gen, type_index, depth)
+        return a.text().s("gsel<|").s(ty).s("|>(").s(c).s(", ").s(x).s(", ")
+            .s(expr(gen, type_index, depth)).s(")").take()
+    case 3
+        x: = expr(gen, type_index, depth)
+        c: = cond(gen, depth)
+        return a.text().s("(gmay<|").s(ty).s("|>(").s(x).s(", ").s(c).s(") catch ")
+            .s(lit(gen, type_index)).s(")").take()
     case 4
-        return closure(g, t, d)
+        return closure(gen, type_index, depth)
     case 5
-        x: = expr(g, t, d)
-        return a.text().s("gsh<|").s(ty).s("|>(").s(x).s(", ").s(expr(g, 4, d)).s(")").take()
+        x: = expr(gen, type_index, depth)
+        return a.text().s("gsh<|").s(ty).s("|>(").s(x).s(", ").s(expr(gen, 4, depth)).s(")").take()
     default
-        for r in g.arrs
-            if r.ty == t && g.rng.chance(50)
+        for r in gen.arrs
+            if r.ty == type_index && gen.rng.chance(50)
                 return a.text().s("gsum<|").s(ty).s("|>(").s(ty).s("[]::").s(r.text).s(")").take()
-        return leaf(g, t)
+        return leaf(gen, type_index)
 
-fn closure(g: Gen$@, t: Sz, d: Sz): U8[] //< a closure over up to two locals, called once
-    if g.in_closure
-        return leaf(g, t)
-    a: = g.arena
-    ty: = NAMES[t]
-    x: = fresh(g, "cx")
+fn closure(gen: Gen$@, type_index: Sz, depth: Sz): U8[] //<
+    //< a closure over up to two locals, called once
+    if gen.in_closure
+        return leaf(gen, type_index)
+    a: = gen.arena
+    ty: = NAMES[type_index]
+    x: = fresh(gen, "cx")
     $caps: = List<|Var|>(a)
-    for v in g.vars
-        if v.bare && caps.len < 2 && v.ty <= SZ && g.rng.chance(40)
+    for v in gen.vars
+        if v.bare && caps.len < 2 && v.ty <= SZ && gen.rng.chance(40)
             caps.push(v)
     $inner: = List<|Var|>(a)
-    inner.push(Var::{ .text = x, .ty = t, .place = false, .bare = false })
+    inner.push(Var::{ .text = x, .ty = type_index, .place = false, .bare = false })
     for c in caps
         inner.push(Var::{ .text = c.text, .ty = c.ty, .place = false, .bare = false })
-    outer_vars: = g.vars
-    outer_arrs: = g.arrs
-    outer_svars: = g.svars
-    g.vars = inner
-    g.arrs = List<|Arr|>(a)
-    g.svars = List<|Svar|>(a)
-    g.in_closure = true
-    $body: = expr(g, t, 2 if d > 2 else d)
+    outer_vars: = gen.vars
+    outer_arrs: = gen.arrs
+    outer_svars: = gen.svars
+    gen.vars = inner
+    gen.arrs = List<|Arr|>(a)
+    gen.svars = List<|Svar|>(a)
+    gen.in_closure = true
+    $body: = expr(gen, type_index, 2 if depth > 2 else depth)
     // Every parameter and capture is read, so none goes unread.
     for v in inner
         body =
-            paren(g, body, "^",
+            paren(gen, body, "^",
             a.text().s(ty).s("::(").s(v.text).s(")").take())
-    g.in_closure = false
-    g.vars = outer_vars
-    g.arrs = outer_arrs
-    g.svars = outer_svars
+    gen.in_closure = false
+    gen.vars = outer_vars
+    gen.arrs = outer_arrs
+    gen.svars = outer_svars
     b: = a.text().s("gvia<|").s(ty).s("|>(fn(").s(x).s(": ").s(ty).s("; ")
     for i in Range.asc(caps.len)
         c: = caps.get(i)
         b.s(", " if i > 0 else "").s(c.text).s(": ").s(NAMES[c.ty])
-    b.s("): ").s(ty).s(" { return ").s(body).s("; }, ").s(expr(g, t, d)).s(")")
+    b.s("): ").s(ty).s(" { return ").s(body).s("; }, ").s(expr(gen, type_index, depth)).s(")")
     return b.take()
 
-fn index(g: Gen$@, len: Sz, d: Sz): U8[] //< an index below len
-    if g.rng.chance(30)
-        return g.arena.text().s("\{g.rng.below(len)\}").take()
-    s: = int_ty(g)
-    return g.arena.text().s("Sz::(U32::(").s(expr(g, s, d)).s(") % \{len\}U32)").take()
+fn index(gen: Gen$@, len: Sz, depth: Sz): U8[] //< an index below len
+    if gen.rng.chance(30)
+        return gen.arena.text().s("\{gen.rng.below(len)\}").take()
+    s: = int_ty(gen)
+    return gen.arena.text().s("Sz::(U32::(").s(expr(gen, s, depth)).s(") % \{len\}U32)").take()
 
-fn element(g: Gen$@, t: Sz, d: Sz): U8[] //< an element of an array or a slice of t
-    $cands: = List<|Arr|>(g.arena)
-    for r in g.arrs
-        if r.ty == t
+fn element(gen: Gen$@, type_index: Sz, depth: Sz): U8[] //<
+    //< an element of an array or a slice of `type_index`
+    $cands: = List<|Arr|>(gen.arena)
+    for r in gen.arrs
+        if r.ty == type_index
             cands.push(r)
     if cands.len == 0
-        return leaf(g, t)
-    r: = cands.get(g.rng.below(cands.len))
-    return g.arena.text().s(r.text).s("[").s(index(g, r.len, d)).s("]").take()
+        return leaf(gen, type_index)
+    r: = cands.get(gen.rng.below(cands.len))
+    return gen.arena.text().s(r.text).s("[").s(index(gen, r.len, depth)).s("]").take()
 
-fn from_enum(g: Gen$@, t: Sz): U8[] //< an enum value cast to t
-    $cands: = List<|U8[]|>(g.arena)
-    for v in g.vars
+fn from_enum(gen: Gen$@, type_index: Sz): U8[] //< an enum value cast to `type_index`
+    $cands: = List<|U8[]|>(gen.arena)
+    for v in gen.vars
         if v.ty >= ENUM_TY
             cands.push(v.text)
     if cands.len == 0
-        return leaf(g, t)
-    return g.arena.text().s(NAMES[t]).s("::(").s(cands.get(g.rng.below(cands.len))).s(")").take()
+        return leaf(gen, type_index)
+    return gen.arena.text().s(NAMES[type_index]).s("::(")
+        .s(cands.get(gen.rng.below(cands.len))).s(")").take()

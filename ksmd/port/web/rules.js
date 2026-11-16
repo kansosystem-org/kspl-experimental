@@ -21,16 +21,16 @@ function ksmdRules(ks) {
   // Whether a calculated value meets a rule: [condition, value, colour, fill].
   function meets(rule, v) {
     const [kind, value] = rule;
-    if (kind === "empty") return !v || v.length < 2 || v[0] === 0;
+    if (kind === "empty") return !v || v.length < 2 || v[0] === ks.CELL.EMPTY;
     if (!v || v.length < 2) return false;
     // A number compares as a formula does, at the digits it shows (`ks.compareNumbers`).
-    if (v[0] === 1 && kind !== "equal") {
+    if (v[0] === ks.CELL.NUMBER && kind !== "equal") {
       const order = ks.compareNumbers(v[1], Number(value));
       return kind === "below" ? order < 0 : order > 0;
     }
     if (kind !== "equal") return false;
-    if (v[0] === 1) return /^-?\d/.test(value) && ks.compareNumbers(v[1], Number(value)) === 0;
-    return v[0] === 2 && String(v[1]).toLowerCase() === value.toLowerCase();
+    if (v[0] === ks.CELL.NUMBER) return /^-?\d/.test(value) && ks.compareNumbers(v[1], Number(value)) === 0;
+    return v[0] === ks.CELL.TEXT && String(v[1]).toLowerCase() === value.toLowerCase();
   }
 
   // A colour `t` of the way from one `#rrggbb` to another.
@@ -44,7 +44,7 @@ function ksmdRules(ks) {
   function scale(wrap, rules, rule, only) {
     const columns = rules.map((r, c) => (r && r[0] === "scale" && r[2] === rule[2] && r[3] === rule[3] ? c : -1))
       .filter((c) => c >= 0);
-    const numbers = columns.flatMap((c) => wrap.values.map((row) => row[c]).filter((v) => v && v[0] === 1)
+    const numbers = columns.flatMap((c) => wrap.values.map((row) => row[c]).filter((v) => v && v[0] === ks.CELL.NUMBER)
       .map((v) => v[1]));
     if (numbers.length === 0) return;
     const lo = Math.min(...numbers);
@@ -52,7 +52,7 @@ function ksmdRules(ks) {
     for (const c of columns) {
       wrap.values.forEach((row, r) => {
         const v = row[c];
-        const el = v && v[0] === 1 && only(r, c) && ks.table.cellAt(wrap, r, c);
+        const el = v && v[0] === ks.CELL.NUMBER && only(r, c) && ks.table.cellAt(wrap, r, c);
         if (!el) return;
         el.style.backgroundColor = between(rule[2], rule[3], span > 0 ? (v[1] - lo) / span : 1);
         el.classList.add("ruled", "looked");

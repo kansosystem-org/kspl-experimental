@@ -19,16 +19,16 @@ priv struct Bits //< the input, read from its lowest bit upwards
     count: Sz //< how many bits `buf` holds; below 8 between calls, as `take` loads byte by byte
 
 impl Bits
-    fn take(r: Self$@, n: Sz): U32!U8[] //< the next `n` bits, at most 15, as a number
-        for r.count < n
+    fn take(r: Self$@, count: Sz): U32!U8[] //< the next `count` bits, at most 15, as a number
+        for r.count < count
             if r.pos >= r.src.len
                 throw "the packed data ends early"
             r.buf |= U32::r.src[r.pos] << U32::r.count
             r.pos += 1
             r.count += 8
-        v: = r.buf & ((1U32 << U32::n) - 1U32)
-        r.buf = r.buf >> U32::n
-        r.count -= n
+        v: = r.buf & ((1U32 << U32::count) - 1U32)
+        r.buf = r.buf >> U32::count
+        r.count -= count
         return v
 
 priv struct Huffman //< a canonical code: how many codes of each length, then the symbols by code
@@ -112,7 +112,7 @@ fn inflate(src: U8[], out: U8$[]): Void!U8[] //<
     if o.len != out.len
         throw "the packed data unpacks to fewer bytes than its size says"
 
-priv fn stored(bits: Bits$@, o: Out$@): Void!U8[] //< copies one stored block
+priv fn stored(bits: Bits$@, out: Out$@): Void!U8[] //< copies one stored block
     // The bits left in the current byte are padding; the block starts at the next byte.
     bits.buf = 0U32
     bits.count = 0
@@ -125,13 +125,13 @@ priv fn stored(bits: Bits$@, o: Out$@): Void!U8[] //< copies one stored block
         throw "a stored block's length does not match its check"
     if bits.src.len - bits.pos < len
         throw "the packed data ends early"
-    if o.buf.len - o.len < len
+    if out.buf.len - out.len < len
         throw "the packed data unpacks to more bytes than its size says"
-    mem.copy(Void$@::(o.buf.ptr + o.len), Void$@::(bits.src.ptr + bits.pos), len)
-    o.len += len
+    mem.copy(Void$@::(out.buf.ptr + out.len), Void$@::(bits.src.ptr + bits.pos), len)
+    out.len += len
     bits.pos += len
 
-priv fn fixed(bits: Bits$@, o: Out$@): Void!U8[] //< decodes one block in the fixed code
+priv fn fixed(bits: Bits$@, out: Out$@): Void!U8[] //< decodes one block in the fixed code
     $lengths: U16[288] = ::{}
     for sym in Range.asc(FIXED_LIT_CODES)
         lengths[sym] = (8U16 if sym < 144 else 9U16 if sym < 256 else 7U16 if sym < 280 else 8U16)
@@ -142,9 +142,10 @@ priv fn fixed(bits: Bits$@, o: Out$@): Void!U8[] //< decodes one block in the fi
         dist_lengths[sym] = 5U16
     $dist: Huffman = ::{}
     _ok_dist: = dist.build(U16[]::dist_lengths)
-    codes(bits, o, lit@, dist@)!
+    codes(bits, out, lit@, dist@)!
 
-priv fn dynamic(bits: Bits$@, o: Out$@): Void!U8[] //< reads a dynamic block's codes, then its data
+priv fn dynamic(bits: Bits$@, out: Out$@): Void!U8[] //<
+    //< reads a dynamic block's codes, then its data
     nlit_bits: = bits.take(5)!
     ndist_bits: = bits.take(5)!
     ncode_bits: = bits.take(4)!
@@ -199,17 +200,17 @@ priv fn dynamic(bits: Bits$@, o: Out$@): Void!U8[] //< reads a dynamic block's c
     dist_left: = dist.build(all.sub(nlit, ndist))
     if dist_left < 0 || (dist_left > 0 && ndist - Sz::dist.count[0] != 1)
         throw "a block's distance code does not fit its lengths"
-    codes(bits, o, lit@, dist@)!
+    codes(bits, out, lit@, dist@)!
 
-priv fn codes(bits: Bits$@, o: Out$@, lit: Huffman@, dist: Huffman@): Void!U8[] //<
+priv fn codes(bits: Bits$@, out: Out$@, lit: Huffman@, dist: Huffman@): Void!U8[] //<
     //< Decodes literals and matches until the end-of-block code
     for
         sym: = lit.decode(bits)!
         if sym < 256
-            if o.len == o.buf.len
+            if out.len == out.buf.len
                 throw "the packed data unpacks to more bytes than its size says"
-            o.buf[o.len] = U8::sym
-            o.len += 1
+            out.buf[out.len] = U8::sym
+            out.len += 1
             continue
         if sym == 256
             return
@@ -223,11 +224,11 @@ priv fn codes(bits: Bits$@, o: Out$@, lit: Huffman@, dist: Huffman@): Void!U8[] 
             throw "the packed data holds a distance code DEFLATE does not have"
         dist_extra: = bits.take(DIST_EXTRA[d])!
         back: = Sz::DIST_BASE[d] + Sz::dist_extra
-        if back > o.len
+        if back > out.len
             throw "the packed data refers back past its start"
-        if o.buf.len - o.len < len
+        if out.buf.len - out.len < len
             throw "the packed data unpacks to more bytes than its size says"
         // Byte by byte: a match may overlap the bytes it is writing.
         for _i in Range.asc(len)
-            o.buf[o.len] = o.buf[o.len - back]
-            o.len += 1
+            out.buf[out.len] = out.buf[out.len - back]
+            out.len += 1

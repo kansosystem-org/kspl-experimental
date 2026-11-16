@@ -26,6 +26,17 @@ import "std/str" { Str_builder }
 fn init()
     fmt_kinds.rules.init()
 
+struct Outer_layout //<
+    //< The layout fields of a `Formatter` as the node around the one being written left them
+    //< **They are saved together and given back at two points**: the columns and the held line
+    //< breaks at a block's `}` (`close_block_layout`), the head once every child is written
+    //< (`leave_children`). One left out would carry a child's layout into the nodes after it.
+    block_head_col: Sz //< the column the node's own body block is set from
+    head_wanted: Bool
+    head_col: Sz
+    level_extra: Sz //< given back at a block's `}`
+    suppress_nl_depth: Sz //< given back at a block's `}`; a block's `{` moves it on
+
 struct Formatter
     out: Str_builder
     config: Config
@@ -724,16 +735,7 @@ impl Formatter
         force_multiline: = shape.force_multiline
         $my_brace_suppress: = is_brace_container && !force_multiline
         $first_arm: = true
-        // Where this node's block opens, the line holding its first token sets the body's column.
-        // A body block takes that line from the node it belongs to.
-        block_head_col: = r.block_head_col
-        r.block_head_col = -1
-        outer_wanted: = r.head_wanted
-        outer_head: = r.head_col
-        r.head_wanted = true
-        r.head_col = -1
-        outer_extra: = r.level_extra
-        $outer_suppress: = r.suppress_nl_depth
+        $outer: = r.enter_children()
 
         for i in Range.asc(len)
             child: = node.get_child(i)
@@ -809,8 +811,7 @@ impl Formatter
             // **The `}` lines up with the heading's line**, so the columns the block added drop
             // only once it is written.
             if is_block && is_block_close
-                r.level_extra = outer_extra
-                r.suppress_nl_depth = outer_suppress
+                r.close_block_layout(outer)
             if my_brace_suppress && is_close_brace
                 if r.suppress_nl_depth > 0
                     r.suppress_nl_depth -= 1
@@ -828,12 +829,14 @@ impl Formatter
                 (is_block && is_block_open)
                 r.flags.force_next_nl = true
                 if is_block && is_block_open
-                    r.extend_level(block_head_col if kind_id == .k_stmt_block else r.head_col)
+                    r
+                        .extend_level(outer.block_head_col if kind_id == .k_stmt_block
+                        else r.head_col)
                     // **A block's body is laid out as at a statement's level, also inside a call's
                     // brackets** (a closure's body): each statement on a line of its own, and each
                     // arm of a `switch` starting one. The list around it holds its breaks back
                     // again once the `}` is written.
-                    outer_suppress = r.suppress_nl_depth
+                    outer.suppress_nl_depth = r.suppress_nl_depth
                     r.suppress_nl_depth = 0
                 r.indent_level += 1
 
@@ -844,11 +847,32 @@ impl Formatter
                     r.flags.force_next_nl = true
             else if is_semi
                 r.write_space()
-        // Where the node outside had written no token yet, this node's first token is its first
-        // too, so the column found stays.
-        if !(outer_wanted && r.head_col >= 0)
-            r.head_wanted = outer_wanted
-            r.head_col = outer_head
+        r.leave_children(outer)
+
+    priv fn enter_children(r: Self$@): Outer_layout //<
+        //< It saves the layout the node outside left, and starts the children's own
+        //< Where this node's block opens, the line holding its first token sets the body's column.
+        //< A body block takes that line from the node it belongs to.
+        outer: = Outer_layout::{ .block_head_col = r.block_head_col, .head_wanted = r.head_wanted,
+            .head_col = r.head_col, .level_extra = r.level_extra,
+            .suppress_nl_depth = r.suppress_nl_depth }
+        r.block_head_col = -1
+        r.head_wanted = true
+        r.head_col = -1
+        return outer
+
+    priv fn close_block_layout(r: Self$@, outer: Outer_layout) //<
+        //< It gives back the columns and the held line breaks a block added, at its `}`
+        r.level_extra = outer.level_extra
+        r.suppress_nl_depth = outer.suppress_nl_depth
+
+    priv fn leave_children(r: Self$@, outer: Outer_layout) //<
+        //< It gives back the head the node outside was looking for, once every child is written
+        //< Where the node outside had written no token yet, this node's first token is its first
+        //< too, so the column found stays.
+        if !(outer.head_wanted && r.head_col >= 0)
+            r.head_wanted = outer.head_wanted
+            r.head_col = outer.head_col
 
     priv fn extend_level(r: Self$@, head_col: Sz) //<
         //< It adds to `level_extra` what puts the block opening now one step in from `head_col`

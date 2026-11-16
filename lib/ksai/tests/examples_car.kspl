@@ -71,7 +71,7 @@ fn test_car_pilot_file(car_exe: U8[], work: U8[], arena: Arena$@) //<
     verdict.check_list("the file alone gives the trainer's manoeuvre", sw.seen, "points", sw.diff,
         "the file must decide as the trainer does: compare the encoding both sides read")
 
-priv fn sweep(p: policy.Pilot$@, b: blob.Blob, compute: Arena$@, arena: Arena$@): Sweep //<
+priv fn sweep(pilot: policy.Pilot$@, loaded: blob.Blob, compute: Arena$@, arena: Arena$@): Sweep //<
     //< Sweeps every distance and line, checking the rule match and the **safety properties**
     //< **The match rate alone is not enough.** "Never move towards something too near" must hold
     //< even after a change that lowers the match rate.
@@ -83,7 +83,8 @@ priv fn sweep(p: policy.Pilot$@, b: blob.Blob, compute: Arena$@, arena: Arena$@)
         for line in Range.asc(LINE_COUNT)
             mark: = compute.save()
             m: = policy
-                .MANEUVERS[policy.decide(p, policy.Obs::{ .dist_mm = dist, .line = line }, compute)]
+                .MANEUVERS[policy.decide(pilot, policy.Obs::{ .dist_mm = dist, .line = line },
+                compute)]
             compute.restore(mark)
             sw.seen += 1
             at: = arena.text().s("dist=\{dist\} line=\{line\}: ").s(m.name).take()
@@ -92,7 +93,7 @@ priv fn sweep(p: policy.Pilot$@, b: blob.Blob, compute: Arena$@, arena: Arena$@)
             if (dist == 0I64 && !m.name.equals("stop")) ||
                 (dist > 0I64 && dist < NEAR_MM && m.lon > 0)
                 sw.bad.push(at)
-            d: = blob.drive(b, dist, line, scratch)
+            d: = blob.drive(loaded, dist, line, scratch)
             if d.margin < TIGHT_MARGIN
                 sw.tight += 1
             else if d.lon != m.lon || d.lat != m.lat || d.rot != m.rot

@@ -71,26 +71,26 @@ priv struct Cmd //< a command selected by a positional argument's name (`fmt` / 
     is_default: Bool //< chosen when no command is named; its name is never typed
     form: U8[] //< what follows its name in its usage line (`<input.kspl>...`); empty: nothing
 
-priv fn store_value(o: Opt@, val: U8[], again: Bool): Void!Argument_error //<
-    //< Interprets the value by o's kind and stores it in the destination
+priv fn store_value(opt: Opt@, val: U8[], again: Bool): Void!Argument_error //<
+    //< Interprets the value by opt's kind and stores it in the destination
     //< Caution: **Refuse an item of one value given `again`.** Kept, the later value silently wins,
     //< so a word added to the end of a command line undoes one before it (`--out=a --out=b`).
-    switch o.kind
+    switch opt.kind
     case .str_val(out)
         if again
-            throw .repeated(o.name)
+            throw .repeated(opt.name)
         out$ = val
     case .int_val(out)
         if again
-            throw .repeated(o.name)
+            throw .repeated(opt.name)
         out$ = val.to_i64() catch
-            throw .bad_value(o.name)
+            throw .bad_value(opt.name)
     case .str_list(out)
         out.push(val)
     default
         // A flag or command takes no value; parse_list refuses `=value` earlier, but it is not
         // ignored.
-        throw .unexpected_value(o.name)
+        throw .unexpected_value(opt.name)
 
 priv fn stop(asked: U8[], name: U8[], why: U8[], file: U8[], line: Sz) //<
     //< Stops the program over a declaration the program itself got wrong
@@ -130,11 +130,11 @@ pub struct Parser //< the declarations, and where the parsed values go
     pub about: U8[] //< one line saying what the program is, shown above the options
     priv opts: List<|Opt|>$@
     priv cmds: List<|Cmd|>$@
-    pub rest: List<|U8[]|>$@ //< the positional arguments, in the order they appeared.
+    pub rest: List<|U8[]|>$@ //< the positional arguments, in the order they appeared
         //< Neither an option nor a command name. Unless `positional` declared them, each is an
         //< error.
     priv positional_help: U8[] //<
-        //< The usage name declared by `positional`. Empty: the CLI takes no positional argument.
+        //< The usage name declared by `positional`. Empty: the CLI takes no positional argument
     priv takes_positional: Bool
     pub command: U8[]? //< the chosen command, or none
         //< Where no command is named, it is the one `default_command` declared, or none.
@@ -545,12 +545,12 @@ impl Parser
                 out.s("          ").s(c.name).s(" (the default subcommand)")
             out.c('\n')
 
-    priv fn print_form(r: Self@, c: Cmd@, out: Writer) //< a command's line after `usage: `
+    priv fn print_form(r: Self@, cmd: Cmd@, out: Writer) //< a command's line after `usage: `
         out.s(r.prog)
-        if !c.is_default
-            out.c(' ').s(c.name)
-        if c.form.len > 0
-            out.c(' ').s(c.form)
+        if !cmd.is_default
+            out.c(' ').s(cmd.name)
+        if cmd.form.len > 0
+            out.c(' ').s(cmd.form)
 
     pub fn print_command_usage( //< writes one command's usage line, for refusing its arguments
         //< The line is `usage: prog name form`, with the form `command_form` gave. A name declared
@@ -660,35 +660,35 @@ impl Parser: Manual_free //< `free()` lets go the arena a parser made with null 
         own.free()
 
 impl Argument_error: Formattable //< so a failure can be written straight into a message
-    pub fn fmt(r: Self, w: Writer): Writer //< writes the reason for a person to read
+    pub fn fmt(r: Self, out: Writer): Writer //< writes the reason for a person to read
         //< Interpolation expands into a chain of calls on a Writer ("The expansion specification
         //< for string interpolation" in docs/SPEC-programming-language.md). Returning a `U8[]`
         //< would leave the caller managing a temporary buffer's lifetime.
         switch r
         case .help_requested
-            return w.s("help requested")
+            return out.s("help requested")
         case .unknown_option(n)
-            return w.s("unknown option '").s(n).s("'")
+            return out.s("unknown option '").s(n).s("'")
         case .missing_value(n)
-            return w.s("option '").s(n).s("' needs a value, written as '").s(n).s("=<value>'")
+            return out.s("option '").s(n).s("' needs a value, written as '").s(n).s("=<value>'")
         case .bad_value(n)
-            return w.s("option '").s(n).s("' got a value that is not a number")
+            return out.s("option '").s(n).s("' got a value that is not a number")
         case .missing_required(n)
-            return w.s("option '").s(n).s("' is required")
+            return out.s("option '").s(n).s("' is required")
         case .unexpected_value(n)
-            return w.s("option '").s(n).s("' is a flag and takes no value")
+            return out.s("option '").s(n).s("' is a flag and takes no value")
         case .multiple_commands(n)
-            return w.s("cannot combine '").s(n).s("' with another command")
+            return out.s("cannot combine '").s(n).s("' with another command")
         case .unexpected_arg(n)
-            return w.s("unexpected argument '").s(n).s("'")
+            return out.s("unexpected argument '").s(n).s("'")
         case .before_command(n, c)
-            return w.s("'").s(n).s("' stands before '").s(c).s("'. '").s(c)
+            return out.s("'").s(n).s("' stands before '").s(c).s("'. '").s(c)
                 .s("' takes the argument after it and passes on the rest, so write '").s(c).s(" ")
                 .s(n).s("'")
         case .repeated(n)
-            return w.s("option '").s(n).s("' takes one value and is given more than once")
+            return out.s("option '").s(n).s("' takes one value and is given more than once")
         case .not_for_command(n, c, cs)
             if c.len == 0
-                return w.s("option '").s(n).s("' takes effect only with a subcommand: ").s(cs)
-            return w.s("option '").s(n).s("' does not take effect on the subcommand '").s(c)
+                return out.s("option '").s(n).s("' takes effect only with a subcommand: ").s(cs)
+            return out.s("option '").s(n).s("' does not take effect on the subcommand '").s(c)
                 .s("'. It takes effect on: ").s(cs)

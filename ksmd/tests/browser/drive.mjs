@@ -330,6 +330,14 @@ export function driver(page) {
     await clickAt(at[0], at[1]);
   }
 
-  return { page, js, settle, frames, resize, until, reload, press, type, select, click, clickBelow, drag, menu, point,
+  // Puts the page on paper (`"print"`) or back on screen (`""`), then waits until it has settled.
+  // Back on screen the header shows again: its height is read on the next frame (`--top-height`),
+  // and wide tables are pinned again on the frame after. Either can move what a press aims at.
+  async function media(kind) {
+    await page("Emulation.setEmulatedMedia", { media: kind });
+    await frames(3);
+  }
+
+  return { page, js, settle, frames, media, resize, until, reload, press, type, select, click, clickBelow, drag, menu, point,
     doubleClickAt, rightClick, dragTo, openCell };
 }

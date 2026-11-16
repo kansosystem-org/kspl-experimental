@@ -49,8 +49,9 @@ priv struct Bpe_key
     val: U64
 
 impl Bpe_key
-    priv fn of(a: I32, b: I32): Bpe_key //< the key of the pair (a, b), a in the high half
-        return Bpe_key::{ .val = ((U64::a) << 32) | (U64::b) }
+    priv fn of(left: I32, right: I32): Bpe_key //<
+        //< the key of the pair (`left`, `right`), `left` in the high half
+        return Bpe_key::{ .val = ((U64::left) << 32) | (U64::right) }
 
 impl Bpe_key: ds.Hashable<|Bpe_key|> //< so a pair of token IDs can stand as a map's key
     //< **Both IDs are mixed** (`ds.fmix32`). An XOR of the two stays below the vocabulary's size
@@ -88,10 +89,11 @@ priv struct Marker_step //< one step of `encode`'s work: a piece of text, or one
 
 priv const GPT2_SHIFTED: Sz = 68 //< how many bytes GPT-2's mapping writes as U+0100 and above
 
-priv fn gpt2_printable(b: I32): Bool //< whether GPT-2's mapping writes the byte as itself
-    return (b >= 0x21 && b <= 0x7E) || (b >= 0xA1 && b <= 0xAC) || (b >= 0xAE && b <= 0xFF)
+priv fn gpt2_printable(byte: I32): Bool //< whether GPT-2's mapping writes the byte as itself
+    return (byte >= 0x21 && byte <= 0x7E) || (byte >= 0xA1 && byte <= 0xAC) ||
+        (byte >= 0xAE && byte <= 0xFF)
 
-priv fn gpt2_shifted(): U8[GPT2_SHIFTED] //< the bytes GPT-2's mapping writes as U+0100, U+0101..
+priv fn gpt2_shifted(): U8[GPT2_SHIFTED] //< the bytes GPT-2's mapping writes as U+0100 and on
     //< In ascending order: the bytes that are not printable, which the mapping numbers from 256.
     $out: U8[GPT2_SHIFTED] = ::{}
     $n: Sz = 0
@@ -133,22 +135,22 @@ priv struct Bpe_pair //< two adjacent pieces a rule merges, waiting in the queue
     left_id: I32 //< the left piece's token when queued; a pair whose pieces changed is stale
     right_id: I32 //< the right piece's token when queued
 
-priv fn merges_first(a: Bpe_pair, b: Bpe_pair): Bool //< whether `a` merges before `b`
+priv fn merges_first(left: Bpe_pair, right: Bpe_pair): Bool //< whether `left` merges before `right`
     //< The smaller rank first, and the leftmost of one rank, as a scan of the chunk would pick.
-    return a.rank < b.rank || (a.rank == b.rank && a.left < b.left)
+    return left.rank < right.rank || (left.rank == right.rank && left.left < right.left)
 
-priv fn queue_push(queue: List<|Bpe_pair|>$@, p: Bpe_pair, steps: Sz$@) //<
+priv fn queue_push(queue: List<|Bpe_pair|>$@, pair: Bpe_pair, steps: Sz$@) //<
     //< Adds a pair to the binary heap; each comparison adds one to `steps`
-    queue.push(p)
+    queue.push(pair)
     $at: = queue.len - 1
     for at > 0
         up: = (at - 1) / 2
         steps$ += 1
-        if !merges_first(p, queue[up])
+        if !merges_first(pair, queue[up])
             break
         queue[at] = queue[up]
         at = up
-    queue[at] = p
+    queue[at] = pair
 
 priv fn queue_pop(queue: List<|Bpe_pair|>$@, steps: Sz$@): Bpe_pair //<
     //< Takes the pair that merges first; each comparison adds one to `steps`
@@ -242,10 +244,10 @@ impl Tokenizer
         //< their order, which is ID order, since `load_lists` reads the words in ID order.
         for i in Range.asc(found.len)
             r.markers.push(found[i])
-        longest_first: = fn(a: Marker@, b: Marker@; ): I32
-            if a.text.len == b.text.len
+        longest_first: = fn(left: Marker@, right: Marker@; ): I32
+            if left.text.len == right.text.len
                 return 0
-            return -1 if a.text.len > b.text.len else 1
+            return -1 if left.text.len > right.text.len else 1
         r.markers$ = r.markers.order_by(longest_first, r.arena)
 
     // One entry per line: vocab.txt "<id>\t<hex>" (the word's bytes; id 0's <unk> is empty) and

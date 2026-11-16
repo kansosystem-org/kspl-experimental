@@ -40,9 +40,9 @@ fn fault_of(groups: List<|Group|>@): Group_fault? //<
             return .some(.too_deep)
     return .none
 
-fn comes_first(a: Group, b: Group): Bool //<
-    //< Whether `a` stands before `b` in the writer's order: from the top, an outer group first
-    return a.first < b.first || a.first == b.first && a.last > b.last
+fn comes_first(left: Group, right: Group): Bool //<
+    //< Whether `left` stands before `right` in the writer's order: from the top, an outer group first
+    return left.first < right.first || left.first == right.first && left.last > right.last
 
 fn order(groups: List<|Group|>$@) //< puts the groups in the writer's order
     for i in Range(1, groups.len, 1)
@@ -102,7 +102,7 @@ fn after_remove(groups: List<|Group|>$@, at: Sz) //<
         groups[i] = g
         i += 1
 
-fn read_groups(text: U8[], t: Table$@): Void!Group_fault //<
+fn read_groups(text: U8[], table: Table$@): Void!Group_fault //<
     //< Adds the groups `rows 2-4, rows 6-9 closed, columns B-D` names, in the writer's order
     //< A row is numbered from 1 and a column lettered, as a formula names them. The rows' entries
     //< come first, so one set of groups has one spelling.
@@ -113,11 +113,12 @@ fn read_groups(text: U8[], t: Table$@): Void!Group_fault //<
             end += 1
         piece: = text.sub(start, end - start)
         columns: = piece.starts_with("columns ")
-        if !columns && t.column_groups.len > 0
+        if !columns && table.column_groups.len > 0
             throw .out_of_order
-        groups: = t.column_groups@ if columns else t.groups@
-        g: = entry(piece, t.columns.len if columns else t.rows.len, columns) catch
-            throw .not_rows
+        groups: = table.column_groups@ if columns else table.groups@
+        g: =
+            entry(piece, table.columns.len if columns else table.rows.len, columns) catch
+                throw .not_rows
         if groups.len > 0 && !comes_first(groups[groups.len - 1], g)
             if groups[groups.len - 1].first == g.first &&
                 groups[groups.len - 1].last == g.last
@@ -129,9 +130,9 @@ fn read_groups(text: U8[], t: Table$@): Void!Group_fault //<
         if !text.starts_with(", ", end)
             throw .not_rows
         start = end + 2
-    if f: = fault_of(t.groups@)
+    if f: = fault_of(table.groups@)
         throw f
-    if f: = fault_of(t.column_groups@)
+    if f: = fault_of(table.column_groups@)
         throw f
 
 priv fn entry(text: U8[], lines: Sz, columns: Bool): Group!Group_fault //<
@@ -175,23 +176,23 @@ priv fn place_of(text: U8[], lines: Sz, columns: Bool): Sz!Group_fault //<
         throw .not_rows
     return n - 1
 
-fn write_groups(t: Table@, out: Str_builder$@) //< the value `read_groups` reads
-    for i in Range.asc(t.groups.len)
+fn write_groups(table: Table@, out: Str_builder$@) //< the value `read_groups` reads
+    for i in Range.asc(table.groups.len)
         if i > 0
             out.s(", ")
-        write_entry(t.groups[i], false, out)
-    for i in Range.asc(t.column_groups.len)
-        if i > 0 || t.groups.len > 0
+        write_entry(table.groups[i], false, out)
+    for i in Range.asc(table.column_groups.len)
+        if i > 0 || table.groups.len > 0
             out.s(", ")
-        write_entry(t.column_groups[i], true, out)
+        write_entry(table.column_groups[i], true, out)
 
-priv fn write_entry(g: Group, columns: Bool, out: Str_builder$@) //< `rows 2-4` or `columns B-D`
+priv fn write_entry(group: Group, columns: Bool, out: Str_builder$@) //< `rows 2-4` or `columns B-D`
     out.s("columns " if columns else "rows ")
-    write_place(g.first, columns, out)
-    if g.last > g.first
+    write_place(group.first, columns, out)
+    if group.last > group.first
         out.c('-')
-        write_place(g.last, columns, out)
-    if g.closed
+        write_place(group.last, columns, out)
+    if group.closed
         out.s(" closed")
 
 priv fn write_place(at: Sz, columns: Bool, out: Str_builder$@) //<

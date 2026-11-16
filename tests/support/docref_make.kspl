@@ -132,9 +132,9 @@ priv fn is_owned(before: U8[]): Bool //< whether the prose before a span makes i
     t: = before.trim_end().strip_suffix(" own")
     return t.ends_with("'s") || t.ends_with(" its")
 
-priv fn names(list: List<|U8[]|>@, t: U8[], family: Bool): Bool
+priv fn names(list: List<|U8[]|>@, target: U8[], family: Bool): Bool
     for n in list
-        hit: = n.starts_with(t) if family else n.equals(t)
+        hit: = n.starts_with(target) if family else n.equals(target)
         if hit
             return true
     return false
@@ -146,20 +146,20 @@ priv fn package_of(rel: U8[], dirs: List<|U8[]|>@): U8[] //<
             return d
     return ""
 
-priv fn shard_target(t: U8[], arena: Arena$@): Bool //<
+priv fn shard_target(target: U8[], arena: Arena$@): Bool //<
     //< a section named by the CI's canonical table
-    return t.starts_with("ci-shard-") && ci_gates.set_from(t, arena).is_some()
+    return target.starts_with("ci-shard-") && ci_gates.set_from(target, arena).is_some()
 
-priv fn makes(r: Rules@, t: U8[], family: Bool, arena: Arena$@): Bool //<
+priv fn makes(rules: Rules@, target: U8[], family: Bool, arena: Arena$@): Bool //<
     //< whether these rules make the target
-    if names(r.targets, t, family)
+    if names(rules.targets, target, family)
         return true
-    if names(r.patterns, "ci-shard-%", false) && shard_target(t, arena)
+    if names(rules.patterns, "ci-shard-%", false) && shard_target(target, arena)
         return true
     if !family
         return false
-    for p in r.patterns
-        if p.starts_with(t)
+    for p in rules.patterns
+        if p.starts_with(target)
             return true
     return false
 
@@ -168,38 +168,38 @@ struct Asked //< the rules of each folder make was asked for, so each is asked o
     rules: List<|Rules|>$@
 
 impl Asked
-    fn makes_in(a: Self$@, place: U8[], t: U8[], family: Bool, arena: Arena$@): Bool //<
+    fn makes_in(r: Self$@, place: U8[], target: U8[], family: Bool, arena: Arena$@): Bool //<
         //< Whether the `Makefile` in `place` (empty: the root) makes the target
         //< A forwarded suite is one the folder it goes to finds (`SUITE_FOUND`).
-        $k: Sz = a.dirs.len
-        for i in Range.asc(a.dirs.len)
-            if a.dirs.get(i).equals(place)
+        $k: Sz = r.dirs.len
+        for i in Range.asc(r.dirs.len)
+            if r.dirs.get(i).equals(place)
                 k = i
-        if k == a.dirs.len
-            a.dirs.push(place)
-            a.rules.push(rules_of(place, arena))
-        r: = a.rules.get(k)
-        if makes(r@, t, family, arena)
+        if k == r.dirs.len
+            r.dirs.push(place)
+            r.rules.push(rules_of(place, arena))
+        rules: = r.rules.get(k)
+        if makes(rules@, target, family, arena)
             return true
         for f in FORWARDS
-            if f.suites && f.dir.equals(place) && t.starts_with("test-") &&
-                names(r.suites, t.sub_from(5), family)
+            if f.suites && f.dir.equals(place) && target.starts_with("test-") &&
+                names(rules.suites, target.sub_from(5), family)
                 return true
         return false
 
-    fn makes_at_root(a: Self$@, t: U8[], arena: Arena$@): Bool //<
+    fn makes_at_root(r: Self$@, target: U8[], arena: Arena$@): Bool //<
         //< Whether `make <t>`, typed at the root, names a target
-        for place in root_places(t, arena)
-            if a.makes_in(place, t, false, arena)
+        for place in root_places(target, arena)
+            if r.makes_in(place, target, false, arena)
                 return true
         return false
 
-priv fn root_places(t: U8[], arena: Arena$@): List<|U8[]|> //<
+priv fn root_places(target: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Where `make <t>` at the root is made: the root, and each folder a pattern forwards it to
     $out: = List<|U8[]|>(arena)
     out.push("")
     for f in FORWARDS
-        if t.starts_with(f.pattern.sub(0, f.pattern.len - 1))
+        if target.starts_with(f.pattern.sub(0, f.pattern.len - 1))
             out.push(f.dir)
     return out
 

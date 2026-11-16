@@ -172,9 +172,9 @@ priv fn agg(recs: List<|Rec|>@): Agg
         tk += count.approx_tokens(code)
     return Agg::{ .files = recs.len, .bytes = b, .lines = ln, .approx_tokens = tk }
 
-priv fn write_agg(w: Writer, a: Agg): Writer
-    return w
-        .s("{\"files\":\{a.files\},\"bytes\":\{a.bytes\},\"lines\":\{a.lines\},\"approx_tokens\":\{a.approx_tokens\}}")
+priv fn write_agg(out: Writer, agg: Agg): Writer
+    return out
+        .s("{\"files\":\{agg.files\},\"bytes\":\{agg.bytes\},\"lines\":\{agg.lines\},\"approx_tokens\":\{agg.approx_tokens\}}")
 
 priv fn write_stats(use_fmt: Bool, dups: Sz, total: Agg, train: Agg, val: Agg)
     $f: = io.open(STATS_PATH, "w") catch panic("cannot open stats.json for writing")
@@ -204,8 +204,8 @@ priv fn repeats(recs: List<|Rec|>@, arena: Arena$@): List<|Bool|> //<
         sha256.write_hex(digest, U8$[]::hex)
         keyed.push(Digest_at::{ .hex = arena.dup_str(U8$[]::hex), .at = i })
         out.push(false)
-    sorted: = keyed.order_by(fn(a: Digest_at@, b: Digest_at@; ): I32 {
-        return a.hex.compare(b.hex);
+    sorted: = keyed.order_by(fn(left: Digest_at@, right: Digest_at@; ): I32 {
+        return left.hex.compare(right.hex);
     }, arena)
     for k in Range(1, sorted.len, 1)
         if sorted.get(k).hex.equals(sorted.get(k - 1).hex)

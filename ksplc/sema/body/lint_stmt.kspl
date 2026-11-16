@@ -17,19 +17,19 @@ import "std/chars" // testing and slicing single characters
 import "std/ds" { Map }
 import "std/str"
 
-fn lint_constant_condition(c: Sema_ctx$@, cond_node: Ast_node$@, is_loop: Bool) //<
+fn lint_constant_condition(ctx: Sema_ctx$@, cond_node: Ast_node$@, is_loop: Bool) //<
     //< [W0205] Detects an if or for whose condition is a boolean literal
     if !base_core.config.run_lint_checks || cond_node == null || cond_node.kind_id != .k_bool
         return
     if is_loop
         if cond_node.text.equals("true")
-            c.warn(cond_node,
+            ctx.warn(cond_node,
                 "[W0205] Loop with 'true' condition. Remove the condition. A bare 'for' loops \
                     forever.")
         else
-            c.warn(cond_node, "[W0205] Loop with 'false' condition. This loop will never execute.")
+            ctx.warn(cond_node, "[W0205] Loop with 'false' condition. This loop will never execute.")
     else
-        c.warn(cond_node,
+        ctx.warn(cond_node,
             "[W0205] Condition is a boolean literal. This block will either always or never \
                 execute.")
 fn find_last_leaf(node: Ast_node$@): Ast_node$@ //<
@@ -41,7 +41,7 @@ fn find_last_leaf(node: Ast_node$@): Ast_node$@ //<
     last_child: = node.get_child(node.children.len - 1)
     return find_last_leaf(last_child)
 
-priv fn spans_multiple_lines(c: Sema_ctx@, node: Ast_node$@): Bool
+priv fn spans_multiple_lines(ctx: Sema_ctx@, node: Ast_node$@): Bool
     // Caution: **Do not measure a node with no children.** The `()` of `f()` holds the kind's name
     // as placeholder `text`, so its length covers **bytes at an unrelated position**, and a newline
     // there reads as "it wraps". A single token has nothing to wrap.
@@ -49,11 +49,11 @@ priv fn spans_multiple_lines(c: Sema_ctx@, node: Ast_node$@): Bool
         return false
     last_leaf: = find_last_leaf(node)
     end_offset: = last_leaf.loc.offset + last_leaf.text.len
-    if end_offset <= node.loc.offset || end_offset > c.source.len
+    if end_offset <= node.loc.offset || end_offset > ctx.source.len
         return false
-    return c.source.sub(node.loc.offset, end_offset - node.loc.offset).find_char('\n').is_some()
+    return ctx.source.sub(node.loc.offset, end_offset - node.loc.offset).find_char('\n').is_some()
 
-fn lint_multiline_call_subject(c: Sema_ctx$@, node: Ast_node$@, label: U8[]) //<
+fn lint_multiline_call_subject(ctx: Sema_ctx$@, node: Ast_node$@, label: U8[]) //<
     //< [H0802] Detects a switch or if whose subject is a call with an argument list spanning lines
     //< For example `switch x.foo(a, b,\n c) case ...`.
     //< Only a wrap inside the argument list counts: a chained-call wrap (`x.method()\n .chain()`)
@@ -64,15 +64,15 @@ fn lint_multiline_call_subject(c: Sema_ctx$@, node: Ast_node$@, label: U8[]) //<
     if op == null || !op.text.equals("(")
         return
     args_node: = node.safe_get_child(2)
-    if args_node == null || !spans_multiple_lines(c, args_node)
+    if args_node == null || !spans_multiple_lines(ctx, args_node)
         return
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("[H0802] This '\{label\}' directly wraps a call whose argument list spans multiple \
             lines. Assign the call to a named temporary variable first. Then apply \{label\} to \
             that variable to separate the operations.")
-    c.hint(node, c.scratch.slice())
+    ctx.hint(node, ctx.scratch.slice())
 
-priv fn subtree_has_multiline_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+priv fn subtree_has_multiline_call(ctx: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< Whether node's subtree holds a call **whose own argument list wraps**
     //< Caution: **Do not count an inner call that fits on one line.** Only a wrap inside a wrap
     //< tangles.
@@ -82,14 +82,14 @@ priv fn subtree_has_multiline_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
         op: = node.get_postfix_op()
         if op != null && op.text.equals("(")
             inner_args: = node.safe_get_child(2)
-            if inner_args != null && spans_multiple_lines(c, inner_args)
+            if inner_args != null && spans_multiple_lines(ctx, inner_args)
                 return true
     for child in node.children
-        if subtree_has_multiline_call(c, child)
+        if subtree_has_multiline_call(ctx, child)
             return true
     return false
 
-fn lint_multiline_nested_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+fn lint_multiline_nested_call(ctx: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< [H0802] Detects a wrapping argument list with another wrapping call nested inside it
     //< For example `a.push(b.create(x,\n y, z))`.
     if !base_core.config.run_lint_checks || node == null
@@ -102,37 +102,38 @@ fn lint_multiline_nested_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
         op: = node.get_postfix_op()
         if op != null && op.text.equals("(")
             args: = node.safe_get_child(2)
-            if args != null && spans_multiple_lines(c, args) &&
-                subtree_has_multiline_call(c, args)
-                c.hint(node,
+            if args != null && spans_multiple_lines(ctx, args) &&
+                subtree_has_multiline_call(ctx, args)
+                ctx.hint(node,
                     "[H0802] This call passes another call as an argument and its argument list \
                         wraps across lines. Assign the inner call to a named temporary variable \
                         first. Pass that variable to separate the calls.")
                 return true
     for child in node.children
-        if lint_multiline_nested_call(c, child)
+        if lint_multiline_nested_call(ctx, child)
             return true
     return false
 
-fn lint_empty_block(c: Sema_ctx$@, node: Ast_node$@, kind_name: U8[], action: U8[]) //<
+fn lint_empty_block(ctx: Sema_ctx$@, node: Ast_node$@, kind_name: U8[], action: U8[]) //<
     //< [I0307] Detects a stmt_block with nothing inside (action is the advice for the context)
     //< Skipped while instantiating a generic: a branch on a type argument (`if sizeof(T) == 4`)
     //< folds. One side then looks empty though the source is not (the same reason as
     //< check_unnecessary_cast in coerce.kspl).
-    if c.is_instantiating()
+    if ctx.is_instantiating()
         return
     if base_core.config.run_lint_checks
-        c.clear_scratch().s("[I0307] Empty '\{kind_name\}' block has no effect. \{action\}")
-        c.information(node, c.scratch.slice())
+        ctx.clear_scratch().s("[I0307] Empty '\{kind_name\}' block has no effect. \{action\}")
+        ctx.information(node, ctx.scratch.slice())
 
-fn lint_if_stmt(c: Sema_ctx$@, r: Ast_node$@, then_block: Ast_node$@, else_block: Ast_node$@)
+fn lint_if_stmt(ctx: Sema_ctx$@, if_node: Ast_node$@, then_block: Ast_node$@,
+    else_block: Ast_node$@)
     if !base_core.config.run_lint_checks || then_block == null
         return
     if then_block.children.len == 0
         if else_block == null || else_block.kind_id == .k_empty
-            lint_empty_block(c, r, "if", "Consider removing it.")
+            lint_empty_block(ctx, if_node, "if", "Consider removing it.")
         else if else_block.children.len > 0
-            lint_empty_block(c, r, "if",
+            lint_empty_block(ctx, if_node, "if",
                 "Consider inverting the condition with '!' and removing the 'else' block.")
     else if else_block != null && else_block.kind_id != .k_empty
         if then_block.children.len == 1 && else_block.children.len == 1
@@ -143,34 +144,35 @@ fn lint_if_stmt(c: Sema_ctx$@, r: Ast_node$@, then_block: Ast_node$@, else_block
                 e_ret: = e_stmt.get_return_expr()
                 if t_ret != null && e_ret != null && t_ret.kind_id == .k_bool &&
                     e_ret.kind_id == .k_bool
-                    c.information(r,
+                    ctx.information(if_node,
                         "[I0308] Redundant if-return for boolean. Consider returning the condition \
                             directly.")
         // **Only where no `break` leaves this `if`**: `break ui` continues after it. Without the
         // `else`, its body would run after the `break` too, and a `break ui` inside the `else`
         // would be left with no label.
-        if !r.is_left_by_break() && then_block.is_guaranteed_to_leave(true)
-            c.hint(r,
+        if !if_node.is_left_by_break() && then_block.is_guaranteed_to_leave(true)
+            ctx.hint(if_node,
                 "[H0801] The 'if' block unconditionally exits. Consider removing 'else' and \
                     unindenting its contents (Guard clause pattern).")
         if else_block.children.len == 0
-            lint_empty_block(c, else_block, "else", "Consider removing it.")
+            lint_empty_block(ctx, else_block, "else", "Consider removing it.")
 
-fn lint_loop_stmt(c: Sema_ctx$@, block_node: Ast_node$@, label_name: U8[], has_cond: Bool)
+fn lint_loop_stmt(ctx: Sema_ctx$@, block_node: Ast_node$@, label_name: U8[], has_cond: Bool)
     if !base_core.config.run_lint_checks || block_node == null
         return
     // A bare `for { }` is the deliberate "wait here forever" idiom (a halt after a semihosting
     // exit). Only `for cond { }`, checking a condition and doing nothing, suggests a forgotten
     // body.
     if block_node.children.len == 0 && has_cond
-        lint_empty_block(c, block_node, "for",
+        lint_empty_block(ctx, block_node, "for",
             "This can run forever. Add a body or a break condition.")
     else
         last_stmt: = block_node.last_child()
         if last_stmt.kind_id == .k_stmt_continue
             t_lbl: = last_stmt.get_jump_label()
             if t_lbl == null || (label_name.len > 0 && t_lbl.text.equals(label_name))
-                c.information(last_stmt, "[I0306] Redundant 'continue' at the end of a loop block.")
+                ctx.information(last_stmt,
+                    "[I0306] Redundant 'continue' at the end of a loop block.")
 priv fn unwrap_cast(node: Ast_node$@): Ast_node$@ //<
     //< Strips implicit or explicit casts (`expr::Type`) and returns the node beneath
     //< A literal combined with an I64 variable is wrapped in an implicit cast, hiding the pattern.
@@ -250,26 +252,26 @@ priv fn collect_if_cond_idents(node: Ast_node$@, out: Map<|U8[], Bool|>$@) //<
         collect_idents(node.get_if_cond(), out)
     for child in node.children
         collect_if_cond_idents(child, out)
-priv fn resolved_real_type(c: Sema_ctx$@, name: U8[]): I32 //<
+priv fn resolved_real_type(ctx: Sema_ctx$@, name: U8[]): I32 //<
     //< Returns the real type id of name once its symbol is resolved (-1 if it cannot be resolved)
-    sym_opt: = c.symtab.resolve(name).unwrap_or(null)
+    sym_opt: = ctx.symtab.resolve(name).unwrap_or(null)
     if sym_opt == null
         return -1
-    return c.env.get_real_type(sym_opt.type_id)
-priv fn is_signed_int_symbol(c: Sema_ctx$@, name: U8[]): Bool //<
+    return ctx.env.get_real_type(sym_opt.type_id)
+priv fn is_signed_int_symbol(ctx: Sema_ctx$@, name: U8[]): Bool //<
     //< Whether the accumulating variable is a signed integer type
     //< An unsigned one is often a deliberate wraparound, as in an FNV hash.
-    return is_signed_int_id(resolved_real_type(c, name))
+    return is_signed_int_id(resolved_real_type(ctx, name))
 priv fn is_signed_int_id(real_id: I32): Bool //< whether a real type id is a signed integer type
     return real_id == (I32::sema_type_env.Builtin_type_id.i8_type) ||
         real_id == (I32::sema_type_env.Builtin_type_id.i16_type) ||
         real_id == (I32::sema_type_env.Builtin_type_id.i32_type) ||
         real_id == (I32::sema_type_env.Builtin_type_id.i64_type)
-priv fn is_integer_symbol(c: Sema_ctx$@, name: U8[]): Bool //<
+priv fn is_integer_symbol(ctx: Sema_ctx$@, name: U8[]): Bool //<
     //< Whether the variable of a multiplying compound assignment (`*=`) is any integer type
     //< Signed and unsigned both count: an unsigned product such as a shape's size can lead straight
     //< to an out-of-bounds write.
-    real_id: = resolved_real_type(c, name)
+    real_id: = resolved_real_type(ctx, name)
     if is_signed_int_id(real_id)
         return true
     return real_id == (I32::sema_type_env.Builtin_type_id.u8_type) ||
@@ -296,9 +298,9 @@ fn contains_throw_guard(node: Ast_node$@): Bool //<
         if contains_throw_guard(child)
             return true
     return false
-priv fn find_accumulator_assigns(c: Sema_ctx$@, node: Ast_node$@,
+priv fn find_accumulator_assigns(ctx: Sema_ctx$@, node: Ast_node$@,
     guarded_names: Map<|U8[], Bool|>$@, has_preceding_bound_check: Bool) //<
-        //< [W0103] Detects a digit-accumulating loop with no upper-bound check.
+        //< [W0103] Detects a digit-accumulating loop with no upper-bound check
         //< A nested for has its own lint_accumulator_overflow call, so it is not descended into.
         //< guarded_names holds the names the loop's if conditions reference (see
         //< collect_if_cond_idents).
@@ -307,22 +309,24 @@ priv fn find_accumulator_assigns(c: Sema_ctx$@, node: Ast_node$@,
     digit_name: = accumulator_var_name(node)
     mul_name: = compound_mul_var_name(node)
     is_candidate: =
-        (digit_name.len > 0 && is_signed_int_symbol(c, digit_name)) ||
-        (mul_name.len > 0 && is_integer_symbol(c, mul_name))
+        (digit_name.len > 0 && is_signed_int_symbol(ctx, digit_name)) ||
+        (mul_name.len > 0 && is_integer_symbol(ctx, mul_name))
     name: = digit_name if digit_name.len > 0 else mul_name
     if is_candidate
         has_guard: = guarded_names.get(name).unwrap_or(false)
         if !has_guard && !has_preceding_bound_check
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("[W0103] Accumulating into '\{name\}' with no upper-bound check in this loop. \
                     Untrusted input can cause overflow.")
-            c.warn(node, c.scratch.slice())
+            ctx.warn(node, ctx.scratch.slice())
     for child in node.children
-        find_accumulator_assigns(c, child, guarded_names, has_preceding_bound_check)
-fn lint_accumulator_overflow(c: Sema_ctx$@, loop_node: Ast_node$@, has_preceding_bound_check: Bool) //<
-    //< [W0103] Reports a digit-accumulating loop with no upper-bound check
-    //< has_preceding_bound_check says whether such a check came before the loop (for example one
-    //< that counts the digits and throws). The caller computes it (infer_stmt_block in stmt.kspl).
+        find_accumulator_assigns(ctx, child, guarded_names, has_preceding_bound_check)
+fn lint_accumulator_overflow(ctx: Sema_ctx$@, loop_node: Ast_node$@,
+    has_preceding_bound_check: Bool) //<
+        //< [W0103] Reports a digit-accumulating loop with no upper-bound check
+        //< has_preceding_bound_check says whether such a check came before the loop (for example
+        //< one that counts the digits and throws). The caller computes it (infer_stmt_block in
+        //< stmt.kspl).
     if !base_core.config.run_lint_checks
         return
     loop_block: = loop_node.get_loop_block()
@@ -330,10 +334,10 @@ fn lint_accumulator_overflow(c: Sema_ctx$@, loop_node: Ast_node$@, has_preceding
         return
     defer $guarded_names: = Map<|U8[], Bool|>(null)
     collect_if_cond_idents(loop_block, guarded_names@)
-    find_accumulator_assigns(c, loop_block, guarded_names@, has_preceding_bound_check)
+    find_accumulator_assigns(ctx, loop_block, guarded_names@, has_preceding_bound_check)
 
-fn lint_repeated_type(c: Sema_ctx$@, type_node: Ast_node$@, expr_node: Ast_node$@, declared_id: I32,
-    expr_id: I32) //<
+fn lint_repeated_type(ctx: Sema_ctx$@, type_node: Ast_node$@, expr_node: Ast_node$@,
+    declared_id: I32, expr_id: I32) //<
         //< [H0302] Reports a local's type written again at the start of its initializer
         //< Or `Bool` written on `true` / `false`. **Only where deleting the annotation keeps the
         //< type**: the initializer already has the declared type with nothing wrapped round it. A
@@ -346,18 +350,18 @@ fn lint_repeated_type(c: Sema_ctx$@, type_node: Ast_node$@, expr_node: Ast_node$
         return
     if expr_node.kind_id == .k_bool
         if type_node.text.equals("Bool")
-            c.hint(type_node,
+            ctx.hint(type_node,
                 "[H0302] Unnecessary type annotation. 'true' and 'false' are always 'Bool'.")
         return
-    named: = named_type_text(c, expr_node, declared_id)
+    named: = named_type_text(ctx, expr_node, declared_id)
     if named.len > 0 && named.equals(type_node.text)
-        c.hint(type_node,
+        ctx.hint(type_node,
             "[H0302] Unnecessary type annotation. The initializer already names the type.")
         return
     // **One fix per line**: where the annotation stays, the type an enum's variant writes may go.
-    lint_type_given(c, expr_node, declared_id, "The declared type already gives it.")
+    lint_type_given(ctx, expr_node, declared_id, "The declared type already gives it.")
 
-fn lint_type_given(c: Sema_ctx$@, value: Ast_node$@, expected_id: I32, giver: U8[]) //<
+fn lint_type_given(ctx: Sema_ctx$@, value: Ast_node$@, expected_id: I32, giver: U8[]) //<
     //< [H0302] Reports an enum's type written at its variant where the place already gives it
     //< The caller is one of the places where `.variant` alone is allowed. "6.6.2 Where the type may
     //< be omitted" in `docs/SPEC-programming-language.md` lists them; `expected_id` is the type it
@@ -373,13 +377,13 @@ fn lint_type_given(c: Sema_ctx$@, value: Ast_node$@, expected_id: I32, giver: U8
         v = v.get_child(0)
     // **An `if … else` passes the place's type to both sides**, so each side is a place of its own.
     if v.kind_id == .k_expr_ternary && v.children.len == 3
-        lint_type_given(c, v.get_ternary_true(), expected_id, giver)
-        lint_type_given(c, v.get_ternary_false(), expected_id, giver)
+        lint_type_given(ctx, v.get_ternary_true(), expected_id, giver)
+        lint_type_given(ctx, v.get_ternary_false(), expected_id, giver)
         return
     wanted: =
-        c.env.strip_result(expected_id) if c.env.is_result(expected_id) else expected_id
+        ctx.env.strip_result(expected_id) if ctx.env.is_result(expected_id) else expected_id
     // The immutable mark is no other enum: an array literal's element expects `Kind immut`.
-    if c.env.strip_const(v.type_id) != c.env.strip_const(wanted)
+    if ctx.env.strip_const(v.type_id) != ctx.env.strip_const(wanted)
         return
     if v.kind_id == .k_enum_init_call && v.children.len > 0
         v = v.get_child(0)
@@ -390,10 +394,10 @@ fn lint_type_given(c: Sema_ctx$@, value: Ast_node$@, expected_id: I32, giver: U8
     dot: = v.get_child(1)
     if dot.loc.offset <= named.loc.offset
         return
-    c.clear_scratch().s("[H0302] Unnecessary type name. \{giver\}")
-    c.hint_over(named, dot.loc.offset - named.loc.offset, c.scratch.slice())
+    ctx.clear_scratch().s("[H0302] Unnecessary type name. \{giver\}")
+    ctx.hint_over(named, dot.loc.offset - named.loc.offset, ctx.scratch.slice())
 
-priv fn named_type_text(c: Sema_ctx$@, expr: Ast_node$@, declared_id: I32): U8[] //<
+priv fn named_type_text(ctx: Sema_ctx$@, expr: Ast_node$@, declared_id: I32): U8[] //<
     //< The type an initializer names at its start, spelled as a `type_expr` spells it, or empty
     switch expr.kind_id
     case .k_struct_literal
@@ -402,31 +406,32 @@ priv fn named_type_text(c: Sema_ctx$@, expr: Ast_node$@, declared_id: I32): U8[]
     case .k_enum_init
         return expr.get_child(0).text
     case .k_enum_init_call
-        return named_type_text(c, expr.get_child(0), declared_id)
+        return named_type_text(ctx, expr.get_child(0), declared_id)
     case .k_expr_postfix
         if expr.ival != 1 && expr.text.equals("::") && expr.children.len == 3
-            return cast_target_text(c, expr, declared_id)
+            return cast_target_text(ctx, expr, declared_id)
         // Caution: **Not while instantiating.** A call's type is decided by its callee, and an impl
         // for one instance can give that instance's callee another return type.
-        if expr.children.len > 1 && expr.get_child(1).is_literal("(") && !c.is_instantiating()
+        if expr.children.len > 1 && expr.get_child(1).is_literal("(") &&
+            !ctx.is_instantiating()
             return callee_owner_text(expr.get_child(0))
     default {}
     return ""
 
-priv fn cast_target_text(c: Sema_ctx$@, cast: Ast_node$@, declared_id: I32): U8[] //<
+priv fn cast_target_text(ctx: Sema_ctx$@, cast: Ast_node$@, declared_id: I32): U8[] //<
     //< An explicit cast's type, or empty where [I0301] asks to drop the cast instead
     //< Caution: **Back off where the cast only widens or changes nothing.** There [I0301] says to
     //< delete the cast and keep the annotation; deleting both can leave the value's own type.
     //< While instantiating, [I0301] says nothing, so the two cannot conflict.
     value: = cast.get_child(0)
-    real_src: = c.env.get_real_type(value.type_id)
-    real_dst: = c.env.get_real_type(declared_id)
+    real_src: = ctx.env.get_real_type(value.type_id)
+    real_dst: = ctx.env.get_real_type(declared_id)
     // **Nor where the cast changes nothing**: [I0301] asks to drop it, so one fix per line.
-    if !c.is_instantiating() && value.type_id != 0 &&
+    if !ctx.is_instantiating() && value.type_id != 0 &&
         sema_body_coerce.is_identity_cast(value, real_src, real_dst)
         return ""
-    if !c.is_instantiating() && value.type_id != 0 && real_src != real_dst
-        kind: = sema_body_coerce.implicit_cast_kind(c, real_src, real_dst, value.type_id,
+    if !ctx.is_instantiating() && value.type_id != 0 && real_src != real_dst
+        kind: = sema_body_coerce.implicit_cast_kind(ctx, real_src, real_dst, value.type_id,
             declared_id)
         switch kind
         case .none {}

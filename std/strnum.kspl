@@ -18,7 +18,7 @@ priv const F64_MANTISSA_DIGITS: Sz = 19 //<
 priv const F64_EXP_DIGITS_LIMIT: I64 = 1000000000I64 //< the cap on the exponent part
     //< Caution: **Do not cap it near F64's range (±400).** The 0s after the decimal point are
     //< subtracted from the scale, so capping `0.000…1e4001`'s exponent at 400 gives a wrong value.
-priv const POW10_MAX: Sz = 22 //< the powers of 10 an F64 can hold **exactly**.
+priv const POW10_MAX: Sz = 22 //< the powers of 10 an F64 can hold **exactly**
     //< **Stop at 10^22.** 10^23 does not fit an F64 exactly, and "significand x 10^n rounds
     //< once" holds only within this range.
 priv const F64_EXACT_MANTISSA: U64 = 9007199254740992U64 //<
@@ -220,45 +220,45 @@ impl U8[]
         v: = bignat.f64_from_bits(bits)
         return -v if neg else v
 
-priv fn leading_zeros(v: U64): U64 //< how many 0 bits stand above the highest 1 (v > 0)
+priv fn leading_zeros(value: U64): U64 //< how many 0 bits stand above the highest 1 (`value` > 0)
     $n: U64 = 0
-    $x: = v
+    $x: = value
     for width in U64[]::{ 32U64, 16U64, 8U64, 4U64, 2U64, 1U64 }
         if x >> (64U64 - width) == 0U64
             n += width
             x <<= width
     return n
 
-priv fn nearest_f64(w: U64, q: I64): U64 //<
-    //< The bits of the F64 nearest w x 10^q, a tie to the even one
-    //< It is Eisel-Lemire as fast_float does it. w times the top 128 bits of 10^q gives the top 55
-    //< bits of the product. Mushtak and Lemire prove those always round right. The low half of
-    //< the table is read only when a carry from below could reach those bits.
-    if w == 0U64 || q < I64::bignat.POW10_Q_MIN
+priv fn nearest_f64(mantissa: U64, exponent: I64): U64 //<
+    //< The bits of the F64 nearest `mantissa` x 10^exponent, a tie to the even one
+    //< It is Eisel-Lemire as fast_float does it. `mantissa` times the top 128 bits of 10^exponent
+    //< gives the top 55 bits of the product. Mushtak and Lemire prove those always round right. The
+    //< low half of the table is read only when a carry from below could reach those bits.
+    if mantissa == 0U64 || exponent < I64::bignat.POW10_Q_MIN
         return 0U64
-    if q > F64_Q_MAX
+    if exponent > F64_Q_MAX
         return F64_INF_BITS
-    lz: = leading_zeros(w)
-    $p: = bignat.pow10_128(I32::q)
+    lz: = leading_zeros(mantissa)
+    $p: = bignat.pow10_128(I32::exponent)
     // From 10^-27 to 10^-1 the entry is rounded up instead, as the proof needs. 5^-q fits a U64
     // there. An exact quotient (where a tie can be) then shows nothing or a 1 below its bits.
-    if q < 0I64 && q >= F64_ROUND_UP_Q_MIN
+    if exponent < 0I64 && exponent >= F64_ROUND_UP_Q_MIN
         p.lo += 1U64
         if p.lo == 0U64
             p.hi += 1U64
-    $x: = bignat.mul_wide(w << lz, p.hi)
+    $x: = bignat.mul_wide(mantissa << lz, p.hi)
     if (x.hi & 0x1FFU64) == 0x1FFU64
-        low: = bignat.mul_wide(w << lz, p.lo).hi
+        low: = bignat.mul_wide(mantissa << lz, p.lo).hi
         x.lo += low
         if x.lo < low
             x.hi += 1U64
     upper: = x.hi >> 63U64
     shift: = upper + 9U64
     $mant: = x.hi >> shift // 54 bits: the 53 kept and one to round by
-    // The exponent field: the product's top bit stands at 2^(floor_log2_pow10(q) + 63 + upper -
-    // lz), and the field is biased by 1023.
+    // The exponent field: the product's top bit stands at 2^(floor_log2_pow10(`exponent`) + 63 +
+    // upper - lz), and the field is biased by 1023.
     $power2: =
-        I64::bignat.floor_log2_pow10(I32::q) + 63I64 + I64::upper - I64::lz + 1023I64
+        I64::bignat.floor_log2_pow10(I32::exponent) + 63I64 + I64::upper - I64::lz + 1023I64
     if power2 <= 0I64
         // A subnormal. Rounding up to 2^52 gives the smallest normal, whose bits are the same.
         if -power2 + 1I64 >= 64I64
@@ -267,7 +267,7 @@ priv fn nearest_f64(w: U64, q: I64): U64 //<
         mant += mant & 1U64
         return mant >> 1U64
     // Exactly halfway, with nothing cut off: round down to the even one instead of up.
-    tie_range: = q >= F64_TIE_Q_MIN && q <= F64_TIE_Q_MAX
+    tie_range: = exponent >= F64_TIE_Q_MIN && exponent <= F64_TIE_Q_MAX
     if tie_range && x.lo <= 1U64 && (mant & 3U64) == 1U64 && (mant << shift) == x.hi
         mant &= ~1U64
     mant += mant & 1U64
@@ -342,26 +342,26 @@ priv fn collect_decimal(body: U8[]): Decimal_text //<
         d.exp10 += -ev if esign else ev
     return d
 
-priv fn cmp_scaled(d: Decimal_text@, pow10: Bignat@, q: U64, t: I64): I32 //<
-    //< Compares the true value `d` with `q x 2^t` (-1 / 0 / 1)
+priv fn cmp_scaled(decimal: Decimal_text@, pow10: Bignat@, mantissa: U64, exponent: I64): I32 //<
+    //< Compares the true value `decimal` with `mantissa x 2^exponent` (-1 / 0 / 1)
     //< A negative power is multiplied into the other side (the arbitrary precision has no
-    //< division). `pow10` is `10^|d.exp10|`, which the caller keeps so it is not rebuilt on each
-    //< call.
-    $left: = d.digits
-    $right: = Bignat.from_u64(q)
+    //< division). `pow10` is `10^|decimal.exp10|`, which the caller keeps so it is not rebuilt on
+    //< each call.
+    $left: = decimal.digits
+    $right: = Bignat.from_u64(mantissa)
     // The sign decides which side `10^|exp10|` multiplies: the value's side if positive, the power
     // of 2's side if negative.
-    if d.exp10 > 0I64
+    if decimal.exp10 > 0I64
         left.mul(pow10)
-    else if d.exp10 < 0I64
+    else if decimal.exp10 < 0I64
         right.mul(pow10)
-    if t >= 0I64
-        right.shl(Sz::t)
+    if exponent >= 0I64
+        right.shl(Sz::exponent)
     else
-        left.shl(Sz::(-t))
+        left.shl(Sz::(-exponent))
     c: = left.cmp(right@)
     // The digits not collected make the true value larger, which matters only if both look equal.
-    return 1 if c == 0 && d.sticky else c
+    return 1 if c == 0 && decimal.sticky else c
 
 // `#noinline` keeps its multiple-precision values (some 1.5KB) out of `to_f64`'s frame.
 #noinline

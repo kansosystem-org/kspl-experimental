@@ -79,6 +79,18 @@ fn is_anon_env_type(name: U8[]): Bool //<
     sb.c('.').s(ANON_ENV_PREFIX)
     return name.find_str(sb.slice()).is_some()
 
+priv const ANON_ENV_CTOR_PREFIX: U8[] = "_anon_env_new_" //<
+    //< The prefix on the name of the function that builds a closure's environment
+    //< Its parameters are the closure's captures, so they carry the names of the outer locals.
+
+fn build_anon_env_ctor_name(serial: Sz): U8[] //< it makes that function's name from a serial number
+    //< Caution: Start it with `_`, or [W0206] fires where one goes unused.
+    return base_core.arena.text().s(ANON_ENV_CTOR_PREFIX).s("\{serial\}").take()
+
+fn is_anon_env_ctor_name(name: U8[]): Bool //< whether a name was made by build_anon_env_ctor_name
+    //< [H0501] asks it, since a capture's name is the outer local's and is not chosen here.
+    return name.starts_with(ANON_ENV_CTOR_PREFIX)
+
 priv const MAX_OFFSET: Sz = 2147483647 //<
     //< The largest position an I32 can hold
     //< **It is also the size limit of one source** (`Loc.at` rejects a larger one).
@@ -121,8 +133,8 @@ impl Loc
         return base_core.pools.get_file_str(r.file_id)
 
 impl Loc: Formattable
-    fn fmt(r: Self$@, w: Writer): Writer
-        return w.s("\{base_core.pools.get_file_str(r.file_id)\}:offset_\{r.offset\}")
+    fn fmt(r: Self$@, out: Writer): Writer
+        return out.s("\{base_core.pools.get_file_str(r.file_id)\}:offset_\{r.offset\}")
 
 struct Span_info
     span: Sz
@@ -651,7 +663,7 @@ impl Ast_node
 
     priv fn find_deep_child_impl(r: Self$@, target_id: base_ast_kinds.Ast_kind, depth: Sz):
         Ast_node$@? //<
-            //< Depth-guarded, since a postfix chain escapes max_parse_depth (see max_clone_depth).
+            //< Depth-guarded, since a postfix chain escapes max_parse_depth (see max_clone_depth)
         if r == null
             return .none
         if depth >= MAX_FIND_DEEP_CHILD_DEPTH

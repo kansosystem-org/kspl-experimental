@@ -206,7 +206,7 @@ function ksmdChart(ks) {
       const l = Number(labels.value);
       const rowName = (r) => {
         const v = table && table.values[r] && table.values[r][l];
-        return v && v[0] === 2 ? String(v[1]) : `Row ${r + 1}`;
+        return v && v[0] === ks.CELL.TEXT ? String(v[1]) : `Row ${r + 1}`;
       };
       const items = rows ? (b.sr[l] || []).map((r) => [r, rowName(r)]) : b.cols.map((n, c) => [c, name(c)]);
       for (const [at, text] of items) {

@@ -11,7 +11,7 @@
 
 **To start, follow the three [Quick start](#-quick-start-write-and-run-your-first-program) steps below**, then learn the language in short steps with [`docs/TUTORIAL-programming-language.md`](docs/TUTORIAL-programming-language.md).
 
-"Kanso" (簡素, simplicity) names the project’s design philosophy. KSPL, Kanso OS, Kanso Server, the AI engine, Kanso DataBase, Kanso Doc and the folder agent follow it.
+"Kanso" (簡素, simplicity) names the project’s design philosophy. KSPL, Kanso OS, Kanso Server, the AI engine, Kanso DataBase, the document editor and the folder agent follow it.
 
 **The compiler turns KSPL into C99**, the 1999 edition of C that nearly every C compiler accepts, and a C compiler then builds the program. A new platform therefore needs a C compiler rather than a port of the whole toolchain. [Where it is supported](#where-it-is-supported) lists the confirmed environments.
 
@@ -41,6 +41,8 @@ Put the C compiler `clang` on your PATH before starting. `ksplc` passes its gene
   make install                       # puts ksplc into ~/.local/bin, std/, lib/ and ksmd into ~/.local/lib/kspl
   ```
 
+  **`make` alone leaves the compiler at `out/ksplc_stage1.exe`.** Run from the repository's top folder, it finds the standard library in the `std/` there. In any other folder it finds none, so run `make install`, or set `KSPLC_STD_DIR` to the repository's `std/`.
+
   Installation requirements and failures are in "Putting `ksplc` on the PATH" in [`docs/HOWTO-build.md`](docs/HOWTO-build.md).
 
   **Alternatively, download a zip** from the Releases page if one exists for your system.
@@ -50,6 +52,8 @@ Put the C compiler `clang` on your PATH before starting. `ksplc` passes its gene
   | Linux x64 | `ksplc-<version>-linux-x64.zip` |
   | macOS on Apple Silicon | `ksplc-<version>-macos-arm64.zip`. Continuous integration (CI) builds it, but nobody confirms it ([Where it is supported](#where-it-is-supported)) |
   | Windows x64 | `ksplc-<version>-windows-x64.zip` |
+
+  **Check the download first.** The Releases page also carries `SHA256SUMS`, one SHA-256 per file. In the folder that holds both, run `sha256sum -c --ignore-missing SHA256SUMS` on Linux, or `shasum -a 256 -c --ignore-missing SHA256SUMS` on macOS. On Windows, compare the hash `Get-FileHash <zip>` prints in PowerShell with the zip's line. A line that is not `OK`, or a hash that differs, means the file is not what the release built.
 
   Unpack the zip, which places `ksplc` beside the standard library, `std/`. On Linux and macOS, run `chmod +x ksplc`. To run it from anywhere, read "Working in another folder" in [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md).
 
@@ -68,6 +72,7 @@ Put the C compiler `clang` on your PATH before starting. `ksplc` passes its gene
 
   ```sh
   ksplc run hello.kspl      # inside the unpacked folder: ./ksplc run hello.kspl
+                            # built with make alone, in the repository: out/ksplc_stage1.exe run hello.kspl
   ```
 
   `run` compiles, links and runs the program in one command. It prints `Hello, Kanso!`.
@@ -106,7 +111,7 @@ A row counts only what actually ran.
 | **The folder agent** (`ksagent/`) | Answers questions about a folder's files through a model server on the same machine, citing lines it checks | **Only against a stand-in model server**; no real model runs in CI |
 | **The document editor** (`ksmd/`) | Prose, lists, formatting, calculating tables with resizable columns, images and included files, in a `.ksmd` source a person can read. Opens and saves a folder's files through `kssrv --local`, and opens a document on a double-click. | Runs in a browser with wasm32. Browser tests drive headless Chromium on Linux. Other browsers, a real input method editor (IME) and screen readers are untested. The double-click was checked by hand on Windows only. [ksmd](ksmd/README.md) lists what works and its limits. |
 
-**The car demonstrates that the mechanism runs on a microcontroller.** It decides with a policy trained on the PC, and trains nothing while it drives ("🤖 The AI on bare metal" in [`lib/ksos/docs/DESIGN-rtos.md`](lib/ksos/docs/DESIGN-rtos.md)). [`lib/ksos/docs/TUTORIAL-bring-up.md`](lib/ksos/docs/TUTORIAL-bring-up.md) brings it up. It is a commercial car kit, not a passenger vehicle.
+**The car demonstrates that the mechanism runs on a microcontroller.** It decides with a policy trained on the PC, and trains nothing while it drives ("The AI on bare metal" in [`lib/ksos/docs/DESIGN-rtos.md`](lib/ksos/docs/DESIGN-rtos.md)). [`lib/ksos/docs/TUTORIAL-bring-up.md`](lib/ksos/docs/TUTORIAL-bring-up.md) brings it up. It is a commercial car kit, not a passenger vehicle.
 
 **Current work improves the existing parts** rather than adding features. [`docs/PLAN.md`](docs/PLAN.md) lists the remaining work by package.
 
@@ -161,6 +166,8 @@ A document’s name identifies its kind: `TUTORIAL-` teaches, `HOWTO-` gives tas
 
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
+| [`docs/TUTORIAL-programming-language.md`](docs/TUTORIAL-programming-language.md) | Learning KSPL by walking through one small program, one declaration at a time | Whoever knows another language and starts with KSPL |
+| [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) | The language, rule by rule. Its Appendix A lists the habits from other languages that KSPL refuses | Whoever writes KSPL and needs a rule exactly |
 | [`ksagent/docs/TUTORIAL-ask-about-your-files.md`](ksagent/docs/TUTORIAL-ask-about-your-files.md) | Asking questions about a folder of Word, Excel and text files, with a model on your own computer | Whoever wants answers from their own documents, with the sources checked |
 | [`docs/README.md`](docs/README.md) | Every document that belongs to no single package, and who each is for: the tutorial, the language specification, building from source and changing Kanso | Whoever writes KSPL, builds it or changes Kanso |
 | Each package's `README.md` | That package's entry point, linked from its row in "Repository layout" above | Whoever uses or changes that package |

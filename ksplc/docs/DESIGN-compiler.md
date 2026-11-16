@@ -4,7 +4,7 @@
 
 **It is for a developer changing `ksplc/`, the compiler itself.** It explains how the compiler works inside, not how to use KSPL. It holds the map of the whole compiler and the rules every part shares. Each layer has a document of its own, listed with the others in "Further reading" in [`ksplc/README.md`](../README.md#further-reading).
 
-Read "The compiler as a whole" and "The Development Principles" first. Read "The rules for handling an AST, shared by every layer" to "The development conventions" before writing any compiler code.
+Read "The compiler as a whole" and "The compiler's own principles" first. Read "The rules for handling an AST, shared by every layer" to "The development conventions" before writing any compiler code.
 
 The compiler's terms (ICE, MIR, monomorphization and the rest) are in [the glossary](#the-glossary), the last chapter.
 
@@ -48,7 +48,7 @@ flowchart TD
 
 ### The bootstrap, and keeping the seed in step
 
-The compiler is *self-hosting*: it is written in KSPL, so building it needs a KSPL compiler. A C file checked into git, the *seed*, is that first compiler. A two-stage *bootstrap* runs the loop below.
+The compiler is *self-hosting*: it is written in KSPL, so building it needs a KSPL compiler. A C file checked into git, the *seed*, is that first compiler. A *bootstrap* of three steps (the seed, stage 1, stage 2) runs the loop below.
 
 ```mermaid
 flowchart LR
@@ -170,7 +170,7 @@ Caution: **Do not compare the sizes as a ratio.** A ratio to a baseline lets one
 
 Caution: **Keep the characters of every line another program reads.** The guard finds its lines by the patterns at its head (`TIME_PATTERN` in `tests/checkers/perf_guard.kspl` and the ones beside it). `STATS_HEAD` in `ksplc/tests/suite/ast_cache_test.kspl` finds `[AST Cache]`.
 
-## The Development Principles
+## The compiler's own principles
 
 The eight principles that hold for all of Kanso are "Development Principles" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md); "Principle N" in this document points there. The two below assume the pipeline, so they hold only for the compiler.
 
@@ -276,6 +276,17 @@ Making and discarding things take one name **per role**, with no dialects such a
 
 ## The development conventions (the rules for writing KSPL source)
 
+**No declaration under `ksplc/` is `pub`**, since nothing outside the compiler imports it. A reader, a model among them, reads a file's declarations with `ksplc doc --surface-scope=all <file>[.<name>]`. Without the flag, `ksplc doc` finds nothing published and names the flag.
+
+### A context's parameter, and the receiver's
+
+**Each context type has one parameter name**, so `ctx.x` and `df.x` show which context a line reads, even in one file:
+
+* **`Sema_ctx` is `ctx`**, the analysis' context. A field that holds one keeps its own name (`df.sema`, `cg.sema`).
+* **`Genc_ctx` and `Genllvm_ctx` are `cg`**, a backend's context.
+* **`Df_ctx` is `df`**, the dataflow's context, which reaches the analysis' as `df.sema` (the head of `sema/flow/track.kspl`).
+* **`r` is a method's receiver and nothing else**, as in the language's own convention. A plain parameter takes a name that says what it holds (`root`, `decl`, `range`). The hint [H0501] reports a one-letter one ("A parameter is named with a word" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md#a-parameter-is-named-with-a-word)).
+
 ### The order of imports, and their paths
 
 `ksplc/`'s own imports follow two rules, so a reader sees which layer a name comes from:
@@ -287,7 +298,7 @@ Making and discarding things take one name **per role**, with no dialects such a
 
 **Which names come in without a namespace is "Prefix a name only when it cannot state its origin" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md).** In `ksplc/`, its condition 3 asks whether the origin is information that belongs to the design:
 
-* **A reference across the pipeline's stages (`parse` / `sema` / `lower` / `gen`) keeps its prefix.** `sema_types.Env` written inside `gen/c/` shows which layer it depends on.
+* **A reference across the pipeline's stages (`parse` / `sema` / `lower` / `gen`) keeps its prefix.** `sema_type_env.Env` written inside `gen/c/` shows which layer it depends on.
 * **`ksplc/base/` and `std/` are exempt.** Every layer rests on them. Where conditions 1 and 2 hold, no namespace is fine.
 
 ### A file using an extension method imports its defining file

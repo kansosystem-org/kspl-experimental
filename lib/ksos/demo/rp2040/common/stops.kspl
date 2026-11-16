@@ -1,0 +1,116 @@
+//< The self-driving car's stop decisions, with no hardware
+//< **Each function here takes readings and counts, and returns what to do.** The firmware reads
+//< the sensors, calls these, and turns the wheels. So `lib/ksos/tests/stops_test.kspl` checks every
+//< decision on the host, while the car checks only the sensors and the wiring.
+//< Caution: **Do not import a driver or a board here.** One hardware access makes the decisions
+//< untestable on the host again.
+//< The battery's rule has its own state, so it stays in `common/battery.kspl` (`Watch.judge`).
+
+// ==========================================
+//   if stops.too_close(raw) { back off }
+//   if stops.out_of_time(rounds) { stop }
+//   switch stops.remote.look(seen, halted, needs_remote) case .stop { … } case .rearm { … } default {}
+// ==========================================
+
+const EMERGENCY_MM: U32 = 100 //<
+    //< The distance at which it backs off, before the policy's decision [mm]
+
+// The limit on driving [rounds]; 0 is unlimited. **The only stop that works while nobody is
+// watching** (IR needs line of sight). A held press re-arms it.
+const MAX_DRIVING_ROUNDS: U32 = 600 // 60 seconds at a 100ms period
+
+// --- the remote's press lengths. **These are outside the policy**: like the battery and
+// point-blank range, the car decides them alone, with no link ---
+const IR_REARM_ROUNDS: U32 = 8 //<
+    //< How long a press must be held to re-arm the car [rounds]
+    //< Caution: **Only a held press may re-arm it**; a brief press would set it off in the hand
+    //< picking it up. A repeat comes about every 108ms, one per round (8 rounds ≈ 0.8s held).
+const IR_RELEASE_ROUNDS: U32 = 3 //< how many rounds with no frame count as released
+    //< Longer than the repeat interval (108ms), or a gap in a held press restarts the count.
+
+const IR_DUMP_ROUNDS: U32 = 25 //< how long a press must be held to dump the record [rounds]
+    //< **Make it longer than re-arming**, the everyday action (about three times). **Do not read it
+    //< as seconds** — a round stretches by up to 70ms while it receives an IR frame.
+const IR_WIPE_ROUNDS: U32 = 60 //< how long a press must be held to erase the record [rounds]
+    //< **Make it longer than dumping**, since erasing cannot be undone. **It is decided by the
+    //< press's length at release**, so it cannot trigger dumping partway (`Remote.look`).
+
+fn too_close(raw_mm: U32): Bool //< whether the raw distance reading is point-blank range
+    //< **Give it the raw reading**, not the median: the median notices an approach a round or two
+    //< late, and a false alarm is on the safe side. 0 is "no echo", not "touching".
+    return raw_mm > 0 && raw_mm < EMERGENCY_MM
+
+fn out_of_time(driving_rounds: U32): Bool //< whether `driving_rounds` reached the driving limit
+    return MAX_DRIVING_ROUNDS > 0 && driving_rounds >= MAX_DRIVING_ROUNDS
+
+enum Remote_verdict //< what the remote asks for this round
+    go //< a decision may be made
+    hold //< skip this round
+    stop //< a press while it runs: the caller stops the car until a held press
+    rearm //< a held press was let go: the caller drives again from the next round
+    dump //< a longer press was let go: the caller prints the record
+    wipe //< the longest press was let go: the caller erases the record
+
+struct Remote //< the remote's count of a held press
+    priv hold: U32 //< how many rounds frames came in a row
+    priv quiet: U32 //< how many rounds since they stopped
+    // Whether the button was seen released after the stop. **Re-arming counts only after that**,
+    // or the finger that stopped it would set it off.
+    priv released: Bool
+
+// One per machine, like the car's remote. **Do not create one in the firmware**; only here does the
+// counting state stay `priv`. A test makes its own with `Remote()`.
+$remote: Remote = ::{}
+
+impl Remote
+    fn new(): Remote //< a remote with no press seen
+        return ::{ .hold = 0, .quiet = 0, .released = false }
+
+    fn stopped_without_press(r: Self$@) //<
+        //< Restarts the count for a stop that no press made (the time limit, a watchdog reset)
+        //< Such a stop waits for no release. Caution: **Call it at that stop**, or a press held
+        //< before it would count towards re-arming.
+        r.hold = 0
+        r.released = true
+
+    fn look(r: Self$@, seen: Bool, halted: Bool, needs_remote: Bool): Remote_verdict //<
+        //< Counts one round and returns what the remote asks for
+        //< `seen` is whether a frame came this round. `halted` is whether the car is stopped for
+        //< any reason, and `needs_remote` whether only the remote brings it back.
+        //< Caution: **Call it while stopped too**, or it misses the held press, the only way back.
+        //< **While it runs any button stops it** (a repeat carries no cmd to tell them apart).
+        if seen
+            r.quiet = 0
+            r.hold += 1
+            if halted
+                return .hold
+            // **The press that stopped it does not count towards re-arming**; counting restarts
+            // after a release.
+            r.hold = 0
+            r.released = false
+            return .stop
+        r.quiet += 1
+        if r.quiet != IR_RELEASE_ROUNDS
+            return .hold if halted else .go // neither released, nor the moment of release
+        // --- the moment the button is released. Re-arming is decided here and only here ---
+        //
+        // Caution: **It must not resume while the button is held.** The finger's next frames hit
+        // "any button stops it", and it "resumed but does not run".
+        held: = r.hold
+        r.hold = 0
+        if !halted
+            return .go
+        if !needs_remote
+            return .hold
+        if !r.released
+            r.released = true // the press that stopped it was released; no resuming here
+            return .hold
+        // **Check the longer press first**, or a long press would trigger re-arming. Dumping does
+        // not lift the stop.
+        if held >= IR_WIPE_ROUNDS
+            return .wipe
+        if held >= IR_DUMP_ROUNDS
+            return .dump
+        if held < IR_REARM_ROUNDS
+            return .hold // a short press does not bring it back
+        return .rearm

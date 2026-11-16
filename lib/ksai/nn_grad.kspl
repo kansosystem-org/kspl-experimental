@@ -22,17 +22,17 @@ pub struct Rms_norm_grads<|T|> //< an `Rms_norm`'s per-channel weight gradient
     pub dw: Tensor<|T|> //< the gain's gradient, one per channel
 
 impl<|T|> Linear_grads<|T|>
-    pub fn accumulate(r: Self$@, o: Self$@) //< adds another sequence's gradient in, in place
-        r.dw.accumulate(o.dw)
+    pub fn accumulate(r: Self$@, other: Self$@) //< adds another sequence's gradient in, in place
+        r.dw.accumulate(other.dw)
 
 impl<|T|> Mlp_grads<|T|>
-    pub fn accumulate(r: Self$@, o: Self$@) //< adds another sequence's gradients in, in place
-        r.fc1.accumulate(o.fc1@)
-        r.fc2.accumulate(o.fc2@)
+    pub fn accumulate(r: Self$@, other: Self$@) //< adds another sequence's gradients in, in place
+        r.fc1.accumulate(other.fc1@)
+        r.fc2.accumulate(other.fc2@)
 
 impl<|T|> Rms_norm_grads<|T|>
-    pub fn accumulate(r: Self$@, o: Self$@) //< adds another sequence's gradient in, in place
-        r.dw.accumulate(o.dw)
+    pub fn accumulate(r: Self$@, other: Self$@) //< adds another sequence's gradient in, in place
+        r.dw.accumulate(other.dw)
 
 impl<|T|> nn.Linear<|T|>
     pub fn backward( //< one SGD step on the weights; returns the input's gradient
@@ -40,74 +40,76 @@ impl<|T|> nn.Linear<|T|>
         //< stays 0, and forward's `add_bias` does nothing), and updating it would break the round
         //< trip through standard weights-only safetensors.
         r: Self$@,
-        x: Tensor<|T|>, //< the input the forward pass was given
+        input: Tensor<|T|>, //< the input the forward pass was given
         dy: Tensor<|T|>, //< the gradient of the output
         lr: F64, //< the learning rate
     ): Tensor<|T|>
         $g: Linear_grads<|T|> = ::{}
-        dx: = r.backward_grads(x, dy, g@)
+        dx: = r.backward_grads(input, dy, g@)
         defer $u: = optim.Updater<|T|>.sgd(lr)
         r.apply_grads(g@, u@)
         return dx
-    pub fn backward_grads( //< writes the weights' gradient into `g`; returns the input's gradient
+    pub fn backward_grads( //<
+        //< writes the weights' gradient into `grads`; returns the input's gradient
         r: Self$@,
-        $x: Tensor<|T|>, //< the input the forward pass was given
+        $input: Tensor<|T|>, //< the input the forward pass was given
         $dy: Tensor<|T|>, //< the gradient of the output
-        g: Linear_grads<|T|>$@, //< where the weights' gradient is written
+        grads: Linear_grads<|T|>$@, //< where the weights' gradient is written
     ): Tensor<|T|>
-        g.dw = x.grad_matmul_weight(dy)
+        grads.dw = input.grad_matmul_weight(dy)
         return dy.grad_matmul_input(r.weights)
-    pub fn apply_grads( //< moves the weights by `g`; the bias stays unchanged
+    pub fn apply_grads( //< moves the weights by `grads`; the bias stays unchanged
         r: Self$@,
-        g: Linear_grads<|T|>$@, //< the gradients `backward_grads` computed
-        u: optim.Updater<|T|>$@, //< the optimizer that moves them
+        grads: Linear_grads<|T|>$@, //< the gradients `backward_grads` computed
+        updater: optim.Updater<|T|>$@, //< the optimizer that moves them
     )
-        u.update(r.weights, g.dw)
+        updater.update(r.weights, grads.dw)
 
 impl<|T|> nn.Mlp<|T|>
     pub fn backward( //< one SGD step on both layers; returns the input's gradient
         r: Self$@,
-        x: Tensor<|T|>, //< the input the forward pass was given
+        input: Tensor<|T|>, //< the input the forward pass was given
         dy: Tensor<|T|>, //< the gradient of the output
         lr: F64, //< the learning rate
     ): Tensor<|T|>
         $g: Mlp_grads<|T|> = ::{}
-        dx: = r.backward_grads(x, dy, g@)
+        dx: = r.backward_grads(input, dy, g@)
         defer $u: = optim.Updater<|T|>.sgd(lr)
         r.apply_grads(g@, u@)
         return dx
-    pub fn backward_grads( //< writes both layers' gradients into `g`; returns the input's gradient
+    pub fn backward_grads( //<
+        //< writes both layers' gradients into `grads`; returns the input's gradient
         r: Self$@,
-        x: Tensor<|T|>, //< the input the forward pass was given
+        input: Tensor<|T|>, //< the input the forward pass was given
         dy: Tensor<|T|>, //< the gradient of the output
-        g: Mlp_grads<|T|>$@, //< where the two layers' gradients are written
+        grads: Mlp_grads<|T|>$@, //< where the two layers' gradients are written
     ): Tensor<|T|>
-        $h: = r.fc1.forward(x) // the hidden layer (before the activation)
+        $h: = r.fc1.forward(input) // the hidden layer (before the activation)
         a: = h.silu() // after the activation = fc2's input
-        da: = r.fc2.backward_grads(a, dy, g.fc2@)
+        da: = r.fc2.backward_grads(a, dy, grads.fc2@)
         dh: = h.grad_silu(da)
-        return r.fc1.backward_grads(x, dh, g.fc1@)
-    pub fn apply_grads( //< moves both layers by `g`
+        return r.fc1.backward_grads(input, dh, grads.fc1@)
+    pub fn apply_grads( //< moves both layers by `grads`
         r: Self$@,
-        g: Mlp_grads<|T|>$@, //< the gradients `backward_grads` computed
-        u: optim.Updater<|T|>$@, //< the optimizer that moves them
+        grads: Mlp_grads<|T|>$@, //< the gradients `backward_grads` computed
+        updater: optim.Updater<|T|>$@, //< the optimizer that moves them
     )
-        r.fc1.apply_grads(g.fc1@, u)
-        r.fc2.apply_grads(g.fc2@, u)
+        r.fc1.apply_grads(grads.fc1@, updater)
+        r.fc2.apply_grads(grads.fc2@, updater)
     pub fn backward_lora_grads( //< only the adapters' gradients; both base layers stay frozen
         //< **It does not update**, so the caller picks the optimizer (SGD / Adam). The returned
         //< gradient is the sum of the base path and the adapter path.
         r: Self$@,
-        x: Tensor<|T|>, //< the input the forward pass was given
+        input: Tensor<|T|>, //< the input the forward pass was given
         $dy: Tensor<|T|>, //< the gradient of the output
         fc1_lora: lora.Lora<|T|>$@, //< the adapter on the widening layer; null means none
         fc1_g: lora.Grads<|T|>$@, //< where its gradients go; untouched if the adapter is null
         fc2_lora: lora.Lora<|T|>$@, //< the adapter on the narrowing layer; null means none
         fc2_g: lora.Grads<|T|>$@, //< where its gradients go; untouched if the adapter is null
     ): Tensor<|T|>
-        $h: = r.fc1.forward(x)
+        $h: = r.fc1.forward(input)
         if fc1_lora != null
-            h = h + fc1_lora.forward(x)
+            h = h + fc1_lora.forward(input)
         a: = h.silu()
         // fc2 (frozen): da = dy · fc2.weights^T
         $da: = dy.grad_matmul_input(r.fc2.weights)
@@ -117,11 +119,11 @@ impl<|T|> nn.Mlp<|T|>
         // fc1 (frozen): dx = dh · fc1.weights^T
         $dx: = dh.grad_matmul_input(r.fc1.weights)
         if fc1_lora != null
-            dx = dx + fc1_lora.backward_grads(x, dh, fc1_g)
+            dx = dx + fc1_lora.backward_grads(input, dh, fc1_g)
         return dx
     pub fn backward_lora( //< the same, but applies the gradients by SGD at once
         r: Self$@,
-        x: Tensor<|T|>, //< the input the forward pass was given
+        input: Tensor<|T|>, //< the input the forward pass was given
         dy: Tensor<|T|>, //< the gradient of the output
         lr: F64, //< the learning rate
         fc1_lora: lora.Lora<|T|>$@, //< the adapter updated on the widening layer; null skips it
@@ -129,7 +131,7 @@ impl<|T|> nn.Mlp<|T|>
     ): Tensor<|T|>
         $g1: lora.Grads<|T|> = ::{}
         $g2: lora.Grads<|T|> = ::{}
-        dx: = r.backward_lora_grads(x, dy, fc1_lora, g1@, fc2_lora, g2@)
+        dx: = r.backward_lora_grads(input, dy, fc1_lora, g1@, fc2_lora, g2@)
         if fc2_lora != null
             fc2_lora.a.sgd_step(g2.da, lr)
             fc2_lora.b.sgd_step(g2.db, lr)
@@ -145,58 +147,58 @@ impl<|T|> nn.Rms_norm<|T|>
     //   dW_i = Σ_rows dy_i * (x_i * inv)
     pub fn backward( //< one SGD step on the per-channel weights; returns the input's gradient
         r: Self$@,
-        x: Tensor<|T|>, //< the input the forward pass was given
+        input: Tensor<|T|>, //< the input the forward pass was given
         dy: Tensor<|T|>, //< the gradient of the output
         lr: F64, //< the learning rate
     ): Tensor<|T|>
         $g: Rms_norm_grads<|T|> = ::{}
-        dx: = r.backward_grads(x, dy, g@)
+        dx: = r.backward_grads(input, dy, g@)
         defer $u: = optim.Updater<|T|>.sgd(lr)
         r.apply_grads(g@, u@)
         return dx
-    pub fn backward_grads( //< writes the gain's gradient into `g`; returns the input's gradient
+    pub fn backward_grads( //< writes the gain's gradient into `grads`; returns the input's gradient
         r: Self$@,
-        x: Tensor<|T|>, //< the input the forward pass was given
+        input: Tensor<|T|>, //< the input the forward pass was given
         dy: Tensor<|T|>, //< the gradient of the output
-        g: Rms_norm_grads<|T|>$@, //< where the gain's gradient is written
+        grads: Rms_norm_grads<|T|>$@, //< where the gain's gradient is written
     ): Tensor<|T|>
-        assert(x.size == dy.size, "rms_norm backward size mismatch")
-        n: = x.shape[x.shape.len - 1]
-        rows: = x.size / n
+        assert(input.size == dy.size, "rms_norm backward size mismatch")
+        n: = input.shape[input.shape.len - 1]
+        rows: = input.size / n
         eps: = r.eps
 
-        dx: = Tensor<|T|>(x.shape, x.arena)
-        dw: = Tensor<|T|>(r.weight.shape, x.arena)
+        dx: = Tensor<|T|>(input.shape, input.arena)
+        dw: = Tensor<|T|>(r.weight.shape, input.arena)
         dw.fill(0.0)
 
         for row in Range.asc(rows)
             base: = row * n
             $ss: = 0.0
             for j in Range.asc(n)
-                v: = (x.data + base + j)$
+                v: = (input.data + base + j)$
                 ss += F64::v * v
             inv: = 1.0 / math.sqrt(ss / F64::n + eps)
             // 2. S = Σ_i (dy_i * w_i) * x_i
             $s_sum: = 0.0
             for i in Range.asc(n)
                 gi: = (dy.data + base + i)$ * (r.weight.data + i)$
-                s_sum += F64::gi * (x.data + base + i)$
+                s_sum += F64::gi * (input.data + base + i)$
             inv3: = inv * inv * inv
             // 3. dX and dW
             for k in Range.asc(n)
-                xk: = (x.data + base + k)$
+                xk: = (input.data + base + k)$
                 gk: = (dy.data + base + k)$ * (r.weight.data + k)$
                 (dx.data + base + k)$ = T::(inv * gk - xk * inv3 * s_sum / F64::n)
                 (dw.data + k)$ =
                     (dw.data + k)$ + T::((dy.data + base + k)$ * xk * inv)
-        g.dw = dw
+        grads.dw = dw
         return dx
-    pub fn apply_grads( //< moves the gain by `g`
+    pub fn apply_grads( //< moves the gain by `grads`
         r: Self$@,
-        g: Rms_norm_grads<|T|>$@, //< the gradient `backward_grads` computed
-        u: optim.Updater<|T|>$@, //< the optimizer that moves it
+        grads: Rms_norm_grads<|T|>$@, //< the gradient `backward_grads` computed
+        updater: optim.Updater<|T|>$@, //< the optimizer that moves it
     )
-        u.update(r.weight, g.dw)
+        updater.update(r.weight, grads.dw)
 
 impl<|T|> nn.Embedding<|T|>
     pub fn backward_seq_grads( //<

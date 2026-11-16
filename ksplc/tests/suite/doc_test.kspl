@@ -118,10 +118,10 @@ fn main(): I32
     io.out().s("# ksplc doc: a file, an entry, a folder\n")
     dir: = harness.sandbox("doc")
     names: = U8[][]::{ "pk/argparse.kspl", "pk/inner.kspl", "pk/run.kspl", "pk/mem.kspl",
-        "pk/math.kspl", "pk2/broken.kspl", "pk2/fine.kspl", "pk/box.kspl" }
+        "pk/math.kspl", "pk2/broken.kspl", "pk2/fine.kspl", "pk/box.kspl", "pk3/inner.kspl" }
     fs.write_tree(dir, names,
         U8[][]::{ ARGPARSE_SRC, INNER_SRC, RUN_SRC, MEM_SRC, MATH_SRC, BROKEN_SRC, FINE_SRC,
-        BOX_SRC }, arena) catch
+        BOX_SRC, INNER_SRC }, arena) catch
             return harness.fatal("cannot place the material")
 
     // **One file, its own entries**: a type at the second level, its member one step in.
@@ -235,6 +235,20 @@ fn main(): I32
         hidden.out)
     all: = doc(dir, U8[][]::{ "--surface-scope=all", "pk/inner" }, arena)
     harness_markers.check("--surface-scope=all shows it", U8[][]::{ "`helper`" }, none, all.out)
+    // **What exists but is not published names the scope that shows it**: an application's files
+    // publish nothing, and an empty answer leaves a model reading them nowhere to go.
+    harness_markers.check("a file that publishes nothing names --surface-scope=all",
+        U8[][]::{ "`ksplc doc --surface-scope=all pk/inner` lists its 1 declarations" }, none,
+        hidden.out)
+    unpub: = doc(dir, U8[][]::{ "pk/inner.helper" }, arena)
+    verdict.check("an entry declared without pub fails and names --surface-scope=all",
+        !unpub.exited_with(0) &&
+        unpub.out.find_str("`ksplc doc --surface-scope=all pk/inner.helper`").is_some(), unpub.out)
+    quiet: = doc(dir, U8[][]::{ "pk3" }, arena)
+    harness_markers.check("a folder where no file publishes names --surface-scope=all",
+        U8[][]::{ "`ksplc doc --surface-scope=all pk3`" }, none, quiet.out)
+    harness_markers.check("a file that publishes something does not name it", none,
+        U8[][]::{ "--surface-scope=all" }, page.out)
 
     // **A std name resolves as `import` resolves it**, from the std the compiler is told of.
     std: = doc(dir, U8[][]::{ "std/prng" }, arena)
@@ -257,4 +271,6 @@ fn main(): I32
     verdict.check("an entry the file does not publish fails",
         !miss.exited_with(0) &&
         miss.out.find_str("publishes nothing called 'Nope'").is_some(), miss.out)
+    harness_markers.check("an entry declared nowhere does not name --surface-scope=all", none,
+        U8[][]::{ "--surface-scope=all" }, miss.out)
     return harness.finish()

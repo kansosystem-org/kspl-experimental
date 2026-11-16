@@ -84,10 +84,10 @@ struct Source //< a source with each literal and comment turned to spaces, its n
     lits: List<|Lit|>
     consts: List<|U8[]|> //< `name`, then its text, for each `const NAME: U8[] = "<text>"`
 
-priv fn blank(b: str.Arena_text$@, src: U8[], from: Sz, to: Sz) //<
+priv fn blank(out: str.Arena_text$@, src: U8[], from: Sz, to: Sz) //<
     //< Spaces for a span, its newlines kept
     for i in Range(from, to, 1)
-        b.c('\n' if src[i] == '\n' else ' ')
+        out.c('\n' if src[i] == '\n' else ' ')
 
 priv fn literal_at(src: U8[], at: Sz, arena: Arena$@): Lit //<
     //< the ordinary literal opening at `at`
@@ -181,25 +181,25 @@ priv fn consts_of(code: U8[], lits: List<|Lit|>@, arena: Arena$@): List<|U8[]|> 
             out.push(l.parts.get(0))
     return out
 
-priv fn const_text(s: Source@, name: U8[]): U8[]? //< the text a file's constant holds, if any
-    for $k: Sz = 0; k + 1 < s.consts.len; k += 2
-        if s.consts.get(k).equals(name)
-            return .some(s.consts.get(k + 1))
+priv fn const_text(source: Source@, name: U8[]): U8[]? //< the text a file's constant holds, if any
+    for $k: Sz = 0; k + 1 < source.consts.len; k += 2
+        if source.consts.get(k).equals(name)
+            return .some(source.consts.get(k + 1))
     return .none
 
-priv fn pieces_of(s: Source@, l: Lit@, arena: Arena$@): List<|U8[]|> //<
+priv fn pieces_of(source: Source@, lit: Lit@, arena: Arena$@): List<|U8[]|> //<
     //< A literal's text as the pieces a row may stand whole in
     //< **A constant of the file interpolated is its text** (`\{cross_cc\}`); any other
     //< interpolation could be anything, so it cuts the text there.
     $out: = List<|U8[]|>(arena)
-    $cur: = arena.text().s(l.parts.get(0))
-    for k in Range.asc(l.holes.len)
-        switch const_text(s, l.holes.get(k))
+    $cur: = arena.text().s(lit.parts.get(0))
+    for k in Range.asc(lit.holes.len)
+        switch const_text(source, lit.holes.get(k))
         case .some(text)
-            cur.s(text).s(l.parts.get(k + 1))
+            cur.s(text).s(lit.parts.get(k + 1))
         case .none
             out.push(cur.take())
-            cur = arena.text().s(l.parts.get(k + 1))
+            cur = arena.text().s(lit.parts.get(k + 1))
     out.push(cur.take())
     return out
 
@@ -247,12 +247,12 @@ priv fn args_of(code: U8[], open: Sz, arena: Arena$@): List<|Span|> //<
             from = i + 1
     return out
 
-priv fn pieces_in(s: Source@, sp: Span, arena: Arena$@): List<|U8[]|> //< the literals' pieces
+priv fn pieces_in(source: Source@, sp: Span, arena: Arena$@): List<|U8[]|> //< the literals' pieces
     $out: = List<|U8[]|>(arena)
-    for k in Range.asc(s.lits.len)
-        l: = s.lits.get(k)
+    for k in Range.asc(source.lits.len)
+        l: = source.lits.get(k)
         if l.at >= sp.from && l.end <= sp.to
-            for p in pieces_of(s, l@, arena)
+            for p in pieces_of(source, l@, arena)
                 out.push(p)
     return out
 
@@ -317,10 +317,10 @@ priv fn binding_in(code: U8[], top: Sz, to: Sz, name: U8[], arena: Arena$@): Sz?
         ls = next_line(code, ls)
     return found
 
-priv fn returns_of(s: Source@, name: U8[], arena: Arena$@): List<|List<|U8[]|>|> //<
+priv fn returns_of(source: Source@, name: U8[], arena: Arena$@): List<|List<|U8[]|>|> //<
     //< The literal pieces of each `return` line of the file's function `name`
     $out: = List<|List<|U8[]|>|>(arena)
-    code: = s.code
+    code: = source.code
     $ls: Sz = 0
     for ls < code.len && !fn_name_at(code, ls).equals(name)
         ls = next_line(code, ls)
@@ -330,7 +330,7 @@ priv fn returns_of(s: Source@, name: U8[], arena: Arena$@): List<|List<|U8[]|>|>
     $at: = next_line(code, ls)
     for at < body.to
         if code.sub(at, next_line(code, at) - at).trim_start().starts_with("return")
-            out.push(pieces_in(s, statement_at(code, at), arena))
+            out.push(pieces_in(source, statement_at(code, at), arena))
         at = next_line(code, at)
     return out
 
@@ -340,12 +340,12 @@ priv fn is_relay(path: U8[], fn_name: U8[]): Bool
             return true
     return false
 
-priv fn read_at(path: U8[], s: Source@, sp: Span, at: Sz, arena: Arena$@): List<|Reason|> //<
+priv fn read_at(path: U8[], source: Source@, sp: Span, at: Sz, arena: Arena$@): List<|Reason|> //<
     //< The reasons one call's argument at `sp` prints, the call standing at `at`
     $out: = List<|Reason|>(arena)
-    code: = s.code
+    code: = source.code
     $r: = Reason::{ .line = code.sub(0, at).count_str("\n") + 1, .fn_name = "",
-        .pieces = pieces_in(s, sp, arena), .relayed = false }
+        .pieces = pieces_in(source, sp, arena), .relayed = false }
     top: = enclosing_fn(code, at)
     r.fn_name = fn_name_at(code, top)
     expr: = code.sub(sp.from, sp.to - sp.from).trim_spaces()
@@ -354,7 +354,7 @@ priv fn read_at(path: U8[], s: Source@, sp: Span, at: Sz, arena: Arena$@): List<
         n += 1
     head: = expr.sub(0, n)
     // A function the file does not hold has no `return` read: the reason stays unread.
-    alts: = returns_of(s, head, arena)
+    alts: = returns_of(source, head, arena)
     if r.pieces.len == 0 && expr.sub_from(n).starts_with("(") && alts.len > 0
         for alt in alts
             r.pieces = alt
@@ -362,7 +362,7 @@ priv fn read_at(path: U8[], s: Source@, sp: Span, at: Sz, arena: Arena$@): List<
         return out
     if r.pieces.len == 0
         if bound: = binding_in(code, top, line_start(code, at), head, arena)
-            r.pieces = pieces_in(s, statement_at(code, bound), arena)
+            r.pieces = pieces_in(source, statement_at(code, bound), arena)
         else
             r.relayed = is_relay(path, r.fn_name)
     out.push(r)
@@ -373,9 +373,9 @@ fn reasons_in(path: U8[], src: U8[], arena: Arena$@): List<|Reason|> //<
     s: = read_source(src, arena)
     return reasons_of(path, s@, arena)
 
-priv fn reasons_of(path: U8[], s: Source@, arena: Arena$@): List<|Reason|> //<
+priv fn reasons_of(path: U8[], source: Source@, arena: Arena$@): List<|Reason|> //<
     //< The reasons the calls of `FORMS` in a source already read print
-    code: = s.code
+    code: = source.code
     $out: = List<|Reason|>(arena)
     for f in FORMS
         needle: = arena.text().c('.').s(f.name).c('(').take()
@@ -391,7 +391,7 @@ priv fn reasons_of(path: U8[], s: Source@, arena: Arena$@): List<|Reason|> //<
                 continue
             args: = args_of(code, pos + needle.len - 1, arena)
             if args.len > f.reason_at
-                for r in read_at(path, s, args.get(f.reason_at), pos, arena)
+                for r in read_at(path, source, args.get(f.reason_at), pos, arena)
                     out.push(r)
     return out
 
@@ -529,11 +529,11 @@ fn c_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
 // The judgment, and the rows it holds the reasons against
 // ==========================================
 
-fn holder(r: Reason@, rows: U8[][]): U8[] //<
+fn holder(reason: Reason@, rows: U8[][]): U8[] //<
     //< The row or `HELD_BY_NONE` piece holding a reason, empty where none does
     //< **A row is held whole inside one piece**: an interpolation can stand for anything, so a row
     //< matched across one holds nothing.
-    for p in r.pieces
+    for p in reason.pieces
         for row in rows
             if p.find_str(row).is_some()
                 return row

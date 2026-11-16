@@ -33,8 +33,8 @@ impl Ev
         case .two
             return 2
 
-    priv fn val(e: Self): I64
-        switch e
+    priv fn val(r: Self): I64
+        switch r
         case .none
             return -1
         case .one(a)
@@ -42,8 +42,8 @@ impl Ev
         case .two(a, b)
             return a * 1000 + b
 
-priv fn bool_word(b: Bool): U8[] //< a switch on a Bool, both values named and no default
-    switch b
+priv fn bool_word(flag: Bool): U8[] //< a switch on a Bool, both values named and no default
+    switch flag
     case true
         return "yes"
     case false
@@ -92,62 +92,62 @@ priv fn eval_b(): I32
 priv fn eval_take(x: I32, y: I32): I32
     return x * 10 + y
 
-priv fn eval_set(v: I32): I32 //< it overwrites the log, so a read of the log before it shows
-    eval_log = v
-    return v
+priv fn eval_set(value: I32): I32 //< it overwrites the log, so a read of the log before it shows
+    eval_log = value
+    return value
 
 priv struct Eval_pair
     priv a: I32
     priv b: I32
 
 impl Eval_pair
-    priv fn add(r: Self$@, v: I32): Eval_pair$@ //< a chain whose receiver is the call before
-        r.a = r.a * 10 + v
+    priv fn add(r: Self$@, value: I32): Eval_pair$@ //< a chain whose receiver is the call before
+        r.a = r.a * 10 + value
         return r
 
-fn tagged_union_lines(b: Str_builder$@) //< tagged unions in array literals and in globals
+fn tagged_union_lines(out: Str_builder$@) //< tagged unions in array literals and in globals
     //< An element of a `const` array carries the immutability mark. Both backends once took it
     //< for another type: C named `Const_Ev`, LLVM read every element as the first variant.
     locals: Ev[3] = ::{ .none, .one(200), .two(-7, 9) }
     $muts: Ev[2] = ::{ .two(1, 2), .none }
     muts[1] = .one(3)
-    b.s("evs=")
+    out.s("evs=")
     for e in locals
-        b.s("\{e.val()\},")
+        out.s("\{e.val()\},")
     for e in muts
-        b.s("\{e.val()\},")
+        out.s("\{e.val()\},")
     for e in G_EVS
-        b.s("\{e.val()\},")
+        out.s("\{e.val()\},")
     for row in G_EV_ROWS
-        b.s("\{row.k\}:\{row.e.val()\},")
-    b.s("\{g_ev_mut.val()\}")
+        out.s("\{row.k\}:\{row.e.val()\},")
+    out.s("\{g_ev_mut.val()\}")
     g_ev_mut = .one(8)
-    b.s("/\{g_ev_mut.val()\}")
+    out.s("/\{g_ev_mut.val()\}")
     $pair: = Ev_arr.pair(::{ 1, 2 })
     pair.flip()
     switch pair
     case .pair(v)
-        b.s("/\{v[0]\}\{v[1]\}")
+        out.s("/\{v[0]\}\{v[1]\}")
     case .none {}
     pair = .none
-    b.s("/\{pair\}")
+    out.s("/\{pair\}")
     copy: = locals[2]
-    b.s("/\{locals[1].tag_of()\}\{copy.tag_of()\}/").s(bool_word(muts.len > 1))
+    out.s("/\{locals[1].tag_of()\}\{copy.tag_of()\}/").s(bool_word(muts.len > 1))
         .s(bool_word(false)).s("\n")
 
-fn eval_order_lines(b: Str_builder$@) //< the evaluation order, a line per group of shapes
+fn eval_order_lines(out: Str_builder$@) //< the evaluation order, a line per group of shapes
     //< The order is "Evaluation order" in docs/SPEC-programming-language.md.
     // Caution: **Put an expression with a side effect on both sides of an assignment.** C does not
     // define the order of an assignment's left and right sides. Without them, a shape that gives
     // different answers under clang and gcc passes.
     eval_log = 0
     eval_arr[eval_idx()] = eval_val()
-    b.s("evalorder=\{eval_log\}")
+    out.s("evalorder=\{eval_log\}")
     eval_log = 0
     eval_arr[eval_idx()] += eval_val()
-    b.s("/\{eval_log\}")
+    out.s("/\{eval_log\}")
     eval_log = 0
-    b.s("/\{eval_take(eval_a(), eval_b())\}/\{eval_log\}\n")
+    out.s("/\{eval_take(eval_a(), eval_b())\}/\{eval_log\}\n")
     // Caution: **Read a variable before a call that writes it, and give each shape its own line.**
     // gcc takes a call's arguments from the right and clang from the left. An operator's sides
     // and a compound literal's fields are just as open in C, so each shape needs both compilers.
@@ -157,13 +157,13 @@ fn eval_order_lines(b: Str_builder$@) //< the evaluation order, a line per group
     sum_first: = eval_log * 10 + eval_set(4)
     eval_log = 0
     pair: = Eval_pair::{ .a = eval_a(), .b = eval_b() }
-    b.s("evalread=\{read_first\}/\{sum_first\}/\{pair.a\}\{pair.b\}/\{eval_log\}\n")
+    out.s("evalread=\{read_first\}/\{sum_first\}/\{pair.a\}\{pair.b\}/\{eval_log\}\n")
     $chain: = Eval_pair::{ .a = 0, .b = 0 }
     eval_log = 0
     _chained: = chain.add(eval_a()).add(eval_b())
-    b.s("evalchain=\{chain.a\}/\{eval_log\}")
+    out.s("evalchain=\{chain.a\}/\{eval_log\}")
     eval_log = 0
-    b.s("/\{eval_a()\}\{eval_b()\}/\{eval_log\}\n")
+    out.s("/\{eval_a()\}\{eval_b()\}/\{eval_log\}\n")
 
 priv struct Held8 //< a struct aligned to 8 by its second field
     priv a: U8
@@ -179,10 +179,10 @@ priv const G_NARROW: Narrow_tag[2] = ::{ .two(4, 5), .wide(6, ::{ .a = 7, .w = 0
 priv enum Layout_err: U8 //< a one-byte error, so a Result's `val` follows it closely
     bad
 
-priv fn aligned_ok(a: U8): Held8!Layout_err
-    if a == 0
+priv fn aligned_ok(value: U8): Held8!Layout_err
+    if value == 0
         throw .bad
-    return ::{ .a = a, .w = 0 }
+    return ::{ .a = value, .w = 0 }
 
 impl Narrow_tag
     priv fn sum(r: Self): I32
@@ -194,31 +194,31 @@ impl Narrow_tag
         case .wide(p, al)
             return p * 10 + al.a
 
-fn layout_lines(b: Str_builder$@) //<
+fn layout_lines(out: Str_builder$@) //<
     //< a narrow tag and a Result of a small error, laid out alike
     n: = Narrow_tag.wide(1, Held8::{ .a = 2, .w = 0 })
-    b.s("narrow=\{sizeof(Narrow_tag)\}/\{n.sum()\}/\{G_NARROW[0].sum()\}/\{G_NARROW[1].sum()\}")
+    out.s("narrow=\{sizeof(Narrow_tag)\}/\{n.sum()\}/\{G_NARROW[0].sum()\}/\{G_NARROW[1].sum()\}")
     // A Result holding a value aligned past its one-byte error, so `val` does not follow it
     // closely. And one of bytes alone, whose size C gives as 3.
     rs: (Held8!Layout_err)[2] = ::{ aligned_ok(4), aligned_ok(5) }
     got: = rs[1] catch Held8::{ .a = 0, .w = 0 }
-    b.s(" result=\{Sz::rs[1]@ - Sz::rs[0]@\}/\{sizeof(Held8!Layout_err)\}/")
+    out.s(" result=\{Sz::rs[1]@ - Sz::rs[0]@\}/\{sizeof(Held8!Layout_err)\}/")
         .s("\{(Sz::rs[0]@) % 8\}/\{got.a\}/\{sizeof(U8!Layout_err)\}\n")
 
 #noinline
-priv fn wrap16(u: U16, s: I16, b: Str_builder$@) //<
+priv fn wrap16(unsigned: U16, signed: I16, out: Str_builder$@) //<
     //< 16-bit products, which C would compute in `int`
-    $cu: = u
-    cu *= u
-    $cs: = s
-    cs *= s
-    b.s("/\{u * u\}/\{s * s\}/\{cu\}/\{cs\}")
+    $cu: = unsigned
+    cu *= unsigned
+    $cs: = signed
+    cs *= signed
+    out.s("/\{unsigned * unsigned\}/\{signed * signed\}/\{cu\}/\{cs\}")
 
-fn wrap16_lines(b: Str_builder$@) //< 16-bit products past `int`'s range, which wrap at 16 bits
-    b.s("wrap16")
-    wrap16(65535, -1, b)
-    wrap16(40000, 300, b)
-    b.s("\n")
+fn wrap16_lines(out: Str_builder$@) //< 16-bit products past `int`'s range, which wrap at 16 bits
+    out.s("wrap16")
+    wrap16(65535, -1, out)
+    wrap16(40000, 300, out)
+    out.s("\n")
 
 // ==========================================
 // Plain shapes whose C gcc warned about (`make test-c-warnings` builds this program under it). A
@@ -228,11 +228,11 @@ fn wrap16_lines(b: Str_builder$@) //< 16-bit products past `int`'s range, which 
 // ==========================================
 priv $warned_byte: U8 = 3
 
-fn warned_shape_lines(b: Str_builder$@) //< each shape, its value printed
+fn warned_shape_lines(out: Str_builder$@) //< each shape, its value printed
     flipped: I32 = ~(I32::(warned_byte == 3U8))
     on: = warned_byte > 2U8
     either: Bool = !(on) | (on & (warned_byte == 4U8))
-    b.s("warned=\{flipped\}/\{either\}\n")
+    out.s("warned=\{flipped\}/\{either\}\n")
 
 // ==========================================
 // Comparisons and an assignment whose answer is fixed before they run. genc writes the answer, not
@@ -257,7 +257,7 @@ priv fn fixed_next(): U32 //< a side that runs code: it counts its calls
 priv fn fixed_nonneg<|T|>(x: T): Bool //< fixed only where `T` is unsigned
     return x >= 0
 
-fn fixed_answer_lines(b: Str_builder$@) //< each fixed answer, then what the program left
+fn fixed_answer_lines(out: Str_builder$@) //< each fixed answer, then what the program left
     $p: Fixed_pt = ::{ .n = fixed_u8, .on = true }
     same: = fixed_u8 == fixed_u8
     field: = p.n < p.n
@@ -275,7 +275,7 @@ fn fixed_answer_lines(b: Str_builder$@) //< each fixed answer, then what the pro
     named: = 0U32 > FIXED_ZERO
     either: = p.on || !p.on
     neither: = !p.on && p.on
-    b.s("fixed=\{same\}/\{field\}/\{flag\}/\{top\}/\{low\}/\{counted\}/\{below\}/")
+    out.s("fixed=\{same\}/\{field\}/\{flag\}/\{top\}/\{low\}/\{counted\}/\{below\}/")
         .s("\{widened\}/\{masked\}/\{ored\}/\{named\}/\{fixed_calls\}/\{p.n\}/\{p.on\}/")
         .s("\{either\}/\{neither\}/")
         .s("\{fixed_nonneg<|U32|>(fixed_u32)\}/\{fixed_nonneg<|I8|>(fixed_i8)\}\n")
@@ -292,7 +292,7 @@ priv fn overlap_next(): I32 //< a value two tests read: it counts its calls
     overlap_calls += 1
     return fixed_i8
 
-fn overlap_xor_lines(b: Str_builder$@) //< each fixed answer and each folded `^`
+fn overlap_xor_lines(out: Str_builder$@) //< each fixed answer and each folded `^`
     $x: = I32::fixed_i8
     $n: Sz = 3
     never: = 3 <= x && 1 > x
@@ -308,7 +308,7 @@ fn overlap_xor_lines(b: Str_builder$@) //< each fixed answer and each folded `^`
     two: = 2 ^ 8
     wide: = 2I64 ^ 3I64
     neg: = 10 ^ -2
-    b.s("overlap=\{never\}/\{always\}/\{one\}/\{other\}/\{small\}/\{size\}/")
+    out.s("overlap=\{never\}/\{always\}/\{one\}/\{other\}/\{small\}/\{size\}/")
         .s("\{called\}/\{overlap_calls\}/\{x\}/\{n\}/\{ten\}/\{two\}/\{wide\}/\{neg\}\n")
 
 // ==========================================
@@ -349,12 +349,12 @@ impl Pick
         case .b(x)
             return x
 
-fn global_ref_lines(b: Str_builder$@) //< globals that name other globals, one line
+fn global_ref_lines(out: Str_builder$@) //< globals that name other globals, one line
     g_var = 5
-    b.s("gref=\{G_FOUR_AT$\}/\{G_FOUR_AT == G_FOUR@\}/\{G_VAR_AT$\}/\{G_LINK2.next.v\}/")
+    out.s("gref=\{G_FOUR_AT$\}/\{G_FOUR_AT == G_FOUR@\}/\{G_VAR_AT$\}/\{G_LINK2.next.v\}/")
         .s("\{G_LINK2.next == G_LINK1@\}/\{G_PICK_A2.val()\}/\{G_PICKS[0].val()\}/")
         .s("\{G_PICKS[1].val()\}\n")
-    b.s("gpart=\{G_V_AT$\}/\{G_V_AT == G_LINK2.v@\}/\{G_NUM_AT$\}/\{G_NUM_AT == G_NUMS[2]@\}/")
+    out.s("gpart=\{G_V_AT$\}/\{G_V_AT == G_LINK2.v@\}/\{G_NUM_AT$\}/\{G_NUM_AT == G_NUMS[2]@\}/")
         .s("\{G_DEEP_AT$\}/\{G_DEEP_AT == G_LINKS[1].v@\}\n")
 
 // ==========================================
@@ -366,11 +366,11 @@ extern $equiv_hidden: I32 = 5
 extern fn equiv_hidden_fn(): I32
     return 9
 
-fn verbatim_hiding_lines(b: Str_builder$@) //< each initializer reads the global, not the local
+fn verbatim_hiding_lines(out: Str_builder$@) //< each initializer reads the global, not the local
     equiv_hidden: = equiv_hidden + 1
     equiv_hidden_fn: = equiv_hidden_fn() + 1
     strtod: = libc.strtod(Void$@::"16".ptr, null) + 1.0
-    b.s("verbatim=\{equiv_hidden\}/\{equiv_hidden_fn\}/\{I32::strtod\}\n")
+    out.s("verbatim=\{equiv_hidden\}/\{equiv_hidden_fn\}/\{I32::strtod\}\n")
 
 // ==========================================
 // Casts from floating point to an integer. Each width saturates at its own bounds, and NaN gives 0
@@ -387,21 +387,22 @@ priv $g_cast_src32: F32[_] = ::{ F32::2147483520.0, F32::2147483648.0, F32::3.0e
     F32::16777217.0 }
 priv const G_CAST_FOLDED: I32 = I32::(1.5 * -3.0) //< folded by ksplc for both backends
 
-priv fn cast_row(b: Str_builder$@, v: F64)
-    b.s("\{I8::v\},\{I16::v\},\{I32::v\},\{I64::v\},\{U8::v\},\{U16::v\},\{U32::v\},\{U64::v\},")
-        .s("\{Sz::v\};")
+priv fn cast_row(out: Str_builder$@, value: F64)
+    out
+        .s("\{I8::value\},\{I16::value\},\{I32::value\},\{I64::value\},\{U8::value\},\{U16::value\},\{U32::value\},\{U64::value\},")
+        .s("\{Sz::value\};")
 
-fn float_cast_lines(b: Str_builder$@) //< one line of every source value at every width
+fn float_cast_lines(out: Str_builder$@) //< one line of every source value at every width
     zero: = g_cast_src[0]
-    b.s("fcast=")
-    cast_row(b, 1.0 / zero)
-    cast_row(b, -1.0 / zero)
-    cast_row(b, zero / zero)
+    out.s("fcast=")
+    cast_row(out, 1.0 / zero)
+    cast_row(out, -1.0 / zero)
+    cast_row(out, zero / zero)
     for v in g_cast_src
-        cast_row(b, v)
+        cast_row(out, v)
     for f in g_cast_src32
-        b.s("\{I32::f\},\{U32::f\},\{I8::f\},\{U64::f\};")
-    b.s("\{I32::2.9\},\{I32::-2.9\},\{U8::255.9\},\{I64::-9223372036854775808.0\},")
+        out.s("\{I32::f\},\{U32::f\},\{I8::f\},\{U64::f\};")
+    out.s("\{I32::2.9\},\{I32::-2.9\},\{U8::255.9\},\{I64::-9223372036854775808.0\},")
         .s("\{U64::18446744073709549568.0\},\{I32::(F32::16777217.0)\},\{G_CAST_FOLDED\}\n")
 
 // ==========================================
@@ -458,15 +459,15 @@ priv const SI_RUN: I32[] = I32[]::{ 4, SI_B }
 priv const SI_OPT: Si_opt = .some(SI_B + 1)
 priv const SI_OPT_PICK: Si_opt = SI_OPT if SI_AND else .none
 priv const SI_NAMED: Si_named = SI_PT
-priv const SI_OP: fn(a: I32): I32 = fn(a: I32): I32
-    return a + SI_B
+priv const SI_OP: fn(a: I32): I32 = fn(value: I32): I32
+    return value + SI_B
 #raw_address
 priv const SI_REG: U32@ = U32@::0x4000_0000
 priv $si_var: I32 = SI_B * 10
 priv $si_var_pt: Si_point = ::{ .x = SI_A if SI_B > 0 else 0 }
 
-fn static_init_lines(b: Str_builder$@) //< each top-level shape, read at run time
-    b.s("sinit=\{SI_B\}/\{SI_AND\}/\{SI_OR\}/\{SI_DIV\}/\{SI_PICK_N\}/\{SI_FF\}/\{SI_F32\}/")
+fn static_init_lines(out: Str_builder$@) //< each top-level shape, read at run time
+    out.s("sinit=\{SI_B\}/\{SI_AND\}/\{SI_OR\}/\{SI_DIV\}/\{SI_PICK_N\}/\{SI_FF\}/\{SI_F32\}/")
         .s("\{SI_F_GT\}/\{SI_F_INT\}/\{SI_INF > 1.0e308\}/\{SI_NAN != SI_NAN\}/")
         .s("\{SI_PT_PICK.x\}/\{SI_TEXT\}/\{SI_PT.x\}/\{SI_PT.y\}/\{I32::SI_COL\}/\{SI_COL_N\}/")
         .s("\{SI_CH\}/\{SI_BIG1\}/\{SI_SIZE\}/\{SI_OFF\}/\{SI_NUMS[2]\}/\{SI_NUMS_S[1]\}/")
@@ -474,28 +475,29 @@ fn static_init_lines(b: Str_builder$@) //< each top-level shape, read at run tim
         .s("\{si_var_pt.x\}/")
     switch SI_OPT_PICK
     case .some(v)
-        b.s("\{v\}\n")
+        out.s("\{v\}\n")
     case .none
-        b.s("none\n")
+        out.s("none\n")
 
 // ==========================================
 // Shapes on which the builds once parted: a level, or a backend
 // ==========================================
 
 #noinline
-priv fn pun_word(a: I64$@, f: F64$@): I64 //<
+priv fn pun_word(integer: I64$@, real: F64$@): I64 //<
     //< Stores through two pointer types to one address, then reads through the first
-    //< C's strict aliasing lets `-O2` keep 5, as if `f` reached other memory; KSPL allows the
+    //< C's strict aliasing lets `-O2` keep 5, as if `real` reached other memory; KSPL allows the
     //< cast, so every build must read the 0 the second store left.
-    a$ = 5
-    f$ = 0.0
-    return a$
+    integer$ = 5
+    real$ = 0.0
+    return integer$
 
 #noinline
-priv fn pun_slice(s: F32$[], t: I32$[]): Bool //< the same through two slices of one array
-    s[0] = 2.0F32
-    t[0] = 0
-    return s[0] == 0.0F32
+priv fn pun_slice(reals: F32$[], integers: I32$[]): Bool //<
+    //< the same through two slices of one array
+    reals[0] = 2.0F32
+    integers[0] = 0
+    return reals[0] == 0.0F32
 
 priv enum Ord_u8: U8 //< tags above `I8`'s range, which order as a `U8`
     high = 200
@@ -507,13 +509,13 @@ priv enum Ord_u16: U16 //< tags above `I16`'s range, which order as a `U16`
 
 impl Ord_u8
     #noinline
-    priv fn kept(e: Self): Self //< the value, through a call the optimizer does not fold
-        return e
+    priv fn kept(r: Self): Self //< the value, through a call the optimizer does not fold
+        return r
 
 impl Ord_u16
     #noinline
-    priv fn kept(e: Self): Self //< the value, through a call the optimizer does not fold
-        return e
+    priv fn kept(r: Self): Self //< the value, through a call the optimizer does not fold
+        return r
 
 priv struct Pk //< a struct's global initializer, a constant and a variable
     a: U8
@@ -527,8 +529,8 @@ priv $pk_var: Pk = ::{ .a = 3, .b = 4 }
 priv fn addr_of(x: I32): U8@ //< a negative `I32` as an address, widened by its sign
     return U8@::x
 
-fn parted_lines(b: Str_builder$@) //< each shape's answer, one line
-    // `a * b + c` rounds twice. Joined into one fused multiply-add, it rounds once: clang folded
+fn parted_lines(out: Str_builder$@) //< each shape's answer, one line
+    // `a * out + c` rounds twice. Joined into one fused multiply-add, it rounds once: clang folded
     // that at `-O2` to 5.55e-17, where `-O0` and LLVM gave 0.0 (the pragma in
     // ksplc/gen/runtime.kspl).
     fa: = 0.1
@@ -540,7 +542,7 @@ fn parted_lines(b: Str_builder$@) //< each shape's answer, one line
     $arr: F32[2] = ::{ 0.0F32, 0.0F32 }
     s: = F32$[]::arr
     zeroed: = pun_slice(s, I32$[]::s)
-    b.s("parted=\{w\}/\{word\}/\{zeroed\}/\{Ord_u8.high.kept() > Ord_u8.low.kept()\}/")
+    out.s("parted=\{w\}/\{word\}/\{zeroed\}/\{Ord_u8.high.kept() > Ord_u8.low.kept()\}/")
         .s("\{Ord_u16.high.kept() > Ord_u16.low.kept()\}/\{PK.a\}/\{PK.b\}/\{pk_var.b\}/")
         .s("\{Sz::addr_of(-16)\}/\{fused == 0.0\}\n")
 
@@ -553,41 +555,42 @@ priv const SOME_WORDS: U8[][_] = ::{ "kept", "list" }
 priv enum Words_error //< why `words_if` gives no words
     odd
 
-priv fn words_if(n: I32): U8[][]!Words_error //< a slice of a constant where n is even
-    if n % 2 != 0
+priv fn words_if(value: I32): U8[][]!Words_error //< a slice of a constant where `value` is even
+    if value % 2 != 0
         throw .odd
     return U8[][]::SOME_WORDS
 
 #noinline
-priv fn stack_churn(n: I32): I32 //< fills a frame of its own, as a later call reuses the stack
+priv fn stack_churn(value: I32): I32 //< fills a frame of its own, as a later call reuses the stack
     $buf: I32[64] = ::{}
     for i in Range.asc(64)
-        buf[i] = n * I32::i + 7
+        buf[i] = value * I32::i + 7
     $sum: I32 = 0
     for v in buf
         sum += v
     return sum
 
-priv fn words_line(b: Str_builder$@, label: U8[], words: U8[][]) //< one line: the label, each word
-    b.s(label).c('=')
+priv fn words_line(out: Str_builder$@, label: U8[], words: U8[][]) //<
+    //< one line: the label, each word
+    out.s(label).c('=')
     for w in words
-        b.s(w).c(',')
-    b.c('\n')
+        out.s(w).c(',')
+    out.c('\n')
 
-fn branch_array_lines(b: Str_builder$@, n: I32, name: U8[]) //<
+fn branch_array_lines(out: Str_builder$@, value: I32, name: U8[]) //<
     //< Each value a branch builds from an array literal, read after other calls
     //< **Its storage must outlive the branch.** Each array is a C compound literal; inside the
     //< branch's block, gcc at `-O2` reuses its stack once the block ends.
     picked: =
-        (U8[][]::{ "attrib", "+r", name } if n > 0 else U8[][]::{ "chmod", "444", name })
+        (U8[][]::{ "attrib", "+r", name } if value > 0 else U8[][]::{ "chmod", "444", name })
     nested: =
-        (U8[][]::{ "a", name } if n > 1
-        else (U8[][]::{ "b", name } if n > 0 else U8[][]::{ "c" }))
-    substituted: = words_if(n) catch U8[][]::{ "instead", name }
-    fell: = words_if(n) catch
+        (U8[][]::{ "a", name } if value > 1
+        else (U8[][]::{ "b", name } if value > 0 else U8[][]::{ "c" }))
+    substituted: = words_if(value) catch U8[][]::{ "instead", name }
+    fell: = words_if(value) catch
         fallback U8[][]::{ "fell", "back", name }
-    b.s("churn=\{stack_churn(n)\}\n")
-    words_line(b, "picked", picked)
-    words_line(b, "nested", nested)
-    words_line(b, "substituted", substituted)
-    words_line(b, "fell", fell)
+    out.s("churn=\{stack_churn(value)\}\n")
+    words_line(out, "picked", picked)
+    words_line(out, "nested", nested)
+    words_line(out, "substituted", substituted)
+    words_line(out, "fell", fell)

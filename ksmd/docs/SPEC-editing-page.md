@@ -398,36 +398,36 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 
 | Function | What it gives | For example |
 | :-- | :-- | :-- |
-| `average(xs…)` | the numbers' mean | `average(2, 4, 9)` is `5` |
-| `bin_to_dec(digits, [width])` | the number binary digits name | `bin_to_dec("101")` is `5` |
-| `bin_to_hex(digits, [width])` | binary digits written in hexadecimal | `bin_to_hex("11111")` is `1F` |
-| `char(code)` | the character with this Unicode number, such as a line break for 10 | `char(65)` is `A` |
-| `count(xs…)` | how many numbers and dates there are | `count(4, 8, 15)` is `3` |
+| `average(numbers…)` | the numbers' mean | `average(2, 4, 9)` is `5` |
+| `bin_to_dec(number, [width])` | the number binary digits name | `bin_to_dec("101")` is `5` |
+| `bin_to_hex(number, [width])` | binary digits written in hexadecimal | `bin_to_hex("11111")` is `1F` |
+| `char(number)` | the character with this Unicode number, such as a line break for 10 | `char(65)` is `A` |
+| `count(values…)` | how many numbers and dates there are | `count(4, 8, 15)` is `3` |
 | `date(year, month, day)` | the day the three parts name, in the years 1 to 9999 | `date(2026, 3, 1)` is `2026-03-01` |
-| `day(d)` | a date's day of the month | `day(date(2026, 3, 1))` is `1` |
-| `dec_to_bin(n, [width])` | `n` in binary | `dec_to_bin(5)` is `101` |
-| `dec_to_hex(n, [width])` | `n` in hexadecimal | `dec_to_hex(255)` is `FF` |
-| `find(part, t)` | where `part` first stands in `t`, in characters from 1; 0 where it does not | `find("c", "pencil")` is `4` |
-| `hex_to_bin(digits, [width])` | hexadecimal digits written in binary | `hex_to_bin("1F")` is `11111` |
-| `hex_to_dec(digits, [width])` | the number hexadecimal digits name | `hex_to_dec("100000")` is `1048576` |
-| `left(t, count)` | the first `count` characters | `left("pencil", 3)` is `pen` |
-| `len(t)` | how many characters the text holds | `len("pencil")` is `6` |
-| `like(t, pattern)` | whether the whole text matches the pattern, `*` and `?` standing for any characters | `like("Pens", "p?n*")` is `true` |
-| `max(xs…)` | the greatest; of dates alone, the latest date | `max(3, -1, 7)` is `7` |
-| `mid(t, start, count)` | `count` characters from the `start`th, the first being 1 | `mid("pencil", 2, 3)` is `enc` |
-| `min(xs…)` | the least; of dates alone, the earliest date | `min(3, -1, 7)` is `-1` |
-| `mod(x, y)` | what is left of `x` after dividing by `y`, with the sign of `y` | `mod(-1, 72)` is `71` |
-| `month(d)` | a date's month, 1 to 12 | `month(date(2026, 3, 1))` is `3` |
-| `power(x, y)` | `x` to the power `y` | `power(2, 10)` is `1024` |
-| `right(t, count)` | the last `count` characters | `right("pencil", 4)` is `ncil` |
-| `round(x, places)` | `x` rounded to `places` decimal places, half away from zero | `round(1234.5, -2)` is `1200` |
-| `round_down(x, places)` | `x` cut to `places` decimal places, toward zero | `round_down(2.79, 1)` is `2.7` |
-| `round_up(x, places)` | `x` taken to `places` decimal places, away from zero | `round_up(2.21, 1)` is `2.3` |
-| `substitute(t, old, new)` | `t` with every `old` in it replaced by `new`, from the left and without overlaps | `substitute("a-b-c", "-", "/")` is `a/b/c` |
-| `sum(xs…)` | the numbers added; of nothing, 0 | `sum(1, 2, 3.5)` is `6.5` |
-| `text(v, format)` | a number or a date written as text, as a column's number format would show it | `text(0.25, "percent:0")` is `25%` |
-| `value(v)` | the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is | `value(" -3 ")` is `-3` |
-| `year(d)` | a date's year | `year(date(2026, 3, 1))` is `2026` |
+| `day(serial_number)` | a date's day of the month | `day(date(2026, 3, 1))` is `1` |
+| `dec_to_bin(number, [width])` | `number` in binary | `dec_to_bin(5)` is `101` |
+| `dec_to_hex(number, [width])` | `number` in hexadecimal | `dec_to_hex(255)` is `FF` |
+| `find(find_text, within_text)` | where `find_text` first stands in `within_text`, in characters from 1; 0 where it does not | `find("c", "pencil")` is `4` |
+| `hex_to_bin(number, [width])` | hexadecimal digits written in binary | `hex_to_bin("1F")` is `11111` |
+| `hex_to_dec(number, [width])` | the number hexadecimal digits name | `hex_to_dec("100000")` is `1048576` |
+| `left(text, num_chars)` | the first `num_chars` characters | `left("pencil", 3)` is `pen` |
+| `len(text)` | how many characters the text holds | `len("pencil")` is `6` |
+| `like(text, pattern)` | whether the whole text matches the pattern, `*` and `?` standing for any characters | `like("Pens", "p?n*")` is `true` |
+| `max(numbers…)` | the greatest; of dates alone, the latest date | `max(3, -1, 7)` is `7` |
+| `mid(text, start_num, num_chars)` | `num_chars` characters from the `start_num`th, the first being 1 | `mid("pencil", 2, 3)` is `enc` |
+| `min(numbers…)` | the least; of dates alone, the earliest date | `min(3, -1, 7)` is `-1` |
+| `mod(number, divisor)` | what is left of `number` after dividing by `divisor`, with the sign of `divisor` | `mod(-1, 72)` is `71` |
+| `month(serial_number)` | a date's month, 1 to 12 | `month(date(2026, 3, 1))` is `3` |
+| `power(number, power)` | `number` to the power `power` | `power(2, 10)` is `1024` |
+| `right(text, num_chars)` | the last `num_chars` characters | `right("pencil", 4)` is `ncil` |
+| `round(number, num_digits)` | `number` rounded to `num_digits` decimal places, half away from zero | `round(1234.5, -2)` is `1200` |
+| `round_down(number, num_digits)` | `number` cut to `num_digits` decimal places, toward zero | `round_down(2.79, 1)` is `2.7` |
+| `round_up(number, num_digits)` | `number` taken to `num_digits` decimal places, away from zero | `round_up(2.21, 1)` is `2.3` |
+| `substitute(text, old_text, new_text)` | `text` with every `old_text` in it replaced by `new_text`, from the left, without overlaps | `substitute("a-b-c", "-", "/")` is `a/b/c` |
+| `sum(numbers…)` | the numbers added; of nothing, 0 | `sum(1, 2, 3.5)` is `6.5` |
+| `text(value, format_text)` | a number or a date written as text, as a column's number format would show it | `text(0.25, "percent:0")` is `25%` |
+| `value(text)` | the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is | `value(" -3 ")` is `-3` |
+| `year(serial_number)` | a date's year | `year(date(2026, 3, 1))` is `2026` |
 
 ## Charts, images and drawing
 

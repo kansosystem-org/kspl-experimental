@@ -47,8 +47,8 @@ priv const PROBE_URI: U8[] = "file:///laid_probe.kspl" //<
 priv const PROBE_SRC: U8[] =
     """import "std/io"
 
-priv fn twice(n: I32): I32
-  return n * 2
+priv fn twice(count: I32): I32
+  return count * 2
 
 fn main(): I32
   v: = twice(21)
@@ -69,14 +69,14 @@ priv const CALL_COL_AT: Sz = 7
 priv const DECL_LINE: I64 = 2I64 //< the line `twice`'s declaration is on (0-based)
     //< It is the `priv fn twice` line of `PROBE_SRC`.
 
-priv fn check_diagnostics(c: jsonrpc_client.Client$@, arena: Arena$@) //< the squiggles
+priv fn check_diagnostics(client: jsonrpc_client.Client$@, arena: Arena$@) //< the squiggles
     //< **The returned URI must be `.kspl`**, or the editor puts squiggles on a different file.
-    lsp_client.open(c, PROBE_URI, PROBE_SRC, arena)
+    lsp_client.open(client, PROBE_URI, PROBE_SRC, arena)
     $found: = false
     $line: I64 = -1I64
     $col: I64 = -1I64
     $count: Sz = 0
-    if p: = lsp_client.published(c, "laid_probe.kspl", 8, lsp_client.READ_MS, arena)
+    if p: = lsp_client.published(client, "laid_probe.kspl", 8, lsp_client.READ_MS, arena)
         found = true
         diags: = p.get("diagnostics").arr_list(arena)
         count = diags.len
@@ -88,15 +88,15 @@ priv fn check_diagnostics(c: jsonrpc_client.Client$@, arena: Arena$@) //< the sq
     verdict.check("a squiggle points at the indentation notation's line and column",
         found && count == 1 && line == BAD_LINE && col == BAD_COL, seen)
 
-priv fn check_lone_cr(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+priv fn check_lone_cr(client: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< A lone carriage return is reported at the place the editor shows it
     //< **No line before it differs**, so the editor's line and character and the compiler's agree
     //< there. No tree is made from the file, so nothing points at a line past it.
     uri: = "file:///lone_cr.kspl"
-    lsp_client.open(c, uri, notation_crlf.LONE_CR_COMMENT, arena)
+    lsp_client.open(client, uri, notation_crlf.LONE_CR_COMMENT, arena)
     $seen: = "no diagnostics arrived"
     $ok: = false
-    if p: = lsp_client.published(c, "lone_cr.kspl", 8, lsp_client.READ_MS, arena)
+    if p: = lsp_client.published(client, "lone_cr.kspl", 8, lsp_client.READ_MS, arena)
         diags: = p.get("diagnostics").arr_list(arena)
         seen = lsp_client.dump(p, arena)
         if diags.len == 1
@@ -109,9 +109,9 @@ priv fn check_lone_cr(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     verdict.check("the language server reports a lone carriage return where the editor shows it",
         ok, seen)
 
-priv fn check_hover(c: jsonrpc_client.Client$@, arena: Arena$@) //< the hovers
+priv fn check_hover(client: jsonrpc_client.Client$@, arena: Arena$@) //< the hovers
     //< Caution: **Check the content**; with the position drifted, something still comes back.
-    got: = lsp_client.answer(c, "textDocument/hover",
+    got: = lsp_client.answer(client, "textDocument/hover",
         lsp_client.at_pos(PROBE_URI, BIND_LINE_AT, BIND_COL_AT, arena), lsp_client.READ_MS, arena)
     text: = got.get("result").get("contents").get("value").as_str().unwrap_or("")
     // Caution: **Check the name too.** The type alone passes with the position drifted to another
@@ -120,9 +120,10 @@ priv fn check_hover(c: jsonrpc_client.Client$@, arena: Arena$@) //< the hovers
         text.find_str("v: I32").is_some(),
         arena.text().s("returned=").s(lsp_client.dump(got, arena)).take())
 
-priv fn check_definition(c: jsonrpc_client.Client$@, arena: Arena$@) //< jumping to a definition
+priv fn check_definition(client: jsonrpc_client.Client$@, arena: Arena$@) //<
+    //< jumping to a definition
     //< **The destination's line must be the indentation notation's line.**
-    got: = lsp_client.answer(c, "textDocument/definition",
+    got: = lsp_client.answer(client, "textDocument/definition",
         lsp_client.at_pos(PROBE_URI, BIND_LINE_AT, CALL_COL_AT, arena), lsp_client.READ_MS, arena)
     res: = got.get("result")
     $line: I64 = -1I64

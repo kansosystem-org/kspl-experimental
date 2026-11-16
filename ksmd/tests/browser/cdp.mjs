@@ -29,6 +29,13 @@ function distinct(log) {
   return [...seen].map(([message, count]) => count > 1 ? `${message} (${count} times)` : message);
 }
 
+// The name the page calls to tell the driver what its policy refused, and the script that runs
+// before the page's own on each load and calls it. The script is the driver's, so the policy
+// does not apply to it.
+const BLOCKED_BINDING = "kansoBlocked";
+const BLOCKED_RECORDER = `document.addEventListener("securitypolicyviolation", (e) =>
+  ${BLOCKED_BINDING}(\`\${location.protocol.slice(0, -1)} \${e.effectiveDirective} \${e.blockedURI}\`));`;
+
 // Caution: **The profile's folder is given whole.** A browser that does not take it uses the
 // person's own profile, and where that browser is already open it hands the request over and ends.
 export async function launch(binary, work) {
@@ -87,6 +94,9 @@ export async function launch(binary, work) {
     });
   }
 
+  // What the Content-Security-Policy of any page refused, each as `<scheme> <directive> <what>`,
+  // such as `file img-src https://a.test/p.png` (`BLOCKED_RECORDER`).
+  const blocked = [];
   // The text the next prompt is answered with; null dismisses it.
   let answer = null;
   // The files the next file chooser is given; null cancels it, as Esc in the system's dialog does.
@@ -123,6 +133,10 @@ export async function launch(binary, work) {
             .catch((e) => page.errors.push(`the chooser took no files: ${e.message}`));
         }
       }
+      if (m.sessionId === sessionId && m.method === "Runtime.bindingCalled" &&
+        m.params.name === BLOCKED_BINDING) {
+        blocked.push(m.params.payload);
+      }
       if (m.sessionId === sessionId && m.method === "Page.javascriptDialogOpening") {
         page.dialogs.push(m.params.type);
         page("Page.handleJavaScriptDialog", answer === null ? { accept: false } :
@@ -132,6 +146,10 @@ export async function launch(binary, work) {
     await page("Page.enable");
     await page("Runtime.enable");
     await page("Page.setInterceptFileChooserDialog", { enabled: true });
+    // Each load or script the page's Content-Security-Policy refused, from every page from its
+    // next load on: so a rule too strict for the page's own work shows, and its cause with it.
+    await page("Runtime.addBinding", { name: BLOCKED_BINDING });
+    await page("Page.addScriptToEvaluateOnNewDocument", { source: BLOCKED_RECORDER });
     page.targetId = targetId;
     return page;
   }
@@ -174,6 +192,7 @@ export async function launch(binary, work) {
 
   return {
     page,
+    blocked,
     answerPrompts(text) {
       answer = text;
     },

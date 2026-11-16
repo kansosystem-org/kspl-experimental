@@ -194,7 +194,20 @@ Text cells need quotes, so numeric-looking identifiers and a leading `=` are una
 
 Addresses start at `A1`, the first data cell. `$A$1`, `$A1` and `A$1` fix axes when copying formulas. Within one source, `budget.D1` names a cell in another table. Cross-file formulas are excluded, including references into an include.
 
-A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges and whole columns. It holds parentheses, unary minus, `+`, `-`, `*`, `/`, `&`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `round_down`, `round_up`, `sum_if`, `count_if`, `average_if`, `sum_product`, `lookup`, `name`, `today`, `date`, `year`, `month` and `day`. It also holds the six base functions of "Hexadecimal and binary" below, `mod` and `power`, and the text functions of "Text" below. Function names are lowercase. Multiplication and division bind before addition and subtraction. Both bind before `&`, and `&` before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. A document can add functions of its own, written in KSPL ("Your own functions").
+A formula holds these parts:
+
+| Part | What it holds |
+| :-- | :-- |
+| Values | Numbers, text in quotes, `true` and `false` |
+| References | Cell references, rectangular ranges and whole columns. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. |
+| Operators | Parentheses, unary minus, `+`, `-`, `*`, `/` and `&` |
+| Comparisons | `=`, `<>`, `<`, `<=`, `>` and `>=` |
+| Words | `and`, `or` and `not` |
+| Functions | `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `round_down`, `round_up`, `sum_if`, `count_if`, `average_if`, `sum_product`, `lookup`, `name`, `today`, `date`, `year`, `month` and `day` |
+| More functions | The six base functions of "Hexadecimal and binary" below, `mod` and `power`, and the text functions of "Text" below |
+| A document's own functions | Functions written in KSPL ("Your own functions") |
+
+Function names are lowercase. Multiplication and division bind before addition and subtraction. Both bind before `&`, and `&` before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right.
 
 An empty cell is zero in arithmetic. The rules for values and errors are "Values and errors" below, and for dates "Dates" below.
 
@@ -221,7 +234,7 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 
 * **`""` alone is empty text, and `""""` is one quote.**
 * **A quote that nothing closes makes the edit refused**, as other text that would not read back as one cell is. The cell stays open with the text typed. With AutoCorrect's brackets on, the page adds the closing quote, so `="C:\` becomes `="C:\"`.
-* **`char(n)` writes a character that formula text cannot hold**, such as a line break: `char(10)`. A formula stays on one line, and its quotes hold no escapes.
+* **`char(number)` writes a character that formula text cannot hold**, such as a line break: `char(10)`. A formula stays on one line, and its quotes hold no escapes.
 * **A table's name in quotes follows the same rule**, so one rule covers all quoted text in a formula.
 * **Text typed in quotes into a cell follows this rule too**, so `"C:\new"` is the text `C:\new`, and `"say ""hi"""` is `say "hi"`. A cell's editor shows quoted text by the same rule.
 * **The file keeps JSON's quotes and escapes for a text cell, an attribute and a note**, as for the rest of the file. Only a formula's text is written by this rule.
@@ -252,7 +265,7 @@ An empty cell is zero in arithmetic. The rules for values and errors are "Values
 **Every function a formula calls by name is an ordinary KSPL function**, in `ksmd/calc/functions.kspl`. Its parameters' types say what it takes, and its result becomes the cell's value:
 
 ```kspl
-pub fn round(x: F64, places: I64): F64!Calc_error
+pub fn round(number: F64, num_digits: I64): F64!Calc_error
 ```
 
 * **One set of rules converts every argument** (`ksmd/calc/args.kspl`). An `F64` takes a number, and an empty cell is 0; text there is `#VALUE!`. An `I64` takes a whole number, and a fraction is `#NUM!`. A `Value[]`, last, takes the arguments left, each a number or a date, a range alone giving its numbers and dates. A `T?`, last, may be left out.
@@ -260,6 +273,8 @@ pub fn round(x: F64, places: I64): F64!Calc_error
 * **The table that calls them is written from their signatures** (`ksmd/calc/glue.kspl`, `make ksmd-functions`). So a function is added by writing it, and nothing else names it.
 * **Eight forms are not functions**: `if`, `sum_if`, `count_if`, `average_if` and `lookup` choose which arguments are calculated, and `sum_product` pairs two ranges' cells. `today` reads the date the document opened, and `name` reads a column's name. They stay in the calculator. `sum_if` hands the values its condition keeps to the same `sum`.
 * **What a person reads of a function is written beside it, in its doc comments.** The first line says what it gives, each parameter's line what that argument takes, and a sentence "For example, `f(…)` is `…`." shows a call. The divider above it names its group. `make ksmd-functions` refuses a function that leaves one out, and a test calculates every example. The eight forms have their entries in `ksmd/calc/help.kspl`, which the calculator takes their names from. The page's help while a formula is typed and the reference's lists both come from there.
+* **A parameter takes the name Excel gives that argument, in snake_case**: `round(number, num_digits)`, `find(find_text, within_text)`. A person who knows a spreadsheet then reads the help as they already know it.
+  * Where Excel has no such function (`like`) or means another thing by its name, the parameter takes the clearest word. A base function's `width` counts bits, while Excel's `places` counts characters.
 
 **Why ordinary functions**: a person reads how `sum` works in the language they write, and its rules for arguments are the ones any function follows.
 
@@ -343,9 +358,9 @@ A cell's value is empty, a number, text, `true` or `false`, or an error. A formu
 * **`if(condition, then, else)` calculates only the branch it takes.** An error in the condition is the result.
 * **`if` takes all three arguments**, since `false` in a column of numbers reads as a mistake. Two arguments are `#SYNTAX!`.
 * **The branch not taken must still read**, so a slip shows at once: `if(true, 1, 2 +)` is `#SYNTAX!`.
-* **`round(x, places)` changes the value, where a number format changes only what shows.** It rounds the shortest decimal digits of the number, half away from zero, so `round(2.675, 2)` is the F64 nearest to 2.68.
-* **`places` is a whole number from -15 to 15; anything else is `#NUM!`.** `round(1250, -2)` is 1300.
-* **`round_down` cuts toward zero and `round_up` away from it**, taking `places` as `round` does. They cut the 15 significant digits a person reads, so `round_down(0.1 + 0.2, 1)` is 0.3.
+* **`round(number, num_digits)` changes the value, where a number format changes only what shows.** It rounds the shortest decimal digits of the number, half away from zero, so `round(2.675, 2)` is the F64 nearest to 2.68.
+* **`num_digits` is a whole number from -15 to 15; anything else is `#NUM!`.** `round(1250, -2)` is 1300.
+* **`round_down` cuts toward zero and `round_up` away from it**, taking `num_digits` as `round` does. They cut the 15 significant digits a person reads, so `round_down(0.1 + 0.2, 1)` is 0.3.
 * **Only those 15 digits are rounded first**, so `round_down(0.99999999, 0)` is 0 and `round_up(1.0000001, 0)` is 2.
 * **A reference alone as a function argument is a set of cells.** The function leaves out the set's empty cells, text, and `true` and `false`. Any other argument calculates as arithmetic, so `sum(A1+0)` with text in A1 is `#VALUE!`. A date stays a date, so `max(A1, today())` gives the later day.
 * **`min`, `max` and `average` of no numbers are `#EMPTY!`, not 0**, while `sum` and `count` of none are 0. A zero would hide that a column holds no data yet.
@@ -419,7 +434,7 @@ Each error has its own mark, since each is fixed differently.
 
 ### Hexadecimal and binary
 
-**`dec_to_hex(n)` writes a whole number in hexadecimal, and `hex_to_dec(text)` reads it back**; `dec_to_bin` and `bin_to_dec` do the same in binary, and `hex_to_bin` and `bin_to_hex` go between the two. `=dec_to_hex(255)` is `"FF"`, and `=bin_to_dec("101")` is 5.
+**`dec_to_hex(number)` writes a whole number in hexadecimal, and `hex_to_dec(number)` reads it back**; `dec_to_bin` and `bin_to_dec` do the same in binary, and `hex_to_bin` and `bin_to_hex` go between the two. `=dec_to_hex(255)` is `"FF"`, and `=bin_to_dec("101")` is 5.
 
 * **Every whole number up to 2^53 either way converts exactly**, the largest a cell's number holds exactly. A larger one, or a fraction, is `#NUM!`.
 * **Without a width, a negative number takes a minus sign**: `=dec_to_bin(-5)` is `"-101"`, and `=hex_to_dec("-ff")` is -255.
@@ -476,7 +491,7 @@ The text functions are `char`, `mid`, `left`, `right`, `len`, `find`, `like`, `v
 
 **Why a `~` before another character is refused:** what a spreadsheet does with it is not clearly documented. An error shows at once, where a wrong match may never be noticed.
 
-**`mod(x, y)` takes the sign of `y`**, so `mod(-1, 72)` is 71 and a count wraps round as a clock does. Its quotient is cut at the 15 digits it shows, as `round_down` cuts, so `mod(3.3, 1.1)` is 0 and not 1.1. Where whole divisors were taken away, the remainder is rounded at the place of the larger operand's 15th digit, since the subtraction's error lies there. So `mod(0.35, 0.1)` is 0.05, not 0.0499999999999999, while `mod(1e-20, 1)` stays 1e-20. **`power(x, y)` is `x` to the power `y`**; a result with no real number, such as `power(-1, 0.5)`, is `#NUM!`, as is one too large. `power(0, -1)` is `#DIV/0!`, since 0 to a negative power divides by 0.
+**`mod(number, divisor)` takes the sign of `divisor`**, so `mod(-1, 72)` is 71 and a count wraps round as a clock does. Its quotient is cut at the 15 digits it shows, as `round_down` cuts, so `mod(3.3, 1.1)` is 0 and not 1.1. Where whole divisors were taken away, the remainder is rounded at the place of the larger operand's 15th digit, since the subtraction's error lies there. So `mod(0.35, 0.1)` is 0.05, not 0.0499999999999999, while `mod(1e-20, 1)` stays 1e-20. **`power(number, power)` is `number` to the power `power`**; a result with no real number, such as `power(-1, 0.5)`, is `#NUM!`, as is one too large. `power(0, -1)` is `#DIV/0!`, since 0 to a negative power divides by 0.
 
 ### Number formats
 

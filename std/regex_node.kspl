@@ -9,7 +9,7 @@
 import "std/ds" { List }
 import "std/mem" + { dealloc }
 
-pub const MAX_GROUPS: Sz = 9 //< how many capturing groups a pattern can have.
+pub const MAX_GROUPS: Sz = 9 //< how many capturing groups a pattern can have
     //< Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group
     //< onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
 
@@ -18,7 +18,7 @@ pub const MAX_PROGRAM_SIZE: Sz = 20000 //< the most states a compiled pattern ca
     //< (`too_large`). A counted repetition is written out round by round, so `(a{1000}){1000}`
     //< would hold a million.
 
-pub const MAX_REPEAT_COUNT: Sz = 1000 //< the largest `{m,n}` count accepted, as in RE2 and Go.
+pub const MAX_REPEAT_COUNT: Sz = 1000 //< the largest `{m,n}` count accepted, as in RE2 and Go
     //< Caution: **Refuse a count that exceeds it** (`invalid_repeat`), as a count no engine
     //< accepts would make a pattern that works here alone.
 
@@ -29,13 +29,13 @@ struct Slots //< what each capturing group caught; `-1` means it did not take pa
     end: Sz[MAX_GROUPS]
 
 fn reset_slots( //< marks every group as not having taken part
-    c: Slots$@, //< the slots to clear
+    slots: Slots$@, //< the slots to clear
     count: Sz, //< how many groups the pattern has
 )
-    c.count = count
+    slots.count = count
     for i in Range.asc(MAX_GROUPS)
-        c.start[i] = -1
-        c.end[i] = -1
+        slots.start[i] = -1
+        slots.end[i] = -1
 
 enum Rx_kind //< what one node of a compiled pattern stands for
     lit //< one literal byte
@@ -59,9 +59,9 @@ struct Rx_node //< one node of a compiled pattern; `kind` decides which fields m
     sub: Rx_node$@ //< for .repeat: the quantified atom; for .group_repeat: the repeated group
     alts: List<|List<|Rx_node$@|>|> //< for .group: one atom list per alternative
     gidx: I32 //<
-        //< For .group: which capturing group; `-1` for a non-capturing group (`(?:…)`).
+        //< For .group: which capturing group; `-1` for a non-capturing group (`(?:…)`)
     min_count: I32 //<
-        //< For .repeat/.group_repeat: the minimum count (0 for `*`, 1 for `+`, m for `{m,n}`).
+        //< For .repeat/.group_repeat: the minimum count (0 for `*`, 1 for `+`, m for `{m,n}`)
     max_count: I32 //<
         //< For .repeat/.group_repeat: the maximum count (n for `{m,n}`, 1 for `?`)
         //< `-1` means no bound (`*` `+` `{m,}`).
@@ -100,12 +100,12 @@ fn new_class_node(): Rx_node$@ //< one new `[...]` node with an empty membership
     return n
 
 fn set_range( //< adds every byte in a range to a `[...]` set
-    n: Rx_node$@, //< the set node to write into
+    node: Rx_node$@, //< the set node to write into
     lo: U8, //< the range's first byte
     hi: U8, //< the range's last byte
 )
     for $c: Sz = lo; c <= Sz::hi; c += 1
-        n.set[c] = true
+        node.set[c] = true
 
 fn free_rx_alts( //< frees a group's alternatives and every node under them
     //< It frees the Lists too. Walk .alts only for the .group kind (for others it is
@@ -120,15 +120,15 @@ fn free_rx_alts( //< frees a group's alternatives and every node under them
     alts.free()
 
 fn free_rx_node( //< frees one node and everything under it
-    n: Rx_node$@, //< the node to free
+    node: Rx_node$@, //< the node to free
 )
-    if n == null
+    if node == null
         return
-    free_rx_node(n.sub)
+    free_rx_node(node.sub)
     // `.group_repeat`'s `sub` is the group itself, already freed above.
-    if n.kind == .group
-        free_rx_alts(n.alts@)
-    dealloc(Void$@::n)
+    if node.kind == .group
+        free_rx_alts(node.alts@)
+    dealloc(Void$@::node)
 
 // ==================== The program (written from the tree) ====================
 enum Op //< what one step of the program does
@@ -145,9 +145,9 @@ enum Op //< what one step of the program does
 struct Inst //< one step of the program; `op` decides which fields mean something
     op: Op
     node: Rx_node$@ //< the tree node read (shared with the tree, never freed through this)
-    x: Sz
-    y: Sz
-    a: Sz
+    x: Sz //< the next step: `.split`'s first choice, `.jump`'s target, `.round_out`'s exit
+    y: Sz //< the other next step, used by `.split` only: its choice of lower priority
+    a: Sz //< the slot that `.save` records the position in; no other op reads it
     base: Sz //< the step's first state; the state with `k` rounds open is `base + k`
 
 struct Emitter //< the program being written, and the state count it has reached
@@ -155,16 +155,16 @@ struct Emitter //< the program being written, and the state count it has reached
     depth: Sz //< the rounds of a repetition that can match empty around the next step
     states: Sz //< the states the steps so far hold, against max_program_size
 
-fn can_be_empty(n: Rx_node$@): Bool //< whether the node can match without reading a byte
+fn can_be_empty(node: Rx_node$@): Bool //< whether the node can match without reading a byte
     //< The emitter walks the nesting, which compile() already held against the stack.
-    switch n.kind
+    switch node.kind
     case .lit, .any, .class
         return false
     case .repeat, .group_repeat
-        return n.min_count == 0 || can_be_empty(n.sub)
+        return node.min_count == 0 || can_be_empty(node.sub)
     case .group
-        for i in Range.asc(n.alts.len)
-            alt: = n.alts.get(i)
+        for i in Range.asc(node.alts.len)
+            alt: = node.alts.get(i)
             $all: = true
             for k in Range.asc(alt.len)
                 if !can_be_empty(alt.get(k))
@@ -177,10 +177,12 @@ fn can_be_empty(n: Rx_node$@): Bool //< whether the node can match without readi
         return true // a zero-width test
 
 impl Emitter
-    fn step(r: Self$@, op: Op, node: Rx_node$@, a: Sz): Sz //< appends a step; returns its place
+    fn step(r: Self$@, op: Op, node: Rx_node$@, operand: Sz): Sz //<
+        //< appends a step; returns its place
         //< Its targets (`x`, `y`) are patched once the steps they name are written.
         r.prog
-            .push(Inst::{ .op = op, .node = node, .x = 0, .y = 0, .a = a, .base = r.states })
+            .push(Inst::{ .op = op, .node = node, .x = 0, .y = 0, .a = operand,
+            .base = r.states })
         r.states += r.depth + 1
         return r.prog.len - 1
 
@@ -196,23 +198,23 @@ impl Emitter
         for k in Range.asc(seq.len)
             r.node(seq.get(k))
 
-    fn node(r: Self$@, n: Rx_node$@)
-        switch n.kind
+    fn node(r: Self$@, node: Rx_node$@)
+        switch node.kind
         case .lit, .any, .class
-            r.step(.byte, n, 0)
+            r.step(.byte, node, 0)
         case .start_anchor, .end_anchor, .word_boundary, .not_word_boundary
-            r.step(.check, n, 0)
+            r.step(.check, node, 0)
         case .group
-            r.group(n)
+            r.group(node)
         case .repeat, .group_repeat
-            r.repeat(n)
+            r.repeat(node)
 
-    fn group(r: Self$@, g: Rx_node$@) //< a group: its start, its alternatives in order, its end
-        if g.gidx >= 0
-            r.step(.save, g, 2 + 2 * Sz::g.gidx)
-        r.alts(g.alts@)
-        if g.gidx >= 0
-            r.step(.save, g, 3 + 2 * Sz::g.gidx)
+    fn group(r: Self$@, group: Rx_node$@) //< a group: its start, its alternatives in order, its end
+        if group.gidx >= 0
+            r.step(.save, group, 2 + 2 * Sz::group.gidx)
+        r.alts(group.alts@)
+        if group.gidx >= 0
+            r.step(.save, group, 3 + 2 * Sz::group.gidx)
 
     fn alts(r: Self$@, alts: List<|List<|Rx_node$@|>|>@) //< alternatives, tried first to last
         defer $ends: = List<|Sz|>(null)
@@ -236,41 +238,41 @@ impl Emitter
     // and `round_out`; going on would loop for good. **A required round is written plain**: it
     // cannot loop, and stopping after it would make `(a|\b){2}` match empty on `ac`. The reasons
     // are "An optional round that read nothing stops the repetition" in std/docs/DESIGN-core.md.
-    fn repeat(r: Self$@, n: Rx_node$@)
-        empty_ok: = n.kind == .group_repeat && can_be_empty(n.sub)
+    fn repeat(r: Self$@, node: Rx_node$@)
+        empty_ok: = node.kind == .group_repeat && can_be_empty(node.sub)
         defer $forks: = List<|Sz|>(null)
         defer $exits: = List<|Sz|>(null)
-        for _i in Range.asc(n.min_count)
+        for _i in Range.asc(node.min_count)
             if r.full()
                 break
-            r.node(n.sub)
-        if n.max_count < 0
-            head: = r.step(.split, n, 0)
+            r.node(node.sub)
+        if node.max_count < 0
+            head: = r.step(.split, node, 0)
             forks.push(head)
-            r.round(n, empty_ok, exits@)
-            back: = r.step(.jump, n, 0)
+            r.round(node, empty_ok, exits@)
+            back: = r.step(.jump, node, 0)
             r.prog.at(back).x = head
         else
-            for _i in Range.asc(n.max_count - n.min_count)
+            for _i in Range.asc(node.max_count - node.min_count)
                 if r.full()
                     break
-                forks.push(r.step(.split, n, 0))
-                r.round(n, empty_ok, exits@)
+                forks.push(r.step(.split, node, 0))
+                r.round(node, empty_ok, exits@)
         past: = r.prog.len
         for f in forks.slice()
             fork: = r.prog.at(f)
-            fork.x = past if n.lazy else f + 1
-            fork.y = f + 1 if n.lazy else past
+            fork.x = past if node.lazy else f + 1
+            fork.y = f + 1 if node.lazy else past
         for e in exits.slice()
             r.prog.at(e).x = past
 
-    fn round(r: Self$@, n: Rx_node$@, empty_ok: Bool, exits: List<|Sz|>$@) //<
+    fn round(r: Self$@, node: Rx_node$@, empty_ok: Bool, exits: List<|Sz|>$@) //<
         //< one round of the body
         if !empty_ok
-            r.node(n.sub)
+            r.node(node.sub)
             return
-        r.step(.round_in, n, 0)
+        r.step(.round_in, node, 0)
         r.depth += 1
-        r.node(n.sub)
-        exits.push(r.step(.round_out, n, 0))
+        r.node(node.sub)
+        exits.push(r.step(.round_out, node, 0))
         r.depth -= 1

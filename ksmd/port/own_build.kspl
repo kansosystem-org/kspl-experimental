@@ -111,7 +111,7 @@ fn tools_near(arena: Arena$@): Tools? //<
             return .some(t)
     return .none
 
-fn own_wasm(file: U8[], shown: U8[], digest: U8[], t: Tools, arena: Arena$@): U8[]!U8[] //<
+fn own_wasm(file: U8[], shown: U8[], digest: U8[], tools: Tools, arena: Arena$@): U8[]!U8[] //<
     //< The wasm of the functions in `file`, or why there is none, naming the file as `shown`
     //< **Only bytes whose SHA-256 is `digest` are built**, read once, so a file that changed after
     //< the person allowed it is refused.
@@ -130,11 +130,11 @@ fn own_wasm(file: U8[], shown: U8[], digest: U8[], t: Tools, arena: Arena$@): U8
     work: = fs.mkdir_unique(base, PREFIX, arena) catch
         throw arena.text().s("cannot make a scratch folder in \{base\}\n").take()
     defer clean(work, arena)
-    got: = steps(source, shown, t, work, ends, arena) catch why
+    got: = steps(source, shown, tools, work, ends, arena) catch why
         throw why.replace(PERSON, shown, arena)
     return got
 
-priv fn steps(source: U8[], shown: U8[], t: Tools, work: U8[], ends: I64, arena: Arena$@):
+priv fn steps(source: U8[], shown: U8[], tools: Tools, work: U8[], ends: I64, arena: Arena$@):
     U8[]!U8[] //<
         //< The build's steps in `work` on the person's `source`; a message names their file as it
         //< stands there
@@ -143,12 +143,12 @@ priv fn steps(source: U8[], shown: U8[], t: Tools, work: U8[], ends: I64, arena:
     put(work, "own/ksplc.cfg", PACKAGE, arena)!
     put(work, PERSON, source, arena)!
     $options: = List<|U8[]|>(arena)
-    options.push(arena.text().s("--pkg-src-dir=").s(t.sources).take())
-    if t.std.len > 0
-        options.push(arena.text().s("--std-dir=").s(t.std).take())
+    options.push(arena.text().s("--pkg-src-dir=").s(tools.sources).take())
+    if tools.std.len > 0
+        options.push(arena.text().s("--std-dir=").s(tools.std).take())
     tsv: = fs.join(work, "functions.tsv", arena)
     $doc: = List<|U8[]|>(arena)
-    doc.push_all(U8[][]::{ t.ksplc, "doc" })
+    doc.push_all(U8[][]::{ tools.ksplc, "doc" })
     doc.push_all(options.slice())
     doc
         .push_all(U8[][]::{ arena.text().s("--emit-surface=").s(tsv).take(), "own/functions" })
@@ -178,8 +178,8 @@ priv fn steps(source: U8[], shown: U8[], t: Tools, work: U8[], ends: I64, arena:
     put(work, "entry/main.kspl", entry.take(), arena)!
     options.push("--closed=own")
     out: = fs.join(work, "own.wasm", arena)
-    b: = Wasm_build::{ .ksplc = t.ksplc, .entry = "entry/main.kspl", .out = out,
-        .imports = fs.join(t.sources, "ksmd/port/own/imports.txt", arena),
+    b: = Wasm_build::{ .ksplc = tools.ksplc, .entry = "entry/main.kspl", .out = out,
+        .imports = fs.join(tools.sources, "ksmd/port/own/imports.txt", arena),
         .work = fs.join(work, "c", arena), .cwd = work, .deps = "", .options = options.slice(),
         .ends = ends }
     build(b@, arena)!

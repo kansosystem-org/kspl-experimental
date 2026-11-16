@@ -170,17 +170,17 @@ fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, shown: Prog
             question, or try a stronger model.").take()
     return Answer.ended(.stopped(why), lang, arena)
 
-priv fn one_reply(job: Ask, b: Json_builder$@, msgs: List<|json.Value|>@, tools: json.Value,
+priv fn one_reply(job: Ask, builder: Json_builder$@, msgs: List<|json.Value|>@, tools: json.Value,
     shown: Progress$@, arena: Arena$@): model.Reply!answer.Outcome //<
         //< One request and its reply, shown as it arrives; the outcome that ends the question where
         //< it fails or must stop
     s: = job.server
-    body: = request_body(b, s.model, msgs, tools, s.stream)
+    body: = request_body(builder, s.model, msgs, tools, s.stream)
     if body.len > MAX_REQUEST_BYTES
         throw .stopped(arena.text()
             .s("the conversation reached its cap of \{MAX_REQUEST_BYTES / 1024\} KiB. Ask a \
                 narrower question.").take())
-    defer x: = opened(job, b, msgs, tools, body, shown, arena)!
+    defer x: = opened(job, builder, msgs, tools, body, shown, arena)!
     for
         step: = x.next(TICK_MS) catch e
             throw .failed(e.describe(s, arena))
@@ -197,7 +197,7 @@ priv fn one_reply(job: Ask, b: Json_builder$@, msgs: List<|json.Value|>@, tools:
                 throw .stopped(CUT_REPLY)
             return reply
 
-priv fn opened(job: Ask, b: Json_builder$@, msgs: List<|json.Value|>@, tools: json.Value,
+priv fn opened(job: Ask, builder: Json_builder$@, msgs: List<|json.Value|>@, tools: json.Value,
     body: U8[], shown: Progress$@, arena: Arena$@): model.Exchange$@!answer.Outcome //<
         //< Sends the request; a server that refuses a stream is asked again for a whole reply
         //< **A refused stream is asked for whole once, then never streamed again**, so a server
@@ -206,7 +206,7 @@ priv fn opened(job: Ask, b: Json_builder$@, msgs: List<|json.Value|>@, tools: js
     x: = model.open(s, body, arena) catch e
         if !s.stream || !e.is_bad_request()
             throw .failed(e.describe(s, arena))
-        whole: = request_body(b, s.model, msgs, tools, false)
+        whole: = request_body(builder, s.model, msgs, tools, false)
         // **Refused again, the stream was not the cause**: a request longer than the server's
         // context is refused with HTTP 400 too.
         plain: = model.open(s, whole, arena) catch again
@@ -220,15 +220,15 @@ priv fn opened(job: Ask, b: Json_builder$@, msgs: List<|json.Value|>@, tools: js
         fallback plain
     return x
 
-priv fn tool_room(b: Json_builder$@, s: model.Server@, msgs: List<|json.Value|>@,
+priv fn tool_room(builder: Json_builder$@, server: model.Server@, msgs: List<|json.Value|>@,
     tools: json.Value, id: U8[]): Sz //<
         //< The bytes the result of call `id` may take in the next request (`files.sent_len`)
         //< What the request already holds, the result's own message and `TOOL_RESERVE` are taken
         //< from `MAX_REQUEST_BYTES`; 0 where nothing is left.
     defer $out: = Str_builder()
-    write_request(b, s.model, msgs, tools, s.stream, out@)
+    write_request(builder, server.model, msgs, tools, server.stream, out@)
     // The empty message, and the comma that comes before it in the list of messages.
-    tool_message(b, id, "").dump(out@)
+    tool_message(builder, id, "").dump(out@)
     used: = out.slice().len + 1 + TOOL_RESERVE
     return MAX_REQUEST_BYTES - used if used < MAX_REQUEST_BYTES else 0
 
@@ -250,13 +250,13 @@ priv fn run_tool(folder: files.Folder, name: U8[], args: json.Value, room: Sz, s
     return arena.text().s("refused: there is no tool called ").s(name)
         .s("; the tools are list, search, read and answer").take()
 
-priv fn int_arg(v: json.Value): I64 //< a line number the model gave, or 0 where there is none
+priv fn int_arg(value: json.Value): I64 //< a line number the model gave, or 0 where there is none
     //< **A number written as text is read too** (`"12"`): small models write either.
-    if n: = v.as_int64()
+    if n: = value.as_int64()
         return n
-    if f: = v.as_f64()
+    if f: = value.as_f64()
         return I64::f
-    if text: = v.as_str()
+    if text: = value.as_str()
         return text.trim_spaces().to_i64() catch 0I64
     return 0I64
 
@@ -277,41 +277,45 @@ priv fn finish_answer(folder: files.Folder, args: json.Value, lang: Lang, arena:
 // The request's JSON
 // ==========================================
 
-priv fn message(b: Json_builder$@, role: U8[], content: U8[]): json.Value //< one plain message
-    return b.obj().set("role", b.str_val(role)).set("content", b.str_val(content)).build()
+priv fn message(builder: Json_builder$@, role: U8[], content: U8[]): json.Value //<
+    //< one plain message
+    return builder.obj().set("role", builder.str_val(role))
+        .set("content", builder.str_val(content)).build()
 
-priv fn tool_message(b: Json_builder$@, id: U8[], content: U8[]): json.Value //<
+priv fn tool_message(builder: Json_builder$@, id: U8[], content: U8[]): json.Value //<
     //< What one tool call gave back, tied to the call by its id
-    return b.obj().set("role", b.str_val("tool")).set("tool_call_id", b.str_val(id))
-        .set("content", b.str_val(content)).build()
+    return builder.obj().set("role", builder.str_val("tool"))
+        .set("tool_call_id", builder.str_val(id)).set("content", builder.str_val(content)).build()
 
-priv fn assistant_message(b: Json_builder$@, reply: model.Reply@): json.Value //<
+priv fn assistant_message(builder: Json_builder$@, reply: model.Reply@): json.Value //<
     //< The model's turn as it is sent back: its text and the calls it asked for
     //< **Rebuilt from what was read**, so a field one server adds (its reasoning) is not sent to it
     //< again on every round.
-    $calls: = b.arr()
+    $calls: = builder.arr()
     for i in Range.asc(reply.calls.len)
         c: = reply.calls.get(i)
-        f: = b.obj().set("name", b.str_val(c.name)).set("arguments", b.str_val(c.arguments)).build()
+        f: = builder.obj().set("name", builder.str_val(c.name))
+            .set("arguments", builder.str_val(c.arguments)).build()
         calls = calls
-            .push(b.obj().set("id", b.str_val(c.id)).set("type", b.str_val("function"))
-            .set("function", f).build())
-    content: = b.null_val() if reply.content.len == 0 else b.str_val(reply.content)
-    return b.obj().set("role", b.str_val("assistant")).set("content", content)
+            .push(builder.obj().set("id", builder.str_val(c.id))
+            .set("type", builder.str_val("function")).set("function", f).build())
+    content: =
+        builder.null_val() if reply.content.len == 0 else builder.str_val(reply.content)
+    return builder.obj().set("role", builder.str_val("assistant")).set("content", content)
         .set("tool_calls", calls.build()).build()
 
-priv fn request_body(b: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
+priv fn request_body(builder: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
     tools: json.Value, stream: Bool): U8[] //<
         //< One request's JSON text: the model, the whole conversation, the tools and the stream
     defer $out: = Str_builder()
-    write_request(b, model_name, msgs, tools, stream, out@)
-    return b.arena.dup_str(out.slice())
+    write_request(builder, model_name, msgs, tools, stream, out@)
+    return builder.arena.dup_str(out.slice())
 
-priv fn write_request(b: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
+priv fn write_request(builder: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
     tools: json.Value, stream: Bool, out: Str_builder$@) //< writes one request's JSON text to `out`
-    $all: = b.arr()
+    $all: = builder.arr()
     for i in Range.asc(msgs.len)
         all = all.push(msgs.get(i))
-    req: = b.obj().set("model", b.str_val(model_name)).set("messages", all.build())
-        .set("tools", tools).set("stream", b.bool_val(stream)).build()
+    req: = builder.obj().set("model", builder.str_val(model_name)).set("messages", all.build())
+        .set("tools", tools).set("stream", builder.bool_val(stream)).build()
     req.dump(out)

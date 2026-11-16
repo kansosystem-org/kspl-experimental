@@ -23,42 +23,42 @@ enum Base //< a base the functions write or read
     binary //< one bit a digit, `0` and `1`
 
 impl Base
-    fn bits(b: Self): I64 //< the bits one digit holds
-        return 4 if b == .hex else 1
+    fn bits(r: Self): I64 //< the bits one digit holds
+        return 4 if r == .hex else 1
 
 enum Base_error //< why a conversion has no answer
     not_digits //< the text holds a character that is no digit of the base, or nothing: `#VALUE!`
     too_large //< past 2^53, outside the width, or a width not from 1 to 53: `#NUM!`
 
-fn whole(n: F64): I64? //< a number as a whole number within 2^53, or none
-    if n != n || n > F64::LIMIT || n < -F64::LIMIT
+fn whole(number: F64): I64? //< a number as a whole number within 2^53, or none
+    if number != number || number > F64::LIMIT || number < -F64::LIMIT
         return .none
-    w: = I64::n
-    if F64::w != n
+    w: = I64::number
+    if F64::w != number
         return .none
     return .some(w)
 
 fn width_ok(width: I64): Bool //< whether a width in bits is one the functions take
     return width >= 1 && width <= MAX_BITS
 
-fn write(n: I64, base: Base, width: I64, arena: Arena$@): U8[]!Base_error //<
-    //< `n` in the base. **Width 0 means none**: a negative number takes a minus sign. Otherwise
-    //< `n` must fit the width as a signed number, and is written in exactly the digits the width
-    //< needs, a negative one as its two's complement.
+fn write(number: I64, base: Base, width: I64, arena: Arena$@): U8[]!Base_error //<
+    //< `number` in the base. **Width 0 means none**: a negative number takes a minus sign. Otherwise
+    //< `number` must fit the width as a signed number, and is written in exactly the digits the
+    //< width needs, a negative one as its two's complement.
     // Why signed only: `read` reads a width's digits back as signed, so `dec_to_bin(200, 8)` would
     // write `11001000`, which reads back as -56.
-    if n > LIMIT || n < -LIMIT
+    if number > LIMIT || number < -LIMIT
         throw .too_large
-    $v: = n
+    $v: = number
     $digits: I64 = 0
     if width != 0
         if !width_ok(width)
             throw .too_large
         span: = 1I64 << width
-        if n >= (span >> 1) || n < -(span >> 1)
+        if number >= (span >> 1) || number < -(span >> 1)
             throw .too_large
-        if n < 0
-            v = n + span
+        if number < 0
+            v = number + span
         digits = (width + base.bits() - 1) / base.bits()
     negative: = width == 0 && v < 0
     if negative
@@ -78,20 +78,20 @@ fn write(n: I64, base: Base, width: I64, arena: Arena$@): U8[]!Base_error //<
         t.c(out[at + i])
     return t.take()
 
-fn read(s: U8[], base: Base, width: I64): I64!Base_error //<
+fn read(text: U8[], base: Base, width: I64): I64!Base_error //<
     //< The whole number a digit text names. Digits are read in either case. **Width 0 means
     //< none**: a leading `-` makes the number negative. Otherwise the text takes no sign, must fit
     //< the width, and a top bit set makes it negative, as two's complement reads it.
     $at: Sz = 0
-    negative: = width == 0 && s.len > 0 && s[0] == '-'
+    negative: = width == 0 && text.len > 0 && text[0] == '-'
     if negative
         at = 1
-    if at == s.len
+    if at == text.len
         throw .not_digits
     if width != 0 && !width_ok(width)
         throw .too_large
     $v: I64 = 0
-    for c in s.sub_from(at)
+    for c in text.sub_from(at)
         d: = digit(c, base) catch
             throw .not_digits
         v = (v << base.bits()) | d
@@ -128,14 +128,14 @@ fn literal(spelled: U8[]): I64? //<
 fn is_literal(spelled: U8[]): Bool //< whether text starts as a literal in a base: `0x` or `0b`
     return spelled.len >= 2 && spelled[0] == '0' && (spelled[1] == 'x' || spelled[1] == 'b')
 
-priv fn digit(c: U8, base: Base): I64!Base_error //< one digit's value in the base
-    if c >= '0' && c <= '9'
-        d: = I64::(c - '0')
+priv fn digit(byte: U8, base: Base): I64!Base_error //< one digit's value in the base
+    if byte >= '0' && byte <= '9'
+        d: = I64::(byte - '0')
         if base == .binary && d > 1
             throw .not_digits
         return d
-    if base == .hex && c >= 'a' && c <= 'f'
-        return I64::(c - 'a') + 10
-    if base == .hex && c >= 'A' && c <= 'F'
-        return I64::(c - 'A') + 10
+    if base == .hex && byte >= 'a' && byte <= 'f'
+        return I64::(byte - 'a') + 10
+    if base == .hex && byte >= 'A' && byte <= 'F'
+        return I64::(byte - 'A') + 10
     throw .not_digits

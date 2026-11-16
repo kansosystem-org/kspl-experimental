@@ -343,4 +343,4 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## Further reading
 
 * [`LICENSE.md`](LICENSE.md) — the license for this repository as a whole.
-* [`lib/ksos/docs/DESIGN-rtos.md`](lib/ksos/docs/DESIGN-rtos.md) — "The RP2040 port" says how the three files under `lib/ksos/port/rp2040/` above compute their values. It also says how the values are confirmed. "🔧 The peripheral drivers" says what each driver originates from.
+* [`lib/ksos/docs/DESIGN-rtos.md`](lib/ksos/docs/DESIGN-rtos.md) — "The RP2040 port" says how the three files under `lib/ksos/port/rp2040/` above compute their values. It also says how the values are confirmed. "The peripheral drivers" says what each driver originates from.

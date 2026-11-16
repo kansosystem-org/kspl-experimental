@@ -61,8 +61,8 @@ enum Edit_error //< why an edit was refused; a refused edit changes nothing
     chart_name //< a chart would not find its column again by the column's name
 
 impl Edit_error
-    fn message(e: Self): U8[] //< what the editor says: the problem, then what to do
-        switch e
+    fn message(r: Self): U8[] //< what the editor says: the problem, then what to do
+        switch r
         case .outside
             return "No table, row, column or cell stands there."
         case .too_many_rows
@@ -141,10 +141,10 @@ struct Saved //< a piece an edit changed, kept to undo the edit
     index: Sz
     piece: Piece
 
-fn insert_rows(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Void!Edit_error //<
+fn insert_rows(doc: Document$@, table: Sz, at: Sz, count: Sz, arena: Arena$@): Void!Edit_error //<
     //< `count` empty data rows before the row at `at`; at the count of rows, after the last one
     //< Every formula is measured once for all of them, not once for each row.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if at < 0 || at > t.rows.len || count < 1
         throw .outside
     if t.rows.len + count > MAX_ROWS
@@ -164,11 +164,11 @@ fn insert_rows(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Void!
     after_insert(t.groups@, at, count)
     attach_loose(doc, arena)
 
-fn insert_columns(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Void!Edit_error //<
+fn insert_columns(doc: Document$@, table: Sz, at: Sz, count: Sz, arena: Arena$@): Void!Edit_error //<
     //< `count` columns before the column at `at`, with empty names and empty cells
     //< In a table with column widths, each takes the width of the column they stand before, or of
     //< the last column when they are added after it.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if at < 0 || at > t.columns.len || count < 1
         throw .outside
     if t.columns.len + count > MAX_COLUMNS
@@ -204,15 +204,15 @@ fn insert_columns(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Vo
     after_insert(t.column_groups@, at, count)
     attach_loose(doc, arena)
 
-fn remove_row(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
+fn remove_row(doc: Document$@, table: Sz, at: Sz): Void!Edit_error //<
     //< Removes a data row; a reference to it becomes `#REF!`
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if at < 0 || at >= t.rows.len
         throw .outside
     id: = t.rows[at]
     defer scratch: = Arena(16 * 1024)
     $saved: = List<|Saved|>(scratch)
-    detach(doc, u, id, true, saved@)
+    detach(doc, table, id, true, saved@)
     $cells: = List<|Cell|>(scratch)
     for c in Range.asc(t.columns.len)
         cells.push(t.cells[t.at(at, c)])
@@ -226,9 +226,9 @@ fn remove_row(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
         throw .too_long
     after_remove(t.groups@, at)
 
-fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
+fn remove_column(doc: Document$@, table: Sz, at: Sz): Void!Edit_error //<
     //< Removes a column, its name, width and format; a reference to it becomes `#REF!`
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if at < 0 || at >= t.columns.len
         throw .outside
     if t.columns.len == 1
@@ -236,7 +236,7 @@ fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
     id: = t.columns[at]
     defer scratch: = Arena(16 * 1024)
     $saved: = List<|Saved|>(scratch)
-    detach(doc, u, id, false, saved@)
+    detach(doc, table, id, false, saved@)
     $cells: = List<|Cell|>(scratch)
     for r in Range.asc(t.rows.len + 1)
         cells.push(t.cells[r * t.columns.len + at])
@@ -281,13 +281,13 @@ fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
             t.merged.remove_at(i)
             break
 
-fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: U8[],
+fn set_cell(doc: Document$@, table: Sz, row: Sz, column: Sz, kind: Cell_kind, text: U8[],
     arena: Arena$@): Void!Edit_error //<
         //< Puts a value in a data cell: text, a number or a date as written, a formula without its
         //< `=`
         //< An empty cell takes empty text. A formula's spaces at either end are dropped, as the
         //< reader drops them, and its references attach.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if row < 0 || row >= t.rows.len || column < 0 || column >= t.columns.len
         throw .outside
     $cell: = empty_cell()
@@ -325,17 +325,17 @@ fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: 
         if !reads_as_formula(formula)
             throw .not_a_value
         cell.first = t.pieces.len
-        cell.count = bind(doc, u, arena.dup_str(formula), t.pieces@)
+        cell.count = bind(doc, table, arena.dup_str(formula), t.pieces@)
     index: = t.at(row, column)
     // A new value keeps the cell's look and note, as a spreadsheet's cell keeps its format.
     t.cells[index] = with_look(cell, t.cells[index])
 
-fn chosen(t: Table@, column: Sz, text: U8[]): U8[]!Edit_error //<
+fn chosen(table: Table@, column: Sz, text: U8[]): U8[]!Edit_error //<
     //< The text a cell of the column holds: one of its choices, as the list spells it, where the
     //< column has a list; the text itself where it has none
-    if t.choices.len == 0 || t.choices[column].len == 0
+    if table.choices.len == 0 || table.choices[column].len == 0
         return text
-    return choice_of(t.choices[column], text) catch
+    return choice_of(table.choices[column], text) catch
         throw .not_a_choice
 
 priv fn with_look($cell: Cell, was: Cell): Cell //< the cell, with the look, note and link it had
@@ -375,12 +375,12 @@ fn copy_cell(doc: Document$@, from: Sz, row: Sz, column: Sz, to: Sz, to_row: Sz,
     target.cells[target.at(to_row, to_column)].look = cell.look
     target.cells[target.at(to_row, to_column)].note = cell.note
 
-fn set_look(doc: Document$@, u: Sz, row: Sz, column: Sz, part: Look_part, value: U8[],
+fn set_look(doc: Document$@, table: Sz, row: Sz, column: Sz, part: Look_part, value: U8[],
     arena: Arena$@): Void!Edit_error //<
         //< Sets or clears one part of a cell's look; row -1 is the names above the data rows
         //< A colour is `#rrggbb`, a size a number of points from 6 to 72, whole or ending in .5,
         //< and an alignment `left`, `center`, `right` or `across`. An empty value clears that part.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if row < -1 || row >= t.rows.len || column < 0 || column >= t.columns.len
         throw .outside
     index: = column if row < 0 else t.at(row, column)
@@ -390,9 +390,9 @@ fn set_look(doc: Document$@, u: Sz, row: Sz, column: Sz, part: Look_part, value:
         drop_filters(t, column, column)
     t.cells[index].look = look
 
-fn group_lines(doc: Document$@, u: Sz, columns: Bool, first: Sz, last: Sz): Void!Edit_error //<
+fn group_lines(doc: Document$@, table: Sz, columns: Bool, first: Sz, last: Sz): Void!Edit_error //<
     //< Makes the data rows, or the columns, from `first` to `last` a group, shown
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if first < 0 || first > last || last >= (t.columns.len if columns else t.rows.len)
         throw .outside
     groups: = t.column_groups@ if columns else t.groups@
@@ -411,27 +411,28 @@ fn group_lines(doc: Document$@, u: Sz, columns: Bool, first: Sz, last: Sz): Void
         default
             throw .groups_cross
 
-fn ungroup_lines(doc: Document$@, u: Sz, columns: Bool, first: Sz, last: Sz): Void!Edit_error //<
+fn ungroup_lines(doc: Document$@, table: Sz, columns: Bool, first: Sz, last: Sz): Void!Edit_error //<
     //< Takes away the smallest group that holds the rows, or columns, from `first` to `last`
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     groups: = t.column_groups@ if columns else t.groups@
     at: = innermost(groups, first, last) catch
         throw .no_group
     groups.remove_at(at)
 
-fn show_group(doc: Document$@, u: Sz, columns: Bool, first: Sz, last: Sz, shown: Bool):
+fn show_group(doc: Document$@, table: Sz, columns: Bool, first: Sz, last: Sz, shown: Bool):
     Void!Edit_error //<
         //< Shows or hides the lines of the smallest group that holds those from `first` to `last`
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     groups: = t.column_groups@ if columns else t.groups@
     at: = innermost(groups, first, last) catch
         throw .no_group
     groups[at].closed = !shown
 
-fn set_choices(doc: Document$@, u: Sz, column: Sz, entry: U8[], arena: Arena$@): Void!Edit_error //<
-    //< Gives a column its choices, as `choice.entry_of` makes them, or none with empty text
-    //< Cells already off the new list keep their values; the page marks them.
-    t: = table_at(doc, u)!
+fn set_choices(doc: Document$@, table: Sz, column: Sz, entry: U8[], arena: Arena$@):
+    Void!Edit_error //<
+        //< Gives a column its choices, as `choice.entry_of` makes them, or none with empty text
+        //< Cells already off the new list keep their values; the page marks them.
+    t: = table_at(doc, table)!
     if column < 0 || column >= t.columns.len
         throw .outside
     if !is_entry(entry)
@@ -444,26 +445,26 @@ fn set_choices(doc: Document$@, u: Sz, column: Sz, entry: U8[], arena: Arena$@):
     if entry.len == 0 && t.row_colors == t.columns[column]
         t.row_colors = UNBOUND
 
-fn set_rule(doc: Document$@, u: Sz, column: Sz, r: Rule): Void!Edit_error //<
+fn set_rule(doc: Document$@, table: Sz, column: Sz, rule: Rule): Void!Edit_error //<
     //< Gives a column its colour rule, or none with `no_rule()`
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if column < 0 || column >= t.columns.len
         throw .outside
     if t.rules.len == 0
         for _ in Range.asc(t.columns.len)
             t.rules.push(no_rule())
-    t.rules[column] = r
+    t.rules[column] = rule
 
-fn set_caption(doc: Document$@, u: Sz, caption: U8[], arena: Arena$@): Void!Edit_error //<
+fn set_caption(doc: Document$@, table: Sz, caption: U8[], arena: Arena$@): Void!Edit_error //<
     //< Gives a table the words shown above it, or takes them away with empty text
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if caption.len > 0 && !is_label(caption)
         throw .not_a_caption
     t.caption = arena.dup_str(caption)
 
-fn set_merged(doc: Document$@, u: Sz, column: Sz, on: Bool): Void!Edit_error //<
+fn set_merged(doc: Document$@, table: Sz, column: Sz, on: Bool): Void!Edit_error //<
     //< Shows a column's repeated values once, as merged, or each again
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if column < 0 || column >= t.columns.len
         throw .outside
     id: = t.columns[column]
@@ -475,10 +476,10 @@ fn set_merged(doc: Document$@, u: Sz, column: Sz, on: Bool): Void!Edit_error //<
     if on
         t.merged.push(id)
 
-fn set_row_colors(doc: Document$@, u: Sz, column: Sz): Void!Edit_error //<
+fn set_row_colors(doc: Document$@, table: Sz, column: Sz): Void!Edit_error //<
     //< Colours each row by the choice that column `column` holds, or no row with -1
     //< Only a column with choices colours rows, so a row's colours always come from its list.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if column == -1
         t.row_colors = UNBOUND
         return
@@ -488,10 +489,10 @@ fn set_row_colors(doc: Document$@, u: Sz, column: Sz): Void!Edit_error //<
         throw .no_choices
     t.row_colors = t.columns[column]
 
-fn set_note(doc: Document$@, u: Sz, row: Sz, column: Sz, note: U8[], arena: Arena$@):
+fn set_note(doc: Document$@, table: Sz, row: Sz, column: Sz, note: U8[], arena: Arena$@):
     Void!Edit_error //<
         //< Gives a data cell a note, or takes its note away with empty text
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if row < 0 || row >= t.rows.len || column < 0 || column >= t.columns.len
         throw .outside
     if note.len > 0 && !is_note(note)
@@ -505,10 +506,10 @@ struct Auto_entry //< what typed text in a cell turns into on its own, as Excel'
     links: Bool //< an `https:` or `http:` address becomes text that links to it
     brackets: Bool //< a formula missing its last `)` or `"` takes them, where it then reads
 
-fn set_link(doc: Document$@, u: Sz, row: Sz, column: Sz, link: U8[], arena: Arena$@):
+fn set_link(doc: Document$@, table: Sz, row: Sz, column: Sz, link: U8[], arena: Arena$@):
     Void!Edit_error //<
         //< Gives a text cell a link, or takes its link away with empty text
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if row < 0 || row >= t.rows.len || column < 0 || column >= t.columns.len
         throw .outside
     if link.len > 0 && t.cells[t.at(row, column)].kind != .text
@@ -517,9 +518,9 @@ fn set_link(doc: Document$@, u: Sz, row: Sz, column: Sz, link: U8[], arena: Aren
         throw .not_a_link
     t.cells[t.at(row, column)].link = arena.dup_str(link)
 
-fn set_widths(doc: Document$@, u: Sz, widths: List<|Sz|>@): Void!Edit_error //<
+fn set_widths(doc: Document$@, table: Sz, widths: List<|Sz|>@): Void!Edit_error //<
     //< Gives each column a width in tenths of a character, 0 for one that fits its text
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if widths.len != t.columns.len
         throw .not_widths
     for width in widths
@@ -529,10 +530,10 @@ fn set_widths(doc: Document$@, u: Sz, widths: List<|Sz|>@): Void!Edit_error //<
     for width in widths
         t.widths.push(width)
 
-fn set_heights(doc: Document$@, u: Sz, rows: Sz[], points: Sz): Void!Edit_error //<
+fn set_heights(doc: Document$@, table: Sz, rows: Sz[], points: Sz): Void!Edit_error //<
     //< Gives each data row listed a height in points; 0 takes it away, so the row fits its lines
     //< Every row is checked first, so a refusal changes none.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if rows.len == 0
         throw .outside
     for r in rows
@@ -549,20 +550,20 @@ fn set_heights(doc: Document$@, u: Sz, rows: Sz[], points: Sz): Void!Edit_error 
         if points > 0
             t.heights.push(Row_height::{ .row = t.rows[r], .points = points })
 
-fn set_format(doc: Document$@, u: Sz, first: Sz, last: Sz, f: Number_format, arena: Arena$@):
-    Void!Edit_error //<
+fn set_format(doc: Document$@, table: Sz, first: Sz, last: Sz, format: Number_format,
+    arena: Arena$@): Void!Edit_error //<
         //< Gives columns `first` to `last` one number format; no format clears theirs
         //< `general` is a cell's own format alone: for a column it is the empty entry. The cells of
         //< those columns lose their own formats, so the whole column shows the one chosen, as
         //< Excel's format on a whole column does.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if first < 0 || last < first || last >= t.columns.len
         throw .outside
     if t.formats.len == 0
         for _ in Range.asc(t.columns.len)
             t.formats.push(no_format())
-    $kept: = no_format() if f.kind == .general else f
-    kept.code = arena.dup_str(f.code)
+    $kept: = no_format() if format.kind == .general else format
+    kept.code = arena.dup_str(format.code)
     for c in Range(first, last + 1, 1)
         t.formats[c] = kept
         for r in Range(-1, t.rows.len, 1)
@@ -573,10 +574,10 @@ fn set_format(doc: Document$@, u: Sz, first: Sz, last: Sz, f: Number_format, are
             return
     t.formats.clear()
 
-fn step_places(doc: Document$@, u: Sz, first: Sz, last: Sz, more: Bool): Void!Edit_error //<
+fn step_places(doc: Document$@, table: Sz, first: Sz, last: Sz, more: Bool): Void!Edit_error //<
     //< Shows one more, or one fewer, decimal place in each column from `first` to `last` that
     //< has a number format
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if first < 0 || last < first || last >= t.columns.len
         throw .outside
     $formatted: = false
@@ -599,10 +600,10 @@ fn step_places(doc: Document$@, u: Sz, first: Sz, last: Sz, more: Bool): Void!Ed
     if !changed
         throw .places
 
-fn set_name(doc: Document$@, u: Sz, column: Sz, text: U8[], arena: Arena$@): Void!Edit_error //<
+fn set_name(doc: Document$@, table: Sz, column: Sz, text: U8[], arena: Arena$@): Void!Edit_error //<
     //< Gives a column the name its header shows; the header keeps its look and note
     //< Refused where a chart would then not find its columns by their names.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if column < 0 || column >= t.columns.len
         throw .outside
     if !text.is_utf8()
@@ -612,7 +613,7 @@ fn set_name(doc: Document$@, u: Sz, column: Sz, text: U8[], arena: Arena$@): Voi
     cell.kind = .text
     cell.text = arena.dup_str(text)
     t.cells[column] = with_look(cell, was)
-    charts_found(doc, u) catch why
+    charts_found(doc, table) catch why
         t.cells[column] = was
         throw why
 
@@ -651,11 +652,11 @@ fn new_table(doc: Document$@, columns: Sz, rows: Sz, arena: Arena$@): Sz!Edit_er
     attach_loose(doc, arena)
     return doc.tables.len - 1
 
-fn remove_table(doc: Document$@, u: Sz, arena: Arena$@): Void!Edit_error //<
+fn remove_table(doc: Document$@, table: Sz, arena: Arena$@): Void!Edit_error //<
     //< Empties a table and its name, so it keeps its place and no reference finds it
     //< A reference to it from another table becomes text as written, and calculates as `#REF!`.
     //< The block that showed the table is the caller's to remove.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if t.name.len == 0
         throw .outside
     defer scratch: = Arena(16 * 1024)
@@ -663,35 +664,35 @@ fn remove_table(doc: Document$@, u: Sz, arena: Arena$@): Void!Edit_error //<
     $found: = List<|Written|>(scratch)
     defer $out: = Str_builder()
     for v in Range.asc(doc.tables.len)
-        if v == u
+        if v == table
             continue
         for i in Range.asc(doc.tables[v].cells.len)
             cell: = doc.tables[v].cells[i]
-            if cell.kind != .formula || !points_into(doc.tables[v]@, cell, u)
+            if cell.kind != .formula || !points_into(doc.tables[v]@, cell, table)
                 continue
             out.clear()
             write_formula(doc, doc.tables[v]@, cell, at@, 0, 0, out@)
             found
                 .push(Written::{ .table = v, .index = i,
                 .text = arena.dup_str(out.slice()) })
-    doc.tables[u] = Table("", arena)
+    doc.tables[table] = Table("", arena)
     for w in found
         first: = doc.tables[w.table].pieces.len
         count: = bind(doc, w.table, w.text, doc.tables[w.table].pieces@)
         doc.tables[w.table].cells[w.index].first = first
         doc.tables[w.table].cells[w.index].count = count
 
-fn rename_table(doc: Document$@, u: Sz, name: U8[], arena: Arena$@): Void!Edit_error //<
+fn rename_table(doc: Document$@, table: Sz, name: U8[], arena: Arena$@): Void!Edit_error //<
     //< Gives a table another name; references written with its name follow it
     //< A reference kept as text that now names one of its cells attaches. Refused where a formula
     //< would then be written longer than 4,096 bytes.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if t.name.len == 0
         throw .outside
     if !is_table_name(name) || !name.is_utf8()
         throw .not_a_name
     if found: = find_table(doc, name)
-        if found != u
+        if found != table
             throw .name_taken
         return
     was: = t.name
@@ -707,20 +708,21 @@ priv struct Written //< a formula written out as text, to be bound again
     index: Sz //< its cell in `Table.cells`
     text: U8[]
 
-priv fn points_into(t: Table@, cell: Cell, u: Sz): Bool //< whether a formula refers to table `u`
+priv fn points_into(grid: Table@, cell: Cell, table: Sz): Bool //<
+    //< whether a formula refers to the table at `table`
     for k in Range(cell.first, cell.first + cell.count, 1)
-        p: = t.pieces[k]@
-        if p.kind != .text && p.table == u
+        p: = grid.pieces[k]@
+        if p.kind != .text && p.table == table
             return true
     return false
 
-priv fn detach(doc: Document$@, u: Sz, id: Sz, row: Bool, saved: List<|Saved|>$@) //<
-    //< Rewrites each reference to row or column `id` of table `u`, before it is removed
+priv fn detach(doc: Document$@, table: Sz, id: Sz, row: Bool, saved: List<|Saved|>$@) //<
+    //< Rewrites each reference to row or column `id` of the table at `table`, before it is removed
     //< A reference to one cell becomes `#REF!`. A range's corner on it moves one line toward the
     //< other corner, and a range with no line left becomes `#REF!`.
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
-    t: = doc.tables[u]@
+    t: = doc.tables[table]@
     lines: = t.rows@ if row else t.columns@
     for v in Range.asc(doc.tables.len)
         for i in Range.asc(doc.tables[v].cells.len)
@@ -730,7 +732,7 @@ priv fn detach(doc: Document$@, u: Sz, id: Sz, row: Bool, saved: List<|Saved|>$@
             for k in Range(cell.first, cell.first + cell.count, 1)
                 $p: = doc.tables[v].pieces[k]
                 // Whole columns hold no row, so a row's removal only shortens them.
-                if p.kind == .text || p.table != u || row && p.kind == .columns
+                if p.kind == .text || p.table != table || row && p.kind == .columns
                     continue
                 $a: = line_of(p.from, row)
                 $b: = line_of(p.to, row)
@@ -740,8 +742,8 @@ priv fn detach(doc: Document$@, u: Sz, id: Sz, row: Bool, saved: List<|Saved|>$@
                 if a == b
                     doc.tables[v].pieces[k] = text_piece(BROKEN)
                     continue
-                pa: = at.of(u, a)
-                pb: = at.of(u, b)
+                pa: = at.of(table, a)
+                pb: = at.of(table, b)
                 inward: = 1 if pa < pb else -1
                 if a == id
                     a = lines[pa + inward]
@@ -771,11 +773,11 @@ fn fits(doc: Document@): Void!Edit_error //<
             if out.slice().len > doc.formula_cap
                 throw .too_long
 
-fn charts_found(doc: Document@, u: Sz): Void!Edit_error //<
-    //< Refuses when a chart that a block shows would not find its columns of table `u` again
+fn charts_found(doc: Document@, table: Sz): Void!Edit_error //<
+    //< Refuses when a chart that a block shows would not find its columns of the table again
     for i in Range.asc(doc.blocks.len)
         b: = doc.blocks.get(i)
-        if b.kind == .chart && doc.charts[b.first].table == u &&
+        if b.kind == .chart && doc.charts[b.first].table == table &&
             !reads_back(doc, doc.charts[b.first]@)
             throw .chart_name
 
@@ -798,42 +800,42 @@ fn attach_loose(doc: Document$@, arena: Arena$@) //<
             doc.tables[v].cells[i].first = first
             doc.tables[v].cells[i].count = count
 
-priv fn add_cells(t: Table$@, at: Sz, count: Sz, row: Bool) //<
+priv fn add_cells(table: Table$@, at: Sz, count: Sz, row: Bool) //<
     //< Puts empty cells for `count` data rows from row `at`, or for `count` columns from column
     //< `at`, before `rows` or `columns` counts them
     //< A new column's name is empty text. Each cell moves once, so the cost is the table's size.
-    columns: = t.columns.len
+    columns: = table.columns.len
     if row
-        widen(t.cells@, t.at(at, 0), count * columns, empty_cell())
+        widen(table.cells@, table.at(at, 0), count * columns, empty_cell())
         return
-    lines: = t.rows.len + 1
+    lines: = table.rows.len + 1
     wider: = columns + count
     $name: = empty_cell()
     name.kind = .text
-    widen(t.cells@, t.cells.len, lines * count, empty_cell())
+    widen(table.cells@, table.cells.len, lines * count, empty_cell())
     // From the end backwards, so no cell is overwritten before it moves.
     for r in Range.desc(lines)
         for c in Range.desc(wider)
-            t.cells[r * wider + c] =
-                (t.cells[r * columns + c] if c < at
-                else t.cells[r * columns + c - count] if c >= at + count else name if r == 0
+            table.cells[r * wider + c] =
+                (table.cells[r * columns + c] if c < at
+                else table.cells[r * columns + c - count] if c >= at + count else name if r == 0
                 else empty_cell())
 
-priv fn remove_cells(t: Table$@, at: Sz, count: Sz, row: Bool) //<
+priv fn remove_cells(table: Table$@, at: Sz, count: Sz, row: Bool) //<
     //< Removes the cells of `count` data rows from row `at`, or of `count` columns from column `at`
     //< with their names, while `rows` or `columns` still counts them
-    columns: = t.columns.len
+    columns: = table.columns.len
     if row
-        narrow(t.cells@, t.at(at, 0), count * columns)
+        narrow(table.cells@, table.at(at, 0), count * columns)
         return
     $kept: Sz = 0
-    for i in Range.asc(t.cells.len)
+    for i in Range.asc(table.cells.len)
         c: = i % columns
         if c < at || c >= at + count
-            t.cells[kept] = t.cells[i]
+            table.cells[kept] = table.cells[i]
             kept += 1
-    for t.cells.len > kept
-        _gone: = t.cells.pop()
+    for table.cells.len > kept
+        _gone: = table.cells.pop()
 
 priv fn widen<|T|>(list: List<|T|>$@, at: Sz, count: Sz, fill: T) //<
     //< Puts `count` copies of `fill` before place `at`, moving each later element once
@@ -851,33 +853,33 @@ priv fn narrow<|T|>(list: List<|T|>$@, at: Sz, count: Sz) //<
     for _ in Range.asc(count)
         _gone: = list.pop()
 
-priv fn line_of(c: Corner, row: Bool): Sz
-    return c.row if row else c.column
+priv fn line_of(corner: Corner, row: Bool): Sz
+    return corner.row if row else corner.column
 
-priv fn with_line($c: Corner, row: Bool, id: Sz): Corner
+priv fn with_line($corner: Corner, row: Bool, id: Sz): Corner
     if row
-        c.row = id
+        corner.row = id
     else
-        c.column = id
-    return c
+        corner.column = id
+    return corner
 
-fn drop_filters(t: Table$@, first: Sz, last: Sz) //<
+fn drop_filters(table: Table$@, first: Sz, last: Sz) //<
     //< Takes away the filters of columns `first` to `last`
     //< A filter matches the text a cell shows, so a change of format makes its entry stale.
     $i: Sz = 0
-    for i < t.filters.len
+    for i < table.filters.len
         $kept: = true
         for c in Range(first, last + 1, 1)
-            kept = kept && t.filters[i].column != t.columns[c]
+            kept = kept && table.filters[i].column != table.columns[c]
         if kept
             i += 1
         else
-            t.filters.remove_at(i)
+            table.filters.remove_at(i)
 
-fn table_at(doc: Document$@, u: Sz): Table$@!Edit_error //< the table at place `u`
-    if u < 0 || u >= doc.tables.len
+fn table_at(doc: Document$@, table: Sz): Table$@!Edit_error //< the table at place `table`
+    if table < 0 || table >= doc.tables.len
         throw .outside
-    return doc.tables[u]@
+    return doc.tables[table]@
 
 fn empty_cell(): Cell
     return Cell::{ .kind = .empty, .text = "", .first = 0, .count = 0, .offset = 0,

@@ -40,11 +40,11 @@ Caution: **Pushing the tag starts the workflow**, which builds on three platform
    * **A commit that no `ci.yml` run passed on with every job.** A run with a job unticked does not count. The refusal says to run CI by hand (step 3); once it passes, press "Re-run all jobs" on the refused run.
 8. **`build`**, once per platform (`linux-x64`, `macos-arm64`, `windows-x64` on MSYS2 UCRT64). It runs `make self-host-ship`, then makes `ksplc-<tag>-<platform>.zip`. The zip holds `ksplc`, `std/`, the VS Code settings, `kspl_lldb.py`, the README and the licence. On Windows it first refuses an executable that needs a DLL from the toolchain. **Then the `ksplc` unpacked outside the checkout builds and runs a hello program**, so a missing or misplaced `std/` fails here.
 9. **`package-vscode-ext`**: packs `kspl-<tag>.vsix`, with each platform's `ksplc` as its language server, and `kspeg-<tag>.vsix`. The packing tool, vsce, comes from `.github/vsce/package-lock.json`, so each release packs with the same tree.
-10. **`release`**: attaches the three zips and two `.vsix` to the tag's Release, with release notes GitHub writes from the merged pull requests.
+10. **`release`**: writes `SHA256SUMS`, one SHA-256 per zip and `.vsix`. It attaches the three zips, the two `.vsix` and `SHA256SUMS` to the tag's Release. GitHub writes the release notes from the merged pull requests.
 
 ## After
 
-11. **Open the Release page and check five files are attached.**
+11. **Open the Release page and check six files are attached**: three zips, two `.vsix` and `SHA256SUMS`.
 
 **A failed job attaches nothing**: `release` runs only once every `build` and `package-vscode-ext` has passed. The other platforms still finish, and their zips stay on the run's page as artifacts. What to do depends on where the cause is:
 

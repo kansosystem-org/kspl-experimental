@@ -27,6 +27,7 @@ import "ksos/demo/rp2040/common/net_client" as nc
 import "ksos/demo/rp2040/common/pilot_boot"
 import "ksos/demo/rp2040/common/records"
 import "ksos/demo/rp2040/common/sample" as csample
+import "ksos/demo/rp2040/common/stops"
 import "ksos/demo/rp2040/common/store"
 import "ksos/drivers/rp2040/clocks"
 import "ksos/drivers/rp2040/ir_nec" as ir
@@ -58,25 +59,8 @@ const SAMPLE_EVERY: U32 = 50 //<
     //< A round where the manoeuvre changed is always saved as well. **Not every round**: at 16
     //< bytes per 100ms round, 64KB lasts minutes; changes plus a heartbeat last hours.
 
-// --- the safety timeouts for stopping remotely / not running too long ---
-const IR_REARM_ROUNDS: U32 = 8 //<
-    //< How long a press must be held to re-arm the car [rounds]
-    //< **These three are outside the policy**: like the battery and point-blank range, the car
-    //< decides them alone, with no link.
-    //< Caution: **Only a held press may re-arm it**; a brief press would set it off in the hand
-    //< picking it up. A repeat comes about every 108ms, one per round (8 rounds ≈ 0.8s held).
-const IR_RELEASE_ROUNDS: U32 = 3 //< how many rounds with no frame count as released
-    //< Longer than the repeat interval (108ms), or a gap in a held press restarts the count.
-
-const IR_DUMP_ROUNDS: U32 = 25 //< how long a press must be held to dump the record [rounds]
-    //< **Make it longer than re-arming**, the everyday action (about three times). **Do not read it
-    //< as seconds** — a round stretches by up to 70ms while it receives an IR frame.
-const IR_WIPE_ROUNDS: U32 = 60 //< how long a press must be held to erase the record [rounds]
-    //< **Make it longer than dumping**, since erasing cannot be undone. **It is decided by the
-    //< press's length at release**, so it cannot trigger dumping partway (`watch_remote`).
-// The limit on driving [rounds]; 0 is unlimited. **The only stop that works while nobody is
-// watching** (IR needs line of sight). A held press re-arms it.
-const MAX_DRIVING_ROUNDS: U32 = 600 // 60 seconds at a 100ms period
+// The stop decisions and their limits (the distance, the driving time, the remote's presses) are
+// `common/stops.kspl`'s, which the host tests check. Only how this car stops is here.
 
 const CONSOLE_TIMEOUT_MS: U32 = 8000 //< the limit on waiting for the console to become usable
     //< Caution: **Wait before the very first line.** A `write` before USB is configured drops the
@@ -88,9 +72,6 @@ const LINE_INTERVAL_MS: U32 = 10 //<
     //< The interval for reading only the line partway through a round and steering again [ms]
     //< **Two or more reads while turning across the line**, or the crossing goes unnoticed.
     //< **Make it divide loop_interval_ms** — otherwise the remainder goes unsteered.
-const EMERGENCY_MM: U32 = 100 //<
-    //< The distance at which it backs off, before the policy's decision [mm]
-
 const HANG_AFTER_ROUNDS: U32 = 0 //< a test build's forced hang: the loop stops after this many
     //< driving rounds; 0 is never
     //< **Only for the on-car check of the watchdog** (lib/ksos/docs/TUTORIAL-bring-up.md).
@@ -108,12 +89,6 @@ $halt_state: status.State = .driving
 $halt_needs_remote: Bool = false
 // Whether an IR frame was received this round (`pump_watch` sets it, `watch_remote` clears it).
 $ir_seen_in_round: Bool = false
-// How many rounds frames came in a row, and how many since they stopped (a held press).
-$ir_hold: U32 = 0
-$ir_quiet_rounds: U32 = 0
-// Whether the button was seen released after the stop. **Re-arming counts only after that**, or
-// the finger that stopped it would set it off.
-$ir_released: Bool = false
 // The running total of frames received, showing that reception works.
 $ir_frames: U32 = 0
 // The last command received. A repeat does not update it (a repeat carries no cmd).
@@ -197,14 +172,15 @@ priv fn watch_battery(ln: con.Line$@): Bool //<
     default {}
     return may
 
-priv fn halt_remote(why: status.State) //< stops from the remote
-    //< Caution: **Restart the held-press count**, or the finger that stopped it re-arms it without
-    //< a release being seen.
+priv fn halt_remote(why: status.State) //< stops until a held press on the remote
     halt_needs_remote = true
-    ir_hold = 0
-    // A stop with no press (running out of time) waits for no release; a press's caller clears it.
-    ir_released = true
     halt(why)
+
+priv fn halt_without_press(why: status.State) //< stops until a held press, with no press seen
+    //< Caution: **Restart the held-press count** (`stops.Remote.stopped_without_press`), or a
+    //< press held before the stop re-arms it.
+    stops.remote.stopped_without_press()
+    halt_remote(why)
 
 priv fn watch_remote(ln: con.Line$@): Bool //<
     //< Checks the remote's stop and returns whether a decision may be made this round
@@ -212,45 +188,25 @@ priv fn watch_remote(ln: con.Line$@): Bool //<
     //< **While it runs any button stops it** (a repeat carries no cmd to tell them apart).
     seen: = ir_seen_in_round
     ir_seen_in_round = false
-    if seen
-        ir_quiet_rounds = 0
-        ir_hold += 1
-        if !halted
-            halt_remote(.remote)
-            // **The press that stopped it does not count towards re-arming**; counting restarts
-            // after a release.
-            ir_released = false
-        return false
-    ir_quiet_rounds += 1
-    if ir_quiet_rounds != IR_RELEASE_ROUNDS
-        return !halted // neither released, nor the moment of release
-    // --- the moment the button is released. Re-arming is decided here and only here ---
-    //
-    // Caution: **It must not resume while the button is held.** The finger's next frames hit "any
-    // button stops it", and it "resumed but does not run".
-    held: = ir_hold
-    ir_hold = 0
-    if !halted || !halt_needs_remote
-        return !halted
-    if !ir_released
-        ir_released = true // the press that stopped it was released; no resuming here
-        return false
-    // **Check the longer press first**, or a long press would trigger re-arming. Dumping does not
-    // lift the stop.
-    if held >= IR_WIPE_ROUNDS
-        wipe_requested = true
-        return false
-    if held >= IR_DUMP_ROUNDS
+    $may: = false
+    switch stops.remote.look(seen, halted, halt_needs_remote)
+    case .go
+        may = true
+    case .stop
+        halt_remote(.remote)
+    case .dump
         dump_requested = true
-        return false
-    if held < IR_REARM_ROUNDS
-        return false // a short press does not bring it back
-    halted = false
-    halt_needs_remote = false
-    // Caution: Reset the driving-time budget too (the reason is in `watch_battery`).
-    driving_rounds = 0
-    con.say(ln, "[car]", "remote re-armed — deciding again")
-    return false // this round is skipped (from the next round it runs as usual)
+    case .wipe
+        wipe_requested = true
+    case .rearm
+        halted = false
+        halt_needs_remote = false
+        // Caution: Reset the driving-time budget too (the reason is in `watch_battery`).
+        driving_rounds = 0
+        // This round is skipped; from the next round it runs as usual.
+        con.say(ln, "[car]", "remote re-armed — deciding again")
+    default {}
+    return may
 
 priv fn watch_run_time(): Bool //<
     //< Checks the driving-time limit and returns whether a decision may be made this round
@@ -258,8 +214,8 @@ priv fn watch_run_time(): Bool //<
     if halted
         return false
     driving_rounds += 1
-    if MAX_DRIVING_ROUNDS > 0 && driving_rounds >= MAX_DRIVING_ROUNDS
-        halt_remote(.time_limit)
+    if stops.out_of_time(driving_rounds)
+        halt_without_press(.time_limit)
         return false
     return true
 
@@ -276,7 +232,7 @@ priv fn pump_watch(ms: U32) //< waits while running USB, checking IR as well
             if !f.repeat
                 last_ir_cmd = f.cmd
 
-priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
+priv fn one_round(in_force: policy.Policy$@, arena: Arena$@) //< runs one round
     //< Caution: **Whichever path it takes, set the wheels' state at the end**, or the last command
     //< keeps running when nothing was decided.
     raw: = range.read_mm()
@@ -285,9 +241,8 @@ priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
     line: = track.read_bits()
     last_line = line
 
-    // Point-blank range is decided here, not by a learned function. **On the raw reading**: the
-    // median notices an approach a round or two late, and a false alarm is on the safe side.
-    if raw > 0 && raw < EMERGENCY_MM
+    // Point-blank range comes before the policy, decided on the raw reading (`stops.too_close`).
+    if stops.too_close(raw)
         last_dist = raw
         emergencies += 1
         apply(-45, 0, 0, .safety)
@@ -295,12 +250,12 @@ priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
 
     last_dist = steady
     t0: = timer.now_us()
-    d: = policy.decide(p, steady, line, arena)
+    d: = policy.decide(in_force, steady, line, arena)
     last_decide_us = timer.elapsed_us(t0)
     apply(d.lon, d.lat, d.rot, .policy)
     decisions += 1
 
-priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool) //<
+priv fn track_while_pumping(in_force: policy.Policy$@, arena: Arena$@, driving: Bool) //<
     //< Spends one round's waiting time running USB and IR
     //< **The ultrasonic is not read again** (too slow for `LINE_INTERVAL_MS`). **A round it may not
     //< drive on is left alone**, or steering would overwrite the command that stopped it.
@@ -309,14 +264,14 @@ priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool) /
     for waited + LINE_INTERVAL_MS <= LOOP_INTERVAL_MS
         pump_watch(LINE_INTERVAL_MS)
         waited += LINE_INTERVAL_MS
-        if !driving || (last_dist > 0 && last_dist < EMERGENCY_MM)
+        if !driving || stops.too_close(last_dist)
             continue
         line: = track.read_bits()
         if line == last_line
             continue // if the line has not moved, the same observation gives the same manoeuvre
         last_line = line
         t0: = timer.now_us()
-        d: = policy.decide(p, last_dist, line, arena)
+        d: = policy.decide(in_force, last_dist, line, arena)
         last_decide_us = timer.elapsed_us(t0)
         apply(d.lon, d.lat, d.rot, .policy)
         arena.restore(mark)
@@ -324,6 +279,19 @@ priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool) /
     // Caution: Wait out the remainder too, or the period shrinks and the round limit comes early.
     if waited < LOOP_INTERVAL_MS
         pump_watch(LOOP_INTERVAL_MS - waited)
+
+priv fn halt_note(ln: con.Line$@) //< appends ` HALTED: <reason>` to a report
+    //< Where the battery's minimum stopped it, the two voltages follow. Only the current one shows
+    //< the switch turned off and on, so they are printed separately.
+    w: = battery.watch
+    ln.str(" HALTED: ")
+    ln.str(halt_state.text())
+    if w.on_battery
+        ln.str(" (")
+        ln.u32_milli(w.halt_mv)
+        ln.str("V, now ")
+        ln.u32_milli(w.now_mv)
+        ln.str("V)")
 
 priv fn report(ln: con.Line$@) //< prints one line
     //< Not every round, or USB's send queue drops lines. One line describes **one moment**: the
@@ -372,21 +340,21 @@ priv fn report(ln: con.Line$@) //< prints one line
         ln.str(csample.stopped())
         ln.str(")")
     if halted
-        battery.watch.halt_note(ln, halt_state.text())
+        halt_note(ln)
     _sent: = ln.flush()
 
 priv fn take_policy( //< loads blob as the policy in force; true if it loaded
     //< **It does not halt**: a refused fresh policy still leaves the stored one to try, so the
     //< caller decides.
     ln: con.Line$@,
-    p: policy.Policy$@,
+    in_force: policy.Policy$@,
     blob: U8[],
     which: U8[], //< "fresh" or "stored", named on the refusal's line
     arena: Arena$@,
 ): Bool
     mark: = arena.save()
     $took: = true
-    p$ = policy.load(blob, arena) catch e
+    in_force$ = policy.load(blob, arena) catch e
         // **Print which policy and which check refused it.** Each check has its own cause: a file
         // that is not safetensors, another version, a shape.
         ln.reset()
@@ -404,11 +372,12 @@ priv fn take_policy( //< loads blob as the policy in force; true if it loaded
     policy_bytes = blob
     return true
 
-priv fn decide_once(p: policy.Policy$@, arena: Arena$@) //< makes one decision and throws it away
+priv fn decide_once(in_force: policy.Policy$@, arena: Arena$@) //<
+    //< makes one decision and throws it away
     //< **Run it before saving a fresh policy.** A file that loads but stops the program at its
     //< first decision is then never saved, so the next start still has the stored one.
     mark: = arena.save()
-    _first: = policy.decide(p, 0I64, 0I64, arena)
+    _first: = policy.decide(in_force, 0I64, 0I64, arena)
     arena.restore(mark)
 
 fn car_task(_arg: Void$@): Void
@@ -486,7 +455,7 @@ fn car_task(_arg: Void$@): Void
         // **It does not set off again by itself after a hang**: whatever hung may hang again, and a
         // car that restarts and drives in fits is worse than one that waits. A held press brings
         // it back.
-        halt_remote(.watchdog)
+        halt_without_press(.watchdog)
 
     if ready
         // No exchange with the PC from here on: driving with no link is what this stage claims.

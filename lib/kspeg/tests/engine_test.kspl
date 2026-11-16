@@ -24,6 +24,7 @@ priv fn try_parse(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): Bool?
     $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         return .none
+    defer parser.free_memo() // the grammar's table and names, which `t` borrows
     $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
@@ -70,6 +71,7 @@ priv fn expect_deep_fatal(label: U8[], grammar: U8[], input: U8[], arena: Arena$
     parser: = meta.parse_grammar() catch
         fail(label, "grammar did not load")
         return
+    defer parser.free_memo() // the grammar's table and names, which `t` borrows
     $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
@@ -101,6 +103,7 @@ priv fn parts_under(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): U8[
     $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         return ""
+    defer parser.free_memo() // the grammar's table and names, which `t` borrows
     $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
@@ -166,6 +169,7 @@ priv fn profile(grammar: U8[], input: U8[], rule: U8[], want: U8[], stats: Bool,
     $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         return sum
+    defer parser.free_memo() // the grammar's table and names, which `t` borrows
     $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
@@ -208,11 +212,12 @@ priv fn expect_no_prof(label: U8[], grammar: U8[], input: U8[], rule: U8[], aren
         fail(label, arena.text().s("rows=\{got.rows\}, loaded=\{got.loaded\}").take())
     verdict.pass(label)
 
-priv fn dump_node(b: Arena_text$@, n: kspeg.Node@) //< one node and everything below it, as text
-    b.s(n.kind).c(':').s(n.text).c('(')
-    for kid in n.children
-        dump_node(b, kid)
-    b.c(')')
+priv fn dump_node(out: Arena_text$@, node: kspeg.Node@) //<
+    //< one node and everything below it, as text
+    out.s(node.kind).c(':').s(node.text).c('(')
+    for kid in node.children
+        dump_node(out, kid)
+    out.c(')')
 
 priv fn outcome(grammar: U8[], input: U8[], rule: U8[], skips: Bool, arena: Arena$@): U8[] //<
     //< What a parse leaves for its reader: the tree where it reads to the end, else the labels
@@ -224,6 +229,7 @@ priv fn outcome(grammar: U8[], input: U8[], rule: U8[], skips: Bool, arena: Aren
     $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         return ""
+    defer parser.free_memo() // the grammar's table and names, which `t` borrows
     $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)

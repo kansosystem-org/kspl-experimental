@@ -184,12 +184,12 @@ priv fn apply(volatile: fn(auto: I32): I32, unsigned: I32): I32 //<
 priv fn twice(auto: I32): I32
     return auto * 2
 
-priv fn matched(n: I32): I32 //< matches a `switch` against a name spelled like a reserved word
+priv fn matched(value: I32): I32 //< matches a `switch` against a name spelled like a reserved word
     //< **Renaming it only at the declaration is not enough.**
     //< Caution: **Test a name that gets rewritten too** (a local carrying `$`).
     $near: I32? = .none
-    if n > 0
-        near = .some(n)
+    if value > 0
+        near = .some(value)
     $got: I32 = 0
     if v: = near
         got = v
@@ -201,10 +201,10 @@ priv fn matched(n: I32): I32 //< matches a `switch` against a name spelled like 
 priv enum Made_err
     bad
 
-priv fn may_fail(n: I32): I32!Made_err
-    if n > 2
+priv fn may_fail(value: I32): I32!Made_err
+    if value > 2
         throw .bad
-    return n
+    return value
 
 priv fn catch_reads_own_e(): I32 //< a `catch` naming no error, beside the source's own `_e`
     _e: I32 = 42
@@ -225,12 +225,12 @@ priv fn for_in_beside_own(): I32 //< a `for … in` beside locals spelled as its
         total += x + _for_coll1
     return total + __k_for_idx1
 
-fn c_named_twice(n: I32): I32 //< a function whose C name a local in `globals_beside_own` spells
-    return n * 2
+fn c_named_twice(value: I32): I32 //< a function whose C name a local in `globals_beside_own` spells
+    return value * 2
 
-priv fn global_named(Slice_U8: I32, s: U8[]): I32 //<
+priv fn global_named(Slice_U8: I32, text: U8[]): I32 //<
     //< A parameter spelled as a type's C name, before a parameter of that type
-    return Slice_U8 + I32::s.len
+    return Slice_U8 + I32::text.len
 
 priv fn globals_beside_own(): I32 //< locals spelled as the C names of types and of a function
     //< Each is declared before a use of the global it spells, which C would read as the local.
@@ -242,7 +242,7 @@ priv fn globals_beside_own(): I32 //< locals spelled as the C names of types and
     return ksplc_tests_c_keyword_names_Rect + r.int + Slice_U8 + I32::s.len +
         kspl_ksplc_tests_c_keyword_names_c_named_twice + c_named_twice(3) + global_named(6, "ab")
 
-priv fn library_names_beside_own(n: I32): Sz //<
+priv fn library_names_beside_own(value: I32): Sz //<
     //< Locals spelled as the C library names the generated code writes inside a body
     //< Each is declared before the code that writes the name: `Sz`'s `+` computes in `size_t`, a
     //< string literal's slice holds `uint8_t` and `ptrdiff_t`, and a tag check casts to `int64_t`.
@@ -252,7 +252,7 @@ priv fn library_names_beside_own(n: I32): Sz //<
     int64_t: I64 = 4
     exit: I32 = 5
     s: = "abc"
-    level: = Level::n
+    level: = Level::value
     return size_t + s.len + Sz::uint8_t + Sz::ptrdiff_t + Sz::int64_t + Sz::exit + Sz::(I32::level)
 
 priv enum Level: I32 //< a scalar enum, whose cast from an integer is checked at run time
@@ -328,18 +328,18 @@ fn test_c_keyword_names()
 
     // A captured name becomes a field of the synthesized environment struct.
     inline: I32 = 10
-    kept: = lst@.where(fn(v: I32@; inline: I32): Bool {
-        return v$ > inline;
+    kept: = lst@.where(fn(value: I32@; inline: I32): Bool {
+        return value$ > inline;
     }).count()
     assert(kept == 2, "C keyword names: closure capture field")
     near: I32 = 11
-    over: = lst@.where(fn(v: I32@; near: I32): Bool {
-        return v$ > near;
+    over: = lst@.where(fn(value: I32@; near: I32): Bool {
+        return value$ > near;
     }).count()
     assert(over == 1, "preamble macro names: closure capture field")
     errno: I32 = 10
-    seen: = lst@.where(fn(v: I32@; errno: I32): Bool {
-        return v$ > errno;
+    seen: = lst@.where(fn(value: I32@; errno: I32): Bool {
+        return value$ > errno;
     }).count()
     assert(seen == 2, "preamble macro names: libc macro as a capture field")
 

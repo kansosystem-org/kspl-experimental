@@ -171,8 +171,8 @@ priv fn sorted_dir(dir: U8[], arena: Arena$@): U8[][]
     names: = fs.read_dir(dir, arena) catch
         sorted.push("(cannot be read)")
         return sorted.slice()
-    sorted = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
-        return a.compare(b$);
+    sorted = names.order_by(fn(left: U8[]@, right: U8[]@; ): I32 {
+        return left.compare(right$);
     }, arena)
     return sorted.slice()
 
@@ -200,85 +200,85 @@ priv fn dot_entries(dir: U8[], rel: U8[], in_dot: Bool, out: str.Arena_text$@, a
 // The generator
 // ==========================================
 
-priv fn pick(r: Prng$@, list: U8[][]): U8[] //< one of the list, at random
-    return list[r.below(list.len)]
+priv fn pick(prng: Prng$@, list: U8[][]): U8[] //< one of the list, at random
+    return list[prng.below(list.len)]
 
-fn generate(r: Prng$@, w: Words@, arena: Arena$@): Made //< one path, built from the pieces
+fn generate(prng: Prng$@, words: Words@, arena: Arena$@): Made //< one path, built from the pieces
     //< **Most paths hold one odd part among plain names**: a path with several is refused for the
     //< first, and the rest go unchecked. Some hold none, and some hold many.
     b: = arena.text()
     // A long run of `/`, or a path of many steps: each cost time once.
-    if r.chance(2)
-        b.s(pick(r, w.plain))
-        for _i in Range.asc(r.below(6000) + 500)
+    if prng.chance(2)
+        b.s(pick(prng, words.plain))
+        for _i in Range.asc(prng.below(6000) + 500)
             b.c('/')
-        b.s(pick(r, w.plain))
+        b.s(pick(prng, words.plain))
         return Made::{ .rel = b.take(), .plain = false }
-    if r.chance(2)
+    if prng.chance(2)
         $plain: = true
-        for i in Range.asc(r.below(3000) + 200)
+        for i in Range.asc(prng.below(3000) + 200)
             if i > 0
                 b.c('/')
-            if r.chance(1)
-                b.s(odd_name(r, w))
+            if prng.chance(1)
+                b.s(odd_name(prng, words))
                 plain = false
             else
-                b.s(pick(r, w.plain))
+                b.s(pick(prng, words.plain))
         return Made::{ .rel = b.take(), .plain = plain }
-    steps: = r.below(4) + 1
-    many: = r.chance(20)
-    none: = !many && r.chance(20)
+    steps: = prng.below(4) + 1
+    many: = prng.chance(20)
+    none: = !many && prng.chance(20)
     // Where the one odd part goes: a step's name, a separator, the start or a name's tail.
-    odd_at: = r.below(steps)
-    odd_how: = r.below(10)
+    odd_at: = prng.below(steps)
+    odd_how: = prng.below(10)
     $plain: = true
-    if many && r.chance(15) || !many && !none && odd_how == 9
-        b.s(pick(r, w.starts))
+    if many && prng.chance(15) || !many && !none && odd_how == 9
+        b.s(pick(prng, words.starts))
         plain = false
     for i in Range.asc(steps)
         if i > 0
-            if many && r.chance(15) || !many && !none && odd_how == 8 && i == odd_at
-                b.s(pick(r, w.seps))
+            if many && prng.chance(15) || !many && !none && odd_how == 8 && i == odd_at
+                b.s(pick(prng, words.seps))
                 plain = false
             else
                 b.c('/')
-        tail: = many && r.chance(10) || !many && !none && odd_how == 7 && i == odd_at
-        if many && r.chance(40) || !many && !none && odd_how < 7 && i == odd_at
-            b.s(odd_name(r, w))
+        tail: = many && prng.chance(10) || !many && !none && odd_how == 7 && i == odd_at
+        if many && prng.chance(40) || !many && !none && odd_how < 7 && i == odd_at
+            b.s(odd_name(prng, words))
             plain = false
-        else if tail && r.chance(50)
+        else if tail && prng.chance(50)
             // A name that stands, so the tail Windows drops leaves a link or a dot name.
-            b.s(pick(r, w.odd[r.below(KINDS_THAT_STAND)]))
+            b.s(pick(prng, words.odd[prng.below(KINDS_THAT_STAND)]))
             plain = false
         else
-            b.s(pick(r, w.plain))
+            b.s(pick(prng, words.plain))
         // A name with a tail Windows drops or reads apart (`a.txt.`, `a.txt::$DATA`).
         if tail
-            b.s(pick(r, U8[][]::{ ".", " ", "::$DATA", "~1", ":x", "\u3000" }))
+            b.s(pick(prng, U8[][]::{ ".", " ", "::$DATA", "~1", ":x", "\u3000" }))
             plain = false
-    if r.chance(4)
+    if prng.chance(4)
         b.c('/')
         plain = false
     return Made::{ .rel = b.take(), .plain = plain }
 
-priv fn odd_name(r: Prng$@, w: Words@): U8[] //< an odd name: a kind first, then one of it
-    return pick(r, w.odd[r.below(w.odd.len)])
+priv fn odd_name(prng: Prng$@, words: Words@): U8[] //< an odd name: a kind first, then one of it
+    return pick(prng, words.odd[prng.below(words.odd.len)])
 
-priv fn encoded(rel: U8[], r: Prng$@, arena: Arena$@): U8[] //<
+priv fn encoded(rel: U8[], prng: Prng$@, arena: Arena$@): U8[] //<
     //< The path as a request carries it: some bytes percent-encoded in either case, some not
     //< Now and then a broken `%` stands in it, which the server must refuse with a 400.
     b: = arena.text()
     for c in rel
         safe: = c.is_alnum() || c == '-' || c == '.' || c == '~'
-        if safe && !r.chance(10) || c == '/' && !r.chance(30)
+        if safe && !prng.chance(10) || c == '/' && !prng.chance(30)
             b.c(c)
             continue
         hi: = c >> 4
         lo: = c & 0x0FU8
-        b.c('%').c(hi.to_hex_upper() if r.chance(50) else hi.to_hex_lower())
-        b.c(lo.to_hex_upper() if r.chance(50) else lo.to_hex_lower())
-    if r.chance(1)
-        b.s(pick(r, U8[][]::{ "%", "%G1", "%2" }))
+        b.c('%').c(hi.to_hex_upper() if prng.chance(50) else hi.to_hex_lower())
+        b.c(lo.to_hex_upper() if prng.chance(50) else lo.to_hex_lower())
+    if prng.chance(1)
+        b.s(pick(prng, U8[][]::{ "%", "%G1", "%2" }))
     return b.take()
 
 fn shown(rel: U8[], arena: Arena$@): U8[] //< a path as a failure prints it: other bytes as `%XX`
@@ -404,22 +404,23 @@ struct Findings //< what one invariant found, for `verdict.check_list`
     bad: List<|U8[]|>
     seen: Sz
 
-priv fn note(f: Findings$@, keep: Arena$@, seed: I64, case_no: Sz, what: U8[], rel: U8[]) //<
+priv fn note(findings: Findings$@, keep: Arena$@, seed: I64, case_no: Sz, what: U8[], rel: U8[]) //<
     //< Notes one finding with the seed and the case that give it again
-    f.bad
+    findings.bad
         .push(keep.text().s("case \{case_no\} of seed \{seed\}: ").s(what).s(": ")
         .s(shown(rel, keep)).take())
 
 priv fn findings(keep: Arena$@): Findings
     return Findings::{ .bad = List<|U8[]|>(keep), .seen = 0 }
 
-priv fn counted_join(root: U8[], rel: U8[], dots: fs.Dot_names, arena: Arena$@, n: I64$@): U8[]? //<
-    //< `fs.join_under`'s answer, none where it refuses, and how many lookups it made
+priv fn counted_join(root: U8[], rel: U8[], dots: fs.Dot_names, arena: Arena$@, count: I64$@):
+    U8[]? //<
+        //< `fs.join_under`'s answer, none where it refuses, and how many lookups it made
     before: = fs.lookups()
     got: = fs.join_under(root, rel, dots, arena) catch
-        n$ = fs.lookups() - before
+        count$ = fs.lookups() - before
         return .none
-    n$ = fs.lookups() - before
+    count$ = fs.lookups() - before
     return .some(got)
 
 priv fn path_bound(rel: U8[]): I64 //< how many lookups the door may make for a path
@@ -436,15 +437,15 @@ priv fn steps(rel: U8[]): I64 //< how many names a path has; an empty step is no
         start = end + 1
     return n
 
-fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
+fn door_cases(sc: Scratch, options: fuzz.Options, again: U8[], arena: Arena$@) //<
     //< Sends many generated paths to `fs.join_under` with dot names refused and allowed
     //< For each path the door takes, neither OS's reading may reach outside the root or, where
     //< refused, a dot name. The door must take a path of plain names, and look up no more for
     //< each path than its names call for.
     defer keep: = Arena(16 * 1024 * 1024)
-    $r: = Prng(U64::o.seed)
+    $r: = Prng(U64::options.seed)
     w: = words(keep)
-    n: = Sz::o.trials * PURE_PER_TRIAL
+    n: = Sz::options.trials * PURE_PER_TRIAL
     $harmful: = findings(keep)
     $joined: = findings(keep)
     $order: = findings(keep)
@@ -470,7 +471,7 @@ fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
                     why: = harm(m.rel, windows, which == 0, sc@, arena)
                     if why.len > 0
                         os: = "Windows" if windows else "POSIX"
-                        note(harmful@, keep, o.seed, case_no,
+                        note(harmful@, keep, options.seed, case_no,
                             arena.text().s("taken, yet as \{os\} reads it ").s(why).take(), m.rel)
                 // An empty path is the root itself.
                 want: =
@@ -478,26 +479,27 @@ fn door_cases(sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@) //<
                     else arena.text().s(sc.root).c('/').s(m.rel).take())
                 joined.seen += 1
                 if !path.equals(want)
-                    note(joined@, keep, o.seed, case_no, "taken, but joined as another path",
+                    note(joined@, keep, options.seed, case_no, "taken, but joined as another path",
                         m.rel)
         order.seen += 1
         if hid.is_some() && all.is_none()
-            note(order@, keep, o.seed, case_no,
+            note(order@, keep, options.seed, case_no,
                 "taken with dot names refused, refused with them allowed", m.rel)
         // A path past the longest the OS takes is refused, however plain.
         if m.plain && sc.root.len + 1 + m.rel.len <= fs.MAX_PATH_LEN
             plain.seen += 1
             if hid.is_none()
-                note(plain@, keep, o.seed, case_no, "refused, though made of plain names", m.rel)
+                note(plain@, keep, options.seed, case_no, "refused, though made of plain names",
+                    m.rel)
         slow.seen += 1
         bound: = path_bound(m.rel)
         if hidden_n > bound || shown_n > bound
-            note(slow@, keep, o.seed, case_no,
+            note(slow@, keep, options.seed, case_no,
                 arena.text().s("\{hidden_n\} and \{shown_n\} lookups against \{bound\}").take(),
                 m.rel)
         arena.restore(mark)
     tail: = arena.text().s("to run it again: ").s(again)
-        .s(" --seed=\{o.seed\} --trials=\{o.trials\}").take()
+        .s(" --seed=\{options.seed\} --trials=\{options.trials\}").take()
     verdict.check_list("the door takes no generated path that POSIX or Windows reads as outside the \
         root, a device, or a refused dot name", harmful.seen, "readings", harmful.bad@, tail)
     verdict.check_list("the door joins each path it takes to the root as written", joined.seen,
@@ -536,22 +538,22 @@ priv struct Expect //< what the door says of a request, before it is sent
     hidden: Bool //< the door refuses it only for a dot name (static serving's 404)
     writes: Bool //< it writes, so a 500 can come from the file system
 
-priv fn door_says(root: U8[], rel: U8[], dots: fs.Dot_names, e: Expect$@, arena: Arena$@) //<
-    //< Adds what the door says of one path to `e`
+priv fn door_says(root: U8[], rel: U8[], dots: fs.Dot_names, expect: Expect$@, arena: Arena$@) //<
+    //< Adds what the door says of one path to `expect`
     _got: = fs.join_under(root, rel, dots, arena) catch why
-        e.refused = true
+        expect.refused = true
         if why == .hidden
-            e.hidden = true
+            expect.hidden = true
         return
 
-priv fn query_expect(root: U8[], query: U8[], names: U8[][], dots: fs.Dot_names, e: Expect$@,
+priv fn query_expect(root: U8[], query: U8[], names: U8[][], dots: fs.Dot_names, expect: Expect$@,
     arena: Arena$@) //<
         //< What the door says of each named value of a query, decoded as the server decodes it
     params: = url.parse_query(query, arena) catch
-        e.broken = true
+        expect.broken = true
         return
     for name in names
-        door_says(root, params.find(name).unwrap_or(""), dots, e, arena)
+        door_says(root, params.find(name).unwrap_or(""), dots, expect, arena)
 
 priv fn send(port: I32, ask: Ask, target: U8[], auth: U8[], body: U8[], arena: Arena$@):
     client.Resp!client.Http_end //< sends one request
@@ -577,15 +579,15 @@ priv fn listed_names(root: U8[], rel: U8[], arena: Arena$@): I64 //<
         return 0I64
     return names.len
 
-fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[], arena: Arena$@):
-    Void!client.Http_end //<
+fn server_cases(port: I32, token: U8[], sc: Scratch, options: fuzz.Options, again: U8[],
+    arena: Arena$@): Void!client.Http_end //<
         //< Sends generated paths to each endpoint that takes one, and checks every answer
         //< A path the door refuses is a 400 or a 403 (static serving: a 404 for a dot name). A
         //< path it takes is never a 403. Only a write the door took can be a 5xx. No answer holds
         //< what lies outside the root. Each request looks up no more than its names call for.
     defer keep: = Arena(16 * 1024 * 1024)
     // Another seed than the door's, so the two parts do not draw the same paths.
-    $r: = Prng(U64::o.seed ^ 0x5DEECE66DU64)
+    $r: = Prng(U64::options.seed ^ 0x5DEECE66DU64)
     w: = words(keep)
     auth: = client.bearer_head(token, keep)
     $agree: = findings(keep)
@@ -604,7 +606,7 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
         arena.text().s("\{stat.status\}, \{counted - before\} lookups for ").s(COUNTED_PATH).take())
     before = counted
     outside_size: = keep.text().s("\"size\":\{OUTSIDE_SIZE\}").take()
-    for case_no in Range.asc(Sz::o.trials)
+    for case_no in Range.asc(Sz::options.trials)
         mark: = arena.save()
         m: = generate(r@, w@, arena)
         ask: = ASKS[r.below(ASKS.len)]
@@ -638,7 +640,7 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
             (listed_names(sc.root, m.rel, arena)
             if ask == Ask.list && !e.broken && !e.refused else 0I64)
         got: = send(port, ask, target, auth, body, arena) catch why
-            note(faults@, keep, o.seed, case_no,
+            note(faults@, keep, options.seed, case_no,
                 arena.text().s("no answer to ").s(target.sub(0, 40)).s(": ").s(why.reason()).take(),
                 m.rel)
             throw why
@@ -649,26 +651,26 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
             !e.broken && e.refused && status != 400 && status != 403 &&
             !(ask == Ask.page && e.hidden && status == 404) ||
             !e.broken && !e.refused && status == 403
-            note(agree@, keep, o.seed, case_no, what, m.rel)
+            note(agree@, keep, options.seed, case_no, what, m.rel)
         faults.seen += 1
         if status >= 500 && !(e.writes && !e.refused && !e.broken)
-            note(faults@, keep, o.seed, case_no, what, m.rel)
+            note(faults@, keep, options.seed, case_no, what, m.rel)
         leaks.seen += 1
         if got.body.find_str(OUTSIDE_MARK).is_some() ||
             got.body.find_str(OUTSIDE_ONLY).is_some() ||
             ask == Ask.stat && got.body.find_str(outside_size).is_some()
-            note(leaks@, keep, o.seed, case_no, what, m.rel)
+            note(leaks@, keep, options.seed, case_no, what, m.rel)
         after: = lookups_now(port, auth, arena)!
         made: = after - before
         before = after
         slow.seen += 1
         bound: = path_bound(m.rel) + LOOKUPS_PER_REQUEST + LOOKUPS_PER_LISTED * listed
         if made > bound
-            note(slow@, keep, o.seed, case_no,
+            note(slow@, keep, options.seed, case_no,
                 arena.text().s(what).s(": \{made\} lookups against \{bound\}").take(), m.rel)
         arena.restore(mark)
     tail: = arena.text().s("to run it again: ").s(again)
-        .s(" --seed=\{o.seed\} --trials=\{o.trials\}").take()
+        .s(" --seed=\{options.seed\} --trials=\{options.trials\}").take()
     verdict.check_list("the server refuses a generated path as the door does, with a 400 or a 403",
         agree.seen, "requests", agree.bad@, tail)
     verdict.check_list("the server answers every generated path, and with a 5xx only for a write \
@@ -678,16 +680,16 @@ fn server_cases(port: I32, token: U8[], sc: Scratch, o: fuzz.Options, again: U8[
     verdict.check_list("the server's file-system lookups for each generated request grow with its \
         path's names alone", slow.seen, "requests", slow.bad@, tail)
 
-priv fn page_expect(root: U8[], target: U8[], e: Expect$@, arena: Arena$@) //<
+priv fn page_expect(root: U8[], target: U8[], expect: Expect$@, arena: Arena$@) //<
     //< What the door says of a static path, decoded and cut as the server cuts it
     decoded: = url.decode_component(target, arena) catch
-        e.broken = true
+        expect.broken = true
         return
     rel: = api.url_rel(decoded)
     // The page itself is answered without the door (`asks_for_page` in `kssrv/static.kspl`).
     if rel.len == 0 || rel.equals("index.html")
         return
-    door_says(root, rel, .refused(U8[][]::SHOWN), e, arena)
+    door_says(root, rel, .refused(U8[][]::SHOWN), expect, arena)
 
 fn after_cases(sc: Scratch, arena: Arena$@) //<
     //< Checks that nothing outside the root, and no dot name under it, changed during the checks

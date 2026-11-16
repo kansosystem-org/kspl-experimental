@@ -17,9 +17,9 @@ struct Tally //< an ARC type whose release only counts down
     priv block: Tally_block$@
 
 impl Tally
-    fn on(b: Tally_block$@): Tally //< the first owner of b, at count 1
-        b.count = 1
-        return ::{ .block = b }
+    fn on(block: Tally_block$@): Tally //< the first owner of `block`, at count 1
+        block.count = 1
+        return ::{ .block = block }
     fn peek(r: Self@): Sz //< a read through a borrowed receiver
         return r.block.count
 
@@ -47,40 +47,40 @@ priv enum Tally_slot
     two(a: Tally, b: Tally)
     none
 
-priv fn tally_or_fail(b: Tally_block$@, fail: Bool): Tally!Tally_err
+priv fn tally_or_fail(block: Tally_block$@, fail: Bool): Tally!Tally_err
     if fail
         throw .failed
-    return Tally.on(b)
+    return Tally.on(block)
 
-priv fn tally_take(t: Tally): Sz //< takes a count by value, as any parameter does
-    return t.peek()
+priv fn tally_take(tally: Tally): Sz //< takes a count by value, as any parameter does
+    return tally.peek()
 
-priv fn tally_two(a: Tally, b: Tally): Sz
-    return a.peek() + b.peek()
+priv fn tally_two(left: Tally, right: Tally): Sz
+    return left.peek() + right.peek()
 
 // ==========================================
 // Each branch of a ternary, and a catch's substitute, hands over a count of its own. A binding it
 // reads is retained there. So the value it yields carries one count whichever way it went.
 // ==========================================
-priv fn pick_returned(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Tally
+priv fn pick_returned(ab: Tally_block$@, bb: Tally_block$@, take_a: Bool): Tally
     a: = Tally.on(ab)
     b: = Tally.on(bb)
-    return a if c else b
+    return a if take_a else b
 
-priv fn pick_bound(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Sz //< the count while bound
+priv fn pick_bound(ab: Tally_block$@, bb: Tally_block$@, take_a: Bool): Sz //< the count while bound
     a: = Tally.on(ab)
     b: = Tally.on(bb)
-    x: = a if c else b
+    x: = a if take_a else b
     return x.peek()
 
-priv fn pick_into_field(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Tally_box
+priv fn pick_into_field(ab: Tally_block$@, bb: Tally_block$@, take_a: Bool): Tally_box
     a: = Tally.on(ab)
     b: = Tally.on(bb)
-    return Tally_box::{ .n = 0, .t = a if c else b }
+    return Tally_box::{ .n = 0, .t = a if take_a else b }
 
-priv fn pick_read_only(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Sz
+priv fn pick_read_only(ab: Tally_block$@, bb: Tally_block$@, take_a: Bool): Sz
     a: = Tally.on(ab)
-    return (a if c else Tally.on(bb)).peek()
+    return (a if take_a else Tally.on(bb)).peek()
 
 priv fn catch_substitute(ab: Tally_block$@, fb: Tally_block$@): Sz
     a: = Tally.on(ab)
@@ -96,13 +96,14 @@ priv fn catch_fallback(ab: Tally_block$@, fb: Tally_block$@): Tally
 priv fn catch_substitute_dropped(fb: Tally_block$@, sb: Tally_block$@) //< the value goes unused
     tally_or_fail(fb, true) catch Tally.on(sb)
 
-priv fn catch_on_place(r: Tally!Tally_err, sb: Tally_block$@): Sz //< `r` still owns its success
+priv fn catch_on_place(result: Tally!Tally_err, sb: Tally_block$@): Sz //<
+    //< `result` still owns its success
     sub: = Tally.on(sb)
-    x: = r catch sub
+    x: = result catch sub
     return x.peek()
 
-priv fn catch_on_place_dropped(r: Tally!Tally_err)
-    r catch {}
+priv fn catch_on_place_dropped(result: Tally!Tally_err)
+    result catch {}
 
 fn test_arc_branch_hands_over_a_count()
     verdict
@@ -146,8 +147,8 @@ fn test_arc_branch_hands_over_a_count()
 // A `switch` arm's binding (and `if v: = o`'s) holds a count of its own for the arm. So the arm
 // can reassign its subject and still use the binding.
 // ==========================================
-priv fn arm_outlives_subject(b: Tally_block$@): Sz //< the count after the subject lets go
-    $s: = Tally_slot.one(Tally.on(b))
+priv fn arm_outlives_subject(block: Tally_block$@): Sz //< the count after the subject lets go
+    $s: = Tally_slot.one(Tally.on(block))
     switch s
     case .one(t)
         s = .none
@@ -164,8 +165,8 @@ priv fn arm_two_bindings(ab: Tally_block$@, bb: Tally_block$@): Sz
     default
         return -1
 
-priv fn bind_outlives_option(b: Tally_block$@): Sz
-    $o: Tally? = .some(Tally.on(b))
+priv fn bind_outlives_option(block: Tally_block$@): Sz
+    $o: Tally? = .some(Tally.on(block))
     if t: = o
         o = .none
         return t.peek()
@@ -187,25 +188,26 @@ fn test_arc_arm_binding_holds_a_count()
 // binding still owns lends it, so the value takes a count of its own. A statement's `catch`
 // releases the value it throws away.
 // ==========================================
-priv fn tally_maybe(b: Tally_block$@, there: Bool): Tally? //< a new Tally where `there`, else none
-    return .some(Tally.on(b)) if there else .none
+priv fn tally_maybe(block: Tally_block$@, there: Bool): Tally? //<
+    //< a new Tally where `there`, else none
+    return .some(Tally.on(block)) if there else .none
 
-priv fn option_catch_new(b: Tally_block$@): Sz //< the count while bound
-    x: = tally_maybe(b, true) catch
+priv fn option_catch_new(block: Tally_block$@): Sz //< the count while bound
+    x: = tally_maybe(block, true) catch
         return 0
     return x.peek()
 
-priv fn option_catch_on_place(o: Tally?): Sz //< `o` still owns its value
-    x: = o catch
+priv fn option_catch_on_place(option: Tally?): Sz //< `option` still owns its value
+    x: = option catch
         return 0
     return x.peek()
 
-priv fn option_catch_dropped(b: Tally_block$@) //< the value goes unused
-    tally_maybe(b, true) catch
+priv fn option_catch_dropped(block: Tally_block$@) //< the value goes unused
+    tally_maybe(block, true) catch
         return
 
-priv fn option_catch_leaves(b: Tally_block$@): Sz //< none: the block leaves before any binding
-    x: = tally_maybe(b, false) catch
+priv fn option_catch_leaves(block: Tally_block$@): Sz //< none: the block leaves before any binding
+    x: = tally_maybe(block, false) catch
         return 7
     return x.peek()
 
@@ -285,22 +287,22 @@ fn test_arc_operand_left_by_exit()
 // A field or an element read off a value nothing owns yet. The value is held to the end of the
 // block. The part is counted only where something takes it.
 // ==========================================
-priv fn tally_box(b: Tally_block$@): Tally_box
-    return Tally_box::{ .n = 7, .t = Tally.on(b) }
+priv fn tally_box(block: Tally_block$@): Tally_box
+    return Tally_box::{ .n = 7, .t = Tally.on(block) }
 
 priv fn tally_array(ab: Tally_block$@, bb: Tally_block$@): Tally[2]
     return ::{ Tally.on(ab), Tally.on(bb) }
 
-priv fn tally_box_or_fail(b: Tally_block$@, fail: Bool): Tally_box!Tally_err
+priv fn tally_box_or_fail(block: Tally_block$@, fail: Bool): Tally_box!Tally_err
     if fail
         throw .failed
-    return tally_box(b)
+    return tally_box(block)
 
-priv fn field_only_read(b: Tally_block$@): Sz
-    return tally_box(b).t.peek()
+priv fn field_only_read(block: Tally_block$@): Sz
+    return tally_box(block).t.peek()
 
-priv fn field_taken(b: Tally_block$@): Sz
-    x: = tally_box(b).t
+priv fn field_taken(block: Tally_block$@): Sz
+    x: = tally_box(block).t
     return x.peek()
 
 priv fn element_taken(ab: Tally_block$@, bb: Tally_block$@): Sz

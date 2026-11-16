@@ -1,0 +1,58 @@
+//< Feeds broken documents to ksmd's reader (`make test-fuzz`)
+//< **A `.ksmd` file is the input ksmd takes from outside**: a person opens one that someone else
+//< wrote. The program under test ([`read_prog.kspl`](read_prog.kspl)) reads it, calculates its
+//< tables, writes each error's reason, and checks that what the writer writes reads back the same.
+//< The Makefile builds it with the address sanitizer where the C compiler has its runtime, and
+//< says so (`fuzz.Sanitized`). So an out-of-range read stops where it happens.
+//< Usage: `ksplc run tests/fuzz_main.kspl <reader> <work folder> [--asan] [--require-asan]`,
+//< with `--trials` and `--seed`.
+import "std/ds" { List }
+import "std/fuzz"
+import "std/mem" { Arena }
+
+priv const DEFAULT_SEED: I64 = 20261116
+priv const DEFAULT_TRIALS: I64 = 60 //< how many rounds CI scatters
+    //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
+    //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
+
+priv const TRIAL_TIMEOUT_MS: I32 = 10000 //<
+    //< How long to wait before treating a trial as a loop that never ends
+    //< Shorter than ksplc's: a seed is a few lines, read and calculated in milliseconds.
+
+priv const REACH_FLOOR_DIV: Sz = 20 //<
+    //< The fewest broken-input trials that must reach deep into the reader, as trials / this
+    //< **A check only that it does not crash can pass having tried nothing** (Principle 5 in
+    //< `docs/DESIGN-principles.md`). **Do not raise it**: it only shows that fuzzing works; the
+    //< proportion itself means nothing.
+
+embed "ksmd/examples/overview.ksmd" as overview
+embed "ksmd/examples/notes.ksmd" as notes
+embed "ksmd/examples/literals.ksmd" as literals
+// One document holding each block, clause and attribute the reader takes.
+// Caution: **Keep one of each form there.** A mutation cannot reach a form missing from the seeds,
+// and each takes a separate path through the reader, the calculation and the writer.
+embed "ksmd/tests/every_form.ksmd" as every_form
+
+priv const KINDS: fuzz.Input_kind[1] = ::{ //<
+    //< The kind of input that is fuzzed, and its files' ending
+    //< **This is the canonical source**: the name the program under test accepts follows it.
+    fuzz.Input_kind::{ .name = "ksmd", .ext = ".ksmd" },
+}
+
+priv fn collect_seeds(_dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
+    //< The examples and the document of every form; ksmd takes no seed folder
+    //< **They must all be read**, as the examples' own tests read them, so they count as built.
+    names: U8[][4] = ::{ "every form", "overview.ksmd", "notes.ksmd", "literals.ksmd" }
+    texts: U8[][4] = ::{ every_form, overview, notes, literals }
+    $out: = List<|fuzz.Sample|>(arena)
+    for i in Range.asc(names.len)
+        out
+            .push(fuzz.Sample::{ .kind = "ksmd", .name = names[i], .data = texts[i],
+            .built = true })
+    return out
+
+fn main(): I32
+    return fuzz.run_main("ksmd", "scatters broken documents at ksmd's reader",
+        fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED },
+        fuzz.Input_kind[]::KINDS, TRIAL_TIMEOUT_MS, REACH_FLOOR_DIV, false, collect_seeds,
+        64 * 1024 * 1024)

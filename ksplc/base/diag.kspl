@@ -87,11 +87,11 @@ fn ice_panic(msg: U8[])
             \{msg\}\n=========================================\n")
     panic("ICE")
 
-fn io_line(e: io.Io_error, kind: U8[]): U8[] //<
+fn io_line(error: io.Io_error, kind: U8[]): U8[] //<
     //< One line naming an I/O failure, `<kind>/<variant>: <details>`, on the arena
     //< The parse phase's I/O errors, the top-level ones and the formatter's share it.
     out: = base_core.arena.text()
-    switch e
+    switch error
     case .file_not_found(path)
         out.s("\{kind\}/file_not_found: file not found or unreadable: \{path\}\n")
     case .read_failed(path)
@@ -174,8 +174,9 @@ fn print_json_closing(succeeded: Bool) //<
         .set("hints", b.int_val(written.hints)).build()
     print_json_row(row)
 
-priv fn json_num(b: Json_builder$@, v: Sz): json.Value //< a position, or `null` where it is 0
-    return b.null_val() if v == 0 else b.int_val(v)
+priv fn json_num(builder: Json_builder$@, value: Sz): json.Value //<
+    //< a position, or `null` where it is 0
+    return builder.null_val() if value == 0 else builder.int_val(value)
 
 fn print_unplaced(file: U8[], line: Sz, msg: U8[]) //<
     //< An error placed in no source: a settings file's line, or nowhere at all (`file` empty)
@@ -313,21 +314,21 @@ priv fn print_placed(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg:
 priv const SHOWN_LINE_CHARS: Sz = 120 //< the most characters of a source line a diagnostic shows
 priv const SHOWN_LINE_LEAD: Sz = 40 //< how many characters before the column a cut line keeps
 
-priv fn byte_at_char(text: U8[], n: Sz): Sz //<
-    //< The byte offset where the `n`th character (from 0) starts, or the length past the last
+priv fn byte_at_char(text: U8[], index: Sz): Sz //<
+    //< The byte offset where the character at `index` (from 0) starts, or the length past the last
     //< It counts characters as `count_codepoints` does (lead bytes only), so the two agree.
     $seen: Sz = 0
     for i in Range.asc(text.len)
         if ((text.ptr + i)$ & 0xC0U8) != 0x80U8
-            if seen == n
+            if seen == index
                 return i
             seen += 1
     return text.len
 
-priv fn repeat_char(w: Writer, ch: U8[], count: Sz) //<
+priv fn repeat_char(out: Writer, ch: U8[], count: Sz) //<
     //< It writes one character `count` times, for a diagnostic's gutter and underline
     for _i in Range.asc(count)
-        w.s(ch)
+        out.s(ch)
 
 impl Lsp_diag_manager: Manual_free
     fn free(r: Self$@)

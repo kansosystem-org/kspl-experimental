@@ -4,7 +4,8 @@
  * write_impl in ksplc/gen/runtime.kspl. */
 #ifdef _WIN32
 /* The extensions a bare name with none is looked up with, in this order. **The same list as
- * RUN_EXTS in std/fs.kspl**, which says what can be started; change both together.
+ * RUN_EXTS in std/fs.kspl**, which says what can be started; change both together (`make
+ * test-conventions` holds them to one list).
  * Caution: **Do not read PATHEXT**, for the reason given at RUN_EXTS. A `.bat` or `.cmd` found here
  * goes through kspl_win_batch_safe, as one named in full does. */
 static const wchar_t *const kspl_win_run_exts[] = {L".exe", L".com", L".bat", L".cmd"};

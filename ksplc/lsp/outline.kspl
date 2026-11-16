@@ -24,10 +24,10 @@ priv struct Ctx //< what every step of the walk shares
     starts: List<|Sz|>$@
     b: Json_builder$@
 
-priv fn kind_of(k: base_ast_kinds.Ast_kind, in_type: Bool): I32 //<
+priv fn kind_of(kind: base_ast_kinds.Ast_kind, in_type: Bool): I32 //<
     //< The symbol kind of a declaration, or -1 for a node that is not one
     //< `in_type` says the walk is inside an `impl` or a trait, where a function is a method.
-    switch k
+    switch kind
     case .k_decl_fn, .k_decl_fn_proto
         return lsp_msg.S_METHOD if in_type else lsp_msg.S_FUNCTION
     case .k_decl_struct
@@ -51,11 +51,11 @@ priv fn kind_of(k: base_ast_kinds.Ast_kind, in_type: Bool): I32 //<
     default
         return -1I32
 
-priv fn holds_members(k: base_ast_kinds.Ast_kind): Bool //<
+priv fn holds_members(kind: base_ast_kinds.Ast_kind): Bool //<
     //< Whether the walk enters this declaration for its members
     //< **A function, a constant and a variable are not entered.** What is inside a body is no part
     //< of the outline. A constant's initializer can hold a function literal.
-    switch k
+    switch kind
     case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_impl
         return true
     default
@@ -66,78 +66,79 @@ priv fn name_node(node: Ast_node$@): Ast_node$@ //< the identifier that names a 
         return node.get_var_decl_id()
     return node.find_child(.k_identifier)
 
-priv fn impl_name(c: Ctx@, node: Ast_node@): U8[] //<
+priv fn impl_name(ctx: Ctx@, node: Ast_node@): U8[] //<
     //< An `impl`'s header as written, up to its line's end (`impl Align: Formattable`)
     //< **The header is shown as written**, not resolved. An impl's type can come through an
     //< import's alias. Resolving it is the analysis's work, not the outline's.
     from: Sz = node.loc.offset
-    if from >= c.src.len
+    if from >= ctx.src.len
         return "impl"
     $to: Sz = from
-    for to < c.src.len && c.src[to] != '\n' && c.src[to] != '{'
+    for to < ctx.src.len && ctx.src[to] != '\n' && ctx.src[to] != '{'
         to += 1
     $end: Sz = to
     for end > from &&
-        (c.src[end - 1] == ' ' || c.src[end - 1] == '\t' || c.src[end - 1] == '\r')
+        (ctx.src[end - 1] == ' ' || ctx.src[end - 1] == '\t' || ctx.src[end - 1] == '\r')
         end -= 1
-    return c.src.sub(from, end - from)
+    return ctx.src.sub(from, end - from)
 
-priv fn end_of(c: Ctx$@, node: Ast_node@): Sz //<
+priv fn end_of(ctx: Ctx$@, node: Ast_node@): Sz //<
     //< The furthest byte any part of the declaration reaches in this file
     //< Caution: **Do not take the last child's span alone** (`get_span_length`). Normalization
     //< reorders children, so the last one need not be the furthest. Then the range would end inside
     //< the body.
-    if node == null || !node.loc.file().equals(c.file)
+    if node == null || !node.loc.file().equals(ctx.file)
         return 0
     $far: Sz = node.loc.offset + node.text.len
     for ch in node.children
-        got: = end_of(c, ch)
+        got: = end_of(ctx, ch)
         if got > far
             far = got
     return far
 
-priv fn symbol(c: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Value? //<
+priv fn symbol(ctx: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Value? //<
     //< One declaration as a `DocumentSymbol`, its members nested, or none where it has no name
     $name: U8[] = ""
     $sel_off: Sz = node.loc.offset
     $sel_len: Sz = 0
     if node.kind_id == .k_decl_impl
-        name = impl_name(c, node)
+        name = impl_name(ctx, node)
         sel_len = name.len
     else
         id: = name_node(node)
-        if id == null || id.text.len <= 0 || !id.loc.file().equals(c.file)
+        if id == null || id.text.len <= 0 || !id.loc.file().equals(ctx.file)
             return .none
         name = id.text
         sel_off = id.loc.offset
         sel_len = id.text.len
-    $kids: = c.b.arr()
+    $kids: = ctx.b.arr()
     if holds_members(node.kind_id)
         inner: = in_type || node.kind_id == .k_decl_impl || node.kind_id == .k_decl_trait
         for ch in node.children
-            kids = members(c, ch, inner, kids)
+            kids = members(ctx, ch, inner, kids)
     // **The whole declaration is the range, the name the selection.** The editor puts the cursor
     // on the selection and highlights the range. The selection must lie inside the range.
-    whole: = c.b
-        .range_in(c.src, node.loc.offset, end_of(c, node) - node.loc.offset, c.starts)
-    sel: = c.b.range_in(c.src, sel_off, sel_len, c.starts)
-    return .some(c.b.obj().set("name", c.b.str_val(name)).set("kind", c.b.int_val(kind))
-        .set("range", whole).set("selectionRange", sel).set("children", kids.build()).build())
+    whole: = ctx.b
+        .range_in(ctx.src, node.loc.offset, end_of(ctx, node) - node.loc.offset, ctx.starts)
+    sel: = ctx.b.range_in(ctx.src, sel_off, sel_len, ctx.starts)
+    return .some(ctx.b.obj().set("name", ctx.b.str_val(name))
+        .set("kind", ctx.b.int_val(kind)).set("range", whole).set("selectionRange", sel)
+        .set("children", kids.build()).build())
 
-priv fn members(c: Ctx$@, node: Ast_node$@, in_type: Bool, $out: json.Array_builder):
+priv fn members(ctx: Ctx$@, node: Ast_node$@, in_type: Bool, $out: json.Array_builder):
     json.Array_builder //<
         //< Adds the declarations at or under `node` to `out`, stopping at each one found
         //< **Nothing the compiler generated is listed** (`made_by_compiler`), and nothing from
         //< another file (normalization can bring one in).
-    if node == null || node.made_by_compiler() || !node.loc.file().equals(c.file)
+    if node == null || node.made_by_compiler() || !node.loc.file().equals(ctx.file)
         return out
     kind: = kind_of(node.kind_id, in_type)
     if kind >= 0I32
-        if got: = symbol(c, node, kind, in_type)
+        if got: = symbol(ctx, node, kind, in_type)
             out = out.push(got)
         return out
     for ch in node.children
-        out = members(c, ch, in_type, out)
+        out = members(ctx, ch, in_type, out)
     return out
 
 fn handle(state: Doc_state$@, id_val: json.Value, arena: Arena$@) //<

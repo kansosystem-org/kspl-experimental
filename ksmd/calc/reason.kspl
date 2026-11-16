@@ -15,41 +15,41 @@ import "std/chars" // `sub_from`
 import "std/ds"
 import "std/str" { Str_builder }
 
-fn write_reason(v: Value, home: Sz, doc: Document@, r: Results@, out: Str_builder$@) //<
-    //< Why the error `v` of a cell of table `home` stands, as a person reads it after its mark
+fn write_reason(value: Value, home: Sz, doc: Document@, results: Results@, out: Str_builder$@) //<
+    //< Why the error `value` of a cell of table `home` stands, as a person reads it after its mark
     //< Every error has one: an error with no detail is told by its kind.
-    at: = v.at()
-    switch v.why
+    at: = value.at()
+    switch value.why
     case .plain
-        out.s(plain(v.error))
+        out.s(plain(value.error))
     case .from_cell
-        cell(at, home, doc, r, out)
-        out.s(" waits for an answer" if v.error == .pending else " shows ")
-        if v.error != .pending
-            out.s(v.error.mark())
+        cell(at, home, doc, results, out)
+        out.s(" waits for an answer" if value.error == .pending else " shows ")
+        if value.error != .pending
+            out.s(value.error.mark())
     case .text_in_arithmetic
-        if named(at, home, doc, r, out, " holds text, which arithmetic cannot use")
+        if named(at, home, doc, results, out, " holds text, which arithmetic cannot use")
             return
         out.s("arithmetic cannot use text, even text that looks like a number. value() reads ")
             .s("a number from text")
     case .truth_in_arithmetic
-        if named(at, home, doc, r, out, " holds true or false, which arithmetic cannot use")
+        if named(at, home, doc, results, out, " holds true or false, which arithmetic cannot use")
             return
         out.s("arithmetic cannot use true or false")
     case .date_arithmetic
         out.s("a date takes only whole days added or taken away, or another date taken away")
     case .not_a_condition
-        if named(at, home, doc, r, out, " holds no true or false, which a condition needs")
+        if named(at, home, doc, results, out, " holds no true or false, which a condition needs")
             return
         out.s("a condition takes only true or false, not a number, text or a date")
     case .kinds_ordered
         out.s("values of two kinds cannot be put in order; = and <> compare them")
     case .joined_kind
-        if named(at, home, doc, r, out, " holds no text, and & joins only text")
+        if named(at, home, doc, results, out, " holds no text, and & joins only text")
             return
         out.s("& joins only text. text() writes a number as text")
     case .divide_by_zero
-        if named(at, home, doc, r, out, ", the divisor, is 0 or empty")
+        if named(at, home, doc, results, out, ", the divisor, is 0 or empty")
             return
         out.s("the divisor is 0")
     case .too_large
@@ -70,54 +70,54 @@ fn write_reason(v: Value, home: Sz, doc: Document@, r: Results@, out: Str_builde
     case .condition_no_range
         out.s("the condition holds no range, so it would be the same on every row")
     case .in_function
-        in_function(v, out)
+        in_function(value, out)
     case .own_function
-        own_function(v, out)
+        own_function(value, out)
     case .unbuilt
-        out.s("the file that gives ").s(v.text).s(" does not build, so this call does not run. ")
-            .s("Fix the file; its box says why")
+        out.s("the file that gives ").s(value.text)
+            .s(" does not build, so this call does not run. ").s("Fix the file; its box says why")
     case .wants_number, .wants_whole, .wants_truth, .wants_text
-        wants(v, out)
+        wants(value, out)
     case .unknown_function
-        out.s("no function is called ").s(v.text)
+        out.s("no function is called ").s(value.text)
     case .bare_word
-        out.s(v.text).s(" is no function, cell or value. Text goes in quotes, as \"").s(v.text)
-            .c('"')
+        out.s(value.text).s(" is no function, cell or value. Text goes in quotes, as \"")
+            .s(value.text).c('"')
     case .arguments
-        out.s("the arguments do not fit ").s(v.text)
-        if h: = help_of(v.text)
+        out.s("the arguments do not fit ").s(value.text)
+        if h: = help_of(value.text)
             out.s(". Write ")
             write_call_form(h@, out)
     case .not_a_column
         out.s("name takes one whole column, as name(B), or name(map.B) for one of another table")
     case .digit_literal
-        digit_literal(v, out)
+        digit_literal(value, out)
     case .bad_token
-        if v.text.len > 0
-            out.s(v.text).s(" does not read as a number")
+        if value.text.len > 0
+            out.s(value.text).s(" does not read as a number")
         else
             out.s("a character here starts nothing a formula reads, or a quote is not closed")
     case .range_alone
         out.s("a range stands only in a function, as sum(A1:A9), or in a condition")
     case .missing
-        out.s("a " if v.text.len == 1 else "").s(v.text).s(" is missing")
+        out.s("a " if value.text.len == 1 else "").s(value.text).s(" is missing")
     case .unexpected
-        if v.text.len == 0
+        if value.text.len == 0
             out.s("the formula ends where a value is needed")
         else
-            out.s(v.text).s(" stands where a value is needed")
+            out.s(value.text).s(" stands where a value is needed")
     case .two_comparisons
         out.s("two comparisons in a row do not read. Join them with and, as A1 < B1 and B1 < C1")
     case .too_deep
         out.s("the formula nests more than 64 levels")
     case .trailing
-        if v.text.equals(")")
+        if value.text.equals(")")
             out.s("a ) has no ( before it")
         else
-            out.s("an operator is missing before ").s(v.text)
+            out.s("an operator is missing before ").s(value.text)
 
-priv fn plain(e: Calc_error): U8[] //< what an error of this kind means, with no detail
-    switch e
+priv fn plain(error: Calc_error): U8[] //< what an error of this kind means, with no detail
+    switch error
     case .wrong_kind
         return "a value is of the wrong kind for its place"
     case .division
@@ -148,9 +148,9 @@ priv fn plain(e: Calc_error): U8[] //< what an error of this kind means, with no
             calculated. A sum_if over a whole column on every row reads the most, or a range that \
             differs on each row"
 
-priv fn in_function(v: Value, out: Str_builder$@) //< an error a function found in its own work
-    out.s(v.text)
-    switch v.error
+priv fn in_function(value: Value, out: Str_builder$@) //< an error a function found in its own work
+    out.s(value.text)
+    switch value.error
     case .wrong_kind
         out.s(" was given a value of the wrong kind")
     case .not_finite
@@ -160,11 +160,11 @@ priv fn in_function(v: Value, out: Str_builder$@) //< an error a function found 
     case .division
         out.s(" divides by zero")
     default
-        out.s(" gives ").s(v.error.mark())
+        out.s(" gives ").s(value.error.mark())
 
-priv fn own_function(v: Value, out: Str_builder$@) //< an error of the document's own function
-    out.s(v.text)
-    switch v.error
+priv fn own_function(value: Value, out: Str_builder$@) //< an error of the document's own function
+    out.s(value.text)
+    switch value.error
     case .pending
         out.s(" has not answered yet: this document's own functions are still building or running")
     case .time_limit
@@ -175,11 +175,11 @@ priv fn own_function(v: Value, out: Str_builder$@) //< an error of the document'
         out.s(" may be this document's own function. Those are not allowed yet, so this call ")
             .s("does not run. Allow them in the bar above or in their box")
     default
-        out.s(", this document's own function, gives ").s(v.error.mark())
+        out.s(", this document's own function, gives ").s(value.error.mark())
 
-priv fn wants(v: Value, out: Str_builder$@) //< an argument its parameter refused
-    out.s("argument \{v.at()\} of ").s(v.text).s(" takes ")
-    switch v.why
+priv fn wants(value: Value, out: Str_builder$@) //< an argument its parameter refused
+    out.s("argument \{value.at()\} of ").s(value.text).s(" takes ")
+    switch value.why
     case .wants_whole
         out.s("a whole number up to 2^53")
     case .wants_truth
@@ -189,46 +189,48 @@ priv fn wants(v: Value, out: Str_builder$@) //< an argument its parameter refuse
     default
         out.s("a number")
 
-priv fn digit_literal(v: Value, out: Str_builder$@) //<
+priv fn digit_literal(value: Value, out: Str_builder$@) //<
     //< A literal in a base given as digit text: the number it already is, and what to write
     name: =
-        READ_DIGITS[v.at()] if v.at() >= 0 && v.at() < READ_DIGITS.len else "this function"
-    out.s(name).s(" reads digits as text: ").s(v.text).s(" is already the number ")
-    if n: = literal(v.text)
+        (READ_DIGITS[value.at()] if value.at() >= 0 && value.at() < READ_DIGITS.len
+        else "this function")
+    out.s(name).s(" reads digits as text: ").s(value.text).s(" is already the number ")
+    if n: = literal(value.text)
         out.s("\{n\}")
     // The prefix fits the function where both name the same base: `0x` and `hex_`.
-    hex: = v.text.len > 1 && v.text[1] == 'x'
+    hex: = value.text.len > 1 && value.text[1] == 'x'
     fits: = name.starts_with("hex" if hex else "bin")
     out.s(". Write ")
     if fits && name.ends_with("_to_dec")
-        out.c('=').s(v.text).s(", or ")
+        out.c('=').s(value.text).s(", or ")
     if !fits
         out.s("its digits in quotes")
         return
     out.s(name).s("(\"")
-    for c in v.text.sub_from(2)
+    for c in value.text.sub_from(2)
         if c != '_'
             out.c(c)
     out.s("\")")
 
-priv fn named(at: Sz, home: Sz, doc: Document@, r: Results@, out: Str_builder$@, rest: U8[]): Bool //<
-    //< Writes the cell at place `at`, then `rest`; false, writing nothing, where `at` is -1
+priv fn named(at: Sz, home: Sz, doc: Document@, results: Results@, out: Str_builder$@, rest: U8[]):
+    Bool //<
+        //< Writes the cell at place `at`, then `rest`; false, writing nothing, where `at` is -1
     if at < 0
         return false
-    cell(at, home, doc, r, out)
+    cell(at, home, doc, results, out)
     out.s(rest)
     return true
 
-priv fn cell(at: Sz, home: Sz, doc: Document@, r: Results@, out: Str_builder$@) //<
-    //< A cell by its place in `r`, as a formula in table `home` names it: `B7`, or `costs.B7`
-    $u: Sz = 0
-    for u + 1 < r.starts.len && r.starts[u + 1] <= at
-        u += 1
-    columns: = r.columns[u] if r.columns[u] > 0 else 1
-    if u != home && u < doc.tables.len && doc.tables[u].name.len > 0
-        write_table_name(doc.tables[u].name, out)
+priv fn cell(at: Sz, home: Sz, doc: Document@, results: Results@, out: Str_builder$@) //<
+    //< A cell by its place in `results`, as a formula in table `home` names it: `B7`, or `costs.B7`
+    $table: Sz = 0
+    for table + 1 < results.starts.len && results.starts[table + 1] <= at
+        table += 1
+    columns: = results.columns[table] if results.columns[table] > 0 else 1
+    if table != home && table < doc.tables.len && doc.tables[table].name.len > 0
+        write_table_name(doc.tables[table].name, out)
         out.c('.')
-    i: = at - r.starts[u]
+    i: = at - results.starts[table]
     write_column(i % columns, out)
     out.s("\{i / columns + 1\}")
 

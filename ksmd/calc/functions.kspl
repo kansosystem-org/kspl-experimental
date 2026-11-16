@@ -10,7 +10,8 @@
 import "ksmd/base/dates" { day_of, write_date, write_date_with, ymd_of }
 import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/bases" { Base, Base_error, read, whole, width_ok, write }
-import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, date_value, number }
+import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, date_value }
+import "ksmd/calc/value" as calculated // `number`, which a parameter here takes as its name
 import "ksmd/model/format" { SHOWN_DIGITS, format_of, round_at_digits_of, round_digits, round_places,
     show, show_plain }
 import "std/chars" // `next_codepoint`, `count_codepoints`
@@ -19,6 +20,10 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder } // and `text`, `find_str`, `replace`
 import "std/strfmt" as _strfmt // `\{}` of a whole number
 import "std/strnum" // `to_f64`
+
+// **A parameter takes the name Excel gives that argument, in snake_case**, as `round(number,
+// num_digits)`, since the formula help shows it. `like` has no counterpart there, and a width in
+// bits is not Excel's `places`, a count of characters; those take their own words.
 
 // **What a person's own functions use is public, so [I0402] is off here.** Their file stands in
 // their own workspace, outside this package, and calls these; the lint sees only ksmd's own uses.
@@ -38,10 +43,10 @@ const MAX_ROUND: I64 = 15 //< the most places `round` takes, either way
 pub fn sum( //<
     //< the numbers added; of nothing, 0
     //< For example, `sum(1, 2, 3.5)` is `6.5`.
-    xs: Value[], //< the numbers, cells or ranges to add
+    numbers: Value[], //< the numbers, cells or ranges to add
 ): F64!Calc_error
     $total: = 0.0
-    for v in xs
+    for v in numbers
         if v.kind == .error
             throw v.error
         // Dates have a least and a greatest, and a count; they have no sum.
@@ -53,10 +58,10 @@ pub fn sum( //<
 pub fn count( //<
     //< how many numbers and dates there are
     //< For example, `count(4, 8, 15)` is `3`.
-    xs: Value[], //< the values, cells or ranges to count
+    values: Value[], //< the values, cells or ranges to count
 ): F64!Calc_error
     $n: Sz = 0
-    for v in xs
+    for v in values
         if v.kind == .error
             throw v.error
         n += 1
@@ -66,26 +71,26 @@ pub fn average( //<
     //< the numbers' mean
     //< Of no numbers it is `#EMPTY!`.
     //< For example, `average(2, 4, 9)` is `5`.
-    xs: Value[], //< the numbers, cells or ranges to average
+    numbers: Value[], //< the numbers, cells or ranges to average
 ): F64!Calc_error
-    s: = sum(xs)!
-    if xs.len == 0
+    s: = sum(numbers)!
+    if numbers.len == 0
         throw .no_numbers
-    return s / F64::xs.len
+    return s / F64::numbers.len
 
 pub fn min( //<
     //< the least; of dates alone, the earliest date
     //< For example, `min(3, -1, 7)` is `-1`.
-    xs: Value[], //< the numbers or dates, cells or ranges to compare
+    numbers: Value[], //< the numbers or dates, cells or ranges to compare
 ): Value!Calc_error
-    return extreme(xs, true)!
+    return extreme(numbers, true)!
 
 pub fn max( //<
     //< the greatest; of dates alone, the latest date
     //< For example, `max(3, -1, 7)` is `7`.
-    xs: Value[], //< the numbers or dates, cells or ranges to compare
+    numbers: Value[], //< the numbers or dates, cells or ranges to compare
 ): Value!Calc_error
-    return extreme(xs, false)!
+    return extreme(numbers, false)!
 
 priv fn extreme(xs: Value[], least: Bool): Value!Calc_error //<
     //< The least or the greatest. **Of dates and numbers together there is no answer**
@@ -106,21 +111,21 @@ priv fn extreme(xs: Value[], least: Bool): Value!Calc_error //<
         if dates != xs.len
             throw .wrong_kind
         return date_value(I64::best)
-    return number(best)
+    return calculated.number(best)
 
 pub fn mod( //<
-    //< what is left of `x` after dividing by `y`, with the sign of `y`
+    //< what is left of `number` after dividing by `divisor`, with the sign of `divisor`
     //< So a count of minutes wraps round a clock. The quotient is cut at the 15 digits it shows, so
     //< `mod(0.3, 0.1)` is 0. The remainder is rounded at the 15th digit of the larger operand, so
     //< `mod(0.35, 0.1)` is 0.05. A division by zero is `#DIV/0!`, and a quotient past 2^53, whose
     //< remainder an F64 no longer holds, is `#NUM!`.
     //< For example, `mod(-1, 72)` is `71`.
-    x: F64, //< the number to divide
-    y: F64, //< the number to divide by
+    number: F64, //< the number to divide
+    divisor: F64, //< the number to divide by
 ): F64!Calc_error
-    if y == 0.0
+    if divisor == 0.0
         throw .division
-    q: = x / y
+    q: = number / divisor
     if q >= 9007199254740992.0 || q <= -9007199254740992.0
         throw .not_finite
     // The quotient is cut at the 15 digits a person reads, as `cut` cuts, so `mod(3.3, 1.1)` is 0:
@@ -133,25 +138,25 @@ pub fn mod( //<
     if times > near
         times -= 1.0
     if times == 0.0
-        return x
+        return number
     // Taking whole divisors away leaves an error at the operands' 15th digit, so the remainder is
     // rounded there: `mod(0.35, 0.1)` is 0.05, not 0.04999999999999993. With nothing taken away
-    // the remainder is `x` itself, so `mod(1e-20, 1)` stays 1e-20.
-    left: = x - y * times
-    larger: = math.max(math.abs(x), math.abs(y))
+    // the remainder is `number` itself, so `mod(1e-20, 1)` stays 1e-20.
+    left: = number - divisor * times
+    larger: = math.max(math.abs(number), math.abs(divisor))
     return round_at_digits_of(left, larger, SHOWN_DIGITS).unwrap_or(left)
 
 pub fn power( //<
-    //< `x` to the power `y`
+    //< `number` to the power `power`
     //< Where no real number is the answer, as for `power(-1, 0.5)`, or the result is too large, it
     //< is `#NUM!`. 0 to a negative power divides by 0, so it is `#DIV/0!`.
     //< For example, `power(2, 10)` is `1024`.
-    x: F64, //< the base
-    y: F64, //< the power to raise it to
+    number: F64, //< the base
+    power: F64, //< the power to raise it to
 ): F64!Calc_error
-    if x == 0.0 && y < 0.0
+    if number == 0.0 && power < 0.0
         throw .division
-    r: = math.pow(x, y)
+    r: = math.pow(number, power)
     // A NaN (no real number) or an infinity is the function's own error, so the reason names it.
     if r - r != 0.0
         throw .not_finite
@@ -167,50 +172,50 @@ pub fn power( //<
 pub fn len( //<
     //< how many characters the text holds
     //< For example, `len("pencil")` is `6`.
-    t: U8[], //< the text
+    text: U8[], //< the text
 ): I64
-    return t.count_codepoints()
+    return text.count_codepoints()
 
 pub fn left( //<
-    //< the first `count` characters
+    //< the first `num_chars` characters
     //< For example, `left("pencil", 3)` is `pen`.
-    t: U8[], //< the text
-    count: I64, //< how many characters to take
+    text: U8[], //< the text
+    num_chars: I64, //< how many characters to take
 ): U8[]!Calc_error
-    return t.sub(0, offset_of(t, count, 0)!)
+    return text.sub(0, offset_of(text, num_chars, 0)!)
 
 pub fn right( //<
-    //< the last `count` characters
+    //< the last `num_chars` characters
     //< For example, `right("pencil", 4)` is `ncil`.
-    t: U8[], //< the text
-    count: I64, //< how many characters to take
+    text: U8[], //< the text
+    num_chars: I64, //< how many characters to take
 ): U8[]!Calc_error
-    if count < 0
+    if num_chars < 0
         throw .not_finite
-    skip: = I64::t.count_codepoints() - count
-    return t.sub_from(offset_of(t, skip if skip > 0 else 0, 0)!)
+    skip: = I64::text.count_codepoints() - num_chars
+    return text.sub_from(offset_of(text, skip if skip > 0 else 0, 0)!)
 
 pub fn mid( //<
-    //< `count` characters from the `start`th, the first being 1
+    //< `num_chars` characters from the `start_num`th, the first being 1
     //< For example, `mid("pencil", 2, 3)` is `enc`.
-    t: U8[], //< the text
-    start: I64, //< the first character to take, counted from 1
-    count: I64, //< how many characters to take
+    text: U8[], //< the text
+    start_num: I64, //< the first character to take, counted from 1
+    num_chars: I64, //< how many characters to take
 ): U8[]!Calc_error
-    if start < 1
+    if start_num < 1
         throw .not_finite
-    from: = offset_of(t, start - 1, 0)!
-    return t.sub(from, offset_of(t, count, from)! - from)
+    from: = offset_of(text, start_num - 1, 0)!
+    return text.sub(from, offset_of(text, num_chars, from)! - from)
 
 pub fn find( //<
-    //< where `part` first stands in `t`, in characters from 1; 0 where it does not
+    //< where `find_text` first stands in `within_text`, in characters from 1; 0 where it does not
     //< Case counts: `find("a", "A")` is 0.
     //< For example, `find("c", "pencil")` is `4`.
-    part: U8[], //< the text to look for
-    t: U8[], //< the text to look in
+    find_text: U8[], //< the text to look for
+    within_text: U8[], //< the text to look in
 ): I64
-    if at: = t.find_str(part)
-        return I64::t.sub(0, at).count_codepoints() + 1
+    if at: = within_text.find_str(find_text)
+        return I64::within_text.sub(0, at).count_codepoints() + 1
     return 0
 
 pub fn like( //<
@@ -219,7 +224,7 @@ pub fn like( //<
     //< stand for `*`, `?` and `~` themselves; any other `~` is `#VALUE!`. Case does not count, as
     //< the filter compares text. So `like(A1, "INV-*")` asks whether `A1` starts with `INV-`.
     //< For example, `like("Pens", "p?n*")` is `true`.
-    t: Value, //< the text; a number or a date is `false`, and `true`/`false` is `#VALUE!`
+    text: Value, //< the text; a number or a date is `false`, and `true`/`false` is `#VALUE!`
     pattern: U8[], //< the pattern, such as `"INV-*"`; any other character stands for itself
 ): Bool!Calc_error
     // Each `~` escapes a wildcard or itself; checked first, so the answer never hangs on the text.
@@ -230,35 +235,36 @@ pub fn like( //<
             i += 1
     // **A number matches no pattern**, so `sum_if(B, like(A, "INV-*"))` passes over the rows
     // whose code is a number instead of being `#VALUE!` for the whole column.
-    switch t.kind
+    switch text.kind
     case .number, .date
         return false
     case .text
-        return matches(t.text, pattern)
+        return matches(text.text, pattern)
     case .empty
         return matches("", pattern)
     default
         throw .wrong_kind
 
-priv fn matches(t: U8[], pattern: U8[]): Bool //< whether `t` matches a pattern checked by `like`
+priv fn matches(text: U8[], pattern: U8[]): Bool //<
+    //< whether `text` matches a pattern checked by `like`
     // **One `*` is kept to go back to, the last one passed.** A later `*` matches whatever an
     // earlier one would, so going back further finds nothing new. The work is then at most the
     // text's characters times the pattern's bytes, never exponential.
-    $at: Sz = 0 // in `t`
+    $at: Sz = 0 // in `text`
     $p: Sz = 0 // in `pattern`
     $star: Sz = -1 // the pattern's byte after the last `*`; -1 before any
-    $star_at: Sz = 0 // where in `t` that `*` began to match
-    for at < t.len
-        step: = t.next_codepoint(at)
+    $star_at: Sz = 0 // where in `text` that `*` began to match
+    for at < text.len
+        step: = text.next_codepoint(at)
         if p < pattern.len && pattern[p] == '*'
             p += 1
             star = p
             star_at = at
-        else if p < pattern.len && one_matches(t.sub(at, step), pattern, p)
+        else if p < pattern.len && one_matches(text.sub(at, step), pattern, p)
             at += step
             p += 2 if pattern[p] == '~' else pattern.next_codepoint(p)
         else if star >= 0
-            star_at += t.next_codepoint(star_at)
+            star_at += text.next_codepoint(star_at)
             at = star_at
             p = star
         else
@@ -267,92 +273,92 @@ priv fn matches(t: U8[], pattern: U8[]): Bool //< whether `t` matches a pattern 
         p += 1
     return p == pattern.len
 
-priv fn is_wild(c: U8): Bool //< whether a `~` before `c` makes it stand for itself in `like`
-    return c == '*' || c == '?' || c == '~'
+priv fn is_wild(byte: U8): Bool //< whether a `~` before `byte` makes it stand for itself in `like`
+    return byte == '*' || byte == '?' || byte == '~'
 
-priv fn one_matches(c: U8[], pattern: U8[], p: Sz): Bool //<
-    //< Whether the character `c` matches the one the pattern holds at byte `p`, which is no `*`
+priv fn one_matches(character: U8[], pattern: U8[], at: Sz): Bool //<
+    //< Whether the character `character` matches the one the pattern holds at byte `at`, which is no `*`
     //< Case does not count: `compare_text`, which the filter and the sort use, decides.
-    if pattern[p] == '?'
+    if pattern[at] == '?'
         return true
-    if pattern[p] == '~'
-        return c.len == 1 && c[0] == pattern[p + 1]
-    return compare_text(c, pattern.sub(p, pattern.next_codepoint(p))) == 0
+    if pattern[at] == '~'
+        return character.len == 1 && character[0] == pattern[at + 1]
+    return compare_text(character, pattern.sub(at, pattern.next_codepoint(at))) == 0
 
 pub fn value( //<
     //< the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is
     //< **The one way from text to a number**, since arithmetic never reads text. Any other text,
     //< `true`/`false` or a date is `#VALUE!`; an empty cell is 0.
     //< For example, `value(" -3 ")` is `-3`.
-    v: Value, //< the text, or a cell that holds it
+    text: Value, //< the text, or a cell that holds it
 ): F64!Calc_error
-    switch v.kind
+    switch text.kind
     case .number
-        return v.number
+        return text.number
     case .empty
         return 0.0
     case .text
-        return v.text.to_f64() catch
+        return text.text.to_f64() catch
             throw .wrong_kind
     default
         throw .wrong_kind
 
 pub fn substitute( //<
-    //< `t` with every `old` in it replaced by `new`, from the left and without overlaps
-    //< Case counts, as in `find`; an empty `old` leaves `t` as it is. A result past `MAX_TEXT`
-    //< bytes is `#NUM!`, measured before the text is made.
+    //< `text` with every `old_text` in it replaced by `new_text`, from the left, without overlaps
+    //< Case counts, as in `find`; an empty `old_text` leaves `text` as it is. A result past
+    //< `MAX_TEXT` bytes is `#NUM!`, measured before the text is made.
     //< For example, `substitute("a-b-c", "-", "/")` is `a/b/c`.
-    t: U8[], //< the text
-    old: U8[], //< the text to replace
-    new: U8[], //< the text to put in its place
+    text: U8[], //< the text
+    old_text: U8[], //< the text to replace
+    new_text: U8[], //< the text to put in its place
     arena: Arena$@,
 ): U8[]!Calc_error
-    if old.len == 0
-        return t
-    $length: = t.len
+    if old_text.len == 0
+        return text
+    $length: = text.len
     $at: Sz = 0
-    for at < t.len
-        if t.starts_with(old, at)
+    for at < text.len
+        if text.starts_with(old_text, at)
             // A growing text is checked at each step, so the count cannot overflow a 32-bit `Sz`.
-            length += new.len - old.len
-            if new.len > old.len && length > MAX_TEXT
+            length += new_text.len - old_text.len
+            if new_text.len > old_text.len && length > MAX_TEXT
                 throw .not_finite
-            at += old.len
+            at += old_text.len
         else
             at += 1
     if length > MAX_TEXT
         throw .not_finite
-    return t.replace(old, new, arena)
+    return text.replace(old_text, new_text, arena)
 
 pub fn text( //<
     //< a number or a date written as text, as a column's number format would show it
     //< `text(E2, "date:yyyy/mm/dd")` is `"2026/06/18"` where `E2` holds that date.
-    //< **The one way from a number to text**, so `&` can join it. An empty `format` writes the
+    //< **The one way from a number to text**, so `&` can join it. An empty `format_text` writes the
     //< number as the page shows it without a format: `text(0.1 + 0.2, "")` is `"0.3"`. Text stays
     //< as it is; a format that does not read, or `true`/`false`, is `#VALUE!`.
     //< For example, `text(0.25, "percent:0")` is `25%`.
-    v: Value, //< the number or the date
-    format: U8[], //< a number format, such as `"percent:0"` or `"date:yyyy/mm/dd"`
+    value: Value, //< the number or the date
+    format_text: U8[], //< a number format, such as `"percent:0"` or `"date:yyyy/mm/dd"`
     arena: Arena$@,
 ): U8[]!Calc_error
-    f: = format_of(format) catch
+    f: = format_of(format_text) catch
         throw .wrong_kind
     defer $out: = Str_builder()
-    switch v.kind
+    switch value.kind
     case .text
-        return v.text
+        return value.text
     case .empty
         return ""
     case .date
         if f.kind == .slash_date
-            write_date_with(I64::v.number, '/', out@)
+            write_date_with(I64::value.number, '/', out@)
         else
-            write_date(I64::v.number, out@)
+            write_date(I64::value.number, out@)
     case .number
         if f.kind == .none || f.kind == .general || f.kind == .slash_date
-            show_plain(v.number, out@)
+            show_plain(value.number, out@)
         else
-            show(v.number, f, out@)
+            show(value.number, f, out@)
     default
         throw .wrong_kind
     return arena.dup_str(out.slice())
@@ -364,24 +370,24 @@ pub fn char( //<
     //< 55296 to 57343 are `#NUM!`.
     //< So `"a" & char(10) & "b"` puts a line break between `a` and `b`.
     //< For example, `char(65)` is `A`.
-    code: I64, //< the character's number in Unicode: 10 for a line break, 9 for a tab
+    number: I64, //< the character's number in Unicode: 10 for a line break, 9 for a tab
     arena: Arena$@,
 ): U8[]!Calc_error
-    if code < 1 || code > 0x10FFFF || code >= 0xD800 && code <= 0xDFFF
+    if number < 1 || number > 0x10FFFF || number >= 0xD800 && number <= 0xDFFF
         throw .not_finite
-    cp: = I32::code
+    cp: = I32::number
     out: = arena.text()
     for i in Range.asc(chars.codepoint_len(cp))
         out.c(chars.codepoint_byte(cp, i))
     return out.take()
 
-priv fn offset_of(t: U8[], count: I64, from: Sz): Sz!Calc_error //<
+priv fn offset_of(text: U8[], count: I64, from: Sz): Sz!Calc_error //<
     //< The byte `count` characters after the byte `from`, or the end; a negative count is `#NUM!`
     if count < 0
         throw .not_finite
     $at: = from
-    for $n: I64 = 0; n < count && at < t.len; n += 1
-        at += t.next_codepoint(at)
+    for $n: I64 = 0; n < count && at < text.len; n += 1
+        at += text.next_codepoint(at)
     return at
 
 // ==========================================
@@ -389,34 +395,34 @@ priv fn offset_of(t: U8[], count: I64, from: Sz): Sz!Calc_error //<
 // ==========================================
 
 pub fn round( //<
-    //< `x` rounded to `places` decimal places, half away from zero
+    //< `number` rounded to `num_digits` decimal places, half away from zero
     //< It rounds the digits a person reads, as a number format does.
     //< For example, `round(1234.5, -2)` is `1200`.
-    x: F64, //< the number to round
-    places: I64, //< the decimal places to keep, from -15 to 15; -2 rounds to hundreds
+    number: F64, //< the number to round
+    num_digits: I64, //< the decimal places to keep, from -15 to 15; -2 rounds to hundreds
 ): F64!Calc_error
-    if places < -MAX_ROUND || places > MAX_ROUND
+    if num_digits < -MAX_ROUND || num_digits > MAX_ROUND
         throw .not_finite
-    return round_places(x, Sz::places) catch
+    return round_places(number, Sz::num_digits) catch
         throw .not_finite
 
 pub fn round_down( //<
-    //< `x` cut to `places` decimal places, toward zero
+    //< `number` cut to `num_digits` decimal places, toward zero
     //< For example, `round_down(2.79, 1)` is `2.7`.
-    x: F64, //< the number to round
-    places: I64, //< the decimal places to keep, as `round` takes them
+    number: F64, //< the number to round
+    num_digits: I64, //< the decimal places to keep, as `round` takes them
 ): F64!Calc_error
-    return cut(x, places, false)!
+    return cut(number, num_digits, false)!
 
 pub fn round_up( //<
-    //< `x` taken to `places` decimal places, away from zero
+    //< `number` taken to `num_digits` decimal places, away from zero
     //< For example, `round_up(2.21, 1)` is `2.3`.
-    x: F64, //< the number to round
-    places: I64, //< the decimal places to keep, as `round` takes them
+    number: F64, //< the number to round
+    num_digits: I64, //< the decimal places to keep, as `round` takes them
 ): F64!Calc_error
-    return cut(x, places, true)!
+    return cut(number, num_digits, true)!
 
-priv fn cut(x: F64, places: I64, away: Bool): F64!Calc_error //<
+priv fn cut(amount: F64, places: I64, away: Bool): F64!Calc_error //<
     //< `round_down` or `round_up`: the digits a person reads are cut, so 0.3 stays 0.3
     // The scaled value is first rounded to the digits a number shows, so `round_down(0.1 + 0.2,
     // 1)` is 0.3: the F64 just above 0.3 would cut to 0.3 anyway, and the one just below to 0.2.
@@ -426,9 +432,9 @@ priv fn cut(x: F64, places: I64, away: Bool): F64!Calc_error //<
     $scale: = 1.0
     for _ in Range.asc(Sz::(places if places > 0 else -places))
         scale *= 10.0
-    scaled: = x * scale if places >= 0 else x / scale
+    scaled: = amount * scale if places >= 0 else amount / scale
     if scaled >= 9007199254740992.0 || scaled <= -9007199254740992.0
-        return x
+        return amount
     near: = round_digits(scaled, SHOWN_DIGITS) catch
         throw .not_finite
     $kept: = F64::(I64::near)
@@ -455,28 +461,28 @@ pub fn date( //<
 pub fn year( //<
     //< a date's year
     //< For example, `year(date(2026, 3, 1))` is `2026`.
-    d: Value, //< the date
+    serial_number: Value, //< the date
 ): F64!Calc_error
-    return F64::ymd_of(day_in(d)!).year
+    return F64::ymd_of(day_in(serial_number)!).year
 
 pub fn month( //<
     //< a date's month, 1 to 12
     //< For example, `month(date(2026, 3, 1))` is `3`.
-    d: Value, //< the date
+    serial_number: Value, //< the date
 ): F64!Calc_error
-    return F64::ymd_of(day_in(d)!).month
+    return F64::ymd_of(day_in(serial_number)!).month
 
 pub fn day( //<
     //< a date's day of the month
     //< For example, `day(date(2026, 3, 1))` is `1`.
-    d: Value, //< the date
+    serial_number: Value, //< the date
 ): F64!Calc_error
-    return F64::ymd_of(day_in(d)!).day
+    return F64::ymd_of(day_in(serial_number)!).day
 
-priv fn day_in(d: Value): I64!Calc_error //< the day a date names; anything else is `#VALUE!`
-    if d.kind != .date
+priv fn day_in(date: Value): I64!Calc_error //< the day a date names; anything else is `#VALUE!`
+    if date.kind != .date
         throw .wrong_kind
-    return I64::d.number
+    return I64::date.number
 
 // ==========================================
 // Hexadecimal and binary
@@ -487,66 +493,66 @@ priv fn day_in(d: Value): I64!Calc_error //< the day a date names; anything else
 // (`ksmd/calc/bases.kspl`), and one outside it, such as 200 in 8 bits, is `#NUM!`.
 
 pub fn dec_to_hex( //<
-    //< `n` in hexadecimal
+    //< `number` in hexadecimal
     //< For example, `dec_to_hex(255)` is `FF`.
-    n: I64, //< the whole number
+    number: I64, //< the whole number
     width: I64?, //< the width in bits, from 1 to 53; left out, a negative number takes a minus sign
     arena: Arena$@,
 ): U8[]!Calc_error
-    return written(n, .hex, width, arena)!
+    return written(number, .hex, width, arena)!
 
 pub fn dec_to_bin( //<
-    //< `n` in binary
+    //< `number` in binary
     //< For example, `dec_to_bin(5)` is `101`.
-    n: I64, //< the whole number
+    number: I64, //< the whole number
     width: I64?, //< the width in bits, from 1 to 53; left out, a negative number takes a minus sign
     arena: Arena$@,
 ): U8[]!Calc_error
-    return written(n, .binary, width, arena)!
+    return written(number, .binary, width, arena)!
 
 pub fn hex_to_dec( //<
     //< the number hexadecimal digits name
     //< For example, `hex_to_dec("100000")` is `1048576`. The literal `=0x100000` is already the
     //< number 1048576. It does not read as the digits.
-    digits: Value, //< the hexadecimal digits as text, such as `"100000"`, not `0x100000`
+    number: Value, //< the hexadecimal digits as text, such as `"100000"`, not `0x100000`
     width: I64?, //< the width in bits, from 1 to 53; given, the digits are two's complement
     arena: Arena$@,
 ): I64!Calc_error
-    return read_in(digits, .hex, width, arena)!
+    return read_in(number, .hex, width, arena)!
 
 pub fn bin_to_dec( //<
     //< the number binary digits name
     //< For example, `bin_to_dec("101")` is `5`. The literal `=0b101` is already the number 5.
     //< It does not read as the digits.
-    digits: Value, //< the binary digits as text, such as `"101"`, not `0b101`
+    number: Value, //< the binary digits as text, such as `"101"`, not `0b101`
     width: I64?, //< the width in bits, from 1 to 53; given, the digits are two's complement
     arena: Arena$@,
 ): I64!Calc_error
-    return read_in(digits, .binary, width, arena)!
+    return read_in(number, .binary, width, arena)!
 
 pub fn hex_to_bin( //<
     //< hexadecimal digits written in binary
     //< For example, `hex_to_bin("1F")` is `11111`. A literal such as `0x1F` does not read as the
     //< digits; write `dec_to_bin(0x1F)`.
-    digits: Value, //< the hexadecimal digits as text, such as `"1F"`, not `0x1F`
+    number: Value, //< the hexadecimal digits as text, such as `"1F"`, not `0x1F`
     width: I64?, //< the width in bits, from 1 to 53; given, the digits are two's complement
     arena: Arena$@,
 ): U8[]!Calc_error
-    return written(read_in(digits, .hex, width, arena)!, .binary, width, arena)!
+    return written(read_in(number, .hex, width, arena)!, .binary, width, arena)!
 
 pub fn bin_to_hex( //<
     //< binary digits written in hexadecimal
     //< For example, `bin_to_hex("11111")` is `1F`. A literal such as `0b11111` does not read as the
     //< digits; write `dec_to_hex(0b11111)`.
-    digits: Value, //< the binary digits as text, such as `"11111"`, not `0b11111`
+    number: Value, //< the binary digits as text, such as `"11111"`, not `0b11111`
     width: I64?, //< the width in bits, from 1 to 53; given, the digits are two's complement
     arena: Arena$@,
 ): U8[]!Calc_error
-    return written(read_in(digits, .binary, width, arena)!, .hex, width, arena)!
+    return written(read_in(number, .binary, width, arena)!, .hex, width, arena)!
 
-priv fn written(n: I64, base: Base, width: I64?, arena: Arena$@): U8[]!Calc_error //<
-    //< `n` in the base, in the width given
-    return write(n, base, bits_of(width)!, arena) catch e
+priv fn written(amount: I64, base: Base, width: I64?, arena: Arena$@): U8[]!Calc_error //<
+    //< `amount` in the base, in the width given
+    return write(amount, base, bits_of(width)!, arena) catch e
         throw failure(e)
 
 priv fn read_in(digits: Value, base: Base, width: I64?, arena: Arena$@): I64!Calc_error //<
@@ -575,5 +581,5 @@ priv fn bits_of(width: I64?): I64!Calc_error //< 0 for no width; a width out of 
         return w
     return 0
 
-priv fn failure(e: Base_error): Calc_error //< the mark a base conversion's failure shows
-    return .wrong_kind if e == .not_digits else .not_finite
+priv fn failure(error: Base_error): Calc_error //< the mark a base conversion's failure shows
+    return .wrong_kind if error == .not_digits else .not_finite

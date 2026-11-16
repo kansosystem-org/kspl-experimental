@@ -96,7 +96,7 @@ struct Genc_ctx
         //< position argument would spread through nearly all of it. This node already points at the
         //< declaration being written.
     scratch: Str_builder //<
-        //< The buffer `clear_scratch` returns, reset to empty rather than allocated again.
+        //< The buffer `clear_scratch` returns, reset to empty rather than allocated again
     had_error: Bool //< whether a fatal error (an embed read failure, say) occurred during codegen
     assign_tmp_seq: Sz //<
         //< The running number of the C temporary that evaluates a compound assignment's target once
@@ -128,13 +128,13 @@ struct Genc_ctx
         //< constant. The address of the value written out is no constant at all.
 
 impl Genc_ctx
-    fn new(out: Writer, sema: Sema_ctx$@, source_map: Map<|U8[], U8$[]|>$@, split: Emit_split):
+    fn new(out: Writer, ctx: Sema_ctx$@, source_map: Map<|U8[], U8$[]|>$@, split: Emit_split):
         Genc_ctx$@
-        base_diag.ice_assert(sema != null && sema.env != null, "Genc_ctx.new: sema is null")
+        base_diag.ice_assert(ctx != null && ctx.env != null, "Genc_ctx.new: sema is null")
         scratch: = Str_builder()
         return base_core.arena
             .create(Genc_ctx::{ .out = out, .pending = Str_builder(), .last_char = '\n',
-            .sema = sema, .env = sema.env, .current_ret_id = 0, .source_map = source_map,
+            .sema = ctx, .env = ctx.env, .current_ret_id = 0, .source_map = source_map,
             .last_line = 0, .last_file = "", .last_node = null, .scratch = scratch,
             .had_error = false, .split = split, .top_level_var = false, .const_init_depth = 0,
             .brace_init = false, .literals = Map<|U8[], U8[]|>(null), .addr_root = null })
@@ -258,10 +258,10 @@ impl Genc_ctx
             r.last_file = loc_file
             r.last_node = node
 
-    fn map_c_type_to(r: Self$@, type_id: I32, w: Writer): Writer
-        return r.map_c_type_to_impl(type_id, w, 0, false)
+    fn map_c_type_to(r: Self$@, type_id: I32, out: Writer): Writer
+        return r.map_c_type_to_impl(type_id, out, 0, false)
 
-    fn map_c_type_to_impl(r: Self$@, type_id: I32, w: Writer, depth: Sz, suppress_const: Bool):
+    fn map_c_type_to_impl(r: Self$@, type_id: I32, out: Writer, depth: Sz, suppress_const: Bool):
         Writer
         if depth >= MAX_C_TYPE_DEPTH
             if !r.had_error
@@ -278,14 +278,14 @@ impl Genc_ctx
                 else
                     base_diag.print_unplaced("", 0, r.sema.scratch.slice())
                 r.had_error = true
-            return w.s("void")
+            return out.s("void")
         if type_id <= 0 || sema_type_env.is_unknown(type_id)
-            return w.s("auto")
+            return out.s("auto")
 
         info: = r.env.get_info(type_id)
         // Immutability is a structural node (Info.const_of), so only the const_of branch below
         // emits a `const`.
-        $res: = w
+        $res: = out
 
         switch info
         case .unknown

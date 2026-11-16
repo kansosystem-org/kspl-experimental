@@ -161,22 +161,22 @@ impl Reading
                 r.arena)
             return r.arena.dup_str(out.slice())
 
-priv fn find_from(t: U8[], tag: U8[], from: Sz): Sz? //< where `tag` stands at or after `from`
-    at: = t.sub_from(from).find_str(tag) catch
+priv fn find_from(text: U8[], tag: U8[], from: Sz): Sz? //< where `tag` stands at or after `from`
+    at: = text.sub_from(from).find_str(tag) catch
         return .none
     return .some(from + at)
 
-priv fn safe_end(t: U8[], from: Sz, a: U8[], b: U8[]): Sz //<
-    //< Where the text stops before a tail that could still grow into tag `a` or tag `b`
-    $n: = t.len - from
-    if n > a.len - 1 && n > b.len - 1
-        n = a.len - 1 if a.len > b.len else b.len - 1
+priv fn safe_end(text: U8[], from: Sz, open_tag: U8[], close_tag: U8[]): Sz //<
+    //< Where the text stops before a tail that could still grow into `open_tag` or `close_tag`
+    $n: = text.len - from
+    if n > open_tag.len - 1 && n > close_tag.len - 1
+        n = open_tag.len - 1 if open_tag.len > close_tag.len else close_tag.len - 1
     for n > 0
-        tail: = t.sub_from(t.len - n)
-        if a.starts_with(tail) || b.starts_with(tail)
-            return t.len - n
+        tail: = text.sub_from(text.len - n)
+        if open_tag.starts_with(tail) || close_tag.starts_with(tail)
+            return text.len - n
         n -= 1
-    return t.len
+    return text.len
 
 // ==========================================
 // The start of a block, read a little at a time
@@ -233,15 +233,15 @@ priv fn head_2507(body: U8[]): Head //< whether a block opens `{"name": "...", "
             return .unsure
     return .call(name, c.at - 1)
 
-priv fn string_end(s: U8[], open: Sz): Sz? //< past the JSON string opening at `open`, once whole
-    if open >= s.len || s[open] != '"'
+priv fn string_end(text: U8[], open: Sz): Sz? //< past the JSON string opening at `open`, once whole
+    if open >= text.len || text[open] != '"'
         return .none
     $at: = open + 1
-    for at < s.len
-        if s[at] == '\\'
+    for at < text.len
+        if text[at] == '\\'
             at += 2
             continue
-        if s[at] == '"'
+        if text[at] == '"'
             return .some(at + 1)
         at += 1
     return .none
@@ -392,8 +392,8 @@ priv fn read_call(body: U8[], arena: Arena$@): Call_out? //<
             return .none
     return .some(Call_out::{ .name = arena.dup_str(name), .arguments = args })
 
-priv fn is_object(v: json.Value): Bool //< whether the value is a JSON object
-    switch v
+priv fn is_object(value: json.Value): Bool //< whether the value is a JSON object
+    switch value
     case .obj_val
         return true
     default
@@ -414,27 +414,28 @@ struct Usage //< the token counts the answer reports
     completion: Sz
     cached: Sz //< prompt tokens whose cache rows were kept from an earlier request
 
-fn finish_reason(p: Parsed@, finish: Finish): U8[] //< `length`, `tool_calls` or `stop`
+fn finish_reason(parsed: Parsed@, finish: Finish): U8[] //< `length`, `tool_calls` or `stop`
     //< **A limit gives `length` even where a call was read**, as `llama-server` gives it: the last
     //< call can be cut, and `tool_calls` would tell the client that every call is whole.
     if finish == Finish.length
         return "length"
-    if p.calls.len > 0
+    if parsed.calls.len > 0
         return "tool_calls"
     return "stop"
 
-fn answer_json(p: Parsed@, finish: Finish, ids: Answer_ids, use: Usage, arena: Arena$@): U8[] //<
+fn answer_json(parsed: Parsed@, finish: Finish, ids: Answer_ids, use: Usage, arena: Arena$@): U8[] //<
     //< The whole `chat.completion` object, with the fields the OpenAI protocol names
     $b: = Json_builder(arena)
     $msg: = b.obj().set("role", b.str_val("assistant"))
     msg = msg.set("content",
-        b.null_val() if p.content.len == 0 && p.calls.len > 0 else b.str_val(p.content))
-    if p.reasoning.len > 0
-        msg = msg.set("reasoning_content", b.str_val(p.reasoning))
-    if p.calls.len > 0
+        b.null_val() if parsed.content.len == 0 && parsed.calls.len > 0
+        else b.str_val(parsed.content))
+    if parsed.reasoning.len > 0
+        msg = msg.set("reasoning_content", b.str_val(parsed.reasoning))
+    if parsed.calls.len > 0
         $calls: = b.arr()
-        for i in Range.asc(p.calls.len)
-            c: = p.calls.get(i)
+        for i in Range.asc(parsed.calls.len)
+            c: = parsed.calls.get(i)
             f: = b.obj().set("name", b.str_val(c.name))
                 .set("arguments", b.str_val(c.arguments)).build()
             calls = calls
@@ -442,7 +443,7 @@ fn answer_json(p: Parsed@, finish: Finish, ids: Answer_ids, use: Usage, arena: A
                 .set("type", b.str_val("function")).set("function", f).build())
         msg = msg.set("tool_calls", calls.build())
     choice: = b.obj().set("index", b.int_val(0)).set("message", msg.build())
-        .set("finish_reason", b.str_val(finish_reason(p, finish))).build()
+        .set("finish_reason", b.str_val(finish_reason(parsed, finish))).build()
     top: = top_of(b@, ids, "chat.completion")
         .set("choices", b.arr().push(choice).build()).set("usage", usage_of(b@, use)).build()
     return dumped(top, arena)
@@ -450,21 +451,22 @@ fn answer_json(p: Parsed@, finish: Finish, ids: Answer_ids, use: Usage, arena: A
 priv fn call_id(ids: Answer_ids, i: Sz, arena: Arena$@): U8[] //< the id of the answer's call i
     return arena.text().s("call_\{ids.first_call + i\}").take()
 
-priv fn top_of(b: Json_builder$@, ids: Answer_ids, object: U8[]): json.Object_builder //<
+priv fn top_of(builder: Json_builder$@, ids: Answer_ids, object: U8[]): json.Object_builder //<
     //< The fields every answer and every piece of a stream opens with
-    return b.obj().set("id", b.str_val(ids.id)).set("object", b.str_val(object))
-        .set("created", b.int_val(ids.created)).set("model", b.str_val(ids.model))
+    return builder.obj().set("id", builder.str_val(ids.id))
+        .set("object", builder.str_val(object)).set("created", builder.int_val(ids.created))
+        .set("model", builder.str_val(ids.model))
 
-priv fn usage_of(b: Json_builder$@, use: Usage): json.Value //< the token counts, as `usage`
-    details: = b.obj().set("cached_tokens", b.int_val(use.cached)).build()
-    return b.obj().set("prompt_tokens", b.int_val(use.prompt))
-        .set("completion_tokens", b.int_val(use.completion))
-        .set("total_tokens", b.int_val(use.prompt + use.completion))
+priv fn usage_of(builder: Json_builder$@, use: Usage): json.Value //< the token counts, as `usage`
+    details: = builder.obj().set("cached_tokens", builder.int_val(use.cached)).build()
+    return builder.obj().set("prompt_tokens", builder.int_val(use.prompt))
+        .set("completion_tokens", builder.int_val(use.completion))
+        .set("total_tokens", builder.int_val(use.prompt + use.completion))
         .set("prompt_tokens_details", details).build()
 
-fn dumped(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text
+fn dumped(value: json.Value, arena: Arena$@): U8[] //< a value as JSON text
     defer $out: = Str_builder()
-    v.dump(out@)
+    value.dump(out@)
     return arena.dup_str(out.slice())
 
 struct Sent //< how much of the answer a stream has sent
@@ -493,25 +495,25 @@ fn usage_chunk(ids: Answer_ids, use: Usage, arena: Arena$@): U8[] //<
     return dumped(top_of(b@, ids, "chat.completion.chunk").set("choices", b.arr().build())
         .set("usage", usage_of(b@, use)).build(), arena)
 
-fn new_chunks(p: Parsed@, sent: Sent$@, ids: Answer_ids, arena: Arena$@): List<|U8[]|> //<
+fn new_chunks(parsed: Parsed@, sent: Sent$@, ids: Answer_ids, arena: Arena$@): List<|U8[]|> //<
     //< The pieces a reading adds to what the stream has sent, each as a chunk's JSON text
     //< **Each reading extends the last** (`read_text`), so the new part is what lies past the
     //< length sent. A call opens with its id, type and name; later pieces carry its arguments.
     $out: = List<|U8[]|>(arena)
     $b: = Json_builder(arena)
-    if p.reasoning.len > sent.reasoning
-        text: = p.reasoning.sub_from(sent.reasoning)
+    if parsed.reasoning.len > sent.reasoning
+        text: = parsed.reasoning.sub_from(sent.reasoning)
         delta: = b.obj().set("reasoning_content", b.str_val(text)).build()
         out.push(chunk(ids, delta, "", arena))
-        sent.reasoning = p.reasoning.len
-    if p.content.len > sent.content
-        text: = p.content.sub_from(sent.content)
+        sent.reasoning = parsed.reasoning.len
+    if parsed.content.len > sent.content
+        text: = parsed.content.sub_from(sent.content)
         out
             .push(chunk(ids, b.obj().set("content", b.str_val(text)).build(), "", arena))
-        sent.content = p.content.len
+        sent.content = parsed.content.len
     $i: = sent.calls - 1 if sent.calls > 0 else 0
-    for i < p.calls.len
-        c: = p.calls.get(i)
+    for i < parsed.calls.len
+        c: = parsed.calls.get(i)
         $f: = b.obj()
         $call: = b.obj().set("index", b.int_val(i))
         $from: = sent.arguments

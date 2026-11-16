@@ -1,7 +1,7 @@
 //< A probe showing that the freestanding heap really works on Cortex-M bare metal
 //< It runs under QEMU (mps2-an385). It runs the free-list allocator of `std/mem.kspl` through
 //< `lib/ksos/kernel/heap.kspl` (the counterpart of `pvPortMalloc`, safe from a task and an ISR by
-//< irq_save/irq_restore). It runs `Arc<T>` on top of it. It makes and deletes tasks on it
+//< irq_save/irq_restore). It runs `Arc<|T|>` on top of it. It makes and deletes tasks on it
 //< (`lib/ksos/kernel/dynamic.kspl`) far more times than the port has contexts.
 import "ksos/demo/common/semihost_console" as con
 import "ksos/kernel/dynamic" as dyn
@@ -104,9 +104,9 @@ extern fn ksos_main()
             heap.heap_free(p)
     con.check("200-round randomized alloc/dealloc stress", stress_ok)
 
-    // 5. Arc<T>: kspl_atomic_add/cas must link and work freestanding, and new/copy/get/release must
-    //    not crash or hang. The release is the automatic one at the block's exit, the path real code
-    //    takes (retain/release by hand would double the compiler's).
+    // 5. Arc<|T|>: kspl_atomic_add/cas must link and work freestanding, and new/copy/get/release
+    //    must not crash or hang. The release is the automatic one at the block's exit, the path
+    //    real code takes (retain/release by hand would double the compiler's).
     release_on_exit:
         a: = Arc<|I32|>(42)
         b: = a

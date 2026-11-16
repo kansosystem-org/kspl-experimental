@@ -21,21 +21,21 @@ priv struct Loop_pair
     a: Loop_handle
     b: Loop_handle
 
-priv fn loop_take(h: Loop_handle): I32
-    return h.v
+priv fn loop_take(handle: Loop_handle): I32
+    return handle.v
 
-priv fn set_before_the_break(n: I32): I32 //< `x` is set on the only way out
+priv fn set_before_the_break(value: I32): I32 //< `x` is set on the only way out
     $x: I32
     for
-        x = n
+        x = value
         break
     return x
 
-priv fn set_before_every_break(n: I32): I32 //< labelled or not, every `break` follows `x = …`
+priv fn set_before_every_break(value: I32): I32 //< labelled or not, every `break` follows `x = …`
     $x: I32
     outer: for
         for $i: I32 = 0; i < 1000; i += 1
-            if i == n
+            if i == value
                 x = i
                 break outer
             if i > 100
@@ -43,17 +43,18 @@ priv fn set_before_every_break(n: I32): I32 //< labelled or not, every `break` f
                 break outer
     return x
 
-priv fn moved_and_given_back(n: I32): I32 //< a move on each pass is fine when a new value follows
+priv fn moved_and_given_back(value: I32): I32 //<
+    //< a move on each pass is fine when a new value follows
     $h: Loop_handle = ::{ .v = 1 }
     $t: I32 = 0
-    for $i: I32 = 0; i < n; i += 1
+    for $i: I32 = 0; i < value; i += 1
         t += loop_take(h)
         h = ::{ .v = i + 2 }
     return t + loop_take(h)
 
-priv fn declared_in_the_body(n: I32): I32 //< each pass binds its own
+priv fn declared_in_the_body(value: I32): I32 //< each pass binds its own
     $t: I32 = 0
-    for $i: I32 = 0; i < n; i += 1
+    for $i: I32 = 0; i < value; i += 1
         h: Loop_handle = ::{ .v = i }
         t += loop_take(h)
     return t
@@ -94,27 +95,27 @@ impl Flow_color
             x = 2
         return x
 
-priv fn set_by_bool(t: Bool): I32 //< 1 for true, 2 for false
+priv fn set_by_bool(flag: Bool): I32 //< 1 for true, 2 for false
     $x: I32
-    switch t
+    switch flag
     case true
         x = 1
     case false
         x = 2
     return x
 
-priv fn set_by_option(o: I32?): I32 //< the value, or 0 for none
+priv fn set_by_option(option: I32?): I32 //< the value, or 0 for none
     $x: I32
-    switch o
+    switch option
     case .some(v)
         x = v
     case .none
         x = 0
     return x
 
-priv fn set_by_short_form(o: I32?): I32 //< the value, or 0 for none
+priv fn set_by_short_form(option: I32?): I32 //< the value, or 0 for none
     $x: I32
-    if v: = o
+    if v: = option
         x = v
     else
         x = 0
@@ -135,16 +136,17 @@ fn test_switch_on_every_value_sets()
 // `../../docs/DESIGN-programming-language.md`). So a move-only value inside is still there to take
 // out after the question, and a temporary can be asked as well.
 // ==========================================
-priv fn loop_handle_if(n: I32): Loop_handle? //< a handle holding n where n is positive
-    return .some(Loop_handle::{ .v = n }) if n > 0 else .none
+priv fn loop_handle_if(value: I32): Loop_handle? //<
+    //< a handle holding `value` where `value` is positive
+    return .some(Loop_handle::{ .v = value }) if value > 0 else .none
 
-priv fn loop_handle_or_throw(n: I32): Loop_handle!Catch_probe_error
-    if n <= 0
+priv fn loop_handle_or_throw(value: I32): Loop_handle!Catch_probe_error
+    if value <= 0
         throw .missing
-    return Loop_handle::{ .v = n }
+    return Loop_handle::{ .v = value }
 
-priv fn asked_then_taken(n: I32): I32 //< asks the Option twice, then moves its value out
-    h: = loop_handle_if(n)
+priv fn asked_then_taken(value: I32): I32 //< asks the Option twice, then moves its value out
+    h: = loop_handle_if(value)
     if h.is_none() || !h.is_some()
         return -1
     switch h
@@ -153,8 +155,8 @@ priv fn asked_then_taken(n: I32): I32 //< asks the Option twice, then moves its 
     case .none
         return -2
 
-priv fn result_asked_then_taken(n: I32): I32 //< asks the Result, then moves its value out
-    r: = loop_handle_or_throw(n)
+priv fn result_asked_then_taken(value: I32): I32 //< asks the Result, then moves its value out
+    r: = loop_handle_or_throw(value)
     if r.is_err()
         return -1
     x: = r catch
@@ -251,8 +253,8 @@ priv fn step_bump(): I32 //< 1, counting each call
     step_calls += 1
     return 1
 
-priv fn step_may(n: I32): I32!Catch_probe_error //< 1, or `missing` past 100
-    if n > 100
+priv fn step_may(value: I32): I32!Catch_probe_error //< 1, or `missing` past 100
+    if value > 100
         throw .missing
     return 1
 
@@ -281,8 +283,8 @@ impl Step_box
     fn val(r: Self@): I32
         return r.n
 
-priv fn step_box(n: I32): Step_box
-    return ::{ .keep = Rc<|I32|>(n), .n = n }
+priv fn step_box(value: I32): Step_box
+    return ::{ .keep = Rc<|I32|>(value), .n = value }
 
 priv fn step_counted(): I32 //< the sum of the values the loop visits, skipping 2
     $total: I32 = 0
@@ -305,8 +307,8 @@ fn test_for_step_with_temporaries()
 // A closure in a `for` header that captures the loop's own counter. Its environment is built
 // once, after the counter is declared, and reads the counter as it stands at each call.
 // ==========================================
-priv fn via(f: Callable1<|I32, I32|>, v: I32): I32 //< f called on v
-    return f.call(v)
+priv fn via(func: Callable1<|I32, I32|>, value: I32): I32 //< `func` called on `value`
+    return func.call(value)
 
 priv fn header_captures(): I32 //< the sum of the values two loops visit
     $total: I32 = 0
@@ -335,22 +337,24 @@ fn test_for_header_closure_captures_counter()
 // the block is skipped, and without one the block leaves. The shapes refused are the cases
 // `option_catch_*` in `tests/negative/errors.kspl`.
 // ==========================================
-priv fn doubled_if_positive(n: I32): I32? //< `n * 2` where n is positive, none otherwise
-    return .some(n * 2) if n > 0 else .none
+priv fn doubled_if_positive(value: I32): I32? //<
+    //< `value * 2` where `value` is positive, none otherwise
+    return .some(value * 2) if value > 0 else .none
 
-priv fn tenfold_if(n: I32, want: I32): I32? //< `n * 10` where n is `want`, none otherwise
-    return .some(n * 10) if n == want else .none
+priv fn tenfold_if(value: I32, want: I32): I32? //<
+    //< `value * 10` where `value` is `want`, none otherwise
+    return .some(value * 10) if value == want else .none
 
 priv enum Catch_probe_error
     missing
 
-priv fn catch_or_return(n: I32): I32
-    v: = tenfold_if(n, 1) catch
+priv fn catch_or_return(value: I32): I32
+    v: = tenfold_if(value, 1) catch
         return -1
     return v + 1
 
-priv fn catch_or_throw(n: I32): I32!Catch_probe_error
-    v: = tenfold_if(n, 2) catch
+priv fn catch_or_throw(value: I32): I32!Catch_probe_error
+    v: = tenfold_if(value, 2) catch
         throw .missing
     return v
 
@@ -370,13 +374,14 @@ priv fn catch_or_continue(): I32 //< the sum of the values, skipping each none
         total += v
     return total
 
-priv fn catch_as_statement(n: I32): I32 //< a statement's `catch` leaves, and its value is unread
-    doubled_if_positive(n) catch
+priv fn catch_as_statement(value: I32): I32 //<
+    //< a statement's `catch` leaves, and its value is unread
+    doubled_if_positive(value) catch
         return 0
     return 1
 
-priv fn catch_nested_result(n: I32): I32 //< a Result's `catch` inside the Option's block
-    v: = doubled_if_positive(n) catch
+priv fn catch_nested_result(value: I32): I32 //< a Result's `catch` inside the Option's block
+    v: = doubled_if_positive(value) catch
         w: = catch_or_throw(2) catch
             fallback 7
         return w

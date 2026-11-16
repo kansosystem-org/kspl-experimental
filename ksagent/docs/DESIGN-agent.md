@@ -211,7 +211,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 
 ## The chat page
 
-**The chat page is the one place a person asks** ([`ksagent/page/chat.html`](../page/chat.html)). It lists the conversations at the top of the root, starts a new one, asks, stops, and shows each answer as it grows. One HTML file holds its style and its scripts, since the local server serves one file for the page and nothing else without the token. Its build puts kssrv's client for the local server (`kssrv/page/client.js`) inside it, the same client ksmd's page holds.
+**The chat page is the one place a person asks** ([`ksagent/page/chat.html`](../page/chat.html)). It lists the conversations at the top of the root, starts a new one, asks, stops, and shows each answer as it grows. **The page is served as one file**, since the local server serves one file for the page and nothing else without the token. That holds for the built page, not its source. The build puts the Markdown reader ([`ksagent/page/markdown.js`](../page/markdown.js)) inside it, and kssrv's client for the local server (`kssrv/page/client.js`), the same client ksmd's page holds. The reader stands in its own file, so it can be read and changed apart from the page's own script.
 
 **A text editor can still ask**, by appending a question record to an ask file. Nothing in ksagent depends on which program wrote it.
 
@@ -226,7 +226,7 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **A line break stays a line break**, since models write one line per sentence or item, and Japanese text joined with a space reads wrong.
 * **A hostile or runaway answer reads in time in step with its length.** Each mark's closings, and each bracket's match, are found in one pass, never by a scan from each opening.
 * **Quotes, lists and emphasis nest at most 8 deep**, and deeper text reads as text. Thousands of `>` would otherwise nest the reader as deep, and overflow the browser's stack.
-* **A table has at most 64 columns** (`MAX_COLUMNS` in `ksagent/page/chat.html`), and a wider header reads as text. Each row is filled out to the header's width. So a header of N `|` over N short rows would make N² cells, and run the tab out of memory.
+* **A table has at most 64 columns** (`MAX_COLUMNS` in `ksagent/page/markdown.js`), and a wider header reads as text. Each row is filled out to the header's width. So a header of N `|` over N short rows would make N² cells, and run the tab out of memory.
 * **ksmd's reader is not used.** It is strict, and refuses much of what models write; it is also internal to ksmd.
 
 ### What a turn shows
@@ -247,6 +247,8 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **Only a turn whose records changed is read and drawn again.** So a growing answer leaves the rest of the page still, and unread.
 * **Only a turn's text is drawn again; its frame and its button stay.** A Stop button built again each second missed a press whose release met the new button, and lost the keyboard's focus.
 * **A screen reader reads an answer once it is whole.** The turns stand in a log, which reads out what is added to it. So the box of an answer still open is marked busy (`aria-busy`), and its growing text is not read out again each second.
+* **Each control has a name a screen reader says, and keys alone reach each one.** The list of conversations is a navigation region, and a notice is read out at once. The box to ask in has a name of its own, since its placeholder goes once text is typed. Tab goes from the box to Ask. `make test-ksagent-chat` reads each name and region from the browser's accessibility tree.
+* **The page's colours are roles in [`ksagent/page/chat.css`](../page/chat.css)**, as ksmd's page has them. So `make test-conventions` measures each pair that meets on the page, in the light and the dark scheme, against 4.5:1. The build puts the style inside the page.
 * **A page shows only the turns its conversation's files hold.** A read that comes back after the person opened another conversation is dropped. A turn whose question goes from the files goes from the page.
 * **A turn that cannot be shown says so, and the page goes on.** Its text stands as plain text, and the next look comes whatever the last one met.
 * **A request to the local server gives up after 15 seconds, and the page says so.** The next look that gets through removes the notice. A slow model never makes a request slow, since the answer reaches the page through files. Only the request that holds the server open has no limit.

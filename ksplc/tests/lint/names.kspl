@@ -404,3 +404,38 @@ fn main(): I32
   b: = at(l@) && other(.closed)
   return I32::(many(Light[]::lights) + second(1, l) + pair<|Sz|>(l, 2) + l.name().len) +
     (1 if b else 0)
+// ==== case one_letter_parameter
+//< A parameter named with one letter, other than one whose letter has a meaning every reader knows
+//< Left out: `i`, `j`, `x`, `y`, a method's receiver `r` (in an `impl` and in a `trait`) and a
+//< closure's capture. `r` outside a method and a `_` before the letter are reported.
+// EXPECT: one_letter_parameter.kspl:21:22: hint: [H0501] The parameter 'd' is named with one letter
+// EXPECT: one_letter_parameter.kspl:24:16: hint: [H0501] The parameter 'n' is named with one letter
+// EXPECT: one_letter_parameter.kspl:24:24: hint: [H0501] The parameter '_s' is named with one letter
+// EXPECT: one_letter_parameter.kspl:27:17: hint: [H0501] The parameter 'r' is named with one letter
+// EXPECT: one_letter_parameter.kspl:32:15: hint: [H0501] The parameter 'v' is named with one letter
+// EXPECT-NOT: The parameter 'i'
+// EXPECT-NOT: The parameter 'j'
+// EXPECT-NOT: The parameter 'x'
+// EXPECT-NOT: The parameter 'y'
+// EXPECT-NOT: The parameter 'k'
+pub struct Spot
+  pub across: I32
+
+pub trait Area
+  fn area(r: Self): I32
+
+impl Spot
+  fn moved(r: Self@, d: I32): Spot
+    return Spot::{ .across = r.across + d }
+
+priv fn sum_of(n: I32, _s: U8[], i: I32, j: I32, x: I32, y: I32): I32
+  return n + i + j + x + y
+
+priv fn outside(r: I32): I32
+  return r
+
+pub fn probe(): I32
+  k: = 3
+  add_k: = fn(v: I32; k: I32): I32 { return v + k }
+  spot: = Spot::{ .across = 1 }.moved(2)
+  return sum_of(1, "", 2, 3, 4, 5) + outside(1) + add_k.call(spot.across)

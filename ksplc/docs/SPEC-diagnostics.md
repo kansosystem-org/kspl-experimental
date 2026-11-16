@@ -489,6 +489,17 @@ A type written where the line, or the place the value goes, already says it. It 
 * **Not reported**: a `defer` that runs another cleanup (`unlock`, `wait`) or does more than the free, or one with a statement between it and the declaration.
 * **Fix**: put `defer` in front of the declaration, and remove the `defer x.free()` line.
 
+### [H0501] A parameter named with one letter
+A parameter has a one-letter name, so a reader must go back to the signature to learn what it holds. The parameter belongs to a function, a method or an anonymous function.
+* **Not reported**:
+  * `i` and `j` (a position), and `x` and `y` (a coordinate). The check cannot tell a coordinate from another value, so every `x` and `y` passes;
+  * `r` as the first parameter of a method in an `impl` or a `trait`, its receiver. `r` elsewhere is reported;
+  * a closure's capture, whose name is the outer local's;
+  * a function the compiler made.
+* A `_` before the letter changes nothing: `_n` is reported as `n` is.
+* **Fix**: name it with a word that says what it holds (`node`, `text`, `count`, `left` and `right`). Keep a `_` in front where the parameter is unused (`_node`).
+* **A file that follows a field's established letters** (a matrix product's `a`, `b`, `c`, `m`, `k` and `n`) turns the hint off with `##lint(H0501 = off)`, and says why in a comment.
+
 ### [H0701] `T?` proposed for a raw pointer that can be null
 A function returning a raw pointer (`T@`) can hand back null, so a caller can forget to check. Three shapes are reported:
 * `return null`;
@@ -547,3 +558,8 @@ A `//<` run goes on below a line whose code ends in `{}` (`impl Row: Move_only {
 ### [H0808] A file's description below a banner
 A file's `//<` run before its first line of code has another comment above it. A banner there pushes what the file is for off the reader's first screen. A `#!` line is not counted as a banner.
 * **Fix**: move the `//<` run to the top of the file, and put the other comment below it.
+
+### [H0809] A `//<` summary ending with a full stop
+The summary, the first line of a `//<` run, ends with a full stop. "Comment notation and limits" in [`../../docs/SPEC-plain-language.md`](../../docs/SPEC-plain-language.md) writes it as a phrase or a short sentence without one.
+* **Not reported**: a full stop inside a code span at the end (`` `std/mem.` ``), an ellipsis (`...`), and a full stop further down the run, in the detail.
+* **Fix**: delete the full stop.

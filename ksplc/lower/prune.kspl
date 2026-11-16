@@ -25,77 +25,77 @@ priv struct Walk //< the breadth-first search's state
     work: List<|Ast_node$@|>$@ //< what has not been looked into yet
 
 impl Walk
-    priv fn mark(r: Self$@, d: Ast_node$@) //<
-        //< It records d as reached and, if d was not looked into yet, pushes it onto the work queue
+    priv fn mark(r: Self$@, node: Ast_node$@) //<
+        //< It records `node` as reached and, if not looked into yet, pushes it onto the work queue
         //< Caution: **Mark it when pushing.** Marked when popped, a function enters the queue once
         //< per reference, millions of times in ksplc. The arena never gets the old List memory
         //< back.
-        already: = r.reached.get(Sz::d).unwrap_or(false)
+        already: = r.reached.get(Sz::node).unwrap_or(false)
         if already
             return
-        r.reached.set(Sz::d, true)
-        r.work.push(d)
+        r.reached.set(Sz::node, true)
+        r.work.push(node)
 
-priv fn collect_fn_defs(n: Ast_node$@, out: Map<|Sz, Ast_node$@|>$@, depth: Sz) //<
+priv fn collect_fn_defs(node: Ast_node$@, out: Map<|Sz, Ast_node$@|>$@, depth: Sz) //<
     //< It collects every `decl_fn` in the tree, top-level and inside a `decl_impl`
-    if n == null || depth >= lower_root.MAX_LOWER_DEPTH
+    if node == null || depth >= lower_root.MAX_LOWER_DEPTH
         return
-    if n.kind_id == .k_decl_fn
-        out.set(Sz::n, n)
-    for child in n.children
+    if node.kind_id == .k_decl_fn
+        out.set(Sz::node, node)
+    for child in node.children
         collect_fn_defs(child, out, depth + 1)
 
-priv fn mark_referenced_fns(n: Ast_node$@, w: Walk$@, depth: Sz) //<
+priv fn mark_referenced_fns(node: Ast_node$@, walk: Walk$@, depth: Sz) //<
     //< It marks the functions n's subtree names
-    if n == null || depth >= lower_root.MAX_LOWER_DEPTH
+    if node == null || depth >= lower_root.MAX_LOWER_DEPTH
         return
-    if n.def_node != null
-        d: = w.defs.get(Sz::n.def_node).unwrap_or(null)
+    if node.def_node != null
+        d: = walk.defs.get(Sz::node.def_node).unwrap_or(null)
         if d != null
-            w.mark(d)
-    for child in n.children
-        mark_referenced_fns(child, w, depth + 1)
+            walk.mark(d)
+    for child in node.children
+        mark_referenced_fns(child, walk, depth + 1)
 
-priv fn mark_export_roots(n: Ast_node$@, w: Walk$@, depth: Sz) //<
+priv fn mark_export_roots(node: Ast_node$@, walk: Walk$@, depth: Sz) //<
     //< it marks the `extern` functions
     //< Caution: Walk the tree; do not copy the subtree into a Map. Done per top-level declaration,
     //< that grows the arena thousands of times.
-    if n == null || depth >= lower_root.MAX_LOWER_DEPTH
+    if node == null || depth >= lower_root.MAX_LOWER_DEPTH
         return
-    if n.kind_id == .k_decl_fn
-        sym: = Sema_symbol$@::n.sym_ptr
+    if node.kind_id == .k_decl_fn
+        sym: = Sema_symbol$@::node.sym_ptr
         if sym != null && sym.flags.is_export
-            w.mark(n)
-    for child in n.children
-        mark_export_roots(child, w, depth + 1)
+            walk.mark(node)
+    for child in node.children
+        mark_export_roots(child, walk, depth + 1)
 
-priv fn mark_roots(root: Ast_node@, c: Sema_ctx$@, w: Walk$@) //<
+priv fn mark_roots(root: Ast_node@, ctx: Sema_ctx$@, walk: Walk$@) //<
     //< It marks the roots, of which there are four kinds
     //< Drop one and everything reached only from it disappears. 1. `main`. 2. `extern`
     //< functions. 3. References from a non-function top-level initializer (a vtable naming a thunk
     //< **as data**). 4. What the entry point or the C runtime calls from outside the tree
     //< (find_backtrace_symbol and find_check_panic_symbol in `sema/type/env.kspl`).
-    switch c.env.find_main_symbol()
+    switch ctx.env.find_main_symbol()
     case .some(ms)
         if ms.node != null
-            w.mark(ms.node)
+            walk.mark(ms.node)
     default {}
-    switch c.env.find_backtrace_symbol()
+    switch ctx.env.find_backtrace_symbol()
     case .some(bs)
         if bs.node != null
-            w.mark(bs.node)
+            walk.mark(bs.node)
     default {}
-    switch c.env.find_check_panic_symbol()
+    switch ctx.env.find_check_panic_symbol()
     case .some(cs)
         if cs.node != null
-            w.mark(cs.node)
+            walk.mark(cs.node)
     default {}
     for child_node in root.children
         child: = child_node.unwrap_top_level()
         if child.kind_id == .k_decl_fn || child.kind_id == .k_decl_impl
-            mark_export_roots(child, w, 0)
+            mark_export_roots(child, walk, 0)
             continue
-        mark_referenced_fns(child, w, 0)
+        mark_referenced_fns(child, walk, 0)
 
 struct Prune_stats //< the count of unmarked `decl_fn`s taken out of their parents' child lists
     //< The number of functions dropped is **also Sema's wasted work**: Sema type-checked each one
@@ -122,12 +122,12 @@ priv fn drop_unreached(parent: Ast_node$@, reached: Map<|Sz, Bool|>$@)
             stats.fn_dropped += 1
     parent.children = kept
 
-priv fn collect_inst_types(c: Sema_ctx$@, out: Map<|Sz, Bool|>$@) //<
+priv fn collect_inst_types(ctx: Sema_ctx$@, out: Map<|Sz, Bool|>$@) //<
     //< The set of instantiated types' declarations (by node identity)
     //< Caution: **Do not identify them by name.** The mangling rule belongs to
     //< `sema/decl/mono_name.kspl`; copied here, a change there drops a live type. The identity
     //< comes from `env.instantiated_nodes`.
-    for e in c.env.instantiated_nodes.items()
+    for e in ctx.env.instantiated_nodes.items()
         n: = e.value
         if n == null
             continue
@@ -135,67 +135,67 @@ priv fn collect_inst_types(c: Sema_ctx$@, out: Map<|Sz, Bool|>$@) //<
             continue
         out.set(Sz::n, true)
 
-priv fn inst_node_of(c: Sema_ctx$@, tid: I32): Ast_node$@? //<
+priv fn inst_node_of(ctx: Sema_ctx$@, tid: I32): Ast_node$@? //<
     //< The node that defines the type with this ID
     //< It asks the instance's record (a linear walk would be O(N^2)).
-    key: = c.env.instance_key(tid)
+    key: = ctx.env.instance_key(tid)
     if key.len == 0
         return .none
-    n: = c.env.instantiated_nodes.get(key).unwrap_or(null)
+    n: = ctx.env.instantiated_nodes.get(key).unwrap_or(null)
     if n == null
         return .none
     return .some(n)
-priv fn mark_type(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I32|>$@, id: I32) //<
+priv fn mark_type(ctx: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I32|>$@, id: I32) //<
     //< It marks a type and, if it was not looked into yet, pushes it onto the work queue
     //< Caution: **Pass it through `c_repr_type_id`.** Types that differ only in immutability are
     //< **one struct in C**; with the plain ID, reaching one drops the other and the C fails with
     //< `unknown type name`. The folding lives in `sema/type/env.kspl`.
     if id == 0
         return
-    tid: = c.env.c_repr_type_id(c.env.get_real_type(id))
+    tid: = ctx.env.c_repr_type_id(ctx.env.get_real_type(id))
     already: = seen.get(tid).unwrap_or(false)
     if already
         return
     seen.set(tid, true)
     work.push(tid)
 
-priv fn mark_referenced_types(n: Ast_node@, c: Sema_ctx$@, seen: Map<|I32, Bool|>$@,
+priv fn mark_referenced_types(node: Ast_node@, ctx: Sema_ctx$@, seen: Map<|I32, Bool|>$@,
     work: List<|I32|>$@, depth: Sz) //<
-        //< It marks the types n's subtree names.
-    if n == null || depth >= lower_root.MAX_LOWER_DEPTH
+        //< It marks the types n's subtree names
+    if node == null || depth >= lower_root.MAX_LOWER_DEPTH
         return
-    mark_type(c, seen, work, n.type_id)
-    for child in n.children
-        mark_referenced_types(child, c, seen, work, depth + 1)
+    mark_type(ctx, seen, work, node.type_id)
+    for child in node.children
+        mark_referenced_types(child, ctx, seen, work, depth + 1)
 
-priv fn mark_type_members(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I32|>$@, tid: I32) //<
+priv fn mark_type_members(ctx: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I32|>$@, tid: I32) //<
     //< It marks the types tid is built from: what it strips to, and its fields' types
     //< Caution: **Read `Env`, not the tree.** The C field types come from `Struct_def` /
     //< `Enum_def`, and a field's node in the tree may have no type.
     // A derived type (a pointer, an immutability qualifier, a slice, an array) needs what it strips
     // to.
-    mark_type(c, seen, work, c.env.receiver_base_id(tid))
-    mark_type(c, seen, work, c.env.slice_elem(tid))
-    mark_type(c, seen, work, c.env.strip_array(tid))
+    mark_type(ctx, seen, work, ctx.env.receiver_base_id(tid))
+    mark_type(ctx, seen, work, ctx.env.slice_elem(tid))
+    mark_type(ctx, seen, work, ctx.env.strip_array(tid))
 
-    name: = c.env.get_str(tid)
-    if sd: = c.env.get_struct_def(name)
+    name: = ctx.env.get_str(tid)
+    if sd: = ctx.env.get_struct_def(name)
         for f in sd.fields_list
-            mark_type(c, seen, work, f.type_id)
-    if ed: = c.env.get_enum_def(name)
-        mark_type(c, seen, work, ed.base_type_id)
+            mark_type(ctx, seen, work, f.type_id)
+    if ed: = ctx.env.get_enum_def(name)
+        mark_type(ctx, seen, work, ed.base_type_id)
         for v in ed.variants_list
             for f in v.payload_fields
-                mark_type(c, seen, work, f.type_id)
+                mark_type(ctx, seen, work, f.type_id)
 
-fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
+fn prune_unreachable_types(root: Ast_node$@, ctx: Sema_ctx$@) //<
     //< It removes the **type declarations** the live declarations cannot reach
     //< Caution: **Call it after the functions are dropped.** A type named only in a signature
     //< becomes unused only once that function is gone; called first, it drops nothing. Keeping one
     //< too many is harmless; dropping too many stops the C compiler with `unknown type name`.
     base_diag.ice_assert(root != null, "lower_prune.prune_unreachable_types: root is null")
     insts: = base_core.arena.create(Map<|Sz, Bool|>(base_core.arena))
-    collect_inst_types(c, insts)
+    collect_inst_types(ctx, insts)
     if insts.len == 0
         return
 
@@ -209,21 +209,21 @@ fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
         child: = child_node.unwrap_top_level()
         if insts.get(Sz::child).unwrap_or(false)
             continue
-        mark_referenced_types(child, c, seen, work, 0)
+        mark_referenced_types(child, ctx, seen, work, 0)
     // A type whose layout was folded stays, so the C compiler's check of the number can name it.
-    for f in c.layout.folded
-        mark_type(c, seen, work, f.type_id)
+    for f in ctx.layout.folded
+        mark_type(ctx, seen, work, f.type_id)
     for work.len > 0
         tid: = work.get(work.len - 1)
         work.truncate(work.len - 1)
-        mark_type_members(c, seen, work, tid)
-        if d: = inst_node_of(c, tid)
+        mark_type_members(ctx, seen, work, tid)
+        if d: = inst_node_of(ctx, tid)
             if reached.get(Sz::d).unwrap_or(false)
                 continue
             reached.set(Sz::d, true)
-            mark_referenced_types(d, c, seen, work, 0)
+            mark_referenced_types(d, ctx, seen, work, 0)
 
-    drop_orphan_complex_types(c, insts, reached)
+    drop_orphan_complex_types(ctx, insts, reached)
 
     kept: = base_ast.new_ast_node_list()
     for child_node in root.children
@@ -234,37 +234,38 @@ fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
         kept.push(child_node)
     root.children = kept
 
-priv fn names_dropped_inst(c: Sema_ctx$@, tid: I32, insts: Map<|Sz, Bool|>$@,
+priv fn names_dropped_inst(ctx: Sema_ctx$@, tid: I32, insts: Map<|Sz, Bool|>$@,
     reached: Map<|Sz, Bool|>$@, depth: Sz): Bool //<
         //< Whether the type tid names an instance this pass drops, at any depth
         //< A pointer counts: C needs the struct's name declared for `S*` too.
     if tid == 0 || depth >= lower_root.MAX_LOWER_DEPTH
         return false
-    switch c.env.get_info(tid)
+    switch ctx.env.get_info(tid)
     case .pointer(base_id)
-        return names_dropped_inst(c, base_id, insts, reached, depth + 1)
+        return names_dropped_inst(ctx, base_id, insts, reached, depth + 1)
     case .const_of(base_id)
-        return names_dropped_inst(c, base_id, insts, reached, depth + 1)
+        return names_dropped_inst(ctx, base_id, insts, reached, depth + 1)
     case .alias_type(base_id)
-        return names_dropped_inst(c, base_id, insts, reached, depth + 1)
+        return names_dropped_inst(ctx, base_id, insts, reached, depth + 1)
     case .array(base_id, _size)
-        return names_dropped_inst(c, base_id, insts, reached, depth + 1)
+        return names_dropped_inst(ctx, base_id, insts, reached, depth + 1)
     case .fn_type(sig)
-        if names_dropped_inst(c, sig.ret_id, insts, reached, depth + 1)
+        if names_dropped_inst(ctx, sig.ret_id, insts, reached, depth + 1)
             return true
         for p in sig.params
-            if names_dropped_inst(c, p, insts, reached, depth + 1)
+            if names_dropped_inst(ctx, p, insts, reached, depth + 1)
                 return true
         return false
     default
         // Caution: **Fold it as mark_type does** (`c_repr_type_id`): `U8[]` and its immutable form
         // are one C struct, which is kept when either is reached.
-        if d: = inst_node_of(c, c.env.c_repr_type_id(c.env.get_real_type(tid)))
+        if d: =
+            inst_node_of(ctx, ctx.env.c_repr_type_id(ctx.env.get_real_type(tid)))
             return insts.get(Sz::d).unwrap_or(false) &&
                 !reached.get(Sz::d).unwrap_or(false)
         return false
 
-priv fn drop_orphan_complex_types(c: Sema_ctx$@, insts: Map<|Sz, Bool|>$@,
+priv fn drop_orphan_complex_types(ctx: Sema_ctx$@, insts: Map<|Sz, Bool|>$@,
     reached: Map<|Sz, Bool|>$@) //<
         //< It removes from the registry the composite types that only dropped code used
         //< **`complex_types` stays as sema registered it**: a dropped function's array or function
@@ -273,13 +274,13 @@ priv fn drop_orphan_complex_types(c: Sema_ctx$@, insts: Map<|Sz, Bool|>$@,
         //< Caution: **Do not drop by `seen`.** A top-level `const`'s initializer can also need an
         //< array type, and that path does not add to `seen`.
     live: = List<|I32|>.create(base_core.arena)
-    for tid in c.env.complex_types.slice()
-        if !names_dropped_inst(c, tid, insts, reached, 0)
+    for tid in ctx.env.complex_types.slice()
+        if !names_dropped_inst(ctx, tid, insts, reached, 0)
             live.push(tid)
-    c.env.complex_types.clear()
-    c.env.complex_types.push_all(live.slice())
+    ctx.env.complex_types.clear()
+    ctx.env.complex_types.push_all(live.slice())
 
-fn prune_unreachable_fns(root: Ast_node$@, c: Sema_ctx$@) //<
+fn prune_unreachable_fns(root: Ast_node$@, ctx: Sema_ctx$@) //<
     //< It removes from the tree every function root cannot reach
     //< Caution: **Call it after all synthesis is done** (in `pipeline.kspl`, right after
     //< `lower_abi.run`); earlier, lower's thunks and ARC retain/release do not exist yet and are
@@ -293,17 +294,17 @@ fn prune_unreachable_fns(root: Ast_node$@, c: Sema_ctx$@) //<
     reached: = base_core.arena.create(Map<|Sz, Bool|>(base_core.arena))
     work: = List<|Ast_node$@|>.create(base_core.arena)
     $w: = Walk::{ .defs = defs, .reached = reached, .work = work }
-    mark_roots(root, c, w@)
+    mark_roots(root, ctx, w@)
     for work.len > 0
         d: = work.get(work.len - 1)
         work.truncate(work.len - 1)
         mark_referenced_fns(d, w@, 0)
     drop_unreached(root, reached)
 
-priv fn is_inst_type(n: Ast_node$@, sym: Sema_symbol@): Bool //<
-    //< Whether n is an instance prune_unreachable_types keeps or drops (collect_inst_types' kinds)
+priv fn is_inst_type(node: Ast_node$@, sym: Sema_symbol@): Bool //<
+    //< Whether `node` is an instance prune_unreachable_types keeps or drops
     return sym.flags.is_generated_instance &&
-        (n.kind_id == .k_decl_struct || n.kind_id == .k_decl_enum)
+        (node.kind_id == .k_decl_struct || node.kind_id == .k_decl_enum)
 
 impl Ast_node
     fn is_alive_for_backend(r: Self$@): Bool //<

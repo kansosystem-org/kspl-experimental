@@ -23,7 +23,7 @@ import "std/chars"
 import "std/ds"
 import "std/str" { Str_builder }
 
-priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_text: U8[],
+priv fn emit_assign_tail(cg: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_text: U8[],
     right_node: Ast_node$@) //<
         //< It emits an assignment from its operator on, after the target was emitted
         //< For `<<=` `>>=` / `/=` `%=` it goes through the binary operators' check
@@ -32,67 +32,67 @@ priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_tex
         //< itself.
     div_op: =
         op_text.sub(0, 1) if op_text.equals("/=") || op_text.equals("%=") else ""
-    if sema_body_binary.takes_signed_div(c.sema, div_op, left_node.type_id, right_node)
-        c.s(" = ")
-        gen_c_expr.open_signed_div(c, div_op, left_node.type_id)
-        emit_assign_target(c, left_node, dst)
-        right_node.close_signed_div(c, left_node.type_id)
+    if sema_body_binary.takes_signed_div(cg.sema, div_op, left_node.type_id, right_node)
+        cg.s(" = ")
+        gen_c_expr.open_signed_div(cg, div_op, left_node.type_id)
+        emit_assign_target(cg, left_node, dst)
+        right_node.close_signed_div(cg, left_node.type_id)
         return
-    if emit_wrapped_compound(c, left_node, dst, op_text, right_node)
+    if emit_wrapped_compound(cg, left_node, dst, op_text, right_node)
         return
-    c.s(" \{op_text\} ")
-    if !c.env.is_integer(left_node.type_id)
-        right_node.emit_expr(c)
+    cg.s(" \{op_text\} ")
+    if !cg.env.is_integer(left_node.type_id)
+        right_node.emit_expr(cg)
         return
     if op_text.equals("<<=") || op_text.equals(">>=")
-        right_node.emit_shift_amount(c, left_node.type_id)
+        right_node.emit_shift_amount(cg, left_node.type_id)
         return
     if op_text.equals("/=") || op_text.equals("%=")
-        right_node.emit_divisor(c, left_node.type_id)
+        right_node.emit_divisor(cg, left_node.type_id)
         return
-    right_node.emit_expr(c)
+    right_node.emit_expr(cg)
 
-priv fn emit_wrapped_compound(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_text: U8[],
+priv fn emit_wrapped_compound(cg: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_text: U8[],
     right_node: Ast_node$@): Bool //<
         //< Emits a `+=` `-=` `*=` `<<=` through the unsigned twin; false if the type needs none
         //< Caution: **Do not leave it as C's `+=`.** KSPL wraps signed overflow (`mod 2^N`), C
         //< makes it undefined, and the optimizer relies on that: `i += 1` on `i > 0` never ends at
         //< `-O2`. The binary operators go the same way (wrap_twin in expr.kspl).
     op: = op_text.sub(0, op_text.len - 1) if op_text.ends_with("=") else ""
-    twin: = gen_c_expr.compound_wrap_twin(c, op, left_node.type_id)
+    twin: = gen_c_expr.compound_wrap_twin(cg, op, left_node.type_id)
     if twin.len == 0
         return false
-    c.s(" = (").t(c.env.strip_const_deep(left_node.type_id)).s(")((\{twin\})(")
-    emit_assign_target(c, left_node, dst)
-    c.s(") \{op\} ")
+    cg.s(" = (").t(cg.env.strip_const_deep(left_node.type_id)).s(")((\{twin\})(")
+    emit_assign_target(cg, left_node, dst)
+    cg.s(") \{op\} ")
     if op.equals("<<")
-        right_node.emit_shift_amount(c, left_node.type_id)
+        right_node.emit_shift_amount(cg, left_node.type_id)
     else
-        c.s("(\{twin\})(")
-        right_node.emit_expr(c)
-        c.s(")")
-    c.s(")")
+        cg.s("(\{twin\})(")
+        right_node.emit_expr(cg)
+        cg.s(")")
+    cg.s(")")
     return true
 
-priv fn emit_assign_target(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[])
+priv fn emit_assign_target(cg: Genc_ctx$@, left_node: Ast_node$@, dst: U8[])
     if dst.len > 0
-        c.s(dst)
+        cg.s(dst)
     else
-        left_node.emit_expr(c)
+        left_node.emit_expr(cg)
 
-priv fn calls_statement_intrinsic(r: Ast_node$@): Bool //<
-    //< Whether r calls an intrinsic that returns no value or embeds raw code
+priv fn calls_statement_intrinsic(expr: Ast_node$@): Bool //<
+    //< Whether expr calls an intrinsic that returns no value or embeds raw code
     //< `__kspl_read_volatile` is not one: the value it reads can be discarded with `(void)()`.
-    if r == null || r.kind_id != .k_expr_postfix
+    if expr == null || expr.kind_id != .k_expr_postfix
         return false
-    recv: = r.get_postfix_receiver()
+    recv: = expr.get_postfix_receiver()
     if recv == null || recv.kind_id != .k_identifier
         return false
     intr: = sema_body_call.intrinsic_of(recv.text)
     return intr != .not_intrinsic && intr != .read_volatile
 
 impl Ast_node
-    fn emit_stmt(r: Self$@, c: Genc_ctx$@)
+    fn emit_stmt(r: Self$@, cg: Genc_ctx$@)
         if r == null
             return
 
@@ -101,55 +101,55 @@ impl Ast_node
         // statements Lower hoists out of one line follow each other there. Without one, each C
         // line between counts as a source line: `!`'s trace names line 14 for a `!` on line 12.
         if kind != .k_stmt_block && kind != .k_stmt_label
-            c.emit_line_directive(r, true)
+            cg.emit_line_directive(r, true)
 
         switch kind
         case .k_stmt_block
-            r.emit_block_stmt(c)
+            r.emit_block_stmt(cg)
         case .k_stmt_return
-            r.emit_return_stmt(c)
+            r.emit_return_stmt(cg)
         case .k_decl_const, .k_decl_var
-            r.emit_var_decl(c)
+            r.emit_var_decl(cg)
         case .k_stmt_if
-            r.emit_if_stmt(c)
+            r.emit_if_stmt(cg)
         case .k_stmt_expr
-            r.emit_assign_stmt(c)
+            r.emit_assign_stmt(cg)
         case .k_stmt_for
-            r.emit_loop_stmt(c)
+            r.emit_loop_stmt(cg)
         case .k_stmt_switch
-            r.emit_switch_stmt(c)
+            r.emit_switch_stmt(cg)
         case .k_stmt_break
-            r.emit_break_stmt(c)
+            r.emit_break_stmt(cg)
         case .k_stmt_continue
-            r.emit_continue_stmt(c)
+            r.emit_continue_stmt(cg)
         case .k_stmt_goto
-            r.emit_goto_stmt(c)
+            r.emit_goto_stmt(cg)
         case .k_stmt_label
-            r.emit_label_stmt(c)
+            r.emit_label_stmt(cg)
         case .k_stmt_throw
-            r.emit_throw_stmt(c)
+            r.emit_throw_stmt(cg)
         case .k_stmt_fallback
-            r.emit_fallback_stmt(c)
+            r.emit_fallback_stmt(cg)
         case .k_stmt_defer
-            r.emit_defer_stmt(c)
+            r.emit_defer_stmt(cg)
         default
-            r.emit_unknown_stmt(c)
+            r.emit_unknown_stmt(cg)
 
-    priv fn emit_unknown_stmt(r: Ast_node$@, _c: Genc_ctx$@)
+    priv fn emit_unknown_stmt(r: Ast_node$@, _cg: Genc_ctx$@)
         defer $msg: = Str_builder()
         msg.s("emit_stmt: unhandled AST kind '").s(r.get_kind_str()).s("' reached Genc")
         r.ice_panic(msg.slice())
 
-    priv fn emit_block_stmt(r: Ast_node@, c: Genc_ctx$@)
-        c.s("{\n")
-        r.emit_block_inline(c)
-        c.s("}\n")
-    priv fn emit_block_inline(r: Ast_node@, c: Genc_ctx$@) //<
+    priv fn emit_block_stmt(r: Ast_node@, cg: Genc_ctx$@)
+        cg.s("{\n")
+        r.emit_block_inline(cg)
+        cg.s("}\n")
+    priv fn emit_block_inline(r: Ast_node@, cg: Genc_ctx$@) //<
         //< It emits only the block's contents (its statements)
         //< The caller owns the enclosing {} (a switch's case uses it to avoid an extra nested
         //< block).
         for child in r.children
-            child.emit(c)
+            child.emit(cg)
     priv fn block_ends_in_jump(r: Ast_node$@): Bool //<
         //< Whether a block ends in an unconditional jump (return / throw / break / continue / goto)
         //< Then the following `break;` can be omitted.
@@ -172,7 +172,7 @@ impl Ast_node
             return true
         return r.get_postfix_receiver().dest_runs_code()
 
-    priv fn emit_assign_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_assign_stmt(r: Ast_node$@, cg: Genc_ctx$@)
         left_node: = r.get_assign_left()
         right_node: = r.get_assign_right()
         if left_node != null && left_node.kind_id == .k_empty
@@ -182,23 +182,23 @@ impl Ast_node
             // **Wrap only an expression that returns a value.** A `(void)` says "the return value
             // is discarded"; on everything, the reader could no longer tell where that happens. An
             // untyped expression (0) is wrapped, the safer guess.
-            real_id: = c.env.get_real_type(left_node.type_id)
+            real_id: = cg.env.get_real_type(left_node.type_id)
             needs_void: =
                 !calls_statement_intrinsic(left_node) && !sema_type_env.is_void(real_id)
             if needs_void
-                c.s("(void)(")
-            left_node.emit_expr(c)
+                cg.s("(void)(")
+            left_node.emit_expr(cg)
             if needs_void
-                c.s(")")
-            c.s(";\n")
+                cg.s(")")
+            cg.s(";\n")
             return
 
         // Only `(void)(x)` stands for `x = x`, which keeps the variable read: clang warns about the
         // assignment itself (-Wself-assign), a message the user must not get.
         if r.is_self_assignment()
-            c.s("(void)(")
-            left_node.emit_expr(c)
-            c.s(");\n")
+            cg.s("(void)(")
+            left_node.emit_expr(cg)
+            cg.s(");\n")
             return
 
         op_node: = r.get_assign_op()
@@ -209,43 +209,43 @@ impl Ast_node
         // order of the two sides is Lower's (`Operand_order` in lower/order.kspl): where it could
         // show, the value is already a temporary.
         if !op_text.equals("=") && left_node.dest_runs_code()
-            c.assign_tmp_seq += 1
-            seq: = c.assign_tmp_seq
+            cg.assign_tmp_seq += 1
+            seq: = cg.assign_tmp_seq
             // Caution: **Do not use clear_scratch to build a name.** scratch is shared, and a
             // caller can still be borrowing a name from it while this body is emitted.
             // **Take the type from the memory, not the target expression**: a KSPL `I32@` can point
             // at memory genc typed `I32 *`.
-            dst_type: = c.env.strip_const_deep(left_node.type_id)
+            dst_type: = cg.env.strip_const_deep(left_node.type_id)
             dst: = base_core.arena.text().s("*_kspl_dst_\{seq\}").take()
-            c.s("{ ").t(dst_type).s("* _kspl_dst_\{seq\} = &(")
-            left_node.emit_expr(c)
-            c.s("); ")
-            emit_assign_target(c, left_node, dst)
-            emit_assign_tail(c, left_node, dst, op_text, right_node)
-            c.s("; }\n")
+            cg.s("{ ").t(dst_type).s("* _kspl_dst_\{seq\} = &(")
+            left_node.emit_expr(cg)
+            cg.s("); ")
+            emit_assign_target(cg, left_node, dst)
+            emit_assign_tail(cg, left_node, dst, op_text, right_node)
+            cg.s("; }\n")
             return
 
-        left_node.emit_expr(c)
-        emit_assign_tail(c, left_node, "", op_text, right_node)
-        c.s(";\n")
+        left_node.emit_expr(cg)
+        emit_assign_tail(cg, left_node, "", op_text, right_node)
+        cg.s(";\n")
 
-    priv fn emit_if_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_if_stmt(r: Ast_node$@, cg: Genc_ctx$@)
         cond_node: = r.get_if_cond()
         then_block: = r.get_if_then_block()
         else_block: = r.get_if_else_block()
 
-        c.s("if (")
-        cond_node.emit_expr(c)
-        c.s(") ")
+        cg.s("if (")
+        cond_node.emit_expr(cg)
+        cg.s(") ")
 
         if then_block != null
-            then_block.emit(c)
-        c.s("\n")
+            then_block.emit(cg)
+        cg.s("\n")
         if else_block != null
-            c.s("else ")
-            else_block.emit(c)
+            cg.s("else ")
+            else_block.emit(cg)
 
-    priv fn emit_var_decl(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_var_decl(r: Ast_node$@, cg: Genc_ctx$@)
         is_const: = r.kind_id == .k_decl_const
         id_node: = r.get_var_decl_id()
         type_node: = r.get_var_decl_type_node()
@@ -264,50 +264,50 @@ impl Ast_node
         $const_before_type: = is_const
         const_in_declarator: = is_const && type_node.const_goes_in_declarator()
         if is_const && inferred_id != 0
-            const_before_type = type_node.const_goes_before_type(c, inferred_id)
+            const_before_type = type_node.const_goes_before_type(cg, inferred_id)
 
         // Caution: Never put a storage word on a local variable (it would make the local `static`).
-        if c.top_level_var
-            c.s(c.global_word(true))
+        if cg.top_level_var
+            cg.s(cg.global_word(true))
         if const_before_type
-            c.s("const ")
+            cg.s("const ")
 
-        r.emit_attributes(c)
+        r.emit_attributes(cg)
         // A name starting with '_' (generated, or deliberately unused) gets C's warning suppressed.
         if var_id.len > 0 && (var_id.ptr + 0)$ == '_'
-            c.s("KSPL_UNUSED ")
+            cg.s("KSPL_UNUSED ")
 
         is_typed: = type_node != null && type_node.kind_id != .k_empty
         has_init: = expr_node != null && expr_node.kind_id != .k_empty
 
         if is_typed
-            type_node.emit_c_decl(c, var_id, const_in_declarator)
+            type_node.emit_c_decl(cg, var_id, const_in_declarator)
         else
             r.ice_assert(inferred_id != 0, "Genc ICE: Variable type missing.")
-            c.map_c_type_to(inferred_id, c)
-            c.s(" ").nm(var_id)
+            cg.map_c_type_to(inferred_id, cg)
+            cg.s(" ").nm(var_id)
 
         if has_init
-            c.s(" = ")
+            cg.s(" = ")
             // Caution: **Set the flag for a top-level initializer**, a `const`'s and a `$`
             // variable's alike (the reason is at Genc_ctx.const_init_depth). A local variable's
             // initializer is an ordinary expression.
-            if c.top_level_var
-                c.const_init_depth += 1
+            if cg.top_level_var
+                cg.const_init_depth += 1
             // A global's aggregate is plain braces (the reason is at Genc_ctx.brace_init).
-            c.brace_init = c.top_level_var
-            expr_node.emit_expr(c)
-            if c.top_level_var
-                c.const_init_depth -= 1
-            c.s(";\n")
+            cg.brace_init = cg.top_level_var
+            expr_node.emit_expr(cg)
+            if cg.top_level_var
+                cg.const_init_depth -= 1
+            cg.s(";\n")
         else if !is_const
-            c.s(" = ")
-            c.emit_zero_init(inferred_id, r)
-            c.s(";\n")
+            cg.s(" = ")
+            cg.emit_zero_init(inferred_id, r)
+            cg.s(";\n")
         else
-            c.s(";\n")
+            cg.s(";\n")
 
-    priv fn emit_loop_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_loop_stmt(r: Ast_node$@, cg: Genc_ctx$@)
         r.ice_assert(r.children.len >= 5, "emit_loop_stmt: stmt_for must have 5 children")
         init_node: = r.get_for_init()
         cond_node: = r.get_loop_cond()
@@ -316,40 +316,40 @@ impl Ast_node
         has_init: = init_node != null && init_node.kind_id != .k_empty
 
         if has_init
-            c.s("    {\n")
-            init_node.emit(c)
+            cg.s("    {\n")
+            init_node.emit(cg)
             // The init's lines lie between the loop's own directive and its `for`.
-            c.emit_line_directive(r, true)
-        c.s("    for (; ")
+            cg.emit_line_directive(r, true)
+        cg.s("    for (; ")
         if cond_node != null && cond_node.kind_id != .k_empty
-            cond_node.emit_expr(c)
-        c.s("; ")
+            cond_node.emit_expr(cg)
+        cg.s("; ")
 
         if step_node != null && step_node.kind_id != .k_empty
             if step_node.kind_id == .k_stmt_expr && step_node.get_assign_right() != null
                 step_left: = step_node.get_assign_left()
                 if step_node.is_self_assignment()
-                    c.s("(void)(")
-                    step_left.emit_expr(c)
-                    c.s(")")
+                    cg.s("(void)(")
+                    step_left.emit_expr(cg)
+                    cg.s(")")
                 else
                     op_node: = step_node.get_assign_op()
                     op_text: = op_node.text if op_node != null else ""
-                    step_left.emit_expr(c)
-                    emit_assign_tail(c, step_left, "", op_text, step_node.get_assign_right())
+                    step_left.emit_expr(cg)
+                    emit_assign_tail(cg, step_left, "", op_text, step_node.get_assign_right())
             else
-                step_node.emit_expr(c)
-        c.s(") ")
+                step_node.emit_expr(cg)
+        cg.s(") ")
 
         if block_node != null && block_node.kind_id != .k_empty
-            block_node.emit(c)
+            block_node.emit(cg)
         else
-            c.s("{}\n")
+            cg.s("{}\n")
 
         if has_init
-            c.s("    }\n")
+            cg.s("    }\n")
 
-    priv fn emit_switch_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_switch_stmt(r: Ast_node$@, cg: Genc_ctx$@)
         cond_node: = r.get_switch_cond()
         // The switch and its payload bindings write the subject more than once. Anything but a
         // name would come out as broken C such as `switch (.tag)`. So Lower binds it to a
@@ -364,26 +364,26 @@ impl Ast_node
         defer $safe: = cond_slice.c_safe_name()
         // A `Bool` subject is switched on as an `int`: clang warns on a boolean one
         // (-Wswitch-bool).
-        is_bool: = c.env.is_bool(cond_node.type_id)
-        c.s("    switch (").s("(int)" if is_bool else "").s(safe.slice())
+        is_bool: = cg.env.is_bool(cond_node.type_id)
+        cg.s("    switch (").s("(int)" if is_bool else "").s(safe.slice())
 
         // The immutability mark stripped: `r$` of an `r: Self@` carries it (as in sema).
-        enum_id: = c.env.get_clean_real_type(cond_node.type_id)
-        enum_name: = c.env.get_str(enum_id)
+        enum_id: = cg.env.get_clean_real_type(cond_node.type_id)
+        enum_name: = cg.env.get_str(enum_id)
         // Caution: **Name the enum by its type's mangled name**, as its declaration and a variant's
         // construction are. Spelled from its canonical string, an instance whose immutability is
         // dropped (`Pick<|I32|>` of an `enum Pick<|$T|>`) names tags C never declared.
         defer $mangled_enum_name: = Str_builder()
-        c.env.mangle_type_id_to(enum_id, mangled_enum_name)
+        cg.env.mangle_type_id_to(enum_id, mangled_enum_name)
         safe_enum_name: = mangled_enum_name.slice()
 
-        enum_def_ptr: = c.env.get_enum_def(enum_name).unwrap_or(null)
+        enum_def_ptr: = cg.env.get_enum_def(enum_name).unwrap_or(null)
         is_enum: = enum_def_ptr != null
         is_scalar: = is_enum && enum_def_ptr.is_scalar()
 
         if is_enum && !is_scalar
-            c.s(".tag")
-        c.s(") {\n")
+            cg.s(".tag")
+        cg.s(") {\n")
 
         // Lower grouped the arms and resolved each label (group_switch_arms in lower/root.kspl).
         $has_default: = false
@@ -394,19 +394,19 @@ impl Ast_node
             block: = arm.get_arm_block()
             if arm.is_default_arm()
                 has_default = true
-                c.s("    default:\n")
-                block.emit(c)
+                cg.s("    default:\n")
+                block.emit(cg)
                 if !block.block_ends_in_jump()
-                    c.s("        break;\n")
+                    cg.s("        break;\n")
                 continue
             for $k: Sz = 0; k + 1 < arm.children.len; k += 1
-                arm.get_child(k).emit_case_label(c, enum_id, safe_enum_name)
+                arm.get_child(k).emit_case_label(cg, enum_id, safe_enum_name)
             // The body goes inline inside the case's {}, not in a second block.
-            c.s("    {\n")
-            block.emit_block_inline(c)
+            cg.s("    {\n")
+            block.emit_block_inline(cg)
             if !block.block_ends_in_jump()
-                c.s("        break;\n")
-            c.s("    }\n")
+                cg.s("        break;\n")
+            cg.s("    }\n")
         // sema (process_switch_exhaustiveness) accepts an enum or Bool switch without an explicit
         // 'default' only if it covers every value. So this branch is never reached at run time.
         // But a scalar enum is emitted as its base type (`emit_struct_enum_fwd` in
@@ -414,77 +414,77 @@ impl Ast_node
         // for an exhaustive switch, it wrongly concludes "control can reach the function's end" and
         // warns with -Wreturn-type.
         if (is_enum || is_bool) && !has_default
-            c.s("    default: __builtin_unreachable();\n")
-        c.s("    }\n")
-    priv fn emit_case_label(r: Ast_node$@, c: Genc_ctx$@, enum_id: I32, safe_enum_name: U8[]) //<
+            cg.s("    default: __builtin_unreachable();\n")
+        cg.s("    }\n")
+    priv fn emit_case_label(r: Ast_node$@, cg: Genc_ctx$@, enum_id: I32, safe_enum_name: U8[]) //<
         //< One `case` label: the variant Lower resolved (a `case_pattern`), else the value
         if r.kind_id == .k_case_pattern
-            variant: = c.env.variant_at(enum_id, r.ival) catch
+            variant: = cg.env.variant_at(enum_id, r.ival) catch
                 r.ice_panic("genc: a switch label names no variant")
             defer $mangled_variant: = variant.name.mangle_c_identifier()
-            c.s("    case kspl_\{safe_enum_name\}_\{mangled_variant.slice()\}:\n")
+            cg.s("    case kspl_\{safe_enum_name\}_\{mangled_variant.slice()\}:\n")
             return
-        c.s("    case ")
-        r.emit_case_value(c)
-        c.s(":\n")
+        cg.s("    case ")
+        r.emit_case_value(cg)
+        cg.s(":\n")
 
-    priv fn emit_case_value(r: Ast_node$@, c: Genc_ctx$@) //<
+    priv fn emit_case_value(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< A non-enum case label, written as the value sema folded
         //< Caution: **Do not emit a constant's name.** A C `const` object is no integer constant
         //< expression. So `case kspl_f_one:` is refused (gcc -O0 says so, -O2 lets it pass).
-        switch c.sema.try_eval_constexpr_wide(r)
+        switch cg.sema.try_eval_constexpr_wide(r)
         case .some(v)
-            c.s("(").t(r.type_id).s(")")
-            gen_c_literal.emit_folded_i64(c, v)
+            cg.s("(").t(r.type_id).s(")")
+            gen_c_literal.emit_folded_i64(cg, v)
         case .none
-            r.emit_expr(c)
+            r.emit_expr(cg)
 
-    priv fn emit_return_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_return_stmt(r: Ast_node$@, cg: Genc_ctx$@)
         expr_node: = r.get_return_expr()
         if expr_node != null
-            c.s("    return ")
-            expr_node.emit_expr(c)
-            c.s(";\n")
+            cg.s("    return ")
+            expr_node.emit_expr(cg)
+            cg.s(";\n")
         else
-            is_res: = c.env.is_result(c.current_ret_id)
+            is_res: = cg.env.is_result(cg.current_ret_id)
             if is_res
-                c.s("    return ").result_open_to(c.current_ret_id, "ok").s(" };\n")
+                cg.s("    return ").result_open_to(cg.current_ret_id, "ok").s(" };\n")
             else
-                c.s("    return;\n")
+                cg.s("    return;\n")
 
-    priv fn emit_throw_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_throw_stmt(r: Ast_node$@, cg: Genc_ctx$@)
         expr_node: = r.get_throw_expr()
         if expr_node != null
-            is_res: = c.env.is_result(c.current_ret_id)
+            is_res: = cg.env.is_result(cg.current_ret_id)
             if is_res
-                c
+                cg
                     .s("    KSPL_RECORD_TRACE();\n" if r.ival == base_ast_ext.PROPAGATED_ERROR
                     else "    KSPL_START_TRACE();\n")
-                c.s("    return ").result_open_to(c.current_ret_id, "err")
+                cg.s("    return ").result_open_to(cg.current_ret_id, "err")
                     .s(", .payload.err = { .error = ")
-                expr_node.emit_expr(c)
-                c.s(" } };\n")
+                expr_node.emit_expr(cg)
+                cg.s(" } };\n")
             else
-                c.s("    exit(")
-                expr_node.emit_expr(c)
-                c.s(");\n")
+                cg.s("    exit(")
+                expr_node.emit_expr(cg)
+                cg.s(");\n")
 
-    priv fn emit_break_stmt(_r: Ast_node$@, c: Genc_ctx$@)
-        c.s("    break;\n")
-    priv fn emit_continue_stmt(_r: Ast_node$@, c: Genc_ctx$@)
-        c.s("    continue;\n")
+    priv fn emit_break_stmt(_r: Ast_node$@, cg: Genc_ctx$@)
+        cg.s("    break;\n")
+    priv fn emit_continue_stmt(_r: Ast_node$@, cg: Genc_ctx$@)
+        cg.s("    continue;\n")
 
-    priv fn emit_goto_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_goto_stmt(r: Ast_node$@, cg: Genc_ctx$@)
         label_node: = r.get_goto_label()
         if label_node != null
-            c.s("    goto \{label_node.text\};\n")
+            cg.s("    goto \{label_node.text\};\n")
 
-    priv fn emit_label_stmt(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_label_stmt(r: Ast_node$@, cg: Genc_ctx$@)
         label_node: = r.get_goto_label()
         if label_node != null
-            c.s("    \{label_node.text\}:\n        ;\n")
+            cg.s("    \{label_node.text\}:\n        ;\n")
 
-    priv fn emit_fallback_stmt(r: Ast_node$@, _c: Genc_ctx$@)
+    priv fn emit_fallback_stmt(r: Ast_node$@, _cg: Genc_ctx$@)
         r.ice_panic("Lowering missed: 'stmt_fallback' reached Genc")
-    priv fn emit_defer_stmt(r: Ast_node$@, _c: Genc_ctx$@)
+    priv fn emit_defer_stmt(r: Ast_node$@, _cg: Genc_ctx$@)
         r.ice_panic("Lowering missed: 'stmt_defer' reached Genc")

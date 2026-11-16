@@ -38,14 +38,14 @@ priv struct Stat //< one file's breakdown
     trail: Sz
 
 impl Stat //< adding one file's breakdown into a running total
-    fn add(r: Self$@, o: Stat)
-        r.files += o.files
-        r.marked += o.marked
-        r.lines += o.lines
-        r.body += o.body
-        r.comment += o.comment
-        r.blank += o.blank
-        r.trail += o.trail
+    fn add(r: Self$@, other: Stat)
+        r.files += other.files
+        r.marked += other.marked
+        r.lines += other.lines
+        r.body += other.body
+        r.comment += other.comment
+        r.blank += other.blank
+        r.trail += other.trail
 
 priv fn stat_file(path: U8[], marker: U8[], block: Block_marks): Stat //<
     //< The counting follows `str.lines` (an unterminated last line counts too, unlike `wc -l`)
@@ -92,21 +92,21 @@ priv fn bump_ext(rows: List<|Ext_row|>$@, ext: U8[], st: Stat)
 
 priv const HEADER: U8[] = "   lines    body comment   blank    cmt%   trail  "
 
-priv fn write_pct(b: Str_builder$@, st: Stat) //< the comment rate [%] to one decimal place
+priv fn write_pct(out: Str_builder$@, st: Stat) //< the comment rate [%] to one decimal place
     //< Caution: **Leave blank lines out of the denominator**, or it changes with a writing habit.
     den: = st.comment + st.body
     if st.marked == 0 || den == 0
-        b.s("       -        -")
+        out.s("       -        -")
         return
     permille: = st.comment * 1000 / den
-    b.s("\{permille / 10:6\}.\{permille % 10\}%\{st.trail:8\}")
+    out.s("\{permille / 10:6\}.\{permille % 10\}%\{st.trail:8\}")
 
-priv fn write_cols(b: Str_builder$@, st: Stat) //< writes only the number columns
+priv fn write_cols(out: Str_builder$@, st: Stat) //< writes only the number columns
     //< **The caller writes the name after it** (a string is built only as a chain of writes).
-    b.s("\{st.lines:8\}\{st.body:8\}")
-    b.s("\{st.comment:8\}\{st.blank:8\}")
-    write_pct(b, st)
-    b.s("  ")
+    out.s("\{st.lines:8\}\{st.body:8\}")
+    out.s("\{st.comment:8\}\{st.blank:8\}")
+    write_pct(out, st)
+    out.s("  ")
 
 priv const GIT_TIMEOUT_MS: I32 = 60000 //< how long one `git ls-files` may run
 priv const GIT_LIST_CAP: Sz = 1 << 24 //< the most of a list kept; the repository's is far under it
@@ -122,7 +122,7 @@ priv fn git_list(args: U8[][], arena: Arena$@): U8[]!fs.Fs_error //< what `git <
             throw .operation_failed
     return listed
 
-priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|Stat|>$@,
+priv fn write_files(out: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|Stat|>$@,
     arena: Arena$@): Void!fs.Fs_error //<
         //< 1. The line count per file
         //< Grouped by top-level folder, and by package under `lib/`, with a subtotal after each
@@ -137,7 +137,7 @@ priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|Stat
     $total: = Stat::{}
     $gen: = Stat::{}
     $top: U8[] = ""
-    b.s("== 1. per file ==\n\n\{HEADER\}path\n")
+    out.s("== 1. per file ==\n\n\{HEADER\}path\n")
     for path in files
         marker: = path_kind.comment_marker(path)
         st: = stat_file(path, marker, path_kind.block_marks(path))
@@ -163,51 +163,51 @@ priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|Stat
         // consecutive.
         if !cur.equals(top)
             if top.len > 0
-                write_cols(b, sub)
-                b.s("\{top\}/ subtotal\n\n")
+                write_cols(out, sub)
+                out.s("\{top\}/ subtotal\n\n")
             top = cur
             sub = Stat::{}
-        write_cols(b, st)
-        b.s("\{path\}\n")
+        write_cols(out, st)
+        out.s("\{path\}\n")
         sub.add(st)
     if top.len > 0
-        write_cols(b, sub)
-        b.s("\{top\}/ subtotal\n\n")
-    b.s(rootb.slice())
-    write_cols(b, root)
-    b.s("(files directly under the root) subtotal\n\n")
-    write_cols(b, total)
-    b.s("total (hand-written)\n")
-    write_cols(b, gen)
-    b.s("ksplc/seed.c (generated. not in the total above)\n\n")
+        write_cols(out, sub)
+        out.s("\{top\}/ subtotal\n\n")
+    out.s(rootb.slice())
+    write_cols(out, root)
+    out.s("(files directly under the root) subtotal\n\n")
+    write_cols(out, total)
+    out.s("total (hand-written)\n")
+    write_cols(out, gen)
+    out.s("ksplc/seed.c (generated. not in the total above)\n\n")
 
-priv fn write_exts(b: Str_builder$@, exts: List<|Ext_row|>@, arena: Arena$@) //<
+priv fn write_exts(out: Str_builder$@, exts: List<|Ext_row|>@, arena: Arena$@) //<
     //< 2. The total per extension
     //< **The rate is shown only for extensions that have a comment mark** (`.md`'s 0% would be
     //< misread as "no comments").
-    b.s("== 2. per extension ==\n\n   files\{HEADER\}ext\n")
-    sorted: = exts.order_by(fn(x: Ext_row@, y: Ext_row@; ): I32 {
-        return I32::(y.st.lines - x.st.lines);
+    out.s("== 2. per extension ==\n\n   files\{HEADER\}ext\n")
+    sorted: = exts.order_by(fn(left: Ext_row@, right: Ext_row@; ): I32 {
+        return I32::(right.st.lines - left.st.lines);
     }, arena)
     for e in sorted
-        b.s("\{e.st.files:8\}")
-        write_cols(b, e.st)
-        b.s("\{e.ext\}\n")
-    b.c('\n')
+        out.s("\{e.st.files:8\}")
+        write_cols(out, e.st)
+        out.s("\{e.ext\}\n")
+    out.c('\n')
 
-priv fn write_roles(b: Str_builder$@, roles: List<|Stat|>@) //<
+priv fn write_roles(out: Str_builder$@, roles: List<|Stat|>@) //<
     //< 3. Functional code against test code
     //< **Compare the `body` column**: comments and blank lines change with writing habits. The
     //< ratio is test code's body lines per 100 of functional code's.
-    b.s("== 3. per role ==\n\n\{HEADER\}role\n")
+    out.s("== 3. per role ==\n\n\{HEADER\}role\n")
     for role in path_kind.Role.variants()
-        write_cols(b, roles[Sz::role])
-        b.s("\{role.variant_name()\}\n")
+        write_cols(out, roles[Sz::role])
+        out.s("\{role.variant_name()\}\n")
     shipped: = roles[Sz::path_kind.Role.functional].body
     tests: = roles[Sz::path_kind.Role.test].body
     if shipped > 0
-        b.s("\ntest body lines per 100 functional body lines: \{tests * 100 / shipped\}\n")
-    b.c('\n')
+        out.s("\ntest body lines per 100 functional body lines: \{tests * 100 / shipped\}\n")
+    out.c('\n')
 
 priv fn write_stat(out_dir: U8[], arena: Arena$@): Void!fs.Fs_error
     defer $b: = Str_builder()

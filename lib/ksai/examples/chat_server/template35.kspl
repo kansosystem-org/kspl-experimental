@@ -105,44 +105,44 @@ priv fn last_query(msgs: List<|Message|>@): Sz!U8[] //< the template's `ns.last_
                 return i - 1
     throw "No user query found in messages."
 
-priv fn assistant(p: Prompt$@, m: Message@, stripped: U8[], after_query: Bool, marks: Marks,
-    arena: Arena$@): Void!U8[] //<
+priv fn assistant(prompt: Prompt$@, message: Message@, stripped: U8[], after_query: Bool,
+    marks: Marks, arena: Arena$@): Void!U8[] //<
         //< An assistant message: its thinking after the last question, its text, then its calls
         //< A `</think>` in the text splits the thinking from it, where no `reasoning_content`
         //< comes.
     $content: = stripped
     $reasoning: U8[] = ""
-    if given: = m.reasoning
+    if given: = message.reasoning
         reasoning = given
     else if content.find_str(template.THINK_END_TEXT).is_some()
         before: = template
             .rstrip_nl(template.before_first(content, template.THINK_END_TEXT))
         reasoning = template.lstrip_nl(template.after_last(before, template.THINK_TEXT))
         content = template.lstrip_nl(template.after_last(content, template.THINK_END_TEXT))
-    p.mark(marks.im_start).s("assistant\n")
+    prompt.mark(marks.im_start).s("assistant\n")
     if after_query
-        p.mark(marks.think_open).s("\n").s(py_strip(reasoning)).s("\n").mark(marks.think_close)
-            .s("\n\n")
-    p.s(content)
-    for k in Range.asc(m.calls.len)
-        c: = m.calls.get(k)
+        prompt.mark(marks.think_open).s("\n").s(py_strip(reasoning)).s("\n")
+            .mark(marks.think_close).s("\n\n")
+    prompt.s(content)
+    for k in Range.asc(message.calls.len)
+        c: = message.calls.get(k)
         if k > 0
-            p.s("\n")
+            prompt.s("\n")
         else if py_strip(content).len > 0
-            p.s("\n\n")
-        p.mark(marks.call_open).s("\n<function=").s(c.name).s(">\n")
+            prompt.s("\n\n")
+        prompt.mark(marks.call_open).s("\n<function=").s(c.name).s(">\n")
         args: = arguments(c.arguments, arena)!
         for arg in args.obj_members()
             value: = arg.val
-            p.s("<parameter=").s(arg.key).s(">\n")
+            prompt.s("<parameter=").s(arg.key).s(">\n")
             switch value
             case .obj_val, .array_val
-                p.json(value)
+                prompt.json(value)
             default
-                py_str(value, p.text)
-            p.s("\n</parameter>\n")
-        p.s("</function>\n").mark(marks.call_close)
-    p.mark(marks.im_end).s("\n")
+                py_str(value, prompt.text)
+            prompt.s("\n</parameter>\n")
+        prompt.s("</function>\n").mark(marks.call_close)
+    prompt.mark(marks.im_end).s("\n")
 
 priv fn arguments(given: json.Value, arena: Arena$@): json.Value!U8[] //<
     //< A call's arguments as an object, as `llama-server` hands them to the template
@@ -153,10 +153,10 @@ priv fn arguments(given: json.Value, arena: Arena$@): json.Value!U8[] //<
         throw "Failed to parse tool call arguments as JSON."
     return doc.val
 
-fn py_str(v: json.Value, out: Str_builder$@) //< a value as the template's `|string` writes it
+fn py_str(value: json.Value, out: Str_builder$@) //< a value as the template's `|string` writes it
     //< Python's `str`: a text as it is, `True`, `False`, `None`, and a float's shortest form,
     //< with an exponent below 1e-4 and from 1e16 up.
-    switch v
+    switch value
     case .str_val(s)
         out.s(s)
     case .bool_val(b)
@@ -166,16 +166,16 @@ fn py_str(v: json.Value, out: Str_builder$@) //< a value as the template's `|str
     case .float_val(f)
         py_float(f, out)
     default
-        v.dump(out)
+        value.dump(out)
 
-priv fn py_float(f: F64, out: Str_builder$@) //< a float as Python's `repr` writes it
+priv fn py_float(number: F64, out: Str_builder$@) //< a float as Python's `repr` writes it
     //< The shortest digits that read back are JSON's (`dump`); only where to put the point
     //< differs. Python writes `1e-05` and `1e+16` where JSON writes `0.00001` and
     //< `10000000000000000.0`.
     defer $b: = Str_builder()
-    json.Value.float_val(f).dump(b@)
+    json.Value.float_val(number).dump(b@)
     text: = b.slice()
-    mag: = -f if f < 0.0 else f
+    mag: = -number if number < 0.0 else number
     if mag == 0.0 || (mag >= 1.0e-4 && mag < 1.0e16) || text.equals("null")
         out.s(text)
         return
@@ -214,7 +214,7 @@ priv fn py_float(f: F64, out: Str_builder$@) //< a float as Python's `repr` writ
     for n > 1 && digits.slice()[n - 1] == '0'
         n -= 1
     d: = digits.slice().sub(0, n)
-    if f < 0.0
+    if number < 0.0
         out.c('-')
     out.c(d[0])
     if d.len > 1
@@ -226,35 +226,36 @@ priv fn py_float(f: F64, out: Str_builder$@) //< a float as Python's `repr` writ
         out.c('0')
     out.s("\{abs\}")
 
-priv fn py_strip(s: U8[]): U8[] //< `s.strip()`: Python's white space taken off both ends
+priv fn py_strip(text: U8[]): U8[] //< `text.strip()`: Python's white space taken off both ends
     $start: Sz = 0
-    for start < s.len
-        n: = space_len(s, start)
+    for start < text.len
+        n: = space_len(text, start)
         if n == 0
             break
         start += n
-    $end: = s.len
+    $end: = text.len
     for end > start
         $first: = end - 1
-        for first > start && (s[first] & 0xC0U8) == 0x80U8
+        for first > start && (text[first] & 0xC0U8) == 0x80U8
             first -= 1
-        if space_len(s, first) != end - first
+        if space_len(text, first) != end - first
             break
         end = first
-    return s.sub(start, end - start)
+    return text.sub(start, end - start)
 
-priv fn space_len(s: U8[], at: Sz): Sz //< the bytes of the white space at `at`, or 0 for none
+priv fn space_len(text: U8[], at: Sz): Sz //< the bytes of the white space at `at`, or 0 for none
     //< Python's `str.isspace`: ASCII's six and 0x1C to 0x1F, U+0085, U+00A0, U+1680, U+2000 to
     //< U+200A, U+2028, U+2029, U+202F, U+205F and U+3000.
-    b: = s[at]
+    b: = text[at]
     if b == ' ' || (b >= 0x09U8 && b <= 0x0DU8) || (b >= 0x1CU8 && b <= 0x1FU8)
         return 1
-    if b == 0xC2U8 && at + 1 < s.len && (s[at + 1] == 0x85U8 || s[at + 1] == 0xA0U8)
+    if b == 0xC2U8 && at + 1 < text.len &&
+        (text[at + 1] == 0x85U8 || text[at + 1] == 0xA0U8)
         return 2
-    if at + 2 >= s.len
+    if at + 2 >= text.len
         return 0
-    c1: = s[at + 1]
-    c2: = s[at + 2]
+    c1: = text[at + 1]
+    c2: = text[at + 2]
     if b == 0xE1U8 && c1 == 0x9AU8 && c2 == 0x80U8
         return 3
     if b == 0xE2U8 && c1 == 0x80U8 &&

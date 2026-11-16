@@ -71,13 +71,14 @@ function ksmdFilter(ks) {
   // text sorts by day; a date in a column with a date format carries that text third.
   const shownText = (v) => (v.length > 2 ? v[2] : v.length > 1 ? String(v[1]) : "");
   // The text without the column's format: a number in a column with a format carries it fourth.
-  const plainText = (v) => (v[0] === 1 && v.length > 3 ? v[3] : shownText(v));
-  const group = (v) => [5, 0, 2, 4, 3, 1][v[0]];
+  const plainText = (v) => (v[0] === ks.CELL.NUMBER && v.length > 3 ? v[3] : shownText(v));
+  const ORDER = [ks.CELL.NUMBER, ks.CELL.DATE, ks.CELL.TEXT, ks.CELL.BOOL, ks.CELL.ERROR, ks.CELL.EMPTY];
+  const group = (v) => ORDER.indexOf(v[0]);
   function compare(a, b) {
     if (group(a) !== group(b)) return group(a) - group(b);
-    if (a[0] === 1) return a[1] - b[1];
+    if (a[0] === ks.CELL.NUMBER) return a[1] - b[1];
     // A date sorts by its day, as `2026-10-23`: a cell's own format can show it otherwise.
-    if (a[0] === 5) return a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0;
+    if (a[0] === ks.CELL.DATE) return a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0;
     const x = shownText(a).toLowerCase();
     const y = shownText(b).toLowerCase();
     return x < y ? -1 : x > y ? 1 : 0;
@@ -92,7 +93,7 @@ function ksmdFilter(ks) {
     if (cond.out) return !cond.out.has(text);
     const arg = cond.arg.toLowerCase();
     const number = Number(cond.arg);
-    const numeric = v[0] === 1 && cond.arg.trim() !== "" && Number.isFinite(number);
+    const numeric = v[0] === ks.CELL.NUMBER && cond.arg.trim() !== "" && Number.isFinite(number);
     switch (cond.op) {
       case "is": return text === arg;
       case "not": return text !== arg;
@@ -250,7 +251,7 @@ function ksmdFilter(ks) {
     // The text a search matches: a day by its whole date, `2026-01-15`, or as its format shows it.
     const searched = (key) => {
       const v = distinct.get(key);
-      if (v[0] === 5) return shownText(v) === v[1] ? v[1] : `${v[1]} ${shownText(v)}`.toLowerCase();
+      if (v[0] === ks.CELL.DATE) return shownText(v) === v[1] ? v[1] : `${v[1]} ${shownText(v)}`.toLowerCase();
       return key === "" ? "(blanks)" : key;
     };
     const matches = (q, key) => q === "" || searched(key).includes(q);
@@ -280,10 +281,10 @@ function ksmdFilter(ks) {
       boxes.length = 0;
       for (const node of Array.from(list.children)) if (node !== allBox) node.remove();
       const listed = found.slice(0, FILTER_LIST_CAP);
-      const tree = dateTree(listed.filter(([, v]) => v[0] === 5), valueBox);
+      const tree = dateTree(listed.filter(([, v]) => v[0] === ks.CELL.DATE), valueBox);
       if (tree) list.appendChild(tree);
       for (const [key, v] of listed) {
-        if (v[0] !== 5) list.appendChild(valueBox(key, v, key === "" ? "(Blanks)" : shownText(v)));
+        if (v[0] !== ks.CELL.DATE) list.appendChild(valueBox(key, v, key === "" ? "(Blanks)" : shownText(v)));
       }
       capped.hidden = found.length <= FILTER_LIST_CAP;
       capped.textContent = `Only the first ${FILTER_LIST_CAP.toLocaleString("en")} of ${found.length.toLocaleString("en")} values are listed. Search to find the others.`;

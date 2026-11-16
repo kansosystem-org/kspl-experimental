@@ -21,14 +21,14 @@ import "std/math"
 //   lg.append(kind_sample, "…") catch { … };
 //   $it: = lg.iter(); for it.next() { … }        // oldest first
 //   n: = lg.last(kind_policy, U8$[]::dst)?;     // the newest one of that kind
-pub const HEADER_SIZE: Sz = 8 //< the size of a record's header, in bytes.
+pub const HEADER_SIZE: Sz = 8 //< the size of a record's header, in bytes
 // Where each field sits in a record's header (the layout is in lib/ksdb/docs/DESIGN-storage.md).
 priv const LEN_AT: Sz = 0 //< the content's length (U16)
 priv const KIND_AT: Sz = 2 //< the record's kind (U16)
 priv const CRC_AT: Sz = 4 //< the CRC (U32) of the header before it and of the content
 priv const CRC_SEED: U32 = 0xffffffff //< CRC-32 starts from this and is finished by xoring it
 
-pub const MAX_PAYLOAD: Sz = 0xfffe //< the largest content one record can hold.
+pub const MAX_PAYLOAD: Sz = 0xfffe //< the largest content one record can hold
     //< `0xFFFF` marks an empty slot, so it cannot be a content length.
 priv const EMPTY_LEN: U16 = 0xffff //< the `len` an erased slot reads as (nothing is written yet)
 priv const MAX_KEPT: Sz = 8 //< how many kinds `reset_keeping` can keep
@@ -39,11 +39,11 @@ priv const CHUNK_SIZE: Sz = 64 //< how many bytes are read at a time
     //< only a few kilobytes.
 
 pub enum Ksdb_error //< why an append or a read failed
-    full //< the medium has no room left; the log only appends, so this lasts until a `reset`.
-    too_large //< the content is longer than `MAX_PAYLOAD`, or does not fit in one sector.
-    write_failed //< the medium refused a write or an erase.
-    too_small //< the `dst` passed to `last` or `Cursor.read` is shorter than the content.
-    not_found //< no record of that kind exists.
+    full //< the medium has no room left; the log only appends, so this lasts until a `reset`
+    too_large //< the content is longer than `MAX_PAYLOAD`, or does not fit in one sector
+    write_failed //< the medium refused a write or an erase
+    too_small //< the `dst` passed to `last` or `Cursor.read` is shorter than the content
+    not_found //< no record of that kind exists
         //< Caution: **Do not report "there is none" as length 0.** A record with empty content is
         //< legitimate (see the caution on `Cursor`'s `started`). An empty record would then read as
         //< "there is none": the writer wrote it, cannot read it back, and nothing shows why.
@@ -53,10 +53,10 @@ pub struct Log //< an append-only log on one `Store` that can be read again afte
     // The position to write next. **`open` has checked that everything from here on is erased.**
     priv tail: Sz
 
-priv fn align4(n: Sz): Sz //< rounds up to a multiple of 4
+priv fn align4(size: Sz): Sz //< rounds up to a multiple of 4
     //< Caution: **Keep record boundaries aligned.** Otherwise the header's 2-byte integer sits at
     //< an odd address, and a target that reads it directly faults.
-    return (n + 3) - ((n + 3) % 4)
+    return (size + 3) - ((size + 3) % 4)
 
 priv fn record_span(payload_len: Sz): Sz //<
     //< One record's length: the header, the content and the padding
@@ -353,7 +353,7 @@ pub struct Cursor //< a walk over the records, oldest first, kept separate from 
     //< **It looks only up to `end`, the range `open` checked**: a half-written record can lie
     //< beyond it, so the scan must not go further.
     priv store: Store
-    pub at: Sz //< the start of the record it points at now.
+    pub at: Sz //< the start of the record it points at now
         //< `Log.open` reads it to find the end of the last record.
     priv end: Sz
     // Whether it has advanced to the first record.

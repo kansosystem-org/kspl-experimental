@@ -112,20 +112,20 @@ priv const FLUSH_GAP_US: I64 = 200000I64 //<
 // How one connection is driven
 // ==========================================
 
-priv fn reject_parse(c: conn.Conn$@, error: http.Http_error) //<
+priv fn reject_parse(connection: conn.Conn$@, error: http.Http_error) //<
     //< one response for a malformed request
     switch error
     case .incomplete {}
     case .head_too_large
-        conn.queue_error(c, 431)
+        conn.queue_error(connection, 431)
     case .body_too_large
-        conn.queue_error(c, 413)
+        conn.queue_error(connection, 413)
     case .chunked_request
         // **Asked for a length, not refused outright**: curl and Python resend with one, and a
         // person reading the answer learns what to change.
-        conn.queue_error(c, 411, "", false, CHUNKED_WHY)
+        conn.queue_error(connection, 411, "", false, CHUNKED_WHY)
     default
-        conn.queue_error(c, 400)
+        conn.queue_error(connection, 400)
 
 // Why a chunked request gets a 411, in its body. **A request is read by its length alone**
 // ("Chunks are read in a response only" in `std/docs/DESIGN-system.md`): a chunked one is the
@@ -133,7 +133,7 @@ priv fn reject_parse(c: conn.Conn$@, error: http.Http_error) //<
 priv const CHUNKED_WHY: U8[] =
     "Send the body with a Content-Length: this server does not read a request body sent in chunks."
 
-priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx@): Bool //<
+priv fn accept_head(connection: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx@): Bool //<
     //< checks before buffering a body
     if !ctx.is_local()
         return true
@@ -143,7 +143,7 @@ priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx@): Bool /
     if !static.names_this_server(req, target)
         status = 403
     else if !api.authorized(req, ctx.token)
-        decoded: = url.decode_component(target.path, c.arena) catch target.path
+        decoded: = url.decode_component(target.path, connection.arena) catch target.path
         page: =
             !is_api && (req.method.equals("GET") || req.method.equals("HEAD")) &&
             static.asks_for_page(decoded) && req.body_length == 0
@@ -152,92 +152,94 @@ priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx@): Bool /
     if status == 0
         return true
     if is_api
-        api.queue_json_error(c, status)
+        api.queue_json_error(connection, status)
     else
-        conn.queue_error(c, status)
+        conn.queue_error(connection, status)
     return false
 
-priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
+priv fn conn_build(connection: conn.Conn$@, ctx: conn.Ctx$@) //<
     //< Builds the response to the next complete request in `inbuf`
     //< Caution: Do not move on to the next request until `outbuf` is empty, or two responses mix.
-    if c.outbuf.len > 0 || c.inbuf.len == 0
+    if connection.outbuf.len > 0 || connection.inbuf.len == 0
         return
-    if c.need == 0 && !skip_blank_lines(c)
+    if connection.need == 0 && !skip_blank_lines(connection)
         return
     // Caution: **Parse only once there is something new to decide.** Parsed from the start on
     // every read, a request trickling in a byte at a time costs its length squared.
-    if c.inbuf.len < c.need || (c.need == 0 && !head_decided(c))
+    if connection.inbuf.len < connection.need ||
+        (connection.need == 0 && !head_decided(connection))
         return
-    base: = c.arena.save()
-    c.answers_head = false
-    if c.need == 0
+    base: = connection.arena.save()
+    connection.answers_head = false
+    if connection.need == 0
         head: =
-            http.parse_request_head(c.inbuf.slice(), body_limit(ctx), c.arena) catch e
-                reject_parse(c, e)
-                c.arena.restore(base)
+            http.parse_request_head(connection.inbuf.slice(), body_limit(ctx), connection.arena)
+            catch e
+                reject_parse(connection, e)
+                connection.arena.restore(base)
                 return
-        c.answers_head = head.method.equals("HEAD")
+        connection.answers_head = head.method.equals("HEAD")
         // **Only HTTP/1.x is spoken here.** A request naming 2.0 or 3.0 in its line is not
         // read as 1.1, which it is not (RFC 9110 §15.6.6).
         if head.version[5] != '1'
-            conn.queue_error(c, 505)
-            c.arena.restore(base)
+            conn.queue_error(connection, 505)
+            connection.arena.restore(base)
             return
-        if !accept_head(c, head, ctx)
-            c.arena.restore(base)
+        if !accept_head(connection, head, ctx)
+            connection.arena.restore(base)
             return
-        c.need = head.consumed + head.body_length
-        if c.inbuf.len < c.need && waits_for_continue(head)
+        connection.need = head.consumed + head.body_length
+        if connection.inbuf.len < connection.need && waits_for_continue(head)
             // Caution: **Ask for a body only where it would be taken.** Asked for, a body a 405
             // or a 404 then refuses comes in full, up to the cap, for nothing.
             if !static.takes_method(conn.split_target(head.target), head.method, ctx)
-                refuse_early(c, head, ctx)
-                c.arena.restore(base)
+                refuse_early(connection, head, ctx)
+                connection.arena.restore(base)
                 return
-            c.outbuf.s(CONTINUE)
-        c.arena.restore(base)
-        if c.inbuf.len < c.need
+            connection.outbuf.s(CONTINUE)
+        connection.arena.restore(base)
+        if connection.inbuf.len < connection.need
             return
     req: =
-        http.parse_request(c.inbuf.slice(), body_limit(ctx), c.arena) catch e
-            reject_parse(c, e)
-            c.arena.restore(base)
+        http.parse_request(connection.inbuf.slice(), body_limit(ctx), connection.arena) catch e
+            reject_parse(connection, e)
+            connection.arena.restore(base)
             return
-    c.answers_head = req.method.equals("HEAD")
-    static.queue_for_request(c, req, ctx, true)
+    connection.answers_head = req.method.equals("HEAD")
+    static.queue_for_request(connection, req, ctx, true)
     // Caution: Drop only what the finished parse used. Emptied completely, the start of the next
     // request that came in the same read is lost.
-    c.inbuf.drop_prefix(req.consumed)
+    connection.inbuf.drop_prefix(req.consumed)
     // What is left is the next request, already arriving.
-    c.need = 0
-    c.head_from = 0
-    c.request_since_us = sys.mono_us() if c.inbuf.len > 0 else 0I64
+    connection.need = 0
+    connection.head_from = 0
+    connection.request_since_us = sys.mono_us() if connection.inbuf.len > 0 else 0I64
     // The response is in `outbuf` (on the heap) by now. Without the rewind, a keep-alive
     // connection's arena grows with every request.
-    c.arena.restore(base)
+    connection.arena.restore(base)
 
-priv fn skip_blank_lines(c: conn.Conn$@): Bool //<
+priv fn skip_blank_lines(connection: conn.Conn$@): Bool //<
     //< Drops the empty lines before a request line; whether anything is left to read
     //< RFC 9112 §2.2 asks a server to ignore at least one: a client may end a body with an extra
     //< CRLF, which then stands before the next request. **Every one is dropped**, as nginx does.
-    s: = c.inbuf.slice()
+    s: = connection.inbuf.slice()
     $lead: Sz = 0
     for lead + 1 < s.len && s[lead] == '\r' && s[lead + 1] == '\n'
         lead += 2
     if lead > 0
-        c.inbuf.drop_prefix(lead)
-        c.head_from = 0
-    return c.inbuf.len > 0
+        connection.inbuf.drop_prefix(lead)
+        connection.head_from = 0
+    return connection.inbuf.len > 0
 
-priv fn refuse_early(c: conn.Conn$@, head: http.Request$@, ctx: conn.Ctx$@) //<
+priv fn refuse_early(connection: conn.Conn$@, head: http.Request$@, ctx: conn.Ctx$@) //<
     //< Answers a request waiting to send its body with the refusal it would get, then closes
     //< Its body never comes, so where the next request starts is not known: the connection closes,
     //< and what still arrives is read and thrown away (`conn.Conn.lingering_since_us`).
-    static.queue_for_request(c, head, ctx, false)
-    c.inbuf.clear()
-    c.need = 0
-    c.head_from = 0
-    c.request_since_us = 0I64
+    static.queue_for_request(connection, head, ctx, false)
+    connection.inbuf.clear()
+    connection.need = 0
+    connection.head_from = 0
+    connection.request_since_us = 0I64
 
 priv const CONTINUE: U8[] = "HTTP/1.1 100 Continue\r\n\r\n" //<
     //< The interim answer that lets a client waiting on `Expect: 100-continue` send its body
@@ -255,15 +257,15 @@ priv fn waits_for_continue(head: http.Request@): Bool //<
             return true
     return false
 
-priv fn head_decided(c: conn.Conn$@): Bool //<
+priv fn head_decided(connection: conn.Conn$@): Bool //<
     //< Whether `inbuf` holds what decides its head: its end, a line break it refuses, or its cap
     //< The search resumes where the last one stopped (`head_from`), so a head arriving a byte at a
     //< time is searched once. `http.parse_request` refuses a bare LF or CR, so it decides
     //< too. Waited past, it would hold the client until its time is up rather than answer 400.
-    s: = c.inbuf.slice()
+    s: = connection.inbuf.slice()
     if s.len > http.MAX_HEAD_BYTES
         return true
-    $i: = c.head_from
+    $i: = connection.head_from
     for i < s.len
         if s[i] == '\n' && (i == 0 || s[i - 1] != '\r')
             return true
@@ -273,33 +275,35 @@ priv fn head_decided(c: conn.Conn$@): Bool //<
             return true
         i += 1
     // The last byte is looked at again: a CR there is decided by what follows it.
-    c.head_from = s.len - 1
+    connection.head_from = s.len - 1
     return false
 
-priv fn conn_send(c: conn.Conn$@, lg: Log$@): Bool //< sends as much of `outbuf` as can be sent
+priv fn conn_send(connection: conn.Conn$@, lg: Log$@): Bool //<
+    //< sends as much of `outbuf` as can be sent
     //< False means close.
     // Caution: **Send a file's head with the start of its body, in one write.** Written alone, the
     // head waits for its ACK before the body may go (Nagle's rule), and the client delays that ACK
     // by about 40 ms: every file on a kept connection then took 40 ms.
-    if c.sent == 0 && c.file_left > 0 && c.outbuf.len < IO_CHUNK
-        if !refill_from_file(c, IO_CHUNK - c.outbuf.len)
+    if connection.sent == 0 && connection.file_left > 0 && connection.outbuf.len < IO_CHUNK
+        if !refill_from_file(connection, IO_CHUNK - connection.outbuf.len)
             return false
     $refills: Sz = 0
     for
-        for c.sent < c.outbuf.len
-            rest: = c.outbuf.slice().sub(c.sent, c.outbuf.len - c.sent)
+        for connection.sent < connection.outbuf.len
+            rest: = connection.outbuf.slice()
+                .sub(connection.sent, connection.outbuf.len - connection.sent)
             n: =
-                https.write_some(c, rest.sub(0, IO_CHUNK) if rest.len > IO_CHUNK else rest, lg)
-                catch e
+                https.write_some(connection,
+                rest.sub(0, IO_CHUNK) if rest.len > IO_CHUNK else rest, lg) catch e
                     return e == https.Io_end.wait // wait for writable, or close
-            c.sent += n
+            connection.sent += n
             conn.stats.writes += 1I64
-            c.moved_us = sys.mono_us()
-        c.outbuf.clear()
-        c.sent = 0
-        if c.file_left == 0
+            connection.moved_us = sys.mono_us()
+        connection.outbuf.clear()
+        connection.sent = 0
+        if connection.file_left == 0
             break
-        if !refill_from_file(c, IO_CHUNK)
+        if !refill_from_file(connection, IO_CHUNK)
             return false
         // Caution: **Cap the chunks per notification**, or one fast download makes everyone else
         // wait. **Stop with a chunk queued**: an empty `outbuf` is not watched for writable, so
@@ -307,135 +311,138 @@ priv fn conn_send(c: conn.Conn$@, lg: Log$@): Bool //< sends as much of `outbuf`
         refills += 1
         if refills >= MAX_READ_ROUNDS
             return true
-    if !c.close_after_send
+    if !connection.close_after_send
         return true
     // **TLS ends with its close_notify**, sent before the sending side closes. A peer that
     // half-closed gets it too: it is still reading the answer. Close once it has gone.
-    if https.close_notify(c)
+    if https.close_notify(connection)
         return true
     // A peer that closed its sending side has nothing left to drain.
-    if c.peer_done
+    if connection.peer_done
         return false
     // Close the sending side and read on until the peer closes (`conn.Conn.lingering_since_us`).
-    c.stream.shut_write() catch
+    connection.stream.shut_write() catch
         return false
-    c.lingering_since_us = sys.mono_us()
-    c.inbuf.clear()
+    connection.lingering_since_us = sys.mono_us()
+    connection.inbuf.clear()
     return true
 
-priv fn refill_from_file(c: conn.Conn$@, room: Sz): Bool //<
+priv fn refill_from_file(connection: conn.Conn$@, room: Sz): Bool //<
     //< Moves the file's next chunk, at most `room` bytes, into `outbuf`
     //< False means close: the read failed, or the file ended before the length the head named (it
     //< shrank since the stat). **The client then sees the connection close short**, which tells it
     //< the body is cut. Padding it out would hand over bytes that are not the file.
     $chunk: U8[IO_CHUNK] = ::{}
-    want: = math.min(c.file_left, math.min(room, IO_CHUNK))
-    n: = c.file.read(U8$[]::{ .ptr = chunk[0]@, .len = want }) catch _e
+    want: = math.min(connection.file_left, math.min(room, IO_CHUNK))
+    n: = connection.file.read(U8$[]::{ .ptr = chunk[0]@, .len = want }) catch _e
         return false
     if n == 0
         return false
-    c.outbuf.s(U8[]::{ .ptr = chunk[0]@, .len = n })
-    c.file_left -= n
-    if c.file_left == 0
-        c.file.free()
+    connection.outbuf.s(U8[]::{ .ptr = chunk[0]@, .len = n })
+    connection.file_left -= n
+    if connection.file_left == 0
+        connection.file.free()
     return true
 
-priv fn conn_read(c: conn.Conn$@, ctx: conn.Ctx$@): Bool //< reads from the socket
+priv fn conn_read(connection: conn.Conn$@, ctx: conn.Ctx$@): Bool //< reads from the socket
     //< False means close.
     //< Caution: **Cap the reads per notification**, or one client that keeps sending makes everyone
     //< else wait. The rest comes back as readable at the next `wait()`, or, where TLS holds it,
     //< `drive_backlog` reads it.
     $chunk: U8[IO_CHUNK] = ::{}
     for _round in Range.asc(MAX_READ_ROUNDS)
-        n: = https.read_some(c, U8$[]::chunk, ctx.lg) catch e
+        n: = https.read_some(connection, U8$[]::chunk, ctx.lg) catch e
             switch e
             case .wait
                 return true
             case .plain_http
-                https.answer_plain(c)
+                https.answer_plain(connection)
                 return true
             default
                 return false
         if n == 0
             // Before lingering, EOF closes only the peer's sending side: its answer may still
             // be waiting. During lingering the answer is out, so EOF completes the close.
-            c.peer_done = true
-            return c.lingering_since_us == 0I64
-        if c.lingering_since_us != 0I64
+            connection.peer_done = true
+            return connection.lingering_since_us == 0I64
+        if connection.lingering_since_us != 0I64
             continue // a lingering connection drains the peer's remaining bytes
-        if c.inbuf.len == 0
-            c.request_since_us = sys.mono_us()
-        c.inbuf.s(U8$[]::{ .ptr = chunk@, .len = n })
-        c.moved_us = sys.mono_us()
+        if connection.inbuf.len == 0
+            connection.request_since_us = sys.mono_us()
+        connection.inbuf.s(U8$[]::{ .ptr = chunk@, .len = n })
+        connection.moved_us = sys.mono_us()
         // **Without a cap, one client that never ends its request uses up the memory.**
-        if c.inbuf.len > http.MAX_HEAD_BYTES + body_limit(ctx)
-            conn.queue_error(c, 431)
-            c.inbuf.clear()
+        if connection.inbuf.len > http.MAX_HEAD_BYTES + body_limit(ctx)
+            conn.queue_error(connection, 431)
+            connection.inbuf.clear()
             return true
         // Check the head before collecting further body chunks. **A short read ends the socket's
         // bytes, but not TLS's**: one TLS read gives one record, and the next may wait inside it.
-        if c.need == 0 || (n < IO_CHUNK && !https.buffered(c))
+        if connection.need == 0 || (n < IO_CHUNK && !https.buffered(connection))
             return true
     return true
 
-priv fn conn_pump(c: conn.Conn$@, ctx: conn.Ctx$@, can_read: Bool): Bool //<
+priv fn conn_pump(connection: conn.Conn$@, ctx: conn.Ctx$@, can_read: Bool): Bool //<
     //< Drives read -> build -> send as far as it will go
     //< False means close.
     //< The table owns the connection for the whole pass; the caller drops its slot afterwards.
-    c.backlog = false
+    connection.backlog = false
     // **What TLS holds goes out first**, a handshake's reply or the end of an answer: no
     // notification but writable comes for it.
-    if https.pending(c)
-        https.flush(c, ctx.lg) catch e
+    if https.pending(connection)
+        https.flush(connection, ctx.lg) catch e
             return e == https.Io_end.wait
-        c.moved_us = sys.mono_us()
+        connection.moved_us = sys.mono_us()
         // Caution: **Finish a close that waited for those bytes**: no answer is left to send, so
         // nothing else would close the sending side.
-        if c.outbuf.len == 0 && c.close_after_send && c.lingering_since_us == 0I64
-            return conn_send(c, ctx.lg)
-    if c.lingering_since_us != 0I64
-        return !can_read || conn_read(c, ctx)
+        if connection.outbuf.len == 0 && connection.close_after_send &&
+            connection.lingering_since_us == 0I64
+            return conn_send(connection, ctx.lg)
+    if connection.lingering_since_us != 0I64
+        return !can_read || conn_read(connection, ctx)
     // **Do not read once `peer_done` is set.** EOF stays readable, so reading would spin.
-    if can_read && !c.peer_done && c.outbuf.len == 0 && !conn_read(c, ctx)
+    if can_read && !connection.peer_done && connection.outbuf.len == 0 &&
+        !conn_read(connection, ctx)
         return false
     // The requests per notification are capped too (the reason is at `conn_read`).
     for _round in Range.asc(MAX_READ_ROUNDS)
-        conn_build(c, ctx)
-        if c.outbuf.len == 0
+        conn_build(connection, ctx)
+        if connection.outbuf.len == 0
             return true // nothing to build (the request has not arrived)
-        if !conn_send(c, ctx.lg)
+        if !conn_send(connection, ctx.lg)
             return false
-        if c.outbuf.len > 0
+        if connection.outbuf.len > 0
             return true // not all sent; wait for writable
-        if c.inbuf.len == 0
+        if connection.inbuf.len == 0
             return true
     // Caution: **Mark what the cap left.** The requests are already read, so no notification comes
     // for them: unmarked, the client waits forever, or is swept away unanswered once it
     // half-closes.
-    c.backlog = true
+    connection.backlog = true
     return true
 
-priv fn reads_held(c: conn.Conn$@): Bool //< whether it would read now what TLS holds received
+priv fn reads_held(connection: conn.Conn$@): Bool //<
+    //< whether it would read now what TLS holds received
     //< **Only while nothing waits to go**: otherwise `conn_pump` does not read, and the loop would
     //< not sleep for nothing. A read that finds a record cut short empties what TLS holds.
-    return https.buffered(c) && !c.backlog && !c.peer_done && c.outbuf.len == 0 &&
-        !https.pending(c)
+    return https.buffered(connection) && !connection.backlog && !connection.peer_done &&
+        connection.outbuf.len == 0 && !https.pending(connection)
 
-priv fn drive_backlog(t: conn.Conn_table$@, ctx: conn.Ctx$@): Bool //<
+priv fn drive_backlog(table: conn.Conn_table$@, ctx: conn.Ctx$@): Bool //<
     //< Drives each connection with work no notification brings
     //< That is requests already read, left by the cap (`conn.Conn.backlog`), or bytes TLS took in
     //< from the socket and holds (`reads_held`). True means one still has some, so the next
     //< `wait()` must not sleep.
     $left: = false
     for i in Range.asc(conn.MAX_CONNS)
-        if t.slots[i].is_empty()
+        if table.slots[i].is_empty()
             continue
-        c: = t.slots[i].get()
+        c: = table.slots[i].get()
         held: = reads_held(c)
         if !c.backlog && !held
             continue
         if !conn_pump(c, ctx, held)
-            conn.table_drop(t, i, ctx.lg)
+            conn.table_drop(table, i, ctx.lg)
             continue
         left = left || c.backlog || reads_held(c)
     return left
@@ -461,11 +468,11 @@ priv fn say_refused(lg: Log$@, per_peer: Bool) //<
                         connections are refused until one closes")
     conn.stats.connections_refused += 1I64
 
-priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@, outward: Bool,
-    h: https.Https$@) //<
+priv fn accept_all(listener: net.Tcp_listener$@, table: conn.Conn_table$@, lg: Log$@, outward: Bool,
+    tls: https.Https$@) //<
         //< Accepts every pending connection into a free slot, or refuses it
         //< Facing outward, one address may hold at most `conn.MAX_CONNS_PER_PEER` of the slots.
-        //< With `h`, each starts its TLS; null serves plain HTTP.
+        //< With `tls`, each starts its TLS; null serves plain HTTP.
     for
         stream: = listener.accept() catch e
             switch e
@@ -483,14 +490,14 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
         peer: = U8[]::{ .ptr = host[0]@, .len = p.host_len }
         // Caution: **Count by address before taking a slot.** Otherwise one machine holding them
         // all shuts everyone else out, however short the time it can hold each.
-        if outward && conn.peer_count(t, peer) >= conn.MAX_CONNS_PER_PEER &&
-            !make_room(t, .some(peer), lg)
+        if outward && conn.peer_count(table, peer) >= conn.MAX_CONNS_PER_PEER &&
+            !make_room(table, .some(peer), lg)
             say_refused(lg, true)
             stream.free()
             continue
-        $slot: = conn.table_find_free(t)
-        if slot < 0 && make_room(t, .none, lg)
-            slot = conn.table_find_free(t)
+        $slot: = conn.table_find_free(table)
+        if slot < 0 && make_room(table, .none, lg)
+            slot = conn.table_find_free(table)
         if slot < 0
             // The cap is reached. Refusing holds less state than waiting for a free slot.
             say_refused(lg, false)
@@ -510,14 +517,14 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
             ln
                 .s("conn #\{conn.stats.connections_total\} from \{who\}:\{p.port\} (open \
                     \{conn.stats.connections_open\})")
-        t.slots[slot] = conn.conn_new(stream, conn.stats.connections_total, !outward)
-        fresh: = t.slots[slot].get()
+        table.slots[slot] = conn.conn_new(stream, conn.stats.connections_total, !outward)
+        fresh: = table.slots[slot].get()
         fresh.peer = host
         fresh.peer_len = p.host_len
-        if h != null && !https.start(fresh, h, lg)
-            conn.table_drop(t, slot, lg)
+        if tls != null && !https.start(fresh, tls, lg)
+            conn.table_drop(table, slot, lg)
 
-priv fn make_room(t: conn.Conn_table$@, peer: U8[]?, lg: Log$@): Bool //<
+priv fn make_room(table: conn.Conn_table$@, peer: U8[]?, lg: Log$@): Bool //<
     //< Closes the connection idle the longest, from `peer`, or from anyone for none
     //< **A browser keeps up to six connections to a host open, idle, for the next request.** Held
     //< against the caps, they shut out a newcomer, or a second browser behind the same address (a
@@ -525,42 +532,45 @@ priv fn make_room(t: conn.Conn_table$@, peer: U8[]?, lg: Log$@): Bool //<
     //< way when it runs out. False where none is idle: then the newcomer is refused.
     $oldest: Sz = -1
     for i in Range.asc(conn.MAX_CONNS)
-        if t.slots[i].is_empty()
+        if table.slots[i].is_empty()
             continue
-        c: = t.slots[i].get()
+        c: = table.slots[i].get()
         if !idle_kept(c)
             continue
         if from: = peer
             if !conn.from_peer(c, from)
                 continue
-        if oldest < 0 || c.moved_us < t.slots[oldest].get().moved_us
+        if oldest < 0 || c.moved_us < table.slots[oldest].get().moved_us
             oldest = i
     if oldest < 0
         return false
     if ln: = lg.at(.information)
-        ln.s("conn #\{t.slots[oldest].get().serial\} was idle; closed to take a new one")
-    conn.table_drop(t, oldest, lg)
+        ln.s("conn #\{table.slots[oldest].get().serial\} was idle; closed to take a new one")
+    conn.table_drop(table, oldest, lg)
     return true
 
-priv fn idle_kept(c: conn.Conn$@): Bool //<
+priv fn idle_kept(connection: conn.Conn$@): Bool //<
     //< Whether a connection waits for its client's next request with nothing in hand
     //< Caution: **Close none that is in the middle of something**: a request partly read, an answer
     //< or a file still going out, a page's hold, a close under way, or TLS still at work. Each
     //< would be cut short. A client whose idle connection closes sends its next request on a new
     //< one (RFC 9112 §9.3.1).
-    return c.inbuf.len == 0 && c.outbuf.len == 0 && c.file_left == 0 && !c.holding && !c.backlog &&
-        !c.peer_done && !c.close_after_send && c.lingering_since_us == 0I64 && https.idle(c)
+    return connection.inbuf.len == 0 && connection.outbuf.len == 0 && connection.file_left == 0 &&
+        !connection.holding && !connection.backlog && !connection.peer_done &&
+        !connection.close_after_send && connection.lingering_since_us == 0I64 &&
+        https.idle(connection)
 
-priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener@, t: conn.Conn_table@) //<
-    //< Rebuilds the watch set and the interests from the table, every time it is called
-    //< Caution: **Rebuild them from scratch.** Updated incrementally, a closed peer's
-    //< registration stays and an interest is not switched back from partly sent to partly read.
-    r.clear()
-    r.register(listener.raw_handle(), reactor.READABLE, LISTENER_TOKEN)
+priv fn rebuild_interests(events: reactor.Reactor$@, listener: net.Tcp_listener@,
+    table: conn.Conn_table@) //<
+        //< Rebuilds the watch set and the interests from the table, every time it is called
+        //< Caution: **Rebuild them from scratch.** Updated incrementally, a closed peer's
+        //< registration stays and an interest is not switched back from partly sent to partly read.
+    events.clear()
+    events.register(listener.raw_handle(), reactor.READABLE, LISTENER_TOKEN)
     for i in Range.asc(conn.MAX_CONNS)
-        if t.slots[i].is_empty()
+        if table.slots[i].is_empty()
             continue
-        c: = t.slots[i].get()
+        c: = table.slots[i].get()
         // Caution: **Do not watch a connection whose peer closed its sending side while there is
         // nothing to send.** EOF is always readable, so `wait()` returns at once and burns the CPU.
         if c.peer_done && c.outbuf.len == 0 && !https.pending(c)
@@ -573,18 +583,18 @@ priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener@, t: 
         // so `wait()` would return at once and burn the CPU.
         sending: = c.outbuf.len > 0 || https.pending(c)
         interest: = reactor.WRITABLE if sending else reactor.READABLE
-        r.register(c.stream.raw_handle(), interest, i)
+        events.register(c.stream.raw_handle(), interest, i)
 
-priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
+priv fn sweep_done(table: conn.Conn_table$@, ctx: conn.Ctx$@) //<
     //< Clears away the connections that are done: nothing left to send, or lingered their time
     //< A connection is done in three cases. Its peer stopped sending and nothing is left to send or
     //< answer. It lingered its full time (`LINGER_US`). Or it passed nothing for `IDLE_CONN_US`.
     //< **This is needed because such a connection is not watched for reading** (the reason is at
     //< `rebuild_interests`).
     for i in Range.asc(conn.MAX_CONNS)
-        if t.slots[i].is_empty()
+        if table.slots[i].is_empty()
             continue
-        c: = t.slots[i].get()
+        c: = table.slots[i].get()
         // Caution: **Drop it even with a partial read left**, once no whole request waits there
         // (`backlog`). No notification comes after EOF, so what is left is a request cut off
         // partway, which cannot be answered.
@@ -614,7 +624,7 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
         else if !lingered &&
             (!c.peer_done || c.outbuf.len > 0 || c.backlog || https.pending(c))
             continue
-        conn.table_drop(t, i, ctx.lg)
+        conn.table_drop(table, i, ctx.lg)
 
 // ==========================================
 // The token
@@ -652,9 +662,9 @@ priv struct Options //< the command line, read and checked
     builder: U8[] //< the program that builds a page's own functions, or empty
     allowed: U8[] //< the record of the functions files the person allowed, or empty
 
-priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
-    //< Reads the command line into `o` and checks it; the exit code of a failure, or 0
-    //< The strings in `o` point into `arena`, so the arena must live as long as the server.
+priv fn read_args(options: Options$@, lg: Log$@, arena: Arena$@): I32 //<
+    //< Reads the command line into `options` and checks it; the exit code of a failure, or 0
+    //< The strings in `options` point into `arena`, so the arena must live as long as the server.
     $local: = false
     $page: U8[] = ""
     $idle_s: I64 = 0I64
@@ -764,7 +774,7 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
                 .s("--allowed must name a file outside <root>, or a page could allow its own file: \
                     \{allowed\}")
         return 1
-    o$ = Options::{ .port = I32::port64, .root = root, .page = page, .local = local,
+    options$ = Options::{ .port = I32::port64, .root = root, .page = page, .local = local,
         .idle_s = idle_s, .cert = cert, .key = key, .builder = builder, .allowed = allowed }
     return 0
 
@@ -780,16 +790,16 @@ priv fn listen(host: U8[], port: I32, lg: Log$@): net.Tcp_listener$@!net.Net_err
         throw e2
     return listener
 
-priv fn announce(o: Options@, host: U8[], port: I32, token: U8[], lg: Log$@) //<
+priv fn announce(options: Options@, host: U8[], port: I32, token: U8[], lg: Log$@) //<
     //< Says that it listens, and where, then flushes those lines
     //< `port` is the one it got, not the one asked for: for a 0 the system chose it.
     if ln: = lg.at(.information)
-        ln.s("listening on \{host\}:\{port\}, root=\{o.root\}")
+        ln.s("listening on \{host\}:\{port\}, root=\{options.root\}")
     // Caution: **Log the named page on one line**, or nobody can confirm which file `/` returns.
-    if o.page.len > 0
+    if options.page.len > 0
         if ln: = lg.at(.information)
-            ln.s("page=\{o.page\}")
-    if o.local
+            ln.s("page=\{options.page\}")
+    if options.local
         // **The token goes in the fragment (`#`)**, which is not sent to the server. So another
         // process's `GET /` cannot get it. In the query (`?`), it would stay in the log. **It is
         // printed only once**: an endpoint returning it would give it to anyone who does not know
@@ -860,11 +870,11 @@ fn main(): I32
 
 priv fn serve( //< answers until asked to stop, or until no page holds it for `idle_s`
     listener: net.Tcp_listener$@,
-    r: reactor.Reactor$@,
+    events: reactor.Reactor$@,
     table: conn.Conn_table$@,
     ctx: conn.Ctx$@,
     idle_s: I64, //< 0 keeps it up
-    h: https.Https$@, //< what HTTPS serves with; null for plain HTTP
+    tls: https.Https$@, //< what HTTPS serves with; null for plain HTTP
 ): I32 //< the exit code
     lg: = ctx.lg
     // Caution: **Flush in this one place, not per line.** A flush blocks the accepting thread, and
@@ -877,11 +887,11 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
     $poll_pause_ms: = POLL_PAUSE_MS
     for
         backlogged: = drive_backlog(table, ctx)
-        rebuild_interests(r, listener, table)
+        rebuild_interests(events, listener, table)
         now_us: = sys.mono_us()
         if now_us - flushed_us >= FLUSH_GAP_US
-            if h != null
-                https.watch_expiry(h, lg)
+            if tls != null
+                https.watch_expiry(tls, lg)
             lg.done()
             flushed_us = now_us
         // **Asked to stop, it stops once the answer has gone out** (`api.queue_api_stop`), whoever
@@ -895,7 +905,7 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
             if ln: = lg.at(.information)
                 ln.s("no page has held it for \{idle_s\} seconds: stopping")
             return 0
-        $ready: = r.wait(0 if backlogged else POLL_TIMEOUT_MS) catch e
+        $ready: = events.wait(0 if backlogged else POLL_TIMEOUT_MS) catch e
             poll_failures += 1
             if poll_failures >= MAX_POLL_FAILURES
                 if ln: = lg.at(.error)
@@ -930,4 +940,4 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
         ready.free()
         sweep_done(table, ctx)
         if accepting
-            accept_all(listener, table, lg, !ctx.is_local(), h)
+            accept_all(listener, table, lg, !ctx.is_local(), tls)

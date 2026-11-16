@@ -1,0 +1,121 @@
+//< Feeds broken input to ksos's network receive path (`make test-fuzz`)
+//< **The host on the other end of the USB cable is not ksos's to trust.** It sends NCM blocks,
+//< and the Ethernet frames inside them reach the ARP, ping and TCP readers. The reader
+//< ([`read_prog.kspl`](read_prog.kspl)) builds each answer and reads each payload. The Makefile
+//< builds it with the address sanitizer where the C compiler has its runtime, and says so
+//< (`fuzz.Sanitized`). So an out-of-range read stops where it happens.
+//< Usage: `ksplc run tests/fuzz_main.kspl <reader> <work folder> [--asan] [--require-asan]`,
+//< with `--trials` and `--seed`.
+import "ksos/drivers/cdc_ncm" as ncm
+import "ksos/net/mini_ipv4" as net
+import "std/bytes"
+import "std/chars" // `sub`
+import "std/ds" { List }
+import "std/fuzz"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+
+priv const DEFAULT_SEED: I64 = 20261116
+priv const DEFAULT_TRIALS: I64 = 1000 //< how many rounds CI scatters, some 500 a kind
+    //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
+    //< With the IPv4 length check removed on purpose, 1000 found it 10 times and 200 never.
+    //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
+
+priv const TRIAL_TIMEOUT_MS: I32 = 10000 //<
+    //< How long to wait before treating a trial as a loop that never ends
+    //< Shorter than ksplc's: the reader takes one block of at most 2 KiB.
+
+priv const REACH_FLOOR_DIV: Sz = 10 //<
+    //< The fewest broken-input trials that must reach a reader, as trials / this
+    //< **A check only that it does not crash can pass having tried nothing** (Principle 5 in
+    //< `docs/DESIGN-principles.md`). **Do not raise it**: it only shows that fuzzing works; the
+    //< proportion itself means nothing.
+
+priv const KINDS: fuzz.Input_kind[2] = ::{ //<
+    //< The kinds of input that are fuzzed, and their files' endings
+    //< **This is the canonical source**: both the names the reader accepts and the seeds below
+    //< follow it.
+    fuzz.Input_kind::{ .name = "ntb", .ext = ".ntb" },
+    fuzz.Input_kind::{ .name = "frame", .ext = ".eth" },
+}
+
+// The peer's and our ends. Caution: **Keep them in step with the reader** (`read_prog.kspl`).
+priv const PEER_IP: U32 = 0x0A000001 // 10.0.0.1
+priv const OUR_IP: U32 = 0x0A000005 // 10.0.0.5
+priv const PEER_PORT: U16 = 80
+priv const OUR_PORT: U16 = 40000
+
+priv const FRAME_CAP: Sz = 1514
+
+priv fn from_peer(): net.Ends //< a frame's ends from the peer to us
+    return net.Ends::{ .src_mac = net.Mac::{ .hi = 0x0a0b, .lo = 0x0c0d0e0f },
+        .dst_mac = net.Mac::{ .hi = 0x0202, .lo = 0x03040506 }, .src_ip = PEER_IP, .dst_ip = OUR_IP,
+        .src_port = PEER_PORT, .dst_port = OUR_PORT }
+
+priv fn tcp_frame(payload: U8[], arena: Arena$@): U8[] //< a TCP segment from the peer to us
+    $buf: U8[FRAME_CAP] = ::{}
+    n: = net.build_tcp_segment(U8$[]::buf, from_peer(), 5000, 1000,
+        net.TCP_FLAG_ACK | net.TCP_FLAG_PSH, payload)
+    return arena.dup_str((U8[]::buf).sub(0, n))
+
+priv fn ping_frame(arena: Arena$@): U8[] //< a ping (an ICMP echo request) from the peer to us
+    //< **ksos builds no ping**, so a TCP segment is turned into one: the protocol byte and the
+    //< ICMP type change, and nothing on the receive side reads the checksums.
+    seg: = tcp_frame("ping payload", arena)
+    out: = U8$[]::{ .ptr = U8$@::arena.alloc(seg.len), .len = seg.len }
+    out.copy_from(0, seg)
+    out[23] = 1 // IPv4's protocol: ICMP
+    out[34] = 8 // ICMP's type: an echo request
+    out[35] = 0
+    return out
+
+priv fn arp_request(arena: Arena$@): U8[] //< the peer asking who holds our address
+    $buf: U8[FRAME_CAP] = ::{}
+    n: = net.build_arp_request(U8$[]::buf, from_peer().src_mac, PEER_IP, OUR_IP)
+    return arena.dup_str((U8[]::buf).sub(0, n))
+
+priv fn arp_reply(arena: Arena$@): U8[] //< the peer answering our ARP request
+    $ask: U8[FRAME_CAP] = ::{}
+    asked: = net.build_arp_request(U8$[]::ask, from_peer().dst_mac, OUR_IP, PEER_IP)
+    $buf: U8[FRAME_CAP] = ::{}
+    n: = net.build_arp_reply(U8$[]::buf, U8[]::ask, asked, PEER_IP, from_peer().src_mac)
+    return arena.dup_str((U8[]::buf).sub(0, n))
+
+priv fn wrapped(frame: U8[], arena: Arena$@): U8[] //< one frame in an NTB, as the host sends it
+    $buf: U8[2048] = ::{}
+    n: = ncm.build_one(U8$[]::buf, frame, frame.len, 7)
+    return arena.dup_str((U8[]::buf).sub(0, n))
+
+priv fn collect_seeds(_dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
+    //< One frame of each kind the readers take, alone and in an NTB; ksos takes no seed folder
+    //< Caution: **Include one of each kind.** Mutation cannot reach a reader no seed reaches.
+    $frames: = List<|fuzz.Sample|>(arena)
+    frames
+        .push(fuzz.Sample::{ .kind = "frame", .name = "a TCP segment with a payload",
+        .data = tcp_frame("GET / HTTP/1.1\r\n\r\n", arena), .built = true })
+    frames
+        .push(fuzz.Sample::{ .kind = "frame", .name = "a bare TCP ACK",
+        .data = tcp_frame("", arena), .built = true })
+    frames
+        .push(fuzz.Sample::{ .kind = "frame", .name = "a ping", .data = ping_frame(arena),
+        .built = true })
+    frames
+        .push(fuzz.Sample::{ .kind = "frame", .name = "an ARP request",
+        .data = arp_request(arena), .built = true })
+    frames
+        .push(fuzz.Sample::{ .kind = "frame", .name = "an ARP reply", .data = arp_reply(arena),
+        .built = true })
+    $out: = List<|fuzz.Sample|>(arena)
+    for f in frames
+        out.push(f)
+        out
+            .push(fuzz.Sample::{ .kind = "ntb",
+            .name = arena.text().s(f.name).s(", in an NTB").take(),
+            .data = wrapped(f.data, arena), .built = true })
+    return out
+
+fn main(): I32
+    return fuzz.run_main("ksos", "scatters broken input at ksos's network receive path",
+        fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED },
+        fuzz.Input_kind[]::KINDS, TRIAL_TIMEOUT_MS, REACH_FLOOR_DIV, false, collect_seeds,
+        64 * 1024 * 1024)

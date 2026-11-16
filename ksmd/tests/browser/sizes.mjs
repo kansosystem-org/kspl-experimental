@@ -8,7 +8,7 @@
 import { ALT, CTRL, H, SHIFT, check, waitFor } from "./drive.mjs";
 
 
-export function sizes({ page, js, settle, until, press, type, click, drag, menu, load, saves, source, openCell,
+export function sizes({ page, media, js, settle, until, press, type, click, drag, menu, load, saves, source, openCell,
   doubleClickAt, rightClick, resize }) {
   return {
   // Column widths and row heights, as a spreadsheet keeps them: a drag of a column letter's right
@@ -185,9 +185,9 @@ export function sizes({ page, js, settle, until, press, type, click, drag, menu,
     await saves("Row height 30 gives the chosen row a height of 30 points", t3(' char_widths="12,," heights=",30"'));
     const tall = () => js("Math.round(document.querySelectorAll('#doc tbody tr')[1].getBoundingClientRect().height)");
     check(await tall() === 40, "and the row stands 40 pixels tall", String(await tall()));
-    await page("Emulation.setEmulatedMedia", { media: "print" });
+    await media("print");
     check(await tall() === 40, "on paper too", String(await tall()));
-    await page("Emulation.setEmulatedMedia", { media: "" });
+    await media("");
     for (const wrong of ["5", "410", "x", "20.5"]) {
       await answer(wrong);
       await menu("row-height");

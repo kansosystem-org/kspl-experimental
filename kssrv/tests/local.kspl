@@ -138,14 +138,14 @@ priv fn token_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
         with_token.status == 200 && with_token.body.equals("one\n"),
         client.shown(with_token, arena))
 
-priv fn guarded(what: U8[], r: client.Resp, arena: Arena$@) //<
+priv fn guarded(what: U8[], resp: client.Resp, arena: Arena$@) //<
     //< Checks that a local answer refuses every frame, sends no referrer, and says nosniff
     //< ("What guards the page in the browser" in `docs/SPEC-local-server.md`)
     verdict.check(arena.text().s("--local refuses frames and referrers, and says nosniff: ").s(what)
         .take(),
-        client.header(r.head, "content-security-policy").equals("frame-ancestors 'none'") &&
-        client.header(r.head, "referrer-policy").equals("no-referrer") &&
-        client.header(r.head, "x-content-type-options").equals("nosniff"), r.head)
+        client.header(resp.head, "content-security-policy").equals("frame-ancestors 'none'") &&
+        client.header(resp.head, "referrer-policy").equals("no-referrer") &&
+        client.header(resp.head, "x-content-type-options").equals("nosniff"), resp.head)
 
 priv fn host_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< the `Host` a request names
@@ -344,7 +344,7 @@ fn digest(bytes: U8[], arena: Arena$@): U8[] //< the SHA-256 of `bytes` in lower
     return arena.dup_str(U8[]::hex)
 
 priv fn conditional_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
-    //< A stale writer and a second creator must leave the first writer's bytes intact.
+    //< A stale writer and a second creator must leave the first writer's bytes intact
     path: = "/api/file?path=conditional.txt"
     missing: = arena.text().s(auth).s("X-Kanso-If-Content: missing\r\n").take()
     first: = client.put_file(port, path, missing, "original", arena)!

@@ -48,26 +48,28 @@ fn is_text(text: U8[]): Bool //<
 fn is_label(text: U8[]): Bool //< a label's text: as `is_text`, with no braces at all
     return is_text(text) && text.find_char('{').is_none()
 
-fn fault_of(s: Settings): U8[]? //<
+fn fault_of(settings: Settings): U8[]? //<
     //< what is wrong with settings, as the reader says it; none if sound
-    if s.paper.len > 0 && !is_paper(s.paper)
+    if settings.paper.len > 0 && !is_paper(settings.paper)
         return .some("paper is A3, A4, A5, B4, B5, JIS-B4, JIS-B5, letter or legal")
-    if s.header.len > 0 && !is_text(s.header) || s.footer.len > 0 && !is_text(s.footer)
+    if settings.header.len > 0 && !is_text(settings.header) ||
+        settings.footer.len > 0 && !is_text(settings.footer)
         return .some("a header or a footer is 1 to 200 bytes of text, with {page} and {pages} the \
             only braces")
-    if s.numbers < 0 || s.numbers > 6
+    if settings.numbers < 0 || settings.numbers > 6
         return .some("numbers is the heading level numbering starts at, 1 to 6")
-    if s.table_label.len > 0 && !is_label(s.table_label) ||
-        s.figure_label.len > 0 && !is_label(s.figure_label)
+    if settings.table_label.len > 0 && !is_label(settings.table_label) ||
+        settings.figure_label.len > 0 && !is_label(settings.figure_label)
         return .some("a label is 1 to 200 bytes of text, with no braces")
-    if is_empty(s)
+    if is_empty(settings)
         return .some("':::document' sets at least one of paper, orientation, header, footer, \
             numbers, table_label and figure_label")
     return .none
 
-fn is_empty(s: Settings): Bool //< whether the settings set nothing
-    return s.paper.len == 0 && !s.landscape && s.header.len == 0 && s.footer.len == 0 &&
-        s.numbers == 0 && s.table_label.len == 0 && s.figure_label.len == 0
+fn is_empty(settings: Settings): Bool //< whether the settings set nothing
+    return settings.paper.len == 0 && !settings.landscape && settings.header.len == 0 &&
+        settings.footer.len == 0 && settings.numbers == 0 && settings.table_label.len == 0 &&
+        settings.figure_label.len == 0
 
 fn settings_of(attributes: List<|Attribute|>@): Settings!Attribute //<
     //< The settings the clause's attributes give; the attribute that is not one of them, or not
@@ -101,20 +103,20 @@ fn settings_of(attributes: List<|Attribute|>@): Settings!Attribute //<
             throw a
     return s
 
-fn write_settings(s: Settings, out: Str_builder$@) //< the clause, as `settings_of` reads it
+fn write_settings(settings: Settings, out: Str_builder$@) //< the clause, as `settings_of` reads it
     out.s(":::document")
-    if s.paper.len > 0
-        out.s(" paper=\"").s(s.paper).c('"')
-    if s.landscape
+    if settings.paper.len > 0
+        out.s(" paper=\"").s(settings.paper).c('"')
+    if settings.landscape
         out.s(" orientation=\"landscape\"")
-    if s.header.len > 0
-        out.s(" header=\"").escape_and_append(s.header).c('"')
-    if s.footer.len > 0
-        out.s(" footer=\"").escape_and_append(s.footer).c('"')
-    if s.numbers > 0
-        out.s(" numbers=\{s.numbers\}")
-    if s.table_label.len > 0
-        out.s(" table_label=\"").escape_and_append(s.table_label).c('"')
-    if s.figure_label.len > 0
-        out.s(" figure_label=\"").escape_and_append(s.figure_label).c('"')
+    if settings.header.len > 0
+        out.s(" header=\"").escape_and_append(settings.header).c('"')
+    if settings.footer.len > 0
+        out.s(" footer=\"").escape_and_append(settings.footer).c('"')
+    if settings.numbers > 0
+        out.s(" numbers=\{settings.numbers\}")
+    if settings.table_label.len > 0
+        out.s(" table_label=\"").escape_and_append(settings.table_label).c('"')
+    if settings.figure_label.len > 0
+        out.s(" figure_label=\"").escape_and_append(settings.figure_label).c('"')
     out.s("\n:::\n")

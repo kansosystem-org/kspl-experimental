@@ -57,12 +57,13 @@ priv fn place_of(doc: U8[], marked: List<|U8[]|>@): U8[] //<
             return top
     return ""
 
-priv fn new_case(s: shape.Snippet, dir: U8[], arena: Arena$@): Case
+priv fn new_case(snippet: shape.Snippet, dir: U8[], arena: Arena$@): Case
     lines: = List<|U8[]|>.create(arena)
-    for ln in s.body.lines(arena)
+    for ln in snippet.body.lines(arena)
         lines.push(ln)
-    $c: = Case::{ .s = s, .lines = lines, .dir = dir, .marks = List<|Sz|>.create(arena),
-        .ends = List<|Sz|>.create(arena), .covered = List<|Bool|>.create(arena),
+    $c: = Case::{ .s = snippet, .lines = lines, .dir = dir,
+        .marks = List<|Sz|>.create(arena), .ends = List<|Sz|>.create(arena),
+        .covered = List<|Bool|>.create(arena),
         .shapes = List<|shape.Shape|>.create(arena), .fit = 0 }
     for _i in Range.asc(lines.len)
         c.covered.push(false)
@@ -76,45 +77,45 @@ priv fn new_case(s: shape.Snippet, dir: U8[], arena: Arena$@): Case
             c.covered.set(j, true)
     c.shapes.push(shape.as_written(lines, arena))
     if !shape.is_whole(lines)
-        c.shapes.push(shape.wrapped(lines, s.laid, arena))
+        c.shapes.push(shape.wrapped(lines, snippet.laid, arena))
     c.fit = c.shapes.len
     return c
 
-priv fn doc_line(c: Case@, at: Sz): Sz //< the document's line of the fragment's line `at`
-    return c.s.line + 1 + at
+priv fn doc_line(fragment: Case@, at: Sz): Sz //< the document's line of the fragment's line `at`
+    return fragment.s.line + 1 + at
 
-priv fn kept(c: Case@, mark_at: Sz, arena: Arena$@): List<|Bool|> //<
+priv fn kept(fragment: Case@, mark_at: Sz, arena: Arena$@): List<|Bool|> //<
     //< Which lines a run leaves out: every covered line but the mark kept's
     $out: = List<|Bool|>(arena)
-    for i in Range.asc(c.lines.len)
-        $drop: = c.covered.get(i) && mark_at != ALL_MARKS
+    for i in Range.asc(fragment.lines.len)
+        $drop: = fragment.covered.get(i) && mark_at != ALL_MARKS
         if drop && mark_at >= 0
-            m: = c.marks.get(mark_at)
-            drop = i < m || i >= c.ends.get(mark_at)
+            m: = fragment.marks.get(mark_at)
+            drop = i < m || i >= fragment.ends.get(mark_at)
         out.push(drop)
     return out
 
-priv fn job_for(c: Case@, case_at: Sz, shape_at: Sz, mark_at: Sz, sandbox: U8[], arena: Arena$@):
-    Job_at //<
+priv fn job_for(fragment: Case@, case_at: Sz, shape_at: Sz, mark_at: Sz, sandbox: U8[],
+    arena: Arena$@): Job_at //<
         //< Writes one run's file and says where it is
-    ext: = "kspl" if c.s.laid else "ksplb"
+    ext: = "kspl" if fragment.s.laid else "ksplb"
     name: = arena.text().s("doc_snippet_\{case_at\}_\{shape_at\}_\{mark_at + 2\}.").s(ext).take()
     rel: =
-        (name if c.dir.len == 0
-        else arena.text().s(c.dir).c('/').s(name).take())
-    dropped: = kept(c, mark_at, arena)
-    sh: = c.shapes.get(shape_at)
+        (name if fragment.dir.len == 0
+        else arena.text().s(fragment.dir).c('/').s(name).take())
+    dropped: = kept(fragment, mark_at, arena)
+    sh: = fragment.shapes.get(shape_at)
     io.write_file(fs.join(sandbox, rel, arena), shape.text_without(sh@, dropped@, arena)) catch {}
     return Job_at::{ .case_at = case_at, .mark_at = mark_at, .shape_at = shape_at, .rel = rel,
         .lint = false }
 
-priv fn argv_of(j: Job_at@, arena: Arena$@): U8[][] //<
+priv fn argv_of(job: Job_at@, arena: Arena$@): U8[][] //<
     //< the compile of one file, run in the sandbox
-    if j.lint
-        return harness.ksplc_argv_anywhere(U8[][]::{ "lint", j.rel })
+    if job.lint
+        return harness.ksplc_argv_anywhere(U8[][]::{ "lint", job.rel })
     return harness
-        .ksplc_argv_anywhere(U8[][]::{ j.rel,
-        arena.text().s(j.rel).s(".c").take() })
+        .ksplc_argv_anywhere(U8[][]::{ job.rel,
+        arena.text().s(job.rel).s(".c").take() })
 
 priv fn run_jobs(at: List<|Job_at|>@, sandbox: U8[], arena: Arena$@): List<|verdict.Run_out|>
     $jobs: = List<|subproc.Job|>(arena)
@@ -139,11 +140,11 @@ priv fn said_lines(out: U8[], rel: U8[], word: U8[], arena: Arena$@): List<|Sz|>
             got.push(Sz::n)
     return got
 
-priv fn first_said(c: Case@, j: Job_at@, out: U8[], word: U8[], arena: Arena$@): U8[] //<
+priv fn first_said(fragment: Case@, job: Job_at@, out: U8[], word: U8[], arena: Arena$@): U8[] //<
     //< What the compiler said first with `word` (`error` / `warning`), at the document's line
-    head: = arena.text().s(j.rel).c(':').take()
+    head: = arena.text().s(job.rel).c(':').take()
     tail: = arena.text().s(": ").s(word).s(": ").take()
-    sh: = c.shapes.get(j.shape_at)
+    sh: = fragment.shapes.get(job.shape_at)
     for ln in out.lines(arena)
         if said: = ln.find_str(tail)
             if !ln.starts_with(head)
@@ -158,26 +159,28 @@ priv fn first_said(c: Case@, j: Job_at@, out: U8[], word: U8[], arena: Arena$@):
             what: = ln.sub_from(said + tail.len)
             if at == shape.ADDED_LINE
                 return arena.text().s("on the line the wrapping added: ").s(what).take()
-            return arena.text().s("line \{doc_line(c, at)\}: ").s(what).take()
+            return arena.text().s("line \{doc_line(fragment, at)\}: ").s(what).take()
     for ln in out.lines(arena)
         if ln.trim_spaces().len > 0
             return ln.trim_spaces()
     return "(it said nothing)"
 
-priv fn mark_judged(c: Case@, j: Job_at@, out: verdict.Run_out@, arena: Arena$@): U8[] //<
+priv fn mark_judged(fragment: Case@, job: Job_at@, out: verdict.Run_out@, arena: Arena$@): U8[] //<
     //< What is wrong with one marked run, or empty: each error must fall inside what is kept
-    sh: = c.shapes.get(j.shape_at)
+    sh: = fragment.shapes.get(job.shape_at)
     $inside: Sz = 0
-    for n in said_lines(out.out, j.rel, "error", arena)
+    for n in said_lines(out.out, job.rel, "error", arena)
         at: = sh.from.get(n - 1) if n - 1 < sh.from.len else shape.ADDED_LINE
-        $ok: = at != shape.ADDED_LINE && c.covered.get(at)
-        if ok && j.mark_at >= 0
-            ok = at >= c.marks.get(j.mark_at) && at < c.ends.get(j.mark_at)
+        $ok: = at != shape.ADDED_LINE && fragment.covered.get(at)
+        if ok && job.mark_at >= 0
+            ok =
+                at >= fragment.marks.get(job.mark_at) &&
+                at < fragment.ends.get(job.mark_at)
         if !ok
             return arena.text().s("an error falls on an unmarked line, ")
-                .s(first_said(c, j, out.out, "error", arena)).take()
+                .s(first_said(fragment, job, out.out, "error", arena)).take()
         inside += 1
-    if j.mark_at >= 0 && (out.exited_with(0) || inside == 0)
+    if job.mark_at >= 0 && (out.exited_with(0) || inside == 0)
         return "it is marked `// error`, but compiles"
     return ""
 

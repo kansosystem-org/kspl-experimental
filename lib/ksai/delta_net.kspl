@@ -60,17 +60,17 @@ impl Delta_net
     fn reset(r: Self@) //< empties the state, for a sequence that starts again at position 0
         mem.zero(Void$@::r.state, r.shape.state_len() * 4)
 
-    fn forward( //< the layer's output for each row of `h`; the state moves on by the rows
+    fn forward( //< the layer's output for each row of `hidden`; the state moves on by the rows
         //< Row `t` follows the rows before it and the state, whatever pieces the rows came in.
         r: Self@,
-        h: Tensor<|F32|>, //< the rows, normalized; their arena takes the working tensors
-    ): Tensor<|F32|> //< `[rows, hidden]`, on `h`'s arena
+        hidden: Tensor<|F32|>, //< the rows, normalized; their arena takes the working tensors
+    ): Tensor<|F32|> //< `[rows, hidden]`, on hidden's arena
         s: = r.shape
-        n: = h.shape[0]
-        mixed: = product(r.qkv@, h)
-        $z: = product(r.z@, h)
-        al: = product(r.alpha@, h)
-        be: = product(r.beta@, h)
+        n: = hidden.shape[0]
+        mixed: = product(r.qkv@, hidden)
+        $z: = product(r.z@, hidden)
+        al: = product(r.alpha@, hidden)
+        be: = product(r.beta@, hidden)
         conv: = r.convolve(mixed)
         heads: = 2 * s.k_heads
         for t in Range.asc(n)
@@ -84,7 +84,7 @@ impl Delta_net
                 (al.data + at)$ = softplus(biased) * (r.a.data + k)$
                 (be.data + at)$ = sigmoid((be.data + at)$)
         o_shape: Sz[2] = ::{ n, s.inner() }
-        o: = Tensor<|F32|>(Sz[]::o_shape, h.arena)
+        o: = Tensor<|F32|>(Sz[]::o_shape, hidden.arena)
         $job: = Recur_job::{ .shape = s, .conv = conv.data, .g = al.data, .beta = be.data,
             .state = r.state, .out = o.data, .n = n,
             .scale = 1.0F32 / F32::math.sqrt(F32::s.head_dim) }
@@ -132,39 +132,42 @@ impl Delta_net
         mem.copy(Void$@::hist, Void$@::keep, kept * c * 4)
         return out.silu()
 
-priv fn product(w: Quant_matrix@, x: Tensor<|F32|>): Tensor<|F32|> //< `w` times each row of `x`
+priv fn product(weights: Quant_matrix@, input: Tensor<|F32|>): Tensor<|F32|> //<
+    //< `weights` times each row of `input`
     //< The shapes were checked when the model was loaded, so a refusal is a fault in the code.
-    return w.mul_mat(x) catch panic("Delta_net: a weight refused an input whose shape was checked")
+    return weights.mul_mat(input)
+        catch panic("Delta_net: a weight refused an input whose shape was checked")
 
-priv fn reshaped(t: Tensor<|F32|>, rows: Sz, cols: Sz): Tensor<|F32|> //< the same numbers, reshaped
-    shape: = Sz$@::t.arena.alloc(2 * sizeof(Sz))
+priv fn reshaped(input: Tensor<|F32|>, rows: Sz, cols: Sz): Tensor<|F32|> //<
+    //< the same numbers, reshaped
+    shape: = Sz$@::input.arena.alloc(2 * sizeof(Sz))
     shape$ = rows
     (shape + 1)$ = cols
-    return Tensor<|F32|>.from_raw_parts(t.data, shape, 2, t.size, t.arena)
+    return Tensor<|F32|>.from_raw_parts(input.data, shape, 2, input.size, input.arena)
 
-priv fn l2_norm(x: F32$@, n: Sz, eps: F32) //< `x` divided by its length, in place
-    //< llama.cpp's `rms_norm(x, eps / n)` times `1 / √n`: the squares summed in F64, the rest in
-    //< F32, each step rounded as there.
+priv fn l2_norm(values: F32$@, count: Sz, eps: F32) //< `values` divided by its length, in place
+    //< llama.cpp's `rms_norm(values, eps / count)` times `1 / √count`: the squares summed in F64,
+    //< the rest in F32, each step rounded as there.
     $ss: F64 = 0.0
-    for i in Range.asc(n)
-        sq: = (x + i)$ * (x + i)$
+    for i in Range.asc(count)
+        sq: = (values + i)$ * (values + i)$
         ss = ss + F64::sq
-    mean: = F32::(ss / F64::n)
-    width: = F32::n
+    mean: = F32::(ss / F64::count)
+    width: = F32::count
     scale: = 1.0F32 / F32::math.sqrt(mean + eps / width)
     inv: = 1.0F32 / F32::math.sqrt(width)
-    for i in Range.asc(n)
-        y: = (x + i)$ * scale
-        (x + i)$ = y * inv
+    for i in Range.asc(count)
+        y: = (values + i)$ * scale
+        (values + i)$ = y * inv
 
-priv fn softplus(x: F32): F32 //< `log(1 + e^x)`, as ggml's: `x` itself above 20
-    if x > 20.0F32
-        return x
-    e: = F32::math.exp(x)
+priv fn softplus(value: F32): F32 //< `log(1 + e^value)`, as ggml's: `value` itself above 20
+    if value > 20.0F32
+        return value
+    e: = F32::math.exp(value)
     return F32::math.log(1.0F32 + e)
 
-priv fn sigmoid(x: F32): F32 //< `1 / (1 + e^-x)`, as ggml's
-    e: = F32::math.exp(-x)
+priv fn sigmoid(value: F32): F32 //< `1 / (1 + e^-value)`, as ggml's
+    e: = F32::math.exp(-value)
     return 1.0F32 / (1.0F32 + e)
 
 priv struct Recur_job //< one call's recurrence, as each of its threads reads it

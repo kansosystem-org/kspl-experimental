@@ -62,12 +62,12 @@ priv fn append_node(head: Node$@$@, tail: Node$@$@, node: Node$@) //<
         tail.next = node
     tail$ = node
 
-priv fn append_member(head: Member$@$@, tail: Member$@$@, m: Member$@)
+priv fn append_member(head: Member$@$@, tail: Member$@$@, member: Member$@)
     if head$ == null
-        head$ = m
+        head$ = member
     else
-        tail.next = m
-    tail$ = m
+        tail.next = member
+    tail$ = member
 // ---------------------------------------------------------
 // The Json_builder API (for building JSON safely)
 // ---------------------------------------------------------
@@ -95,16 +95,17 @@ impl Json_builder
         return Json_builder::{ .arena = at, .own = work.keep() }
     pub fn null_val(_r: Self$@): Value //< JSON's `null`
         return .null_val
-    pub fn bool_val(_r: Self$@, b: Bool): Value //< `true` or `false`
-        return .bool_val(b)
-    pub fn int_val(_r: Self$@, i: I64): Value //< a number with no point; wide enough for an offset
+    pub fn bool_val(_r: Self$@, value: Bool): Value //< `true` or `false`
+        return .bool_val(value)
+    pub fn int_val(_r: Self$@, value: I64): Value //<
+        //< a number with no point; wide enough for an offset
         //< Caution: Take an I64, like Value.int_val and as_int64; with an I32 here, values could be
         //< read but not written.
-        return .int_val(i)
-    pub fn float_val(_r: Self$@, f: F64): Value //< a number with a point
-        return .float_val(f)
-    pub fn str_val(r: Self$@, s: U8[]): Value //< a string, copied into the arena
-        return .str_val(r.arena.dup_str(s) if s.len > 0 else "")
+        return .int_val(value)
+    pub fn float_val(_r: Self$@, value: F64): Value //< a number with a point
+        return .float_val(value)
+    pub fn str_val(r: Self$@, text: U8[]): Value //< a string, copied into the arena
+        return .str_val(r.arena.dup_str(text) if text.len > 0 else "")
     pub fn arr(r: Self$@): Array_builder //< an empty array builder
         return Array_builder::{ .builder = r$, .head = null, .tail = null }
     pub fn obj(r: Self$@): Object_builder //< an empty object builder
@@ -196,9 +197,9 @@ priv fn skip_ws(ctx: Parse_ctx$@)
     for ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos).is_space()
         ctx.pos += 1
 
-priv fn match_str(ctx: Parse_ctx$@, s: U8[]): Bool
-    if ctx.src.starts_with(s, ctx.pos)
-        ctx.pos += s.len
+priv fn match_str(ctx: Parse_ctx$@, text: U8[]): Bool
+    if ctx.src.starts_with(text, ctx.pos)
+        ctx.pos += text.len
         return true
     return false
 
@@ -369,9 +370,10 @@ priv fn first_repeat(keys: List<|Key_at|>@, arena: Arena$@): Sz //<
     //< takes part**, so keys chosen to collide cost the same O(n log n) as any others. The sort
     //< works in the parse's arena and rewinds it, since freestanding code has no heap.
     defer $work: = mem.scratch(arena)
-    sorted: = keys.order_by(fn(a: Key_at@, b: Key_at@; ): I32 {
-        c: = a.key.compare(b.key);
-        return c if c != 0 else (0 if a.at == b.at else (-1 if a.at < b.at else 1));
+    sorted: = keys.order_by(fn(left: Key_at@, right: Key_at@; ): I32 {
+        c: = left.key.compare(right.key);
+        return c if c != 0
+            else (0 if left.at == right.at else (-1 if left.at < right.at else 1));
     }, work.arena)
     $first: Sz = -1
     for i in Range(1, sorted.len, 1)
@@ -685,32 +687,34 @@ impl Value
         //< Caution: **It is quadratic in an object's members**, as `get` called for each key is.
         //< Each value is compared once, so the depth of nesting adds no more than its own values.
         r: Self@,
-        o: Value, //< the value to compare with
+        other: Value, //< the value to compare with
     ): Bool
-        if r.kind_rank() != o.kind_rank()
+        if r.kind_rank() != other.kind_rank()
             return false
-        // The kinds match, so each read below finds o's own value and its fallback is never taken.
+        // The kinds match, so each read below finds other's own value and its fallback is never
+        // taken.
         switch r$
         case .null_val
             return true
         case .bool_val(b)
-            return b == o.as_bool().unwrap_or(!b)
+            return b == other.as_bool().unwrap_or(!b)
         case .int_val(i)
-            return i == o.as_int64().unwrap_or(0I64)
+            return i == other.as_int64().unwrap_or(0I64)
         case .float_val(f)
-            return bignat.f64_to_bits(f) == bignat.f64_to_bits(o.as_f64().unwrap_or(0.0))
+            return bignat.f64_to_bits(f) == bignat
+                .f64_to_bits(other.as_f64().unwrap_or(0.0))
         case .str_val(s)
-            return s.equals(o.as_str().unwrap_or(""))
+            return s.equals(other.as_str().unwrap_or(""))
         case .array_val(own)
-            switch o
-            case .array_val(other)
-                return same_elements(own.head, other.head)
+            switch other
+            case .array_val(theirs)
+                return same_elements(own.head, theirs.head)
             default {}
             return false
         case .obj_val(own)
-            switch o
-            case .obj_val(other)
-                return same_members(own.head, other.head)
+            switch other
+            case .obj_val(theirs)
+                return same_members(own.head, theirs.head)
             default {}
             return false
 

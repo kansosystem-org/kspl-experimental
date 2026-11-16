@@ -108,21 +108,22 @@ fn build_many(orders: Order[], arena: Arena$@): List<|Built|> //<
                 Built::{ .exe = orders[i].exe, .deps = deps_of(orders[i], arena) })
     return out
 
-priv fn gen_of(o: Order, arena: Arena$@): U8[] //< the file ksplc writes for an order
-    return arena.text().s(o.exe).s(".ll" if o.llvm else ".c").take()
+priv fn gen_of(order: Order, arena: Arena$@): U8[] //< the file ksplc writes for an order
+    return arena.text().s(order.exe).s(".ll" if order.llvm else ".c").take()
 
-priv fn deps_of(o: Order, arena: Arena$@): U8[] //<
+priv fn deps_of(order: Order, arena: Arena$@): U8[] //<
     //< The sources an order's program was compiled from, one whole path a line
     //< A package's own files are listed from its folder; each path is made whole here.
     listed: =
-        io.read_file(arena.text().s(o.exe).s(".deps").take(), null) catch
+        io.read_file(arena.text().s(order.exe).s(".deps").take(), null) catch
             fallback ""
     whole: = arena.text()
     for line in listed.lines(arena)
         at: = line.find_char(' ').unwrap_or(0)
         if at > 0 // a space, with a name before it
             path: = line.sub_from(at + 1)
-            whole.s(path if sys.is_absolute(path) else fs.join(o.dir, path, arena)).c('\n')
+            whole
+                .s(path if sys.is_absolute(path) else fs.join(order.dir, path, arena)).c('\n')
     return whole.take()
 
 fn runs_with( //<

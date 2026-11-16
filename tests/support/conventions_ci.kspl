@@ -633,6 +633,111 @@ priv fn check_container_env(arena: Arena$@)
     verdict.check_list("every dev container step passes GITHUB_ACTIONS to its gates", seen, "steps",
         bad@, "add `env: |` with the line `GITHUB_ACTIONS` to the step's `with:`")
 
+// ==========================================
+// Every outside action and base image is named by its hash
+// **Whoever holds an outside repository can move its tag or branch to other code**, and the next
+// round then runs that code with the round's token. A 40-hex commit, or an image's `@sha256:`
+// digest, names one content for good. The comment after it says which release that is.
+// ==========================================
+priv fn is_hex_run(text: U8[], count: Sz): Bool //< whether it is `count` lower-case hex digits
+    if text.len != count
+        return false
+    for c in text
+        if !(c.is_digit() || (c >= 'a' && c <= 'f'))
+            return false
+    return true
+
+priv fn names_unpinned_action(text: U8[], arena: Arena$@): Bool //<
+    //< Whether a workflow's text names an outside action by anything but a commit hash
+    //< A local action (`./`) comes with the commit itself. A `docker://` image needs its digest.
+    for line in text.lines(arena)
+        rest: = line.trim_spaces().strip_prefix("- ")
+        if !rest.starts_with("uses:")
+            continue
+        $ref: = rest.sub_from(5)
+        if at: = ref.find_str(" #")
+            ref = ref.sub(0, at)
+        ref = ref.trim_spaces()
+        if ref.starts_with("./")
+            continue
+        if ref.starts_with("docker://")
+            if at: = ref.find_str("@sha256:")
+                if is_hex_run(ref.sub_from(at + 8), 64)
+                    continue
+            return true
+        switch ref.rfind_char('@')
+        case .none
+            return true
+        case .some(at)
+            if !is_hex_run(ref.sub_from(at + 1), 40)
+                return true
+    return false
+
+// Caution: **Keep a comment and a local action on the miss side, and a hash in a comment on the
+// hit side.** A check that reads the whole line takes the comment for the ref.
+priv const ACTION_PIN_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "      - uses: actions/checkout@v7\n", .hits = true },
+    Sample::{ .text = "        uses: actions/checkout@main # 3d3c42e5\n", .hits = true },
+    Sample::{ .text = "      - uses: actions/checkout@3d3c42e5\n", .hits = true },
+    Sample::{ .text = "      - uses: docker://alpine:3.20\n", .hits = true },
+    Sample::{ .text = "      - uses: actions/checkout\n", .hits = true },
+    Sample::{ .text =
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n",
+        .hits = false },
+    Sample::{ .text = "      - uses: ./.github/actions/msys2-ucrt64\n", .hits = false },
+    Sample::{ .text = "      # - uses: actions/checkout@v7\n", .hits = false },
+    Sample::{ .text =
+        "      - uses: \
+            docker://alpine@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c\n",
+        .hits = false },
+}
+
+priv fn names_unpinned_image(text: U8[], arena: Arena$@): Bool //<
+    //< Whether a Dockerfile starts from an image named by anything but its `@sha256:` digest
+    for line in text.lines(arena)
+        t: = line.trim_spaces()
+        if !t.starts_with("FROM ")
+            continue
+        $image: = t.sub_from(5).trim_spaces()
+        if sp: = image.find_char(' ')
+            image = image.sub(0, sp)
+        switch image.find_str("@sha256:")
+        case .none
+            return true
+        case .some(at)
+            if !is_hex_run(image.sub_from(at + 8), 64)
+                return true
+    return false
+
+priv const IMAGE_PIN_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "FROM ubuntu:26.04\n", .hits = true },
+    Sample::{ .text = "FROM ubuntu:26.04@sha256:6a06 AS base\n", .hits = true },
+    Sample::{ .text =
+        "FROM \
+            ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c\n",
+        .hits = false },
+    Sample::{ .text = "# FROM ubuntu:26.04\n", .hits = false },
+}
+
+priv const DOCKERFILE: U8[] = ".devcontainer/Dockerfile" //< CI's Linux image
+
+priv fn check_action_pins(arena: Arena$@)
+    $bad: = scan.misjudged(Sample[]::ACTION_PIN_SAMPLES, names_unpinned_action, arena)
+    for s in scan.misjudged(Sample[]::IMAGE_PIN_SAMPLES, names_unpinned_image, arena)
+        bad.push(s)
+    $seen: Sz = 0
+    for rel in harness.tracked_matching(U8[][]::{ "*.yml", "*.yaml" })
+        if !rel.starts_with(".github/")
+            continue
+        seen += 1
+        if names_unpinned_action(harness.read_under_root(rel), arena)
+            bad.push(rel)
+    seen += 1
+    if names_unpinned_image(harness.read_under_root(DOCKERFILE), arena)
+        bad.push(DOCKERFILE)
+    verdict.check_list("every outside action and base image is named by its hash", seen, "files",
+        bad@, "name an action by its 40-hex commit (`@<hash> # v7.0.1`), an image by `@sha256:`")
+
 fn run(arena: Arena$@) //< this section's entry point
     //< Caution: **Call it from `conventions_match.kspl`'s `run`** (there is one suite).
     check_shebang_modes(arena)
@@ -641,6 +746,7 @@ fn run(arena: Arena$@) //< this section's entry point
     check_dispatch_switches(arena)
     check_job_timeouts(arena)
     check_runner_pins(arena)
+    check_action_pins(arena)
     check_container_env(arena)
     check_ci_shards(arena)
     check_platform_table(arena)

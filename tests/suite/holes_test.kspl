@@ -51,42 +51,44 @@ struct Run //< one program built and waiting to run, and what judges it
     sync: Bool //< built with ThreadSanitizer, not the memory sanitizers
     exe: U8[]
 
-priv fn check_spec_names(h: Hole, spec: U8[], arena: Arena$@) //<
+priv fn check_spec_names(hole: Hole, spec: U8[], arena: Arena$@) //<
     //< A hole's row names the specification's heading, and the words there that name the shape
     //< **The link cannot rot unseen**: a heading renamed, or the shape's words moved, fails here.
     $ok: = false
-    if at: = spec.find_str(arena.text().c('\n').s(h.spec).c('\n').take())
-        rest: = spec.sub_from(at + h.spec.len + 2)
+    if at: = spec
+        .find_str(arena.text().c('\n').s(hole.spec).c('\n').take())
+        rest: = spec.sub_from(at + hole.spec.len + 2)
         next: = rest.find_str("\n#").unwrap_or(rest.len)
-        ok = rest.sub(0, next).find_str(h.says).is_some()
-    verdict.check(arena.text().s(h.name).s(": the specification names the hole in \"").s(h.spec)
-        .s("\"").take(), ok,
-        arena.text().s("no heading, or its section does not hold: ").s(h.says).take())
+        ok = rest.sub(0, next).find_str(hole.says).is_some()
+    verdict.check(arena.text().s(hole.name).s(": the specification names the hole in \"")
+        .s(hole.spec).s("\"").take(), ok,
+        arena.text().s("no heading, or its section does not hold: ").s(hole.says).take())
 
-priv fn compile_or_refuse(work: U8[], h: Hole, sync: Bool, runs: List<|Run|>$@, arena: Arena$@) //<
+priv fn compile_or_refuse(work: U8[], hole: Hole, sync: Bool, runs: List<|Run|>$@, arena: Arena$@) //<
     //< Writes one program, and either checks its refusal or builds it for its run
-    src: = fs.join(work, arena.text().s(h.name).s(".kspl").take(), arena)
-    io.write_file(src, h.source) catch
-        verdict.check(h.name, false, "cannot write it")
+    src: = fs.join(work, arena.text().s(hole.name).s(".kspl").take(), arena)
+    io.write_file(src, hole.source) catch
+        verdict.check(hole.name, false, "cannot write it")
         return
-    if h.verdict == Verdict.refused
+    if hole.verdict == Verdict.refused
         r: = ksplc_harness.run_in(harness
             .ksplc_argv_anywhere(U8[][]::{ src,
-            fs.join(work, arena.text().s(h.name).s(".c").take(), arena) }), work)
-        verdict.check(arena.text().s(h.name).s(": ").s(h.what).s(", is refused").take(),
-            !r.exited_with(0) && r.out.find_str(h.says).is_some(), r.out)
+            fs.join(work, arena.text().s(hole.name).s(".c").take(), arena) }), work)
+        verdict.check(arena.text().s(hole.name).s(": ").s(hole.what).s(", is refused").take(),
+            !r.exited_with(0) && r.out.find_str(hole.says).is_some(), r.out)
         return
     flags: =
-        (U8[][]::PLAIN_CFLAGS if h.verdict == Verdict.stops else U8[][]::SYNC_CFLAGS if sync
-        else U8[][]::MEM_CFLAGS)
-    b: = harness_sanitizer.build(work, src, fs.join(work, h.name, arena), flags, false, "", arena)
+        (U8[][]::PLAIN_CFLAGS if hole.verdict == Verdict.stops
+        else U8[][]::SYNC_CFLAGS if sync else U8[][]::MEM_CFLAGS)
+    b: = harness_sanitizer.build(work, src, fs.join(work, hole.name, arena), flags, false, "", arena)
     if b.exe.len == 0
-        verdict.check(arena.text().s(h.name).s(": ").s(h.what).s(", builds").take(), false, b.why)
+        verdict.check(arena.text().s(hole.name).s(": ").s(hole.what).s(", builds").take(), false,
+            b.why)
         return
-    runs.push(Run::{ .hole = h, .sync = sync, .exe = b.exe })
+    runs.push(Run::{ .hole = hole, .sync = sync, .exe = b.exe })
 
-priv fn judge(r: Run, out: verdict.Run_out, arena: Arena$@) //< one run against its verdict
-    h: = r.hole
+priv fn judge(run: Run, out: verdict.Run_out, arena: Arena$@) //< one run against its verdict
+    h: = run.hole
     seen: = reported(out.out)
     switch h.verdict
     case .reported

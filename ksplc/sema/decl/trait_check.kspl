@@ -44,34 +44,34 @@ impl Sema_ctx
                 target.get_method(method.name)
         default {}
 
-    fn refuse_read_only_upcast(c: Self$@, r: Ast_node$@, type_id: I32, trait_id: I32): Bool //<
+    fn refuse_read_only_upcast(r: Self$@, node: Ast_node$@, type_id: I32, trait_id: I32): Bool //<
         //< Refuses a trait value made of a read-only place where a method would write through it
         //< **A direct call, `@` and an upcast must agree** ("Places, and the rules for when they
         //< may be written" in docs/SPEC-programming-language.md). Otherwise `grow(q)` writes an
         //< immutable `q`, and a `const` in ROM, where `q.scale()` is refused.
-        writer: = c.env.trait_slot_writing_receiver(type_id, trait_id).unwrap_or("")
+        writer: = r.env.trait_slot_writing_receiver(type_id, trait_id).unwrap_or("")
         if writer.len == 0
             return false
         // The node has no type yet, so a pointer or a slice is told apart by type_id. **They follow
         // the direct call**: a `T@` points at read-only memory, and a slice is refused where it is
         // a copy (`"ab"`, receiver_is_copy) as well as where its binding is read-only.
         $read_only: = false
-        if c.env.is_pointer(type_id)
-            read_only = c.env.is_const(c.env.strip_ptr(type_id))
+        if r.env.is_pointer(type_id)
+            read_only = r.env.is_const(r.env.strip_ptr(type_id))
         else
             read_only =
-                (c.env.is_slice(type_id) && c.env.receiver_is_copy(r, type_id)) ||
-                c.place_is_readonly(r)
+                (r.env.is_slice(type_id) && r.env.receiver_is_copy(node, type_id)) ||
+                r.place_is_readonly(node)
         if !read_only
             return false
-        if c.refuse_made_binding_write(r)
+        if r.refuse_made_binding_write(node)
             return true
-        c.clear_scratch()
-            .s("cannot make a '\{c.env.display(trait_id)\}' value of a read-only location. \
-                '\{c.env.display(type_id)\}' implements '\{writer\}' with a 'Self$@' receiver, \
+        r.clear_scratch()
+            .s("cannot make a '\{r.env.display(trait_id)\}' value of a read-only location. \
+                '\{r.env.display(type_id)\}' implements '\{writer\}' with a 'Self$@' receiver, \
                 which would write through it. ")
-        c.read_only_place_fix(r)
-        c.err(r, c.scratch.slice())
+        r.read_only_place_fix(node)
+        r.err(node, r.scratch.slice())
         return true
 
     fn add_trait_method(r: Self$@, m_node: Ast_node$@, m_name: U8[],

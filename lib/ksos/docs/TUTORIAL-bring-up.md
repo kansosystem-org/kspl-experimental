@@ -52,7 +52,7 @@ Each *stage* builds a small test program, copies it onto the car, and watches fo
 
 ## How the stages fit together
 
-**The stage numbers are names, not the order of starting**; renumbering would break every reference to them. An arrow means "get this working first".
+**The stage numbers are names, not the order of starting**; renumbering would break every reference to them. **There is no stage 11.** An arrow means "get this working first".
 
 ```mermaid
 flowchart LR
@@ -513,7 +513,21 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 | A remote button while it runs | Stops | ✅ any button | ✅ ▶ or 9 only | `car-pilot`: hold a key about a second, then let go ("How to stop it when it drives itself" in stage 9) |
 | 60 seconds of driving (`MAX_DRIVING_ROUNDS`) | Stops. The only one that works while nobody watches | ✅ | — | As for the remote |
 | A held key let go | Stops | — | ✅ | Press the key again ("It runs only while a key is held" in stage 12) |
+| A panic in the firmware | Stops every wheel (the panic hook that `boot.motors_up` sets) | ✅ | ✅ | Restart the car |
 | Every instruction to the wheels | Scales it down to the speed cap, `motor.CAP` (it does not stop) | ✅ | ✅ | — |
+
+**A host test checks each decision; only the car checks what feeds it and what it drives.** QEMU has no RP2040, so each decision is a function with no hardware access, and `make debug-ksos` runs the tests.
+
+| The stop | What a host test checks | What only the car checks |
+| :-- | :-- | :-- |
+| The battery | `LOW_ROUNDS` low readings in a row stop it, and fewer do not (`lib/ksos/tests/stops_test.kspl`) | The ADC's reading, the divider, and the switch bringing it back |
+| The distance | A raw reading under `EMERGENCY_MM` backs off, and 0 (no echo) does not (`stops_test.kspl`) | The ultrasonic's readings, and the wheels backing off |
+| No policy | Which policy files are refused, and why (`lib/ksos/tests/pilot_policy_test.kspl`) | The download, the record, and the wheels staying put |
+| The remote (`car-pilot`) | A press stops it; only a held press, let go, re-arms it (`stops_test.kspl`) | The IR receiver, and the press lengths in seconds |
+| The remote (`car-ir`) and a held key let go | Nothing | Every row |
+| The driving limit | `MAX_DRIVING_ROUNDS` rounds stop it, and fewer do not (`stops_test.kspl`) | That one round lasts 100ms |
+| A panic | Speed 0 gives 0 on both pins of every wheel (`stops_test.kspl`) | That the hook is set, and the PWM reaching the wheels |
+| The speed cap | No wheel goes over `motor.CAP` (`lib/ksos/tests/motor_test.kspl`) | The wheels' real speed |
 
 ## Stage 8 — leaving a record inside the device
 
@@ -758,7 +772,7 @@ Caution: **Read the correction's strength from `line`**, not `lon`/`rot`, which 
 
 **`used=` adds up only with the gaps at sector ends**: `append` never lets a record straddle a sector. The report line's `n=` and `trk=` count one run, not the record.
 
-**The record is not sampled at a fixed interval**, so how long something lasted is not in it; see the report line's `emerg=`. Why it is no training set for the policy is in "🤖 The AI on bare metal" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
+**The record is not sampled at a fixed interval**, so how long something lasted is not in it; see the report line's `emerg=`. Why it is no training set for the policy is in "The AI on bare metal" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 **Old lines carry two traps.** A line with no origin bit reads `safety=0`, and a line written under another `motor.CAP` has other `lon/lat/rot` magnitudes.
 

@@ -7,7 +7,8 @@
 // a diagram `diagrams.mjs`; help while a formula is typed, and its references' colours,
 // `formulas.mjs`; cells copied and pasted with their formulas or as values `pasting.mjs`; the
 // status bar `status.mjs`; the formula bar `bar.mjs`; the keys and what a screen reader is given
-// `keyboard.mjs`.
+// `keyboard.mjs`; a document crafted to run script `hostile.mjs`. Last, the run checks that the page
+// did nothing its Content-Security-Policy refuses.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
 // Paste is a synthetic `paste` event holding plain text, since a headless browser has no clipboard.
@@ -31,6 +32,7 @@ import { pasting } from "./pasting.mjs";
 import { statusBar } from "./status.mjs";
 import { formulaBar } from "./bar.mjs";
 import { keyboard } from "./keyboard.mjs";
+import { hostile } from "./hostile.mjs";
 import { SPEC, written } from "../../port/web/reference.mjs";
 
 const [binary, pageFile, work, kssrv, builder] = process.argv.slice(2);
@@ -38,7 +40,7 @@ const [binary, pageFile, work, kssrv, builder] = process.argv.slice(2);
 const browser = await launch(binary, work);
 const page = browser.page;
 const { js, settle, until, press, type, select, click, clickBelow, drag, menu, point, doubleClickAt,
-  rightClick, dragTo, openCell, frames, resize } = driver(page);
+  rightClick, dragTo, openCell, frames, media, resize } = driver(page);
 
 async function load(source) {
   const r = await js(`ksmd.load(${JSON.stringify(source)})`);
@@ -671,11 +673,11 @@ const sections = {
 
 Object.assign(sections, menus({ browser, js, until, press, type, select, click, clickBelow, menu,
   point, rightClick, doubleClickAt, dragTo, load, saves, source, openCell }));
-Object.assign(sections, tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
+Object.assign(sections, tools({ browser, page, media, js, settle, until, press, type, select, click, menu, load,
   saves, dragTo, rightClick, openCell, drag, doubleClickAt, resize }));
-Object.assign(sections, tables({ page, js, settle, press, type, select, click, menu, load, saves,
+Object.assign(sections, tables({ page, media, js, settle, press, type, select, click, menu, load, saves,
   rightClick, openCell }));
-Object.assign(sections, sizes({ page, js, settle, until, press, type, click, drag, menu, load, saves, source,
+Object.assign(sections, sizes({ page, media, js, settle, until, press, type, click, drag, menu, load, saves, source,
   openCell, doubleClickAt, rightClick, frames, resize }));
 Object.assign(sections, documents({ page, js, press, type, click, menu, load, saves, source }));
 Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
@@ -683,7 +685,8 @@ Object.assign(sections, formulaHelp({ page, js, settle, until, press, type, clic
 Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));
 Object.assign(sections, keyboard({ js, until, press, type, click, menu, load, saves, openCell, rightClick }));
 Object.assign(sections, formulaBar({ js, settle, until, press, type, click, menu, load, saves }));
-Object.assign(sections, statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,
+Object.assign(sections, hostile({ page, browser, js, settle, load }));
+Object.assign(sections, statusBar({ page, media, js, settle, until, press, type, select, click, menu, load, saves,
   rightClick, openCell, drag, resize }));
 
 try {
@@ -708,6 +711,14 @@ try {
     }
   }
   await served(browser, pageFile, path.join(work, "served"), kssrv, builder);
+  // The page's policy (`page.html`) is strict enough to hold off a crafted document
+  // (`hostile.mjs`), and loose enough for every section's own work, opened from a file or served.
+  verdict.part = "policy";
+  for (const [scheme, how] of [["file", "opened from a file"], ["http", "served"]]) {
+    const hit = browser.blocked.filter((b) => b.startsWith(`${scheme} `));
+    check(hit.length === 0, `the page ${how} does nothing its Content-Security-Policy refuses`,
+      hit.slice(0, 5).join(" | "));
+  }
 } finally {
   await browser.close();
 }

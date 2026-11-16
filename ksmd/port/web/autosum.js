@@ -9,8 +9,8 @@ function ksmdAutosum(ks) {
   const FUNCTIONS = { "autosum-sum": "sum", "autosum-average": "average", "autosum-count": "count",
     "autosum-max": "max", "autosum-min": "min" };
   const wrapOf = (block) => ks.view.blocks()[block];
-  const isNumber = (v) => !!v && v[0] === 1;
-  const isEmpty = (v) => !v || v[0] === 0;
+  const isNumber = (v) => !!v && v[0] === ks.CELL.NUMBER;
+  const isEmpty = (v) => !v || v[0] === ks.CELL.EMPTY;
   const at = (column, row) => `${ks.table.letters(column)}${row + 1}`;
 
   function one(c, fn) {

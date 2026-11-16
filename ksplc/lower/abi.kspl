@@ -18,20 +18,20 @@ import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // the one-character tests and cuts
 import "std/ds" { Map }
 import "std/str" { Str_builder }
-fn run(r: Ast_node$@, c: Sema_ctx$@, runtime_names: U8[][]) //<
+fn run(root: Ast_node$@, ctx: Sema_ctx$@, runtime_names: U8[][]) //<
     //< The ABI conversion pass's entry point
     //< It overwrites names with their mangled forms in place, recursively over the whole tree.
     //< runtime_names: the names the C runtime spells (`c_names` in `../gen/runtime.kspl`). The
     //< pipeline hands them in, since this layer imports nothing of the generators.
-    base_diag.ice_assert(r != null, "abi.apply: file_node is null")
-    $names: = C_names::{ .globals = global_c_names(c),
+    base_diag.ice_assert(root != null, "abi.apply: file_node is null")
+    $names: = C_names::{ .globals = global_c_names(ctx),
         .declared = Map<|U8[], C_claim|>(null) }
     defer names.globals.free()
     defer names.declared.free()
     for n in runtime_names
         names.declared.set(n, C_claim::{ .name = "", .node = null, .type_id = 0 })
-    names.claim_made_types(c)
-    r.apply_abi_recursive(c, names@, 0)
+    names.claim_made_types(ctx)
+    root.apply_abi_recursive(ctx, names@, 0)
 
 priv struct C_claim //< what holds a C name: the C runtime, a type with no declaration, or a global
     name: U8[] //< the KSPL spelling; empty for a name of the C runtime
@@ -43,25 +43,25 @@ priv struct C_names //< the C names the pass deals in, for the checks on them
     declared: Map<|U8[], C_claim|> //< each global C name, and what holds it
 
 impl C_names
-    priv fn claim_made_types(r: Self$@, c: Sema_ctx$@) //<
+    priv fn claim_made_types(r: Self$@, ctx: Sema_ctx$@) //<
         //< Records the C names of the types C defines with no declaration: arrays and functions
         //< They are what genc defines from `complex_types` (`../gen/c/decl.kspl`). One name reached
         //< by two ids (a read-only one and the plain one) is one C type, so the first id holds it.
         defer $spelled: = Str_builder()
-        for type_id in c.env.complex_types
-            switch c.env.get_info(type_id)
+        for type_id in ctx.env.complex_types
+            switch ctx.env.get_info(type_id)
             case .array(_b, size)
                 if size == -1
                     continue
             default {}
             spelled.clear()
-            c.env.mangle_type_id_to(type_id, spelled)
+            ctx.env.mangle_type_id_to(type_id, spelled)
             if r.declared.get(spelled.slice()).is_none()
                 r.declared
                     .set(base_core.arena.dup_str(spelled.slice()),
-                    C_claim::{ .name = c.env.display(type_id), .node = null, .type_id = type_id })
+                    C_claim::{ .name = ctx.env.display(type_id), .node = null, .type_id = type_id })
 
-    priv fn claim(r: Self$@, c: Sema_ctx$@, at: Ast_node$@, sym: Sema_symbol$@, c_name: U8[],
+    priv fn claim(r: Self$@, ctx: Sema_ctx$@, at: Ast_node$@, sym: Sema_symbol$@, c_name: U8[],
         type_id: I32) //<
             //< Records c_name (on the arena) as sym's, and reports it where something took it first
             //< type_id is the type a type's declaration names, or 0. **Two KSPL names can meet in
@@ -75,26 +75,26 @@ impl C_names
                 holder = "the C runtime"
             else if other.node == null
                 if type_id != 0 &&
-                    c.env.get_real_type(type_id) == c.env.get_real_type(other.type_id)
+                    ctx.env.get_real_type(type_id) == ctx.env.get_real_type(other.type_id)
                     return
                 holder = base_core.arena.text().s("'\{other.name\}'").take()
             // A generic trait's default method has a clone per instance of the trait, each with
             // its symbol; a clone keeps its declaration's position.
             else if sym.node != null && !other.node.loc.same_as(sym.node.loc)
                 file: = base_diag.shown_file(other.node.loc.file())
-                line: = c.line_of(other.node.loc)
+                line: = ctx.line_of(other.node.loc)
                 holder = base_core.arena.text().s("'\{other.name\}' at \{file\}:\{line\}").take()
             if holder.len > 0
-                c.clear_scratch()
+                ctx.clear_scratch()
                     .s("'\{sym.name\}' takes the name '\{c_name\}' in the generated C, and so does \
                         \{holder\}. Rename one of them, or the folder or file that holds it")
-                c.err(at, c.scratch.slice())
+                ctx.err(at, ctx.scratch.slice())
             return
         r.declared
             .set(c_name,
             C_claim::{ .name = sym.name, .node = sym.node, .type_id = type_id })
 
-priv fn global_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
+priv fn global_c_names(ctx: Sema_ctx$@): Map<|U8[], Bool|> //<
     //< The C names of the program's globals that a local can spell: verbatim ones, types', and
     //< the C library's a body writes (`BODY_C_NAMES` in `../base/c_name.kspl`)
     //< A local of such a name takes a made one, as a local hiding a local does. C would read the
@@ -105,26 +105,26 @@ priv fn global_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
     $names: = Map<|U8[], Bool|>(null)
     for name in base_c_name.BODY_C_NAMES
         names.set(name, true)
-    for e in c.symtab.by_fqn.items()
+    for e in ctx.symtab.by_fqn.items()
         sym: = e.value
         if !sym.flags.is_method && sym.uses_verbatim_c_name()
             names.set(sym.name, true)
     defer $spelled: = Str_builder()
-    for $type_id: = 1; type_id < c.env.id_to_type.len; type_id += 1
+    for $type_id: = 1; type_id < ctx.env.id_to_type.len; type_id += 1
         // A pointer and a read-only type have no name in C: genc writes `T*` and `const T` around
         // their base (`map_c_type_to_impl`). Leave them out, or a chain too deep for C is spelled
         // here and stops the compiler before genc reports it at its line.
-        info: = c.env.get_info(type_id)
+        info: = ctx.env.get_info(type_id)
         if info.is_pointer() || info.is_const_of()
             continue
         spelled.clear()
-        c.env.mangle_type_id_to(type_id, spelled)
+        ctx.env.mangle_type_id_to(type_id, spelled)
         if names.get(spelled.slice()).is_none()
             names.set(base_core.arena.dup_str(spelled.slice()), true)
     return names
 
 impl Ast_node
-    priv fn apply_abi_recursive(r: Ast_node$@, c: Sema_ctx$@, names: C_names$@, owner_id: I32) //<
+    priv fn apply_abi_recursive(r: Ast_node$@, ctx: Sema_ctx$@, names: C_names$@, owner_id: I32) //<
         //< owner_id: the type of the `impl` whose direct child r is, or 0
         if r == null
             return
@@ -137,22 +137,22 @@ impl Ast_node
         target: = r.get_decl_type_node() if kind == .k_decl_impl else null
         child_owner_id: = target.type_id if target != null else 0
         for child in r.children
-            child.apply_abi_recursive(c, names, child_owner_id)
+            child.apply_abi_recursive(ctx, names, child_owner_id)
 
         if kind == .k_identifier || kind == .k_expr_path
             r.name_hiding_local(names.globals@)
         switch kind
         case .k_decl_fn, .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_struct, .k_decl_enum,
             .k_decl_typedef, .k_decl_trait
-            r.transform_decl_name(c, owner_id, names)
+            r.transform_decl_name(ctx, owner_id, names)
         case .k_expr_postfix
             op_node: = r.get_postfix_op()
             if op_node != null && op_node.text.equals("(")
-                r.transform_postfix_call(c)
+                r.transform_postfix_call(ctx)
         case .k_method_access
-            r.transform_method_access(c)
+            r.transform_method_access(ctx)
         case .k_expr_path, .k_type_path, .k_generic_path
-            r.transform_path_access(c)
+            r.transform_path_access(ctx)
         default {}
 
     priv fn name_hiding_local(r: Ast_node$@, globals: Map<|U8[], Bool|>$@) //<
@@ -168,7 +168,7 @@ impl Ast_node
             c_name: = base_c_name.hiding_local_name(sym.name, sym.hidden_count)
             r.flatten_to_identifier(c_name)
 
-    priv fn transform_decl_name(r: Ast_node$@, c: Sema_ctx$@, owner_id: I32, names: C_names$@) //<
+    priv fn transform_decl_name(r: Ast_node$@, ctx: Sema_ctx$@, owner_id: I32, names: C_names$@) //<
         //< Gives a declaration its final C name, which both backends write as it stands
         //< owner_id: the type of the `impl` r is a method of, or 0
         id_node: = r.find_child(.k_identifier)
@@ -177,7 +177,7 @@ impl Ast_node
         sym: Sema_symbol$@ = get_global_symbol_by_def(r) catch
             return
 
-        w: = c.clear_scratch()
+        w: = ctx.clear_scratch()
         is_type_decl: =
             r.kind_id == .k_decl_struct || r.kind_id == .k_decl_enum ||
             r.kind_id == .k_decl_typedef || r.kind_id == .k_decl_trait
@@ -186,19 +186,20 @@ impl Ast_node
             // the one every use of the type is written with. A name spelled again here from the
             // file's path lost the dot of a folder like `.hidden`. The type's name kept it as `_`,
             // so the C declared one name and used another.
-            c.env.mangle_type_id_to(sym.type_id, w)
+            ctx.env.mangle_type_id_to(sym.type_id, w)
         else if owner_id != 0
             // A method takes its type's name in front, spelled from the type as above.
-            c.env.mangle_type_id_to(owner_id, w.s(base_mangle.KSPL_PREFIX)).s("_").s(id_node.text)
+            ctx.env.mangle_type_id_to(owner_id, w.s(base_mangle.KSPL_PREFIX)).s("_")
+                .s(id_node.text)
         else
             get_c_identifier_for_sym_to(sym, id_node.text, w)
 
         id_node.text = base_core.arena.dup_str(w.slice())
         // Caution: **Pass the arena's copy**: a report reuses the scratch the name was spelled in.
         if !sym.uses_verbatim_c_name()
-            names.claim(c, id_node, sym, id_node.text, sym.type_id if is_type_decl else 0)
+            names.claim(ctx, id_node, sym, id_node.text, sym.type_id if is_type_decl else 0)
 
-    fn receiver_wants_ptr(r: Ast_node$@, c: Sema_ctx$@): Bool //<
+    fn receiver_wants_ptr(r: Ast_node$@, ctx: Sema_ctx$@): Bool //<
         //< Whether the method that the method access `r` calls takes its receiver by pointer
         //< With no definition to say, **it answers true** but for a slice: else a needed temporary
         //< is missed and the C breaks.
@@ -209,13 +210,13 @@ impl Ast_node
         member_node: = r.get_postfix_member()
         fn_def: = member_node.def_node if member_node != null else null
         if fn_def != null
-            return fn_def.receiver_is_pointer(c)
+            return fn_def.receiver_is_pointer(ctx)
         obj_node: = r.get_postfix_receiver()
-        if obj_node != null && c.env.is_slice(obj_node.type_id)
+        if obj_node != null && ctx.env.is_slice(obj_node.type_id)
             return false
         return true
 
-    fn receiver_is_pointer(r: Ast_node$@, c: Sema_ctx@): Bool //<
+    fn receiver_is_pointer(r: Ast_node$@, ctx: Sema_ctx@): Bool //<
         //< Whether the function definition `r` takes its first argument (the receiver) by pointer
         //< True where the signature does not say, as receiver_wants_ptr answers.
         fn_sig: = r.find_child(.k_type_fn_sig)
@@ -227,38 +228,38 @@ impl Ast_node
         first_param: = params.get_child(0)
         if first_param.kind_id != .k_fn_param
             return true
-        return c.env.is_pointer(first_param.param_type_id())
+        return ctx.env.is_pointer(first_param.param_type_id())
 
-    priv fn transform_postfix_call(r: Ast_node$@, c: Sema_ctx$@)
+    priv fn transform_postfix_call(r: Ast_node$@, ctx: Sema_ctx$@)
         expr_node: = r.get_postfix_receiver()
         r.ice_assert(expr_node != null, "transform_postfix_call: postfix node must have receiver")
 
         if expr_node.kind_id == .k_method_access || expr_node.kind_id == .k_generic_method
             obj_node: = expr_node.get_postfix_receiver()
-            if c.env.trait_def_of_receiver(obj_node.type_id).is_none()
-                requires_ptr: = expr_node.receiver_wants_ptr(c)
+            if ctx.env.trait_def_of_receiver(obj_node.type_id).is_none()
+                requires_ptr: = expr_node.receiver_wants_ptr(ctx)
                 // It adjusts the receiver's pointer depth (obj_depth) to the method's
                 // (target_depth: 1 for Self@, 0 for Self). It adds one '@' where the depth is
                 // short, and a '$' per extra level (Foo@@, say).
                 target_depth: = 1 if requires_ptr else 0
-                $obj_depth: = c.env.ptr_depth(obj_node.type_id)
+                $obj_depth: = ctx.env.ptr_depth(obj_node.type_id)
                 $passed_obj: = obj_node
 
                 if obj_depth < target_depth
                     passed_obj = Ast_node(.k_expr_postfix, "@", r.loc)
                     at_literal: = Ast_node(.k_literal, "@", r.loc)
                     passed_obj.add_child(obj_node).add_child(at_literal)
-                    passed_obj.type_id = c.env.make_ptr(obj_node.type_id)
+                    passed_obj.type_id = ctx.env.make_ptr(obj_node.type_id)
                 else
                     for obj_depth > target_depth
                         deref_node: = Ast_node(.k_expr_postfix, "$", r.loc)
                         deref_literal: = Ast_node(.k_literal, "$", r.loc)
                         deref_node.add_child(passed_obj).add_child(deref_literal)
-                        deref_node.type_id = c.env.strip_ptr(passed_obj.type_id)
+                        deref_node.type_id = ctx.env.strip_ptr(passed_obj.type_id)
                         passed_obj = deref_node
                         obj_depth -= 1
 
-                expr_node.transform_method_access(c)
+                expr_node.transform_method_access(ctx)
                 flattened_member: = expr_node.get_postfix_member()
                 // The receiver is now the first argument, so the method_access becomes a plain
                 // Identifier of the callee, an ordinary function call from here on.
@@ -279,7 +280,7 @@ impl Ast_node
                     args_node.add_child(passed_obj)
                 return
 
-        if expr_node.flatten_if_generic(c)
+        if expr_node.flatten_if_generic(ctx)
             return
 
         if (expr_node.kind_id == .k_expr_path || expr_node.kind_id == .k_type_path) ||
@@ -287,7 +288,7 @@ impl Ast_node
             func_part: = expr_node.get_path_name()
             sym: = get_global_symbol_by_def(expr_node.def_node).unwrap_or(null)
 
-            w: = c.clear_scratch()
+            w: = ctx.clear_scratch()
             get_c_identifier_for_sym_to(sym, func_part, w)
             c_name: = w.slice()
 
@@ -297,27 +298,27 @@ impl Ast_node
             else
                 expr_node.flatten_to_identifier(c_name)
 
-    priv fn transform_method_access(r: Ast_node$@, c: Sema_ctx$@)
+    priv fn transform_method_access(r: Ast_node$@, ctx: Sema_ctx$@)
         obj_node: = r.get_postfix_receiver()
         member_node: = r.get_postfix_member()
         r.ice_assert(obj_node != null && member_node != null,
             "method_access node must have receiver and member")
 
-        if member_node.flatten_if_generic(c)
+        if member_node.flatten_if_generic(ctx)
             return
 
         $base_id: = member_node.type_id
         if base_id == 0 || sema_type_env.is_unknown(base_id)
             base_id = obj_node.type_id
             for
-                info: = c.env.get_info(base_id)
+                info: = ctx.env.get_info(base_id)
                 switch info
                 case .pointer(inner_id)
                     base_id = inner_id
                 default
                     break
 
-        info: = c.env.get_info(c.env.get_real_type(base_id))
+        info: = ctx.env.get_info(ctx.env.get_real_type(base_id))
         switch info
         case .trait_type
             return
@@ -326,7 +327,7 @@ impl Ast_node
         target_def: = member_node.def_node if member_node.def_node != null else r.def_node
 
         sym: = get_global_symbol_by_def(target_def).unwrap_or(null)
-        w: = c.clear_scratch()
+        w: = ctx.clear_scratch()
 
         if sym != null
             get_c_identifier_for_sym_to(sym, member_node.text, w)
@@ -335,30 +336,30 @@ impl Ast_node
 
         w.s("kspl_")
         if base_id != 0
-            c.env.mangle_type_id_to(base_id, w)
+            ctx.env.mangle_type_id_to(base_id, w)
             w.s("_")
 
         w.s(member_node.text)
         member_node.flatten_to_identifier(w.slice())
 
-    priv fn transform_path_access(r: Ast_node$@, c: Sema_ctx$@)
-        if r.flatten_if_generic(c)
+    priv fn transform_path_access(r: Ast_node$@, ctx: Sema_ctx$@)
+        if r.flatten_if_generic(ctx)
             return
 
         base_name: = r.get_path_name()
         switch get_global_symbol_by_def(r.def_node)
         case .some(sym)
-            w: = c.clear_scratch()
+            w: = ctx.clear_scratch()
             get_c_identifier_for_sym_to(sym, base_name, w)
             r.flatten_to_identifier(w.slice())
         case .none
             r.flatten_to_identifier(base_name)
 
-    priv fn flatten_if_generic(r: Ast_node$@, c: Sema_ctx$@): Bool
+    priv fn flatten_if_generic(r: Ast_node$@, ctx: Sema_ctx$@): Bool
         if r.kind_id == .k_generic_path || r.kind_id == .k_generic_method
             if r.type_id != 0
-                flat_name: = c.env.get_str(r.type_id)
-                w: = c.clear_scratch()
+                flat_name: = ctx.env.get_str(r.type_id)
+                w: = ctx.clear_scratch()
                 flat_name.kspl_symbol_to(w)
                 r.flatten_to_identifier(w.slice())
                 return true
@@ -369,11 +370,11 @@ impl Ast_node
             return false
         return sym.flags.is_generated_instance
 
-fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): Writer //<
+fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], out: Writer): Writer //<
     //< It writes the C name of what sym names (base_name where sym names no value or type)
     //< The entry point asks it for the functions it calls outside the tree (gen/entry.kspl).
     if sym == null || (!sym.kind.is_value() && !sym.kind.is_type())
-        return w.s(base_name)
+        return out.s(base_name)
 
     is_method_name: = sym.flags.is_method || sym.name.find_char_out('.') >= 0
 
@@ -383,30 +384,30 @@ fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): 
     // function that is not defined. A method has this option only where an `extern` definition
     // was written, and `sema/decl/attrs.kspl` rejects that.
     if !is_method_name && sym.uses_verbatim_c_name()
-        return w.s(sym.name)
+        return out.s(sym.name)
     if sym.name.equals("main") || sym.name.equals("kspl_main")
-        return w.s("kspl_main")
+        return out.s("kspl_main")
     if sym.node.is_generic_inst_node()
-        return sym.name.kspl_symbol_to(w)
+        return sym.name.kspl_symbol_to(out)
 
     if is_method_name
         last_dot: = sym.name.rfind_char_out('.')
         if last_dot >= 0
             t_name: = sym.name.sub(0, last_dot)
             m_name: = sym.name.sub_from(last_dot + 1)
-            return t_name.mangle_c_type_name_to(w.s("kspl_")).s("_\{m_name\}")
-        return sym.name.mangle_type_name_to(w.s("kspl_"))
+            return t_name.mangle_c_type_name_to(out.s("kspl_")).s("_\{m_name\}")
+        return sym.name.mangle_type_name_to(out.s("kspl_"))
 
     def_in: = sym.get_defined_in()
 
     if is_private_symbol(sym)
-        return write_priv_prefix_to(def_in, w).s(sym.name)
+        return write_priv_prefix_to(def_in, out).s(sym.name)
 
     if def_in.len > 0
-        def_in.mangle_type_name_to(w.s("kspl_")).s("_")
-        return sym.name.mangle_type_name_to(w)
+        def_in.mangle_type_name_to(out.s("kspl_")).s("_")
+        return sym.name.mangle_type_name_to(out)
 
-    return sym.name.mangle_type_name_to(w.s("kspl_"))
+    return sym.name.mangle_type_name_to(out.s("kspl_"))
 
 priv fn is_private_symbol(sym: Sema_symbol$@): Bool //<
     //< Whether sym is a file-private value whose C name needs the file's prefix
@@ -450,8 +451,8 @@ impl U8[]
         //< Whether a local of this name would take a global's C name (`global_c_names`)
         return r.has_kspl_prefix() || globals.get(r).unwrap_or(false)
 
-priv fn write_priv_prefix_to(fname: U8[], w: Writer): Writer
-    $res: = w.s("kspl_priv_")
+priv fn write_priv_prefix_to(fname: U8[], out: Writer): Writer
+    $res: = out.s("kspl_priv_")
 
     // resolve_import_path joins "dir/import_str" without normalizing, so a relative import can
     // collect several "./" / ".\" ("././sibling"); it skips them until none is left.

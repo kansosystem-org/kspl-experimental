@@ -38,8 +38,8 @@ fn changed(ed: Editor$@, block: Sz, what: Table_edit, at: Sz) //<
     ed.edit_table(block, what, at, 1, Sz[]::{}) catch e
         verdict.check("a row or column edit", false, e.message())
 
-fn join(a: U8[], b: U8[], arena: Arena$@): U8[]
-    return arena.text().s(a).s(b).take()
+fn join(left: U8[], right: U8[], arena: Arena$@): U8[]
+    return arena.text().s(left).s(right).take()
 
 fn saves(what: U8[], ed: Editor@, arena: Arena$@, expected: U8[]) //<
     //< The document saves as `expected`, and that source reads and saves again unchanged
@@ -71,10 +71,10 @@ fn refused(text: U8[], what: U8[]) //< the reader refuses the source
         return
     verdict.check(arena.text().s("refused: \{what\}").take(), false, "the source was read")
 
-fn refuses(what: U8[], r: Void!Refused) //< the editor refuses the action
+fn refuses(what: U8[], result: Void!Refused) //< the editor refuses the action
     //< Caution: **Hand it the call's result, rather than checking `true` in a `catch`.** There, an
     //< action the editor wrongly takes prints nothing, and the test passes unseen.
-    verdict.check(what, r.is_err(), "accepted")
+    verdict.check(what, result.is_err(), "accepted")
 
 struct Folder //< a folder on disk that the tests read sources and images from
     //< It applies the rules of a path's text alone. The page and the local server add their own
@@ -82,21 +82,21 @@ struct Folder //< a folder on disk that the tests read sources and images from
     root: U8[]
 
 impl Folder
-    fn assemble(f: Self@, written: U8[], arena: Arena$@): Assembly!Load_error //<
+    fn assemble(r: Self@, written: U8[], arena: Arena$@): Assembly!Load_error //<
         //< The view of the document `written` names from the root
-        return assemble_loaded(f, load(f, written, arena)!, arena)
+        return assemble_loaded(r, load(r, written, arena)!, arena)
 
 impl Folder: Files
-    fn resolve(_f: Self@, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal
+    fn resolve(_r: Self@, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal
         return resolve_text(folder, written, arena)
 
-    fn check(f: Self@, path: U8[], arena: Arena$@): Void!Refusal
-        info: = fs.stat(fs.join(f.root, path, arena)) catch
+    fn check(r: Self@, path: U8[], arena: Arena$@): Void!Refusal
+        info: = fs.stat(fs.join(r.root, path, arena)) catch
             throw .missing
         if info.kind != .file
             throw .not_file
 
-    fn read(f: Self@, path: U8[], limit: Sz, arena: Arena$@): U8[]!Refusal
-        f.check(path, arena)!
-        return io.read_file_capped(fs.join(f.root, path, arena), limit + 1, arena) catch
+    fn read(r: Self@, path: U8[], limit: Sz, arena: Arena$@): U8[]!Refusal
+        r.check(path, arena)!
+        return io.read_file_capped(fs.join(r.root, path, arena), limit + 1, arena) catch
             throw .unreadable

@@ -35,8 +35,8 @@ pub enum Calc_error //< why a cell has no value; each is fixed differently
         //< `#LIMIT!`
 
 impl Calc_error
-    pub fn mark(e: Self): U8[] //< what the cell shows
-        switch e
+    pub fn mark(r: Self): U8[] //< what the cell shows
+        switch r
         case .wrong_kind
             return "#VALUE!"
         case .division
@@ -122,16 +122,16 @@ pub struct Value //< the small fields first, so they share one word
     pub text: U8[] //< a text's bytes; empty for the other kinds
 
 impl Value
-    pub fn failed(e: Calc_error): Value //< the value of a cell that has none, of this kind
-        return Value.because(e, .plain, "", -1)
+    pub fn failed(error: Calc_error): Value //< the value of a cell that has none, of this kind
+        return Value.because(error, .plain, "", -1)
 
-    pub fn because(e: Calc_error, why: Why, detail: U8[], at: Sz): Value //<
+    pub fn because(error: Calc_error, why: Why, detail: U8[], at: Sz): Value //<
         //< An error and what made it: `detail` and `at` are the text and the number `why` names
         return Value::{ .kind = .error, .number = F64::at, .text = detail, .boolean = false,
-            .error = e, .why = why }
+            .error = error, .why = why }
 
-    pub fn at(v: Self): Sz //< an error's number as `Why` names it: a place, or -1
-        return Sz::v.number
+    pub fn at(r: Self): Sz //< an error's number as `Why` names it: a place, or -1
+        return Sz::r.number
 
 fn equal_keys(key: Value, cell: Value): Bool //< whether a cell's value is the key looked for
     if key.kind != cell.kind
@@ -148,14 +148,14 @@ fn equal_keys(key: Value, cell: Value): Bool //< whether a cell's value is the k
     default
         return false
 
-fn arithmetic(x: Value, y: Value, op: Token_kind): Value //<
+fn arithmetic(left: Value, right: Value, op: Token_kind): Value //<
     //< Two numbers joined by an operator; the left error comes first
-    if x.kind == .date || y.kind == .date
-        return date_arithmetic(x, y, op)
-    a: = operand(x)
+    if left.kind == .date || right.kind == .date
+        return date_arithmetic(left, right, op)
+    a: = operand(left)
     if a.kind == .error
         return a
-    b: = operand(y)
+    b: = operand(right)
     if b.kind == .error
         return b
     switch op
@@ -170,17 +170,18 @@ fn arithmetic(x: Value, y: Value, op: Token_kind): Value //<
         return Value.because(.division, .divide_by_zero, "", -1)
     return number(a.number / b.number)
 
-fn sum_of(a: F64, b: F64): Value //< `a + b`, and 0 where the two cancel at the 15 digits they show
+fn sum_of(left: F64, right: F64): Value //<
+    //< `left + right`, and 0 where the two cancel at the 15 digits they show
     //< **A sum whose sides show the same 15 digits with opposite signs is exactly 0**, so
-    //< `0.1 + 0.2 - 0.3` is 0, not 5.55e-17, and `a - b` is 0 exactly where `a = b` is `true`.
-    //< A number the sides do not cancel stays, however small: `1e-20 - 0` is 1e-20.
-    if a != 0.0 && b != 0.0 && shows_same(a, -b)
+    //< `0.1 + 0.2 - 0.3` is 0, not 5.55e-17, and `left - right` is 0 exactly where `left = right`
+    //< is `true`. A number the sides do not cancel stays, however small: `1e-20 - 0` is 1e-20.
+    if left != 0.0 && right != 0.0 && shows_same(left, -right)
         return number(0.0)
-    return number(a + b)
+    return number(left + right)
 
-pub fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or true and false
+pub fn operand(value: Value): Value //< a value in arithmetic: empty is 0, text or true and false
     //< an error
-    switch v.kind
+    switch value.kind
     case .empty
         return number(0.0)
     case .text
@@ -190,29 +191,30 @@ pub fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or t
     case .date
         return Value.because(.wrong_kind, .date_arithmetic, "", -1)
     case .number, .error
-        return v
+        return value
 
-pub fn truth(v: Value): Value //< a value as a condition: empty is false, a number or text an error
-    switch v.kind
+pub fn truth(value: Value): Value //<
+    //< a value as a condition: empty is false, a number or text an error
+    switch value.kind
     case .empty
         return boolean(false)
     case .number, .text, .date
         return Value.because(.wrong_kind, .not_a_condition, "", -1)
     case .boolean, .error
-        return v
+        return value
 
-fn is_comparison(k: Token_kind): Bool
-    return k == .equal || k == .unequal || k == .less || k == .less_equal || k == .greater ||
-        k == .greater_equal
+fn is_comparison(kind: Token_kind): Bool
+    return kind == .equal || kind == .unequal || kind == .less || kind == .less_equal ||
+        kind == .greater || kind == .greater_equal
 
-fn joined(x: Value, y: Value, arena: Arena$@): Value //<
+fn joined(left: Value, right: Value, arena: Arena$@): Value //<
     //< Two texts joined by `&`; the left error comes first. An empty cell is empty text. **A
     //< number, a date or `true`/`false` is `#VALUE!`**: written as text, its digits would depend on
     //< a format the formula does not name. Text past `MAX_TEXT` is `#NUM!`.
-    a: = as_text(x)
+    a: = as_text(left)
     if a.kind == .error
         return a
-    b: = as_text(y)
+    b: = as_text(right)
     if b.kind == .error
         return b
     if a.text.len + b.text.len > MAX_TEXT
@@ -223,27 +225,27 @@ fn joined(x: Value, y: Value, arena: Arena$@): Value //<
         return a
     return text(arena.text().s(a.text).s(b.text).take())
 
-priv fn as_text(v: Value): Value //< a value as one side of `&`: text, or an error
-    switch v.kind
+priv fn as_text(value: Value): Value //< a value as one side of `&`: text, or an error
+    switch value.kind
     case .text, .error
-        return v
+        return value
     case .empty
         return text("")
     default
         return Value.because(.wrong_kind, .joined_kind, "", -1)
 
-fn compare(x: Value, y: Value, op: Token_kind): Value //<
+fn compare(left: Value, right: Value, op: Token_kind): Value //<
     //< Two values compared; the left error comes first
     //< An empty value takes the other side's kind: 0, empty text, false or a day before every
     //< date. Values of two kinds are unequal, and ordering them is an error. Two numbers are
     //< equal when the 15 digits they show agree, so `0.1 + 0.2 = 0.3`. Text compares without
     //< regard to case.
-    if x.kind == .error
-        return x
-    if y.kind == .error
-        return y
-    a: = like(x, y)
-    b: = like(y, x)
+    if left.kind == .error
+        return left
+    if right.kind == .error
+        return right
+    a: = like(left, right)
+    b: = like(right, left)
     if a.kind != b.kind
         if op == .equal || op == .unequal
             return boolean(op == .unequal)
@@ -274,11 +276,11 @@ fn compare(x: Value, y: Value, op: Token_kind): Value //<
     default {}
     return boolean(order >= 0)
 
-fn like(v: Value, other: Value): Value //< an empty value as the zero of the other's kind
+fn like(value: Value, other: Value): Value //< an empty value as the zero of the other's kind
     //< Among dates that is a day before the first, so an empty due date is earlier than every
     //< date, as an empty cell is 0 among numbers.
-    if v.kind != .empty
-        return v
+    if value.kind != .empty
+        return value
     switch other.kind
     case .number
         return number(0.0)
@@ -289,18 +291,18 @@ fn like(v: Value, other: Value): Value //< an empty value as the zero of the oth
     case .date
         return date_value(BEFORE_DATES)
     case .empty, .error {}
-    return v
+    return value
 
-priv fn date_arithmetic(x: Value, y: Value, op: Token_kind): Value //<
+priv fn date_arithmetic(left: Value, right: Value, op: Token_kind): Value //<
     //< A date and a whole number of days added or taken away, or two dates taken apart
     //< A date plus or minus days is a date, and a date minus a date the days between them. Any
     //< other use of a date in arithmetic is `#VALUE!`, and a day past the year 9999 `#NUM!`.
-    if x.kind == .error
-        return x
-    if y.kind == .error
-        return y
-    a: = number(0.0) if x.kind == .empty else x
-    b: = number(0.0) if y.kind == .empty else y
+    if left.kind == .error
+        return left
+    if right.kind == .error
+        return right
+    a: = number(0.0) if left.kind == .empty else left
+    b: = number(0.0) if right.kind == .empty else right
     if op == .minus && a.kind == .date && b.kind == .date
         return number(a.number - b.number)
     $days: = 0.0
@@ -329,17 +331,20 @@ fn number_of(text: U8[]): Value //< a number written in decimal; one too large i
         return Value.because(.not_finite, .too_large, "", -1)
     return number(n)
 
-pub fn number(n: F64): Value //< a number; an infinity or a NaN is an error
-    if n - n != 0.0
+pub fn number(value: F64): Value //< a number; an infinity or a NaN is an error
+    if value - value != 0.0
         return Value.because(.not_finite, .too_large, "", -1)
 
-    return Value::{ .kind = .number, .number = n, .text = "", .boolean = false, .error = .syntax }
+    return Value::{ .kind = .number, .number = value, .text = "", .boolean = false,
+        .error = .syntax }
 
-pub fn text(s: U8[]): Value
-    return Value::{ .kind = .text, .number = 0.0, .text = s, .boolean = false, .error = .syntax }
+pub fn text(value: U8[]): Value
+    return Value::{ .kind = .text, .number = 0.0, .text = value, .boolean = false,
+        .error = .syntax }
 
-pub fn boolean(b: Bool): Value
-    return Value::{ .kind = .boolean, .number = 0.0, .text = "", .boolean = b, .error = .syntax }
+pub fn boolean(value: Bool): Value
+    return Value::{ .kind = .boolean, .number = 0.0, .text = "", .boolean = value,
+        .error = .syntax }
 
 pub fn empty(): Value
     return Value::{ .kind = .empty, .number = 0.0, .text = "", .boolean = false,

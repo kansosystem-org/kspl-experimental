@@ -60,7 +60,7 @@ pub enum Fs_error //< why a filesystem operation failed
     too_deep //< a walk reached the depth limit (see `MAX_WALK_DEPTH`)
     held_elsewhere //< another holder has the lock (only `File_lock.try_take`, which does not wait)
     io(err: io.Io_error) //< reading or writing a file's contents failed; it names the file
-    mkdir_failed(at: U8[]) //< the segment that could not be created, as a view into the path.
+    mkdir_failed(at: U8[]) //< the segment that could not be created, as a view into the path
         //< **Which segment it stopped at** tells a path problem from a permission problem. It is
         //< not a copy; to keep it longer than the caller's path, the caller copies it.
 
@@ -333,26 +333,26 @@ pub fn read_dir( //< one directory's entries, without descending
 
 pub fn join( //< a path with a segment appended (Python's `os.path.join`)
     //< It writes `/` at the join, which Windows also accepts. Separators at the join are not
-    //< doubled. **After a bare root, `b` follows it directly**: `/` and `etc` give `/etc`. On
+    //< doubled. **After a bare root, `segment` follows it directly**: `/` and `etc` give `/etc`. On
     //< Windows `C:` and `x` give `C:x`, which stays relative to that drive's working folder, as
     //< Python, Go and Rust answer. To split a path, use `sys.get_dir_name` / `sys.get_file_name`.
-    a: U8[], //< the leading part
-    b: U8[], //< the segment to append
+    head: U8[], //< the leading part
+    segment: U8[], //< the segment to append
     arena: Arena$@, //< where the joined path goes; null means the heap, freed with `dealloc`
 ): U8[] //< the joined path; if one side is empty, a copy of the other
-    return join_on(a, b, sys.is_windows(), arena)
+    return join_on(head, segment, sys.is_windows(), arena)
 
-fn join_on(a: U8[], b: U8[], windows: Bool, arena: Arena$@): U8[] //<
+fn join_on(head: U8[], segment: U8[], windows: Bool, arena: Arena$@): U8[] //<
     //< `join`, on Windows or on POSIX, so a test checks both answers on every OS
-    if a.len == 0
-        return arena.dup_str(b)
-    if b.len == 0
-        return arena.dup_str(a)
-    top: = sys.root_len_on(a, windows)
-    left: = without_trailing_seps(a, windows)
-    right: = without_leading_seps(b)
-    // A bare drive (`C:`) takes `b` directly and stays drive-relative; a share (`\\srv\sh`) is
-    // from the root, so it takes a separator as any folder does.
+    if head.len == 0
+        return arena.dup_str(segment)
+    if segment.len == 0
+        return arena.dup_str(head)
+    top: = sys.root_len_on(head, windows)
+    left: = without_trailing_seps(head, windows)
+    right: = without_leading_seps(segment)
+    // A bare drive (`C:`) takes `segment` directly and stays drive-relative; a share (`\\srv\sh`)
+    // is from the root, so it takes a separator as any folder does.
     if left.len == top &&
         (sys.is_path_sep(left[top - 1]) || !sys.is_path_sep(left[0]))
         return arena.text().s(left).s(right).take()
@@ -626,8 +626,8 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
     defer $work: = mem.scratch(null)
     $found: = List<|U8[]|>(work.arena)
     walk_into(path, skip_dir, work.arena, found@, 0)!
-    sorted: = found.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
-        return a.compare(b$);
+    sorted: = found.order_by(fn(left: U8[]@, right: U8[]@; ): I32 {
+        return left.compare(right$);
     }, work.arena)
     $out: = List<|U8[]|>(arena)
     for p in sorted
@@ -885,11 +885,12 @@ impl File_lock: Move_only //< copying it would release one lock twice
             throw .operation_failed
         return h
 
-    priv fn held(h: I64, wait: I32): File_lock!Fs_error //< takes the lock on `h`, or closes `h`
-        got: = kspl_lock_take(h, wait)
+    priv fn held(handle: I64, wait: I32): File_lock!Fs_error //<
+        //< takes the lock on `handle`, or closes `handle`
+        got: = kspl_lock_take(handle, wait)
         if got == 0
-            return File_lock::{ .handle = h }
-        kspl_lock_close(h)
+            return File_lock::{ .handle = handle }
+        kspl_lock_close(handle)
         if got == 1
             throw .held_elsewhere
         throw .operation_failed

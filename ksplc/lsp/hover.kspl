@@ -106,7 +106,7 @@ priv fn find_owner_of_fn(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bo
         return from_instance
     return find_owner_in_tree(state.sema, state.root_file, def_node)
 
-priv fn find_owner_in_tree(c: Sema_ctx$@, root: Ast_node@, def_node: Ast_node$@): U8[] //<
+priv fn find_owner_in_tree(ctx: Sema_ctx$@, root: Ast_node@, def_node: Ast_node$@): U8[] //<
     //< The owner's full name read from the tree, for a generic trait or impl nothing instantiated
     //< Such a declaration has no entry among the types.
     //<
@@ -120,10 +120,10 @@ priv fn find_owner_in_tree(c: Sema_ctx$@, root: Ast_node@, def_node: Ast_node$@)
             continue
         for kid in decl.children
             if kid == def_node
-                return owner_name_of(c, decl)
+                return owner_name_of(ctx, decl)
     return ""
 
-priv fn owner_name_of(c: Sema_ctx$@, decl: Ast_node$@): U8[] //<
+priv fn owner_name_of(ctx: Sema_ctx$@, decl: Ast_node$@): U8[] //<
     //< The full name of the type that declaration is about, or "" where none resolved
     //< It is "" where the analysis resolved no type from its header.
     //<
@@ -136,7 +136,7 @@ priv fn owner_name_of(c: Sema_ctx$@, decl: Ast_node$@): U8[] //<
     if decl.kind_id == .k_decl_impl
         type_node: = decl.get_decl_type_node()
         named: = named_decl(type_node) catch
-            return shown_type(c, type_node)
+            return shown_type(ctx, type_node)
         owner = named
     id_n: = owner.find_child(.k_identifier)
     if id_n == null
@@ -152,11 +152,11 @@ priv fn named_decl(type_node: Ast_node$@): Ast_node$@? //<
             return .some(path.def_node)
     return .none
 
-priv fn shown_type(c: Sema_ctx$@, type_node: Ast_node@): U8[] //<
+priv fn shown_type(ctx: Sema_ctx$@, type_node: Ast_node@): U8[] //<
     //< The type a header names, as displayed, or "" where the analysis resolved none
-    if c == null || type_node == null || type_node.type_id == 0
+    if ctx == null || type_node == null || type_node.type_id == 0
         return ""
-    shown: = c.env.display(type_node.type_id)
+    shown: = ctx.env.display(type_node.type_id)
     return base_core.arena.dup_str(shown)
 
 priv fn owns_fn(entry: sema_type_def.Entry$@, def_node: Ast_node@): Bool //<
@@ -211,15 +211,16 @@ priv fn declares_in_variant(vv: sema_type_def.Enum_variant$@, def_node: Ast_node
         if pfield.node == def_node
             return true
     return false
-priv fn append_enum_variant_hover(hover_text: Str_builder$@, ctx: Hover_ctx$@, state: Doc_state$@) //<
-    //< For an enum variant, it appends the payload `(name: T, ...)` and the tag value to the hover.
-    if ctx.def_node == null || ctx.def_node.kind_id != .k_enum_variant
+priv fn append_enum_variant_hover(hover_text: Str_builder$@, hover: Hover_ctx$@,
+    state: Doc_state$@) //<
+        //< For an enum variant, it appends the payload `(name: T, ...)` and the tag value to the hover
+    if hover.def_node == null || hover.def_node.kind_id != .k_enum_variant
         return
-    id_n: = ctx.def_node.find_child(.k_identifier)
-    if id_n == null || ctx.type_id == 0 || state.sema == null
+    id_n: = hover.def_node.find_child(.k_identifier)
+    if id_n == null || hover.type_id == 0 || state.sema == null
         return
     // A variant built through an alias is typed by the alias; the definition is the enum's.
-    real_id: = state.sema.env.get_real_type(ctx.type_id)
+    real_id: = state.sema.env.get_real_type(hover.type_id)
     enum_def: sema_type_def.Enum_def$@ =
         state.sema.env.get_enum_def(state.sema.env.get_str(real_id)) catch
             return
@@ -283,68 +284,68 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
         send_literal_type(state, target_node, id_val, arena)
         return
 
-    $ctx: = Hover_ctx::{ .type_id = 0, .shape = .type_head, .def_node = null,
+    $hover: = Hover_ctx::{ .type_id = 0, .shape = .type_head, .def_node = null,
         .fallback_str = Str_builder() }
-    defer ctx.fallback_str.free()
+    defer hover.fallback_str.free()
 
-    resolve_hover_target(state, path, target_node, ctx@)
+    resolve_hover_target(state, path, target_node, hover@)
 
-    if (ctx.type_id == 0 || state.sema == null) && ctx.fallback_str.len == 0
+    if (hover.type_id == 0 || state.sema == null) && hover.fallback_str.len == 0
         lsp_msg.send_null_response(id_val, arena)
         return
     defer $formatted_name: = Str_builder()
-    write_shown_type(state, ctx@, formatted_name@)
+    write_shown_type(state, hover@, formatted_name@)
     defer $def_code: = Str_builder()
-    build_hover_def_code(state, ctx@, def_code@)
+    build_hover_def_code(state, hover@, def_code@)
     defer $fqn_name: = Str_builder()
-    get_fqn_name(state, ctx@, target_node, fqn_name@)
+    get_fqn_name(state, hover@, target_node, fqn_name@)
     f_name_slice: =
-        formatted_name.slice() if formatted_name.len > 0 else ctx.fallback_str.slice()
+        formatted_name.slice() if formatted_name.len > 0 else hover.fallback_str.slice()
     defer $hover_text: = Str_builder()
-    write_hover_head(state, ctx@, def_code.slice(), fqn_name.slice(), f_name_slice, hover_text@)
-    append_enum_variant_hover(hover_text@, ctx@, state)
+    write_hover_head(state, hover@, def_code.slice(), fqn_name.slice(), f_name_slice, hover_text@)
+    append_enum_variant_hover(hover_text@, hover@, state)
     defer $md_str: = Str_builder()
     md_str.s("```kspl\n\{hover_text.slice()\}\n\n```")
     // **The description goes below the fence**, or the editor shows it as part of the signature.
-    doc: = lsp_nav.linked_doc(state.sema, state.root_file, ctx.def_node)
+    doc: = lsp_nav.linked_doc(state.sema, state.root_file, hover.def_node)
     if doc.len > 0
         md_str.s("\n\{doc\}")
     send_markdown(id_val, md_str.slice(), arena)
 
-priv fn write_shown_type(state: Doc_state$@, ctx: Hover_ctx$@, out: Str_builder$@) //<
+priv fn write_shown_type(state: Doc_state$@, hover: Hover_ctx$@, out: Str_builder$@) //<
     //< The type a hover shows: the analysed type (a variant's as `Enum.variant`), else the fallback
-    if ctx.type_id == 0 || state.sema == null
-        out.s(ctx.fallback_str.slice())
+    if hover.type_id == 0 || state.sema == null
+        out.s(hover.fallback_str.slice())
         return
-    out.s(state.sema.env.display(ctx.type_id))
-    if ctx.def_node != null && ctx.def_node.kind_id == .k_enum_variant
-        id_n: = ctx.def_node.find_child(.k_identifier)
+    out.s(state.sema.env.display(hover.type_id))
+    if hover.def_node != null && hover.def_node.kind_id == .k_enum_variant
+        id_n: = hover.def_node.find_child(.k_identifier)
         out.c('.').s(id_n.text if id_n != null else "")
 
-priv fn write_hover_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn: U8[],
+priv fn write_hover_head(state: Doc_state$@, hover: Hover_ctx$@, def_code: U8[], fqn: U8[],
     shown: U8[], out: Str_builder$@) //<
         //< The hover's first line: a function's signature, a type's declaration, or `name: type`
-    if ctx.shape == .fn_head
-        write_fn_head(state, ctx, def_code, fqn, shown, out)
+    if hover.shape == .fn_head
+        write_fn_head(state, hover, def_code, fqn, shown, out)
         return
-    if ctx.shape == .type_head || ctx.shape == .file
-        out.s(type_decl_keyword(ctx)).s(fqn)
+    if hover.shape == .type_head || hover.shape == .file
+        out.s(type_decl_keyword(hover)).s(fqn)
         return
-    $decl_keyword: U8[] = "const " if ctx.shape == .constant else ""
-    if ctx.def_node != null
-        k: = ctx.def_node.kind_id
+    $decl_keyword: U8[] = "const " if hover.shape == .constant else ""
+    if hover.def_node != null
+        k: = hover.def_node.kind_id
         if k == .k_decl_const
             decl_keyword = "const "
         else if k == .k_struct_field || k == .k_enum_field
             decl_keyword = "field "
     out.s(decl_keyword).s(fqn)
-    if ctx.def_node == null || ctx.def_node.kind_id != .k_enum_variant
+    if hover.def_node == null || hover.def_node.kind_id != .k_enum_variant
         out.s(": ").s(shown)
 
-priv fn type_decl_keyword(ctx: Hover_ctx$@): U8[] //< the word a type's hover opens with
-    if ctx.def_node == null
+priv fn type_decl_keyword(hover: Hover_ctx$@): U8[] //< the word a type's hover opens with
+    if hover.def_node == null
         return "type "
-    switch ctx.def_node.kind_id
+    switch hover.def_node.kind_id
     case .k_decl_struct
         return "struct "
     case .k_decl_enum
@@ -354,27 +355,27 @@ priv fn type_decl_keyword(ctx: Hover_ctx$@): U8[] //< the word a type's hover op
     case .k_decl_trait
         return "trait "
     default
-        return "file " if ctx.shape == .file else "type "
+        return "file " if hover.shape == .file else "type "
 
-priv fn write_fn_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn: U8[],
+priv fn write_fn_head(state: Doc_state$@, hover: Hover_ctx$@, def_code: U8[], fqn: U8[],
     shown: U8[], out: Str_builder$@) //<
         //< A function's hover line, from its declaration where there is one
-    if ctx.def_node.is_fn_decl()
-        is_pub: = ctx.def_node.get_visibility() == sema_type_scope.Visibility.public
+    if hover.def_node.is_fn_decl()
+        is_pub: = hover.def_node.get_visibility() == sema_type_scope.Visibility.public
         // **`extern` is shown**: it says C reaches the function by the name written.
         out.s("pub " if is_pub else "")
-            .s("extern fn " if ctx.def_node.publishes_to_c() else "fn ").s(fqn)
+            .s("extern fn " if hover.def_node.publishes_to_c() else "fn ").s(fqn)
         // With the source, a parameter's `//<` sits on its own line; without it, it is one line.
         sig_src: U8[] =
-            (base_core.source_of(state.sema.source_map, ctx.def_node.loc.file())
+            (base_core.source_of(state.sema.source_map, hover.def_node.loc.file())
             if state.sema != null else "")
-        defer $sig_str: = lsp_spell.format_fn_sig(state.sema, ctx.def_node, sig_src)
+        defer $sig_str: = lsp_spell.format_fn_sig(state.sema, hover.def_node, sig_src)
         out.s(sig_str.slice())
         return
     if def_code.len == 0
         out.s("fn \{fqn\}()")
-        if ctx.type_id != 0 && state.sema != null &&
-            !state.sema.env.get_str(ctx.type_id).equals("Void")
+        if hover.type_id != 0 && state.sema != null &&
+            !state.sema.env.get_str(hover.type_id).equals("Void")
             out.s(": \{shown\}")
         return
     fn_idx: Sz =
@@ -405,181 +406,181 @@ priv fn send_literal_type(state: Doc_state$@, literal: Ast_node@, id_val: json.V
     send_markdown(id_val, md.slice(), arena)
 
 priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
-    target_node: Ast_node$@, ctx: Hover_ctx$@)
+    target_node: Ast_node$@, hover: Hover_ctx$@)
     def_res: = lsp_nav.resolve_def_node(state.sema, path, target_node)
-    ctx.def_node = def_res.def_node
+    hover.def_node = def_res.def_node
 
-    if ctx.def_node != null
-        classify_def_node(state, ctx.def_node, def_res.enum_node, ctx)
+    if hover.def_node != null
+        classify_def_node(state, hover.def_node, def_res.enum_node, hover)
     // Set where the declaration's own type is spelt out (a field's `a: I32`, which carries no id).
     $spelt_from_def: = false
-    if ctx.type_id == 0
-        if ctx.def_node != null
-            classify_def_fallback(state.sema, path, ctx.def_node, ctx)
-            spelt_from_def = ctx.fallback_str.len > 0
-        if ctx.type_id == 0 && ctx.fallback_str.len == 0 &&
+    if hover.type_id == 0
+        if hover.def_node != null
+            classify_def_fallback(state.sema, path, hover.def_node, hover)
+            spelt_from_def = hover.fallback_str.len > 0
+        if hover.type_id == 0 && hover.fallback_str.len == 0 &&
             (target_node.kind_id == .k_identifier || target_node.kind_id == .k_primitive_type) &&
-            !classify_identifier(state, path, target_node, ctx)
+            !classify_identifier(state, path, target_node, hover)
             return
     // **A keyword answers only through what it stands for** (the `const` of a declaration, the
     // declaration). Its spelling is no name, so the walk would label the enclosing declaration's
     // type with it: `priv` read `type priv`.
     // Caution: **Borrow no type over one the declaration spelt.** The node around a field's name
     // in `Pair::{ .a = 1 }` is the struct literal, so `.a` read `field a: Pair`.
-    if ctx.type_id == 0 && target_node.kind_id != .k_keyword && !spelt_from_def
-        walk_path_for_type(path, target_node, ctx)
-priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast_node$@,
-    ctx: Hover_ctx$@) //<
+    if hover.type_id == 0 && target_node.kind_id != .k_keyword && !spelt_from_def
+        walk_path_for_type(path, target_node, hover)
+priv fn classify_def_node(state: Doc_state$@, node: Ast_node$@, parent_enum_in: Ast_node$@,
+    hover: Hover_ctx$@) //<
         //< It decides the type and shape from a definition node's kind (the first classification)
-    if classify_decl(d, ctx)
+    if classify_decl(node, hover)
         return
     $parent_enum: = parent_enum_in
-    switch d.kind_id
+    switch node.kind_id
     case .k_enum_variant
-        if d.sym_ptr != null
-            sym: = Sema_symbol$@::d.sym_ptr
-            ctx.type_id = sym.type_id
+        if node.sym_ptr != null
+            sym: = Sema_symbol$@::node.sym_ptr
+            hover.type_id = sym.type_id
         else if parent_enum == null
-            if pe: = lsp_nav.find_parent_enum(state.root_file, d)
+            if pe: = lsp_nav.find_parent_enum(state.root_file, node)
                 parent_enum = pe
-        if ctx.type_id == 0 && parent_enum != null && parent_enum.type_id != 0
-            ctx.type_id = parent_enum.type_id
-        else if ctx.type_id == 0
-            ctx.type_id = d.type_id
-        ctx.shape = .other
+        if hover.type_id == 0 && parent_enum != null && parent_enum.type_id != 0
+            hover.type_id = parent_enum.type_id
+        else if hover.type_id == 0
+            hover.type_id = node.type_id
+        hover.shape = .other
     case .k_identifier
         // **A name that is its own declaration is a binding** (`catch e`, `.some(v)`, the `v` of
         // `if v: = opt`); left to the default, `e` read `type e`.
-        ctx.type_id = d.type_id
-        ctx.shape = .other
+        hover.type_id = node.type_id
+        hover.shape = .other
     case .k_decl_import
-        ctx.type_id = 0
-        ctx.shape = .file
+        hover.type_id = 0
+        hover.shape = .file
     default
-        if d.type_id != 0
-            ctx.type_id = d.type_id
-priv fn classify_decl(d: Ast_node$@, ctx: Hover_ctx$@): Bool //<
+        if node.type_id != 0
+            hover.type_id = node.type_id
+priv fn classify_decl(node: Ast_node$@, hover: Hover_ctx$@): Bool //<
     //< The type and shape of a declaration whose kind alone decides them; false for another kind
     //< **A method is in the symbol table only as `Foo.bar`.** So its declaration's own name reaches
     //< here through the path walk too (`walk_path_for_type`), not through the symbol table.
-    switch d.kind_id
+    switch node.kind_id
     case .k_decl_fn, .k_decl_fn_proto
-        sig: = d.find_child(.k_type_fn_sig)
+        sig: = node.find_child(.k_type_fn_sig)
         if sig != null
             ret_type: = sig.find_child(.k_type_expr)
-            ctx.type_id =
+            hover.type_id =
                 (ret_type.type_id if ret_type != null && ret_type.type_id != 0
                 else I32::sema_type_env.Builtin_type_id.void_type)
-        ctx.shape = .fn_head
+        hover.shape = .fn_head
     case .k_struct_field, .k_enum_field
-        ctx.type_id = d.type_id
-        ctx.shape = .other
+        hover.type_id = node.type_id
+        hover.shape = .other
     case .k_fn_param
-        ctx.type_id = d.type_id
-        ctx.shape = .other
+        hover.type_id = node.type_id
+        hover.shape = .other
     case .k_decl_var, .k_decl_var_item
-        ctx.type_id = d.type_id
-        ctx.shape = .other
+        hover.type_id = node.type_id
+        hover.shape = .other
     case .k_decl_const
-        ctx.type_id = d.type_id
-        ctx.shape = .constant
+        hover.type_id = node.type_id
+        hover.shape = .constant
     default
         return false
     return true
-priv fn set_ident_fallback(d: Ast_node$@, ctx: Hover_ctx$@) //<
+priv fn set_ident_fallback(node: Ast_node$@, hover: Hover_ctx$@) //<
     //< It takes the identifier's name (else the node's text) as the fallback string
-    id_n: = d.find_child(.k_identifier)
-    ctx.fallback_str.s(id_n.text if id_n != null else d.text)
-priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_node$@,
-    ctx: Hover_ctx$@) //<
+    id_n: = node.find_child(.k_identifier)
+    hover.fallback_str.s(id_n.text if id_n != null else node.text)
+priv fn classify_def_fallback(ctx: Sema_ctx$@, path: List<|Ast_node$@|>$@, node: Ast_node$@,
+    hover: Hover_ctx$@) //<
         //< The fallback classification for a definition node with no type ID (it spells the type)
-    switch d.kind_id
+    switch node.kind_id
     case .k_struct_field, .k_enum_field
-        ctx.shape = .other
-        type_n: = d.get_decl_type_node()
+        hover.shape = .other
+        type_n: = node.get_decl_type_node()
         // Caution: **Get the type through the display here too** (`write_type_of` in
         // `spell.kspl`). The node holds the desugared spelling and the path's last name is the
         // element, so a `U8[][]` would read `U8` — a different type, not another spelling.
         if type_n == null
-            ctx.fallback_str.s("Unresolved")
+            hover.fallback_str.s("Unresolved")
         else
-            lsp_spell.write_type_of(c, type_n, 0, ctx.fallback_str@)
+            lsp_spell.write_type_of(ctx, type_n, 0, hover.fallback_str@)
     case .k_fn_param
-        ctx.shape = .other
-        type_n: = d.get_decl_type_node()
+        hover.shape = .other
+        type_n: = node.get_decl_type_node()
 
         self_spelt: = type_n.self_type_spelling()
 
         if self_spelt.len > 0
-            ctx.fallback_str.s(self_spelt)
+            hover.fallback_str.s(self_spelt)
             target: = enclosing_impl_target(path)
             if target.len > 0
-                ctx.fallback_str.s(" (").s(target).c(')')
+                hover.fallback_str.s(" (").s(target).c(')')
         else if type_n != null && !type_n.text.equals(base_core.UNKNOWN_TYPE_NAME)
-            lsp_spell.write_type_of(c, type_n, 0, ctx.fallback_str@)
+            lsp_spell.write_type_of(ctx, type_n, 0, hover.fallback_str@)
         else
-            ctx.fallback_str.s("Unresolved")
+            hover.fallback_str.s("Unresolved")
     case .k_decl_struct
-        ctx.shape = .type_head
-        set_ident_fallback(d, ctx)
+        hover.shape = .type_head
+        set_ident_fallback(node, hover)
     case .k_decl_trait
-        ctx.shape = .type_head
-        set_ident_fallback(d, ctx)
+        hover.shape = .type_head
+        set_ident_fallback(node, hover)
     case .k_decl_fn, .k_decl_fn_proto
-        ctx.shape = .fn_head
-        set_ident_fallback(d, ctx)
+        hover.shape = .fn_head
+        set_ident_fallback(node, hover)
     case .k_type_gen_param
-        ctx.shape = .other
-        set_ident_fallback(d, ctx)
+        hover.shape = .other
+        set_ident_fallback(node, hover)
     case .k_decl_var, .k_decl_var_item, .k_decl_const
-        ctx.shape = .other if d.kind_id != .k_decl_const else .constant
-        type_n: = d.get_decl_type_node()
+        hover.shape = .other if node.kind_id != .k_decl_const else .constant
+        type_n: = node.get_decl_type_node()
         // Taken through the display, as a field's is (the caution in the branch above).
         if type_n == null
-            ctx.fallback_str.s("Inferred / Unresolved")
+            hover.fallback_str.s("Inferred / Unresolved")
         else
-            lsp_spell.write_type_of(c, type_n, 0, ctx.fallback_str@)
+            lsp_spell.write_type_of(ctx, type_n, 0, hover.fallback_str@)
     case .k_decl_import
-        ctx.shape = .file
-        path_opt: = d.get_import_path_text()
+        hover.shape = .file
+        path_opt: = node.get_import_path_text()
         if !path_opt.is_none()
-            ctx.fallback_str.s_path_as_dots(path_opt.unwrap_or(""))
+            hover.fallback_str.s_path_as_dots(path_opt.unwrap_or(""))
         else
             // A path that is not a plain string is shown as written.
-            path_n: = d.find_child(.k_string)
+            path_n: = node.find_child(.k_string)
             if path_n != null
-                ctx.fallback_str.s(path_n.text)
+                hover.fallback_str.s(path_n.text)
             else
-                ctx.fallback_str.s("Unknown File")
+                hover.fallback_str.s("Unknown File")
     case .k_enum_variant
-        ctx.shape = .other
-        set_ident_fallback(d, ctx)
+        hover.shape = .other
+        set_ident_fallback(node, hover)
     default {}
 priv fn classify_identifier(state: Doc_state$@, path: List<|Ast_node$@|>$@,
-    target_node: Ast_node$@, ctx: Hover_ctx$@): Bool //<
+    target_node: Ast_node$@, hover: Hover_ctx$@): Bool //<
         //< How an identifier or primitive type name resolves (as a type, a symbol, or unresolved)
         //< False for a name used as a value that names nothing: **the hover then shows nothing**.
         //< Its own name, or a type borrowed from the expression around it, would read as a
         //< declaration that does not exist (`qq: qq`, or `b: I32` from `a + b`).
     t_id: = state.sema.env.type_to_id.get(target_node.text).unwrap_or(0)
     if t_id != 0
-        ctx.type_id = t_id
-        ctx.shape = .type_head
+        hover.type_id = t_id
+        hover.shape = .type_head
         return true
     sym: = state.sema.symtab.resolve(target_node.text).unwrap_or(null)
     if (sym == null || sym.node == null) && is_value_use(path, target_node)
         return false
     if sym != null && sym.node != null
         if sym.node.kind_id == .k_decl_struct
-            ctx.shape = .type_head
+            hover.shape = .type_head
         else if sym.node.is_fn_decl()
-            ctx.shape = .fn_head
+            hover.shape = .fn_head
         else
-            ctx.shape = .other
-        ctx.def_node = sym.node
+            hover.shape = .other
+        hover.def_node = sym.node
     else
-        ctx.shape = unresolved_shape(path, target_node)
-    ctx.fallback_str.s(target_node.text)
+        hover.shape = unresolved_shape(path, target_node)
+    hover.fallback_str.s(target_node.text)
     return true
 priv fn is_value_use(path: List<|Ast_node$@|>@, target_node: Ast_node@): Bool //<
     //< Whether the name is written as a value (`a` in `a + 1`), not as a declaration's own name
@@ -595,11 +596,12 @@ priv fn unresolved_shape(path: List<|Ast_node$@|>@, target_node: Ast_node@): Hov
     is_mod: =
         p.kind_id == .k_expr_postfix && p.children.len >= 1 && p.get_child(0) == target_node
     return .file if is_mod else .other
-priv fn is_field_def(d: Ast_node$@): Bool //<
+priv fn is_field_def(node: Ast_node$@): Bool //<
     //< Whether the definition found is a field (a struct's or an enum payload's)
-    return d != null && (d.kind_id == .k_struct_field || d.kind_id == .k_enum_field)
+    return node != null &&
+        (node.kind_id == .k_struct_field || node.kind_id == .k_enum_field)
 
-priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, ctx: Hover_ctx$@) //<
+priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, hover: Hover_ctx$@) //<
     //< From the path's tail, the type and shape of the first node with a type ID or definition
     for $idx: = path.len; idx > 0; idx -= 1
         p: = path.get(idx - 1)
@@ -608,47 +610,48 @@ priv fn walk_path_for_type(path: List<|Ast_node$@|>@, target_node: Ast_node$@, c
         if idx < path.len && is_length_of(p, path.get(idx))
             break
         if p.type_id != 0
-            ctx.type_id = p.type_id
-            if ctx.def_node != null && ctx.def_node.kind_id == .k_enum_variant
+            hover.type_id = p.type_id
+            if hover.def_node != null && hover.def_node.kind_id == .k_enum_variant
                 break
             // Caution: **A member access is not always a call.** A field's `j.argv` reaches here
             // too. Treated as a function, the display takes it from the source. That span stops
             // short on a desugared type, so a `U8[][]` field reads `U8`: a different type.
-            if p.is_member_access() && !is_field_def(ctx.def_node)
-                ctx.shape = .fn_head
+            if p.is_member_access() && !is_field_def(hover.def_node)
+                hover.shape = .fn_head
             break
 
         is_target: = target_node.def_node == p || target_node == p.find_child(.k_identifier)
         if !is_target
             continue
 
-        if !classify_decl(p, ctx)
+        if !classify_decl(p, hover)
             switch p.kind_id
             case .k_type_gen_param
-                ctx.shape = .other
+                hover.shape = .other
             case .k_enum_variant
-                ctx.type_id = p.type_id
-                ctx.shape = .other
+                hover.type_id = p.type_id
+                hover.shape = .other
             case .k_decl_impl {}
             default
                 continue
-        ctx.def_node = p
+        hover.def_node = p
         break
 
-priv fn is_length_of(p: Ast_node$@, child: Ast_node@): Bool //<
-    //< Whether child is the length written in p, an array type's postfix (`[N]` or `$[N]`)
-    return p.kind_id == .k_type_postfix && p.text.strip_prefix("$").starts_with("[") &&
-        p.children.len > 0 && p.get_child(0) == child
+priv fn is_length_of(node: Ast_node$@, child: Ast_node@): Bool //<
+    //< Whether child is the length written in `node`, an array type's postfix (`[N]` or `$[N]`)
+    return node.kind_id == .k_type_postfix &&
+        node.text.strip_prefix("$").starts_with("[") && node.children.len > 0 &&
+        node.get_child(0) == child
 
-priv fn build_hover_def_code(state: Doc_state$@, ctx: Hover_ctx$@, def_code: Str_builder$@)
-    if ctx.def_node == null
+priv fn build_hover_def_code(state: Doc_state$@, hover: Hover_ctx$@, def_code: Str_builder$@)
+    if hover.def_node == null
         return
-    def_file: = ctx.def_node.loc.file()
+    def_file: = hover.def_node.loc.file()
     def_src: = base_core.source_of(state.sema.source_map, def_file)
 
     if def_src.len == 0
         return
-    snippet: = def_src.sub(ctx.def_node.loc.offset, ctx.def_node.get_span_length())
+    snippet: = def_src.sub(hover.def_node.loc.offset, hover.def_node.get_span_length())
     $last_was_space: = false
     for c_char in snippet.sub(0, 150)
         if c_char == '{' || c_char == ';'
@@ -689,18 +692,18 @@ priv fn enclosing_impl_target(path: List<|Ast_node$@|>@): U8[] //<
         return tp.get_path_name() if tp != null else ""
     return ""
 
-priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node@,
+priv fn get_fqn_name(state: Doc_state$@, hover: Hover_ctx$@, target_node: Ast_node@,
     fqn_name: Str_builder$@)
     $orig_name: = target_node.text
     $sym: Sema_symbol$@ = null
 
-    if ctx.def_node != null
-        id_n: = ctx.def_node.find_child(.k_identifier)
+    if hover.def_node != null
+        id_n: = hover.def_node.find_child(.k_identifier)
         if id_n != null
             orig_name = id_n.text
-        if ctx.def_node.sym_ptr != null
-            sym = Sema_symbol$@::ctx.def_node.sym_ptr
-            d_kind: = ctx.def_node.kind_id
+        if hover.def_node.sym_ptr != null
+            sym = Sema_symbol$@::hover.def_node.sym_ptr
+            d_kind: = hover.def_node.kind_id
             if d_kind != .k_struct_field && d_kind != .k_enum_variant && d_kind != .k_enum_field
                 orig_name = sym.name
 
@@ -712,7 +715,7 @@ priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node
         defer $shown_sb: = Str_builder()
         // **Do not use `type_id` for a function.** It is **the return type**, so the return type
         // would stand where the name goes; the owner is the signature's first argument.
-        is_fn_def: = ctx.def_node.is_fn_decl()
+        is_fn_def: = hover.def_node.is_fn_decl()
         if sym.flags.is_generated_instance && is_fn_def && target_node.text.len > 0
             orig_name = target_node.text
         else if sym.flags.is_generated_instance && state.sema != null
@@ -720,7 +723,7 @@ priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node
             shown_sb.s(src)
             orig_name = shown_sb.slice()
 
-        d_kind: = ctx.def_node.kind_id
+        d_kind: = hover.def_node.kind_id
         // **An instantiated function goes through here too**, getting its owner as a non-generic
         // method does (`out.probe.Point.area`). A non-generic one only while its name is bare: an
         // impl's already reads `out.probe.Point.area` (twice doubles the owner); a trait
@@ -729,7 +732,7 @@ priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node
         inst_fn: = sym.flags.is_generated_instance && is_fn_def
         if d_kind == .k_struct_field || d_kind == .k_enum_variant || d_kind == .k_enum_field ||
             inst_fn || owner_missing
-            if write_owner_prefix(state, ctx.def_node, inst_fn, fqn_name)
+            if write_owner_prefix(state, hover.def_node, inst_fn, fqn_name)
                 fqn_name.s(orig_name)
                 return
 
@@ -739,8 +742,8 @@ priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node
 
     // **A generic trait's requirement carries no symbol** (`add` in `trait Add<|Rhs, Output|>`), so
     // the owner is read from the tree, together with its module.
-    if ctx.def_node != null
-        owner: = find_owner_in_tree(state.sema, state.root_file, ctx.def_node)
+    if hover.def_node != null
+        owner: = find_owner_in_tree(state.sema, state.root_file, hover.def_node)
         if owner.len > 0
             fqn_name.s(owner).s(".").s(orig_name)
             return

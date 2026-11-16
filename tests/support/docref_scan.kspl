@@ -133,13 +133,13 @@ fn holds_name(text: U8[], name: U8[], arena: Arena$@): Bool //<
             return true
     return false
 
-priv fn bold_holds(t: U8[], name: U8[]): Bool //< whether a bold span in the line holds the name
+priv fn bold_holds(line: U8[], name: U8[]): Bool //< whether a bold span in the line holds the name
     $at: Sz = 0
-    for at < t.len
-        if open: = t.sub_from(at).find_str("**")
+    for at < line.len
+        if open: = line.sub_from(at).find_str("**")
             from: = at + open + 2
-            if close: = t.sub_from(from).find_str("**")
-                if t.sub(from, close).find_str(name).is_some()
+            if close: = line.sub_from(from).find_str("**")
+                if line.sub(from, close).find_str(name).is_some()
                     return true
                 at = from + close + 2
             else
@@ -148,11 +148,11 @@ priv fn bold_holds(t: U8[], name: U8[]): Bool //< whether a bold span in the lin
             return false
     return false
 
-priv fn opens_with(t: U8[], name: U8[]): Bool //<
+priv fn opens_with(line: U8[], name: U8[]): Bool //<
     //< Whether a table cell or a list item of the line starts with the name
     //< The bold around a cell (`**ksmd**`) and a list item's mark (`*`, `-`, `1.`) are skipped.
-    if t.starts_with("|")
-        $rest: = t.sub_from(1)
+    if line.starts_with("|")
+        $rest: = line.sub_from(1)
         for rest.len > 0
             bar: = rest.find_char('|')
             cell: = rest.sub(0, bar.unwrap_or(rest.len)).trim_spaces()
@@ -163,7 +163,7 @@ priv fn opens_with(t: U8[], name: U8[]): Bool //<
             else
                 return false
         return false
-    $item: = t
+    $item: = line
     if item.starts_with("* ") || item.starts_with("- ")
         item = item.sub_from(2)
     else
@@ -228,7 +228,7 @@ fn sym_member(sym: U8[]): U8[] //<
         return ""
     return word
 
-priv fn looks_like_place(s: U8[], dirs: U8[][]): Bool //<
+priv fn looks_like_place(text: U8[], dirs: U8[][]): Bool //<
     //< Whether a name in backticks looks like it **cites a place**
     //< A path carrying an extension and an import's extensionless spelling (`std/lang`) are both
     //< places.
@@ -236,33 +236,33 @@ priv fn looks_like_place(s: U8[], dirs: U8[][]): Bool //<
     //< place. A check of extensions alone goes green on a smaller count. **For it, check that the
     //< first step is a folder of this repository.** Otherwise `Str_builder.s/c` becomes a place,
     //< and a real citation is dropped.
-    if looks_like_path(s)
+    if looks_like_path(text)
         return true
-    cut: = s.find_char('/').unwrap_or(0)
-    if cut == 0 || cut + 1 >= s.len
+    cut: = text.find_char('/').unwrap_or(0)
+    if cut == 0 || cut + 1 >= text.len
         return false
     $named: = false
     for d in dirs
-        if !named && s.sub(0, cut).equals(d)
+        if !named && text.sub(0, cut).equals(d)
             named = true
     if !named
         return false
     $i: Sz = 0
-    for i < s.len
-        if !is_path_at(s, i)
+    for i < text.len
+        if !is_path_at(text, i)
             return false
-        i += htext.cp_len(s[i])
+        i += htext.cp_len(text[i])
     return true
 
-priv fn looks_like_path(s: U8[]): Bool //<
+priv fn looks_like_path(text: U8[]): Bool //<
     //< Whether a name in backticks looks like the name of a file carrying an extension
     for e in SRC_PATH_EXT
-        if s.len > e.len + 1 && s.ends_with(e) && s[s.len - e.len - 1] == '.'
+        if text.len > e.len + 1 && text.ends_with(e) && text[text.len - e.len - 1] == '.'
             $i: Sz = 0
-            for i < s.len
-                if !is_path_at(s, i)
+            for i < text.len
+                if !is_path_at(text, i)
                     return false
-                i += htext.cp_len(s[i])
+                i += htext.cp_len(text[i])
             return true
     return false
 

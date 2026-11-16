@@ -3,7 +3,7 @@
 //< 32-bit integer or by a power of 10 or 2, adding, subtracting and comparing. It also holds the
 //< powers of ten at 128 bits. Both `std/strnum`'s `to_f64` and `std/strfmt`'s floating-point output
 //< use it.
-pub const BIGNAT_LIMBS: Sz = 120 //< how many 32-bit limbs one holds (3840 bits).
+pub const BIGNAT_LIMBS: Sz = 120 //< how many 32-bit limbs one holds (3840 bits)
     //< `to_f64`'s correct rounding sets this size: with up to 768 decimal digits against the power
     //< of 2, the largest value is `2^56 x 10^1098 ~= 2^3704` (std/strnum's `cmp_scaled`).
 
@@ -18,10 +18,10 @@ impl Bignat
         r: Bignat = ::{}
         return r
 
-    pub fn from_u64(v: U64): Bignat //< the same value, widened
+    pub fn from_u64(value: U64): Bignat //< the same value, widened
         $r: Bignat = ::{}
-        r.limbs[0] = U32::v
-        r.limbs[1] = U32::(v >> 32U64)
+        r.limbs[0] = U32::value
+        r.limbs[1] = U32::(value >> 32U64)
         r.len = 2
         r.trim()
         return r
@@ -30,38 +30,39 @@ impl Bignat
         for r.len > 0 && r.limbs[r.len - 1] == 0
             r.len -= 1
 
-    priv fn push_limb(r: Self$@, v: U32)
+    priv fn push_limb(r: Self$@, limb: U32)
         assert(r.len < BIGNAT_LIMBS, "Bignat: the value does not fit in bignat_limbs")
-        r.limbs[r.len] = v
+        r.limbs[r.len] = limb
         r.len += 1
 
-    pub fn mul_small(r: Self$@, m: U32) //< multiplies in place by a value that fits in one limb
-        if m == 0
+    pub fn mul_small(r: Self$@, factor: U32) //<
+        //< multiplies in place by a value that fits in one limb
+        if factor == 0
             for i in Range.asc(r.len)
                 r.limbs[i] = 0
             r.len = 0
             return
         $carry: U64 = 0
         for i in Range.asc(r.len)
-            cur: U64 = r.limbs[i] * U64::m + carry
+            cur: U64 = r.limbs[i] * U64::factor + carry
             r.limbs[i] = U32::cur
             carry = cur >> 32U64
         if carry != 0
             r.push_limb(U32::carry)
 
-    pub fn mul(r: Self$@, o: Self@) //< multiplies in place by another value of the same width
-        //< Long multiplication, from o's top limb down. The other value is `10^n`, which
+    pub fn mul(r: Self$@, other: Self@) //< multiplies in place by another value of the same width
+        //< Long multiplication, from other's top limb down. The other value is `10^n`, which
         //< `std/strnum` keeps so it need not rebuild it on each call.
         $acc: = Bignat.zero()
-        for $i: Sz = o.len; i > 0; i -= 1
+        for $i: Sz = other.len; i > 0; i -= 1
             acc.shl(32)
             $part: = r$
-            part.mul_small(o.limbs[i - 1])
+            part.mul_small(other.limbs[i - 1])
             acc.add(part@)
         r$ = acc
 
-    pub fn add_small(r: Self$@, v: U32) //< adds, in place, a value that fits in one limb
-        $carry: U64 = v
+    pub fn add_small(r: Self$@, value: U32) //< adds, in place, a value that fits in one limb
+        $carry: U64 = value
         for i in Range.asc(r.len)
             if carry == 0
                 return
@@ -71,9 +72,9 @@ impl Bignat
         if carry != 0
             r.push_limb(U32::carry)
 
-    pub fn mul_pow10(r: Self$@, n: Sz) //< multiplies in place by 10 to the power of `n`
+    pub fn mul_pow10(r: Self$@, power: Sz) //< multiplies in place by 10 to the power of `power`
         //< It multiplies by 10^9 at a time, the largest power of 10 that fits in a U32.
-        $rest: = n
+        $rest: = power
         for rest >= 9
             r.mul_small(1000000000U32)
             rest -= 9
@@ -103,37 +104,38 @@ impl Bignat
         r.len = new_len
         r.trim()
 
-    pub fn add(r: Self$@, o: Self@) //< adds another value in place
-        n: = r.len if r.len > o.len else o.len
+    pub fn add(r: Self$@, other: Self@) //< adds another value in place
+        n: = r.len if r.len > other.len else other.len
         $carry: U64 = 0
         for i in Range.asc(n)
-            cur: U64 = r.limbs[i] + U64::o.limbs[i] + carry
+            cur: U64 = r.limbs[i] + U64::other.limbs[i] + carry
             r.limbs[i] = U32::cur
             carry = cur >> 32U64
         r.len = n
         if carry != 0
             r.push_limb(U32::carry)
 
-    pub fn sub(r: Self$@, o: Self@) //< subtracts another value in place
-        //< Caution: r >= o must hold, because a natural number never goes negative.
+    pub fn sub(r: Self$@, other: Self@) //< subtracts another value in place
+        //< Caution: r >= `other` must hold, because a natural number never goes negative.
         $borrow: I64 = 0
         for i in Range.asc(r.len)
-            $cur: I64 = I64::r.limbs[i] - I64::o.limbs[i] - borrow
+            $cur: I64 = I64::r.limbs[i] - I64::other.limbs[i] - borrow
             if cur < 0
                 cur += 4294967296I64
                 borrow = 1
             else
                 borrow = 0
             r.limbs[i] = U32::cur
-        assert(borrow == 0 && o.len <= r.len, "Bignat.sub: the subtrahend is larger than the value")
+        assert(borrow == 0 && other.len <= r.len,
+            "Bignat.sub: the subtrahend is larger than the value")
         r.trim()
 
-    pub fn cmp(r: Self@, o: Self@): I32 //< returns -1, 0 or 1 for less, equal or greater
-        if r.len != o.len
-            return 1 if r.len > o.len else -1
+    pub fn cmp(r: Self@, other: Self@): I32 //< returns -1, 0 or 1 for less, equal or greater
+        if r.len != other.len
+            return 1 if r.len > other.len else -1
         for $i: Sz = r.len; i > 0; i -= 1
             a: = r.limbs[i - 1]
-            b: = o.limbs[i - 1]
+            b: = other.limbs[i - 1]
             if a != b
                 return 1 if a > b else -1
         return 0
@@ -181,11 +183,11 @@ priv const POW10_FIXES: U64[_] = ::{ 0x1505101015155440U64, 0x5145400045450501U6
 priv const POW5_SMALL: U64[_] = ::{ 1U64, 5U64, 25U64, 125U64, 625U64, 3125U64, 15625U64, 78125U64,
     390625U64, 1953125U64, 9765625U64, 48828125U64, 244140625U64, 1220703125U64 }
 
-fn mul_wide(a: U64, b: U64): Wide //< the whole 128-bit product of two U64s
-    a0: = a & 0xFFFFFFFFU64
-    a1: = a >> 32U64
-    b0: = b & 0xFFFFFFFFU64
-    b1: = b >> 32U64
+fn mul_wide(left: U64, right: U64): Wide //< the whole 128-bit product of two U64s
+    a0: = left & 0xFFFFFFFFU64
+    a1: = left >> 32U64
+    b0: = right & 0xFFFFFFFFU64
+    b1: = right >> 32U64
     p00: = a0 * b0
     p01: = a0 * b1
     p10: = a1 * b0
@@ -193,19 +195,19 @@ fn mul_wide(a: U64, b: U64): Wide //< the whole 128-bit product of two U64s
     return Wide::{ .hi = a1 * b1 + (p01 >> 32U64) + (p10 >> 32U64) + (mid >> 32U64),
         .lo = (mid << 32U64) | (p00 & 0xFFFFFFFFU64) }
 
-fn floor_log2_pow10(q: I32): I32 //< floor(log2(10^q)), exact for q within ±4000
-    return I32::((I64::q * 913124641741I64) >> 38)
+fn floor_log2_pow10(power: I32): I32 //< floor(log2(10^power)), exact for `power` within ±4000
+    return I32::((I64::power * 913124641741I64) >> 38)
 
-priv fn floor_log2_pow5(q: I32): I32 //< floor(log2(5^q)), exact for q within ±4000
-    return I32::((I64::q * 1217359I64) >> 19)
+priv fn floor_log2_pow5(power: I32): I32 //< floor(log2(5^power)), exact for `power` within ±4000
+    return I32::((I64::power * 1217359I64) >> 19)
 
-fn pow10_128(q: I32): Wide //< the top 128 bits of 10^q, truncated, so the top bit is set
-    //< 10^q is that value times 2^(floor_log2_pow10(q) - 127). q runs from pow10_q_min to
-    //< pow10_q_max. The held entry below q is multiplied by 5^r (10^q / 10^(q - r), less the
-    //< power of 2). It is then shifted back to 128 bits and corrected by the bits `POW10_FIXES`
-    //< holds.
-    assert(q >= POW10_Q_MIN && q <= POW10_Q_MAX, "pow10_128: the power is outside the table")
-    i: = q - POW10_Q_MIN
+fn pow10_128(power: I32): Wide //< the top 128 bits of 10^power, truncated, so the top bit is set
+    //< 10^power is that value times 2^(floor_log2_pow10(`power`) - 127). `power` runs from
+    //< pow10_q_min to pow10_q_max. The held entry below `power` is multiplied by 5^r (10^power /
+    //< 10^(`power` - r), less the power of 2). It is then shifted back to 128 bits and corrected by
+    //< the bits `POW10_FIXES` holds.
+    assert(power >= POW10_Q_MIN && power <= POW10_Q_MAX, "pow10_128: the power is outside the table")
+    i: = power - POW10_Q_MIN
     j: = Sz::(i / POW10_STEP)
     r: = i % POW10_STEP
     $out: = Wide::{ .hi = POW10_BASES[2 * j], .lo = POW10_BASES[2 * j + 1] }
@@ -216,7 +218,7 @@ fn pow10_128(q: I32): Wide //< the top 128 bits of 10^q, truncated, so the top b
         high: = mul_wide(out.hi, m)
         mid: = low.hi + high.lo
         top: = high.hi + (1U64 if mid < low.hi else 0U64)
-        shift: = U64::(floor_log2_pow5(q) - floor_log2_pow5(q - r))
+        shift: = U64::(floor_log2_pow5(power) - floor_log2_pow5(power - r))
         out.hi = (top << (64U64 - shift)) | (mid >> shift)
         out.lo = (mid << (64U64 - shift)) | (low.lo >> shift)
     fix: = (POW10_FIXES[i / 32] >> (i % 32 * 2)) & 3U64
@@ -230,8 +232,8 @@ fn pow10_128(q: I32): Wide //< the top 128 bits of 10^q, truncated, so the top b
 // Caution: **Do not copy by casting a pointer.** `(U64@::x@)$` breaks C's strict aliasing
 // (optimization can reorder the read and the write).
 // ==========================================
-priv fn copy_bytes(dst: U8$@, src: U8@, n: Sz)
-    for i in Range.asc(n)
+priv fn copy_bytes(dst: U8$@, src: U8@, count: Sz)
+    for i in Range.asc(count)
         (dst + i)$ = (src + i)$
 
 pub const F64_SIGN_BIT: U64 = 0x8000000000000000U64 //< an F64's sign, in its bits
@@ -253,8 +255,8 @@ pub fn decompose_f64(mag: U64): Binary_float //< an F64's bits, without the sign
     return Binary_float::{ .f = mant | F64_HIDDEN_BIT, .e = I32::exp_field - 1075,
         .unequal = mant == 0U64 && exp_field > 1U64 }
 
-pub fn f64_to_bits(v: F64): U64 //< the same bits read as an integer; no numeric conversion
-    $x: = v
+pub fn f64_to_bits(value: F64): U64 //< the same bits read as an integer; no numeric conversion
+    $x: = value
     $bits: U64 = 0
     copy_bytes(U8$@::bits@, U8@::x@, 8)
     return bits
@@ -265,8 +267,8 @@ pub fn f64_from_bits(bits: U64): F64 //< the same bits read as a float; no numer
     copy_bytes(U8$@::v@, U8@::x@, 8)
     return v
 
-pub fn f32_to_bits(v: F32): U32 //< the same bits read as an integer; no numeric conversion
-    $x: = v
+pub fn f32_to_bits(value: F32): U32 //< the same bits read as an integer; no numeric conversion
+    $x: = value
     $bits: U32 = 0
     copy_bytes(U8$@::bits@, U8@::x@, 4)
     return bits

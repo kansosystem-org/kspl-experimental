@@ -49,11 +49,11 @@ priv fn class_of(cp: I32): U8 //< a code point's class, looked up in the generat
 priv fn bad_byte(): Cpt //< a byte that starts no code point: one byte, read as U+FFFD
     return Cpt::{ .cp = REPLACEMENT, .cls = class_of(REPLACEMENT), .len = 1 }
 
-priv fn tail_ok(text: U8[], at: Sz, n: Sz): Bool //<
+priv fn tail_ok(text: U8[], at: Sz, count: Sz): Bool //<
     //< whether bytes at+1 .. at+n-1 continue a code point
-    if at + n > text.len
+    if at + count > text.len
         return false
-    for k in Range(1, n, 1)
+    for k in Range(1, count, 1)
         if (text[at + k] & 0xC0U8) != 0x80U8
             return false
     return true
@@ -97,8 +97,8 @@ priv fn lower_ascii(cp: I32): U8 //< an ASCII code point in lower case, or 0 for
         return 0
     return (U8::cp).to_lower()
 
-priv fn is_newline(c: Cpt): Bool //< `\r` or `\n`, the two the rule names apart from `\s`
-    return c.cp == 0x0D || c.cp == 0x0A
+priv fn is_newline(code_point: Cpt): Bool //< `\r` or `\n`, the two the rule names apart from `\s`
+    return code_point.cp == 0x0D || code_point.cp == 0x0A
 
 priv fn contraction_end(text: U8[], start: Sz): Sz //< where `'s`, `'re` and the rest end, or 0
     //< Case does not matter (`'S` too). Only ASCII folds: no other code point folds to one of
@@ -122,9 +122,10 @@ priv fn run_end(text: U8[], from: Sz, cls: U8, also: U8, rule: Split_rule): Sz /
             return at
         at += c.len
 
-priv fn letter_like(c: Cpt): Bool //< a letter, or a mark where the rule joins marks to letters
+priv fn letter_like(code_point: Cpt): Bool //<
+    //< a letter, or a mark where the rule joins marks to letters
     //< `read_as` has already read a mark as punctuation for a rule that does not.
-    return c.cls == uc.CLASS_LETTER || c.cls == uc.CLASS_MARK
+    return code_point.cls == uc.CLASS_LETTER || code_point.cls == uc.CLASS_MARK
 
 priv fn other_run_end(text: U8[], start: Sz, c0: Cpt, rule: Split_rule): Sz //<
     //< ` ?[^\s\p{L}\p{N}]+[\r\n]*`: where it ends, or 0 when it does not match at `start`

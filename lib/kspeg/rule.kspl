@@ -19,7 +19,7 @@ pub enum Kspeg_signal //< what a rule throws: both backtracking and a real failu
     mismatch //< this rule did not match here; try the next alternative
     fatal(msg: U8[]) //< a real failure, to be passed up to the caller and never swallowed
 
-pub const MAX_PARSE_DEPTH: Sz = 3000 //< how deep the rule tree can be walked before it gives up.
+pub const MAX_PARSE_DEPTH: Sz = 3000 //< how deep the rule tree can be walked before it gives up
     //< Pathologically deep nesting (a long run of `(`) becomes a compile error at a depth ordinary
     //< code never reaches, **the same on every build**. The stack cost per level differs by backend
     //< (LLVM and MSVC use more than clang's C). So the walk also stops near the stack's end
@@ -58,11 +58,11 @@ struct First_bytes //< the bytes a match can begin with, and whether it can matc
     can_be_empty: Bool //< whether it can match without reading a byte
 
 impl First_bytes
-    fn allows(r: Self@, c: U8): Bool //< whether a match can begin with `c`
-        return ((r.bits[c / 64] >> (U64::c % 64U64)) & 1U64) != 0U64
+    fn allows(r: Self@, byte: U8): Bool //< whether a match can begin with `byte`
+        return ((r.bits[byte / 64] >> (U64::byte % 64U64)) & 1U64) != 0U64
 
-    fn add(r: Self$@, c: U8) //< lets a match begin with `c`
-        r.bits[c / 64] |= 1U64 << (U64::c % 64U64)
+    fn add(r: Self$@, byte: U8) //< lets a match begin with `byte`
+        r.bits[byte / 64] |= 1U64 << (U64::byte % 64U64)
 
     fn add_all(r: Self$@) //< lets a match begin with any byte
         for i in Range.asc(4)
@@ -95,10 +95,10 @@ fn char_class_matches( //< whether one byte is in a character class's ranges
     //< `_Boundary` (keyword_set) disagreed, where a keyword ends would depend on where it is
     //< matched.
     ranges: U8[], //< 3-byte ranges `X-Y` only; a lone byte is `X-X` (`Rule.char_class`)
-    c: U8,
-): Bool //< true when `c` falls in one of the ranges
+    byte: U8,
+): Bool //< true when `byte` falls in one of the ranges
     for $i: Sz = 0; i + 2 < ranges.len; i += 3
-        if c >= (ranges.ptr + i)$ && c <= (ranges.ptr + i + 2)$
+        if byte >= (ranges.ptr + i)$ && byte <= (ranges.ptr + i + 2)$
             return true
     return false
 
@@ -379,7 +379,7 @@ pub struct Keyword_set //< keywords folded into one rule: extract one word, then
     //< error's `expected …` would change from run to run.
     pub words: Map<|U8[], Sz|>$@ //< each keyword's index in order, for the lookup itself
     pub order: List<|U8[]|>$@ //< the same keywords in the grammar's order, for an `expected` list
-    pub boundary: U8[] //< `_Boundary`'s ranges, which decide where a keyword ends.
+    pub boundary: U8[] //< `_Boundary`'s ranges, which decide where a keyword ends
         //< Caution: Do not make this a fixed value; a grammar can override `_Boundary`.
 
 pub enum Rule //< one node of the rule tree; each variant is one way of matching
@@ -394,13 +394,13 @@ pub enum Rule //< one node of the rule tree; each variant is one way of matching
     optional(rule: Rule$@) //< this if it matches, and nothing if it does not
     and_pred(rule: Rule$@) //< matches where this would, consuming nothing and building nothing
     not_pred(rule: Rule$@) //< matches where this would not, consuming nothing and building nothing
-    char_class(ranges: U8[]) //< one byte in these ranges.
+    char_class(ranges: U8[]) //< one byte in these ranges
         //< Every element is a 3-byte run "X-Y" for the bytes X..Y; a lone byte X is "X-X". So
         //< `[a-z_\-]` is stored as "a-z_-_---". The grammar's text is not kept: there `\-` and a
         //< range's `-` would be the same byte (Meta.class_ranges in `lib/kspeg/notation.kspl`).
     reference(name: U8[]) //< another rule, by name, before `load_rules` resolves it
     resolved_ref(rule_id: I32) //< that same rule after resolving, referred to by index, not name
-    recover(stops: U8[]) //< absorbs input up to one of these, and also marks the run as lenient.
+    recover(stops: U8[]) //< absorbs input up to one of these, and also marks the run as lenient
         //< Outside a lenient run it matches nothing, so its branch is dead.
         //< Caution: **Do not separate the swallowing from the mark.** Otherwise a run could set the
         //< mark alone. The notation is in "`~\"...\"`: swallowing a run, and the mark of the

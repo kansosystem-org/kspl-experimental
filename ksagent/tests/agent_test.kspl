@@ -23,10 +23,10 @@ fn job_at(port: I32, root: U8[], arena: Arena$@): agent.Ask //<
     s: = model.parse_url(url, "test", 10000, arena) catch panic("the stand-in's URL reads")
     return agent.Ask::{ .server = arena.create(s), .folder = files.Folder(root), .trace = false }
 
-fn ask(s: Stub$@, root: U8[], question: U8[], arena: Arena$@): Answer //<
+fn ask(stub_server: Stub$@, root: U8[], question: U8[], arena: Arena$@): Answer //<
     //< Asks one question of the stand-in, and stops it
-    a: = ask_on(job_at(s.port, root, arena), question, arena)
-    stub.done_asking(s)
+    a: = ask_on(job_at(stub_server.port, root, arena), question, arena)
+    stub.done_asking(stub_server)
     return a
 
 fn ask_on(job: agent.Ask, question: U8[], arena: Arena$@): Answer //<
@@ -36,12 +36,12 @@ fn ask_on(job: agent.Ask, question: U8[], arena: Arena$@): Answer //<
     defer $shown: = Progress(false, lang, arena)
     return agent.run(job, question, none@, lang, shown@, arena)
 
-fn recorded(a: Answer@, arena: Arena$@): U8[] //<
+fn recorded(reply: Answer@, arena: Arena$@): U8[] //<
     //< The answer's record, as `watch` writes it into a chat file for the question `q1`
     none: = List<|answer.Turn|>(arena)
-    p: = chat.Pending::{ .id = "q1", .question = "How much paid leave?", .lang = a.lang,
+    p: = chat.Pending::{ .id = "q1", .question = "How much paid leave?", .lang = reply.lang,
         .history = none }
-    lines: = chat.turn_lines(p@, a, "", arena)
+    lines: = chat.turn_lines(p@, reply, "", arena)
     return lines.sub_from(lines.find_char('\n').unwrap_or(0) + 1)
 
 fn test_a_round_whose_quote_checks(work: U8[], arena: Arena$@)
@@ -242,8 +242,8 @@ fn test_a_conversation_file_in_any_case_is_no_source(work: U8[], arena: Arena$@)
     verdict.check("a chat file of the old form is found whatever its case",
         files.old_chat_file(root, arena).ends_with("old.Chat.KSMD"), "")
 
-priv fn said_not_found(a: Answer@): Bool //< whether the answer is the not-found answer
-    switch a.outcome
+priv fn said_not_found(reply: Answer@): Bool //< whether the answer is the not-found answer
+    switch reply.outcome
     case .not_found
         return true
     default

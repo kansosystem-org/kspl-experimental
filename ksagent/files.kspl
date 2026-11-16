@@ -154,8 +154,8 @@ fn walk(root: U8[], arena: Arena$@): List<|U8[]|>!fs.Fs_error //<
     //< out of the root hands the tools files from elsewhere.
     $found: = List<|U8[]|>(arena)
     walk_into(root, 0, found@, arena)!
-    return found.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
-        return a.compare(b$);
+    return found.order_by(fn(left: U8[]@, right: U8[]@; ): I32 {
+        return left.compare(right$);
     }, arena)
 
 priv fn walk_into(dir: U8[], depth: Sz, out: List<|U8[]|>$@, arena: Arena$@): Void!fs.Fs_error //<
@@ -278,8 +278,8 @@ fn tool_list(folder: Folder, given: U8[], room: Sz, arena: Arena$@): U8[] //<
         return "refused: it is not a folder"
     names: = fs.read_dir(full, arena) catch
         return "refused: the folder cannot be read"
-    sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
-        return a.compare(b$);
+    sorted: = names.order_by(fn(left: U8[]@, right: U8[]@; ): I32 {
+        return left.compare(right$);
     }, arena)
     out: = arena.text()
     $listed: Sz = 0
@@ -456,9 +456,9 @@ priv fn space_at(text: U8[], i: Sz): Sz //< how many bytes the space at `i` take
         return 3
     return 0
 
-priv fn holds(words: U8[][], w: U8[]): Bool //< whether the list already holds the word
+priv fn holds(words: U8[][], entry: U8[]): Bool //< whether the list already holds the word
     for x in words
-        if x.equals(w)
+        if x.equals(entry)
             return true
     return false
 
@@ -548,15 +548,15 @@ fn tool_read(folder: Folder, given: U8[], from_line: I64, to_line: I64, room: Sz
         k += 1I64
     return out.take()
 
-priv fn stop_note(k: I64, at_cap: Bool, arena: Arena$@): U8[] //<
-    //< The line a read ends with before line `k`: at one read's cap, or at the conversation's room
+priv fn stop_note(line: I64, at_cap: Bool, arena: Arena$@): U8[] //<
+    //< The line a read ends with before line `line`: at one read's cap, or at the conversation's room
     if at_cap
         return arena.text()
-            .s("(stopped before line \{k\}: one read returns at most \{MAX_READ_LINES\} lines or 32 \
-                KiB; read again from line \{k\})\n").take()
+            .s("(stopped before line \{line\}: one read returns at most \{MAX_READ_LINES\} lines or \
+                32 KiB; read again from line \{line\})\n").take()
     return arena.text()
-        .s("(stopped before line \{k\}: the conversation has room for no more lines, and a read \
-            again from line \{k\} gives fewer still. Answer from what you have read)\n").take()
+        .s("(stopped before line \{line\}: the conversation has room for no more lines, and a read \
+            again from line \{line\} gives fewer still. Answer from what you have read)\n").take()
 
 fn sent_len(text: U8[]): Sz //< the bytes a text takes in a request, once written in a JSON string
     //< **Escaping makes it longer**: a quote or a line break takes two bytes, a control character

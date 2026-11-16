@@ -35,8 +35,8 @@ node: = t.parse_rule("program")!
 
 | Line | What it does |
 | :-- | :-- |
-| `Meta.new` / `parse_grammar` | Reads the grammar text into rules, and checks them. A bad grammar fails here |
-| `Target.new` | Starts one parse of `source` |
+| `kspeg_notation.Meta(…)` / `parse_grammar` | Reads the grammar text into rules, and checks them. A bad grammar fails here. Calling the type runs `Meta.new` |
+| `kspeg.Target(…)` | Starts one parse of `source`, through `Target.new` |
 | `share_grammar_from` | Borrows the rules and the memo table read above (`Target.share_grammar_from`) |
 | `parse_rule("program")` | Parses the whole source from the rule named `program`. Returns the tree's root `Node`, or none where the rule built no node. Text other than whitespace left unread fails with `.mismatch`, its labels led by `end of input` |
 

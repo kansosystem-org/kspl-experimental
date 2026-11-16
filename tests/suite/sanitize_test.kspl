@@ -1,10 +1,11 @@
 #!/usr/bin/env -S ksplc run
-//< Compiler, library and editor tests are clean under the memory and undefined-behaviour sanitizers
+//< The packages' own tests are clean under the memory and undefined-behaviour sanitizers
 //< **This sees what counting bytes cannot.** ksplc's ARC tests judge a balance by the bytes in use
 //< (`heap_used_bytes`). Some faults leave that count unchanged: a use after free, a binding left
-//< pointing at freed memory, an undefined operation in the generated C. These packages' tests are
-//< built through both backends with the sanitizers and run as their own `make test` runs
-//< them. Any report from any process fails the gate, leaks included, and nothing is suppressed.
+//< pointing at freed memory, an undefined operation in the generated C. The packages' tests
+//< (`PKG_TESTS`) are built through both backends with the sanitizers and run as their own `make
+//< test` runs them. Any report from any process fails the gate, leaks included, and nothing is
+//< suppressed.
 //< **Mandatory where `KANSO_REQUIRE_ASAN=1`** (`mk/test.mk` sets it on Linux, whose image holds the
 //< runtimes). Elsewhere a C compiler or a platform without them gives a `SKIP` line, never a silent
 //< pass.
@@ -301,66 +302,109 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
 // The packages' own tests, through both backends
 // ==========================================
 
-enum Pkg_arg //< what a package's tests are handed on their command line
-    none //< nothing
-    ksplc //< the compiler, to start as a child
-    work_folder //< a fresh folder to write in, one per build, as `make test` empties its own
-
 struct Pkg_tests //< a package's own tests, as its own `make test` runs them
     pkg: U8[] //< its folder, from the root, which they run in
     entry: U8[] //< the program, from the root
-    arg: Pkg_arg //< what they are handed
+    program: U8[] //< a program of the package that the tests start, from the root; empty for none
+        //< **It reads what comes from outside** (kssrv's server), so it is built the same way as
+        //< the tests and handed to them first. A child's reports go to the same logs.
+    ksplc: Bool //< whether they are handed the compiler, to start as a child, after program
+    work_folder: Bool //< whether they are handed a fresh folder to write in, last
+        //< One per build, as `make test` empties its own.
     own_folder: Bool //< whether each run takes a fresh folder of its own rather than the package's
         //< **For tests that write fixed names under the `out/tmp` they run beside.** Two builds
         //< run side by side in one folder would write over each other's files.
 
-// The compiler, library and editor exercise owned buffers and their borrowed views. Memory checks
-// catch a stale view even when the allocator leaves the freed bytes unchanged. ksagent unpacks
-// Word and Excel files it did not make, and ksdb reads its pages back from a file.
-priv const PKG_TESTS: Pkg_tests[_] = ::{
-    Pkg_tests::{ .pkg = "ksplc", .entry = "ksplc/tests/main.kspl", .arg = .none,
-        .own_folder = false },
-    Pkg_tests::{ .pkg = "std", .entry = "std/tests/main.kspl", .arg = .ksplc, .own_folder = true },
-    Pkg_tests::{ .pkg = "ksmd", .entry = "ksmd/tests/main.kspl", .arg = .none,
-        .own_folder = false },
-    Pkg_tests::{ .pkg = "ksagent", .entry = "ksagent/tests/main.kspl", .arg = .work_folder,
-        .own_folder = false },
-    Pkg_tests::{ .pkg = "lib/ksdb", .entry = "lib/ksdb/tests/main.kspl", .arg = .none,
-        .own_folder = false },
+priv const PKG_TESTS: Pkg_tests[_] = ::{ //<
+    //< The packages whose tests are watched, each for what it reads or holds
+    //< The compiler, library and editor hold borrowed views of owned buffers; a stale one is seen
+    //< even where the freed bytes stay. kssrv, kstls and ksos read the network, ksagent office
+    //< files, ksai model files and ksdb its own pages; kspeg is the engine every grammar runs on.
+    Pkg_tests::{ .pkg = "ksplc", .entry = "ksplc/tests/main.kspl", .program = "", .ksplc = false,
+        .work_folder = false, .own_folder = false },
+    Pkg_tests::{ .pkg = "std", .entry = "std/tests/main.kspl", .program = "", .ksplc = true,
+        .work_folder = false, .own_folder = true },
+    Pkg_tests::{ .pkg = "ksmd", .entry = "ksmd/tests/main.kspl", .program = "", .ksplc = false,
+        .work_folder = false, .own_folder = false },
+    Pkg_tests::{ .pkg = "ksagent", .entry = "ksagent/tests/main.kspl", .program = "",
+        .ksplc = false, .work_folder = true, .own_folder = false },
+    Pkg_tests::{ .pkg = "lib/ksdb", .entry = "lib/ksdb/tests/main.kspl", .program = "",
+        .ksplc = false, .work_folder = false, .own_folder = false },
+    Pkg_tests::{ .pkg = "kssrv", .entry = "kssrv/tests/main.kspl", .program = "kssrv/main.kspl",
+        .ksplc = false, .work_folder = true, .own_folder = false },
+    Pkg_tests::{ .pkg = "lib/kstls", .entry = "lib/kstls/tests/main.kspl", .program = "",
+        .ksplc = false, .work_folder = false, .own_folder = false },
+    Pkg_tests::{ .pkg = "lib/kspeg", .entry = "lib/kspeg/tests/main.kspl", .program = "",
+        .ksplc = false, .work_folder = false, .own_folder = false },
+    Pkg_tests::{ .pkg = "lib/ksai", .entry = "lib/ksai/tests/main.kspl", .program = "",
+        .ksplc = false, .work_folder = false, .own_folder = false },
+    Pkg_tests::{ .pkg = "lib/ksos", .entry = "lib/ksos/tests/main.kspl", .program = "",
+        .ksplc = true, .work_folder = true, .own_folder = false },
 }
+
+struct Pkg_build //< one package's tests through one backend, and where each built file is
+    tests: Pkg_tests
+    name: U8[] //< the check
+    stem: U8[] //< the name its files take in the work folder
+    at: Sz //< the index of its tests' order in `build_many`; the program's, if any, is next
 
 priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
     //< Each package's own tests (`make test` in its folder), built through each backend
-    $runs: = List<|Sanitized|>(arena)
+    //< **Every build runs side by side** (`build_many`), the programs the tests start among them.
+    $orders: = List<|harness_sanitizer.Order|>(arena)
+    $builds: = List<|Pkg_build|>(arena)
     for t in PKG_TESTS
         dir: = fs.join(harness.root(), t.pkg, arena)
-        entry: = fs.join(harness.root(), t.entry, arena)
         for llvm in Bool[]::{ false, true }
-            name: = arena.text().s(t.pkg).s("'s own tests, built through ").s(backend_name(llvm))
-                .s(", run with nothing the sanitizers report").take()
             // One name per build in work's own folder: lib/ksdb is lib_ksdb.
             stem: = arena.text().s(t.pkg.replace("/", "_", arena)).s("_llvm" if llvm else "_c")
                 .take()
-            b: = harness_sanitizer.build(dir, entry, fs.join(work, stem, arena),
-                U8[][]::SAN_CFLAGS, llvm, SAN_MARKS, arena)
-            if b.exe.len == 0
-                verdict.check(name, false, b.why)
+            builds
+                .push(Pkg_build::{ .tests = t, .stem = stem, .at = orders.len,
+                .name = arena.text().s(t.pkg).s("'s own tests, built through ")
+                .s(backend_name(llvm)).s(", run with nothing the sanitizers report").take() })
+            orders
+                .push(harness_sanitizer.Order::{ .dir = dir,
+                .entry = fs.join(harness.root(), t.entry, arena),
+                .exe = fs.join(work, stem, arena), .cflags = U8[][]::SAN_CFLAGS, .llvm = llvm,
+                .marks = SAN_MARKS })
+            if t.program.len > 0
+                orders
+                    .push(harness_sanitizer.Order::{ .dir = dir,
+                    .entry = fs.join(harness.root(), t.program, arena),
+                    .exe = fs.join(work, arena.text().s(stem).s("_program").take(), arena),
+                    .cflags = U8[][]::SAN_CFLAGS, .llvm = llvm, .marks = SAN_MARKS })
+    built: = harness_sanitizer.build_many(orders.slice(), arena)
+    $runs: = List<|Sanitized|>(arena)
+    for p in builds
+        t: = p.tests
+        b: = built.get(p.at)
+        if b.exe.len == 0
+            verdict.check(p.name, false, b.why)
+            continue
+        $argv: = List<|U8[]|>(arena)
+        argv.push(b.exe)
+        if t.program.len > 0
+            program: = built.get(p.at + 1)
+            if program.exe.len == 0
+                verdict.check(p.name, false,
+                    arena.text().s("the program it starts, ").s(t.program).s(": ").s(program.why)
+                    .take())
                 continue
-            $argv: = List<|U8[]|>(arena)
-            argv.push(b.exe)
-            if t.arg == .ksplc
-                argv.push(ksplc_harness.ksplc_exe())
-            else if t.arg == .work_folder
-                argv
-                    .push(fs.join(work, arena.text().s(stem).s("_work").take(), arena))
-            $run_dir: = dir
-            if t.own_folder
-                run_dir = fs.join(work, arena.text().s(stem).s("_run").take(), arena)
-                fs.mkdir_all(run_dir) catch {}
-            runs
-                .push(Sanitized::{ .name = name, .dir = run_dir, .argv = argv.slice(),
-                .log_dir = fs.join(work, arena.text().s(stem).s("_log").take(), arena),
-                .env = harness_sanitizer.pkg_env(arena) })
+            argv.push(program.exe)
+        if t.ksplc
+            argv.push(ksplc_harness.ksplc_exe())
+        if t.work_folder
+            argv
+                .push(fs.join(work, arena.text().s(p.stem).s("_work").take(), arena))
+        $run_dir: = fs.join(harness.root(), t.pkg, arena)
+        if t.own_folder
+            run_dir = fs.join(work, arena.text().s(p.stem).s("_run").take(), arena)
+            fs.mkdir_all(run_dir) catch {}
+        runs
+            .push(Sanitized::{ .name = p.name, .dir = run_dir, .argv = argv.slice(),
+            .log_dir = fs.join(work, arena.text().s(p.stem).s("_log").take(), arena),
+            .env = harness_sanitizer.pkg_env(arena) })
     outs: = run_all(runs@, work, arena)
     for i in Range.asc(runs.len)
         found: = reports_in(runs.get(i).log_dir, arena)

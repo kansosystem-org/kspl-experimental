@@ -25,10 +25,11 @@ priv const LSP_WAIT_MS: I32 = 60000 //< how long one answer may take under the s
 priv const LSP_EXIT_MS: I64 = 30000I64 //< how long the server may take to end after `exit`
 priv const LSP_BURST: Sz = 40 //< the edits sent at once, with no answer awaited in between
 
-priv fn lsp_text(fn_name: U8[], k: Sz, arena: Arena$@): U8[] //<
-    //< A document whose `main` calls a function named fn_name and k; the hovers ask at its call
-    return arena.text().s("fn ").s(fn_name).s("\{k\}(a: I32, b: I32): I32 //< adds\n")
-        .s("    return a + b\n\nfn main(): I32\n    return ").s(fn_name).s("\{k\}(1, 2)\n").take()
+priv fn lsp_text(fn_name: U8[], index: Sz, arena: Arena$@): U8[] //<
+    //< A document whose `main` calls a function named `fn_name` and `index`; the hovers ask at its call
+    return arena.text().s("fn ").s(fn_name).s("\{index\}(a: I32, b: I32): I32 //< adds\n")
+        .s("    return a + b\n\nfn main(): I32\n    return ").s(fn_name).s("\{index\}(1, 2)\n")
+        .take()
 
 struct Lsp_session //< the client playing the editor, the workspace, and what went wrong
     c: jsonrpc_client.Client$@
@@ -38,33 +39,33 @@ struct Lsp_session //< the client playing the editor, the workspace, and what we
     limit_s: I64 //< the whole session's limit, for the fault that names it
 
 impl Lsp_session
-    priv fn uri(r: Self@, k: Sz, arena: Arena$@): U8[]
-        return lsp_client.uri_of(r.top, arena.text().s("d\{k\}.kspl").take(), arena)
+    priv fn uri(r: Self@, index: Sz, arena: Arena$@): U8[]
+        return lsp_client.uri_of(r.top, arena.text().s("d\{index\}.kspl").take(), arena)
 
-    priv fn change(r: Self@, k: Sz, fn_name: U8[], version: Sz, arena: Arena$@) //<
+    priv fn change(r: Self@, index: Sz, fn_name: U8[], version: Sz, arena: Arena$@) //<
         //< a didChange of the whole text
         $b: = Json_builder(arena)
-        td: = b.obj().set("uri", b.str_val(r.uri(k, arena)))
+        td: = b.obj().set("uri", b.str_val(r.uri(index, arena)))
             .set("version", b.int_val(version)).build()
-        change: = b.obj().set("text", b.str_val(lsp_text(fn_name, k, arena))).build()
+        change: = b.obj().set("text", b.str_val(lsp_text(fn_name, index, arena))).build()
         params: = b.obj().set("textDocument", td)
             .set("contentChanges", b.arr().push(change).build()).build()
         r.c.notify("textDocument/didChange", params, lsp_client.SEND_MS, arena) catch {}
 
-    priv fn hover(r: Self$@, k: Sz, fn_name: U8[], when: U8[], arena: Arena$@) //<
-        //< A hover at document k's call, which must name fn_name and k
+    priv fn hover(r: Self$@, index: Sz, fn_name: U8[], when: U8[], arena: Arena$@) //<
+        //< A hover at document `index`'s call, which must name `fn_name` and `index`
         wait: = r.wait_ms()
         if wait == 0
             r.faults
-                .push(arena.text().s("a hover on d\{k\} ").s(when).s(" was not asked: the ")
+                .push(arena.text().s("a hover on d\{index\} ").s(when).s(" was not asked: the ")
                 .s("session ran past its \{r.limit_s\} s").take())
             return
-        at: = lsp_client.at_pos(r.uri(k, arena), 4, 12, arena)
+        at: = lsp_client.at_pos(r.uri(index, arena), 4, 12, arena)
         got: = lsp_client.answer(r.c, "textDocument/hover", at, wait, arena)
         text: = lsp_client.hover_text(got)
-        want: = arena.text().s(fn_name).s("\{k\}").take()
+        want: = arena.text().s(fn_name).s("\{index\}").take()
         if text.find_str(want).is_none()
-            said: = arena.text().s("a hover on d\{k\} ").s(when).s(" did not name `").s(want)
+            said: = arena.text().s("a hover on d\{index\} ").s(when).s(" did not name `").s(want)
                 .s("`: '").s(text).s("'").take()
             r.faults.push(lsp_client.why(r.c, said, arena))
 

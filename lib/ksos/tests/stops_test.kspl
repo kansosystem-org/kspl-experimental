@@ -1,0 +1,114 @@
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/motor"
+import "ksos/demo/rp2040/common/battery"
+import "ksos/demo/rp2040/common/stops"
+import "std/verdict"
+
+// ==========================================
+// The self-driving car's stops: each decision that stops the wheels, checked with no car.
+//
+// **The firmware reads the sensors and turns the wheels; the decisions are pure functions**
+// (`ksos/demo/rp2040/common/stops`, `battery.Watch.judge`, `motor.duty`). This file checks those.
+// The real sensors, the wiring and the panic hook being set are checked on the car.
+// ==========================================
+
+fn test_stops_too_close() //< A raw distance under `EMERGENCY_MM` backs off; 0 (no echo) does not
+    verdict.start("[ksos/stops] backing off at point-blank range test...")
+    assert(stops.too_close(1), "1mm is point-blank range")
+    assert(stops.too_close(stops.EMERGENCY_MM - 1), "just under the limit is point-blank range")
+    assert(!stops.too_close(stops.EMERGENCY_MM), "the limit itself is not")
+    assert(!stops.too_close(2000), "a far reading is not")
+    assert(!stops.too_close(0), "no echo is not point-blank range")
+    verdict.pass("only a reading under the limit backs off.")
+
+priv fn low_rounds_until_stop(rounds: U32): Bool //<
+    //< Whether `rounds` low readings in a row, on a fresh watch, stop the car on the last one
+    $watch: = battery.Watch()
+    low: = board.BATTERY_LOW_MV - 1
+    for $i: U32 = 1; i < rounds; i += 1
+        if watch.judge(false, low) != battery.Verdict.go
+            return false
+    return watch.judge(false, low) == battery.Verdict.low
+
+fn test_stops_battery_low() //<
+    //< The battery under its minimum for `LOW_ROUNDS` rounds in a row stops; fewer rounds do not
+    //< Caution: **One low reading must not stop it.** The motors' inrush dips the voltage for an
+    //< instant on every start.
+    verdict.start("[ksos/stops] stopping on a low battery test...")
+    assert(low_rounds_until_stop(battery.LOW_ROUNDS), "LOW_ROUNDS low readings stop it")
+    assert(!low_rounds_until_stop(battery.LOW_ROUNDS - 1), "one round fewer does not")
+
+    // A good reading in the run starts the count again.
+    $watch: = battery.Watch()
+    low: = board.BATTERY_LOW_MV - 1
+    for $i: U32 = 1; i < battery.LOW_ROUNDS; i += 1
+        _v: = watch.judge(false, low)
+    assert(watch.judge(false, board.BATTERY_LOW_MV) == battery.Verdict.go, "a good reading drives")
+    for $i: U32 = 1; i < battery.LOW_ROUNDS; i += 1
+        assert(watch.judge(false, low) == battery.Verdict.go, "the count started again")
+    assert(watch.judge(false, low) == battery.Verdict.low, "a full run after it stops")
+
+    // Stopped for another reason, the battery's watch does not bring it back.
+    $other: = battery.Watch()
+    assert(other.judge(true, board.BATTERY_LOW_MV) == battery.Verdict.hold,
+        "a stop for another reason holds")
+    verdict.pass("only LOW_ROUNDS low readings in a row stop the car.")
+
+fn test_stops_out_of_time() //< Driving for `MAX_DRIVING_ROUNDS` rounds stops; fewer do not
+    verdict.start("[ksos/stops] stopping at the driving limit test...")
+    assert(stops.MAX_DRIVING_ROUNDS > 0, "the car has a driving limit")
+    assert(!stops.out_of_time(1), "the first round drives")
+    assert(!stops.out_of_time(stops.MAX_DRIVING_ROUNDS - 1), "one round before the limit drives")
+    assert(stops.out_of_time(stops.MAX_DRIVING_ROUNDS), "the limit stops it")
+    verdict.pass("the driving limit stops the car on its last round.")
+
+priv fn quiet_until_release(remote: stops.Remote$@, halted: Bool): stops.Remote_verdict //<
+    //< Feeds rounds with no frame until the one that counts as the release, and returns its verdict
+    for $i: U32 = 1; i < stops.IR_RELEASE_ROUNDS; i += 1
+        _v: = remote.look(false, halted, true)
+    return remote.look(false, halted, true)
+
+priv fn press(remote: stops.Remote$@, rounds: U32) //<
+    //< holds a press for `rounds` rounds, while stopped
+    for $i: U32 = 0; i < rounds; i += 1
+        assert(remote.look(true, true, true) == stops.Remote_verdict.hold, "a held press holds")
+
+fn test_stops_remote() //<
+    //< A press while it runs stops it; only a held press, let go, brings it back
+    verdict.start("[ksos/stops] stopping from the remote test...")
+    $remote: = stops.Remote()
+    assert(remote.look(false, false, false) == stops.Remote_verdict.go, "no frame drives")
+    assert(remote.look(true, false, false) == stops.Remote_verdict.stop,
+        "a press while it runs stops")
+
+    // The press that stopped it does not re-arm it, however long it is held.
+    press(remote@, stops.IR_REARM_ROUNDS)
+    assert(quiet_until_release(remote@, true) == stops.Remote_verdict.hold,
+        "letting go of the press that stopped it does not re-arm")
+
+    press(remote@, stops.IR_REARM_ROUNDS - 1)
+    assert(quiet_until_release(remote@, true) == stops.Remote_verdict.hold,
+        "a short press does not re-arm")
+    press(remote@, stops.IR_REARM_ROUNDS)
+    assert(quiet_until_release(remote@, true) == stops.Remote_verdict.rearm,
+        "a held press, let go, re-arms")
+
+    // A stop no press made (the time limit) needs no release first.
+    $timed: = stops.Remote()
+    timed.stopped_without_press()
+    press(timed@, stops.IR_REARM_ROUNDS)
+    assert(quiet_until_release(timed@, true) == stops.Remote_verdict.rearm,
+        "after the time limit, a held press re-arms")
+    verdict.pass("any press stops the car, and only a held press brings it back.")
+
+fn test_stops_panic_stops_every_wheel() //<
+    //< The panic hook's `motor.stop` sends speed 0, which gives 0 on both pins of every wheel
+    //< Caution: **The raise to `WHEEL_MIN_PERCENT` must leave 0 alone**, or a panic leaves the
+    //< wheels turning.
+    verdict.start("[ksos/stops] speed 0 stopping every wheel test...")
+    for wheel in Range.asc(board.WHEEL_COUNT)
+        d: = motor.duty(wheel, 0)
+        assert(d.a == 0 && d.b == 0, "speed 0 gives 0 on both pins")
+        one: = motor.duty(wheel, 1)
+        assert(one.a + one.b > 0, "a small speed still turns the wheel")
+    verdict.pass("speed 0 gives 0 on both pins of every wheel.")

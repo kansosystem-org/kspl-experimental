@@ -42,15 +42,15 @@ priv struct Index //< what the tree declares, as the check looks it up
     members: Map<|U8[], List<|U8[]|>$@|>$@ //< each type's members, from every file that adds one
     modules: Map<|U8[], List<|U8[]|>$@|>$@ //< each standard library file's names, by its alias
 
-priv fn add_to(m: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[], name: U8[], arena: Arena$@)
-    $got: = m.get(key).unwrap_or(null)
+priv fn add_to(names: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[], name: U8[], arena: Arena$@)
+    $got: = names.get(key).unwrap_or(null)
     if got == null
         got = List<|U8[]|>.create(arena)
-        m.set(key, got)
+        names.set(key, got)
     got.push(name)
 
-priv fn holds(m: Map<|U8[], List<|U8[]|>$@|>@, key: U8[], name: U8[]): Bool
-    got: = m.get(key).unwrap_or(null)
+priv fn holds(names: Map<|U8[], List<|U8[]|>$@|>@, key: U8[], name: U8[]): Bool
+    got: = names.get(key).unwrap_or(null)
     if got == null
         return false
     for n in got
@@ -58,16 +58,16 @@ priv fn holds(m: Map<|U8[], List<|U8[]|>$@|>@, key: U8[], name: U8[]): Bool
             return true
     return false
 
-priv fn knows(m: Map<|U8[], List<|U8[]|>$@|>@, key: U8[]): Bool
-    got: = m.get(key).unwrap_or(null)
+priv fn knows(names: Map<|U8[], List<|U8[]|>$@|>@, key: U8[]): Bool
+    got: = names.get(key).unwrap_or(null)
     return got != null
 
 // ==========================================
 // Reading a document
 // ==========================================
 
-priv fn is_word_byte(c: U8): Bool
-    return c.is_alnum() || c == '_'
+priv fn is_word_byte(byte: U8): Bool
+    return byte.is_alnum() || byte == '_'
 
 fn dotted(span: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The parts of a span holding a dotted name and nothing else (call brackets may close it)
@@ -324,12 +324,12 @@ priv fn fence_words(text: U8[], arena: Arena$@): Map<|U8[], Bool|>$@ //<
             out.set(s.body.sub(start, i - start), true)
     return out
 
-priv fn wrong_name(ix: Index@, u: Use@, own: Map<|U8[], Bool|>@): Bool //<
+priv fn wrong_name(ix: Index@, use: Use@, own: Map<|U8[], Bool|>@): Bool //<
     //< Whether a name's head is known and its member is not
     //< **Two heads are known**: a type (a capital first), and a standard library file's alias. A
     //< lower-case head is as often a variable the prose speaks of (`root.children`).
-    head: = u.parts.get(0)
-    member: = u.parts.get(1)
+    head: = use.parts.get(0)
+    member: = use.parts.get(1)
     if head[0].is_upper()
         return knows(ix.members, head) && !holds(ix.members, head, member) &&
             !own.get(member).unwrap_or(false)

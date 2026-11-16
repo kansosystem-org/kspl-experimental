@@ -45,19 +45,19 @@ fn read_asks(text: U8[], arena: Arena$@): Asks //<
             out.refused.push(arena.text().s("line \{r.n\}: ").s(why).take())
     return out
 
-priv fn take_ask(out: Asks$@, question_at: List<|Sz|>$@, slot: Sz, r: Line@): U8[] //<
+priv fn take_ask(out: Asks$@, question_at: List<|Sz|>$@, slot: Sz, line: Line@): U8[] //<
     //< Adds one record of an ask file; why it cannot be read, or empty
     at: = question_at.get(slot)
-    if r.kind.equals("question")
-        q: = r.val.get("text").as_str().unwrap_or("").trim_spaces()
+    if line.kind.equals("question")
+        q: = line.val.get("text").as_str().unwrap_or("").trim_spaces()
         if q.len == 0
             return "the question has no text"
         if at >= 0
             return "an earlier line has a question with the same id"
         question_at.set(slot, out.questions.len)
-        out.questions.push(Asked::{ .id = r.id, .text = q, .stopped = false })
+        out.questions.push(Asked::{ .id = line.id, .text = q, .stopped = false })
         return ""
-    if r.kind.equals("stop")
+    if line.kind.equals("stop")
         if at < 0
             return "no earlier line has a question with this id"
         out.questions[at].stopped = true
@@ -109,18 +109,18 @@ priv fn parsed(text: U8[], arena: Arena$@): Parsed //< each line's record, and t
         lines.push(r)
     return Parsed::{ .lines = lines, .slots = sorted_names.sorted(keys@, arena) }
 
-priv fn line_of(n: Sz, text: U8[], arena: Arena$@): Line //< one line's record, read alone
+priv fn line_of(number: Sz, text: U8[], arena: Arena$@): Line //< one line's record, read alone
     doc: = json.parse(text, arena) catch
-        return Line::{ .n = n, .kind = "", .id = "", .val = .null_val,
+        return Line::{ .n = number, .kind = "", .id = "", .val = .null_val,
             .why = "it is not one JSON value" }
     v: = doc.val
     id: = v.get("id").as_str().unwrap_or("")
-    return Line::{ .n = n, .kind = v.get("type").as_str().unwrap_or(""), .id = id, .val = v,
+    return Line::{ .n = number, .kind = v.get("type").as_str().unwrap_or(""), .id = id, .val = v,
         .why = id_problem(id) }
 
-priv fn no_slots(n: Sz, arena: Arena$@): List<|Sz|> //< `n` slots, each holding -1
+priv fn no_slots(count: Sz, arena: Arena$@): List<|Sz|> //< `count` slots, each holding -1
     $out: = List<|Sz|>(arena)
-    for _k in Range.asc(n)
+    for _k in Range.asc(count)
         out.push(-1)
     return out
 
@@ -156,28 +156,28 @@ fn read_chat(text: U8[], arena: Arena$@): Recorded!U8[] //<
             throw arena.text().s("line \{r.n\}: ").s(why).take()
     return Recorded::{ .answered = sorted_names.sorted(answers@, arena), .turns = turns }
 
-priv fn take_record(r: Line@, at: Sz, question_at: List<|Sz|>$@, answer_at: List<|Sz|>$@, slot: Sz):
-    U8[] //<
+priv fn take_record(line: Line@, at: Sz, question_at: List<|Sz|>$@, answer_at: List<|Sz|>$@,
+    slot: Sz): U8[] //<
         //< Takes one record of a chat file, the `at`-th line read; why it cannot be read, or empty
-    if r.kind.equals("question")
+    if line.kind.equals("question")
         if question_at.get(slot) >= 0
             return "an earlier line has a question with the same id"
         question_at.set(slot, at)
         return ""
-    if !r.kind.equals("answer")
+    if !line.kind.equals("answer")
         return "its type is neither question nor answer"
     if question_at.get(slot) < 0
         return "no earlier line has a question with this id"
     if answer_at.get(slot) >= 0
         return "an earlier line has an answer with the same id"
-    if !is_state(r.val.get("state").as_str().unwrap_or(""))
+    if !is_state(line.val.get("state").as_str().unwrap_or(""))
         return "its state is none of checked, unverified, not_found, stopped and failed"
     answer_at.set(slot, at)
     return ""
 
-priv fn is_state(s: U8[]): Bool //< whether a word is one of the five states an answer ends in
-    return s.equals("checked") || s.equals("unverified") || s.equals("not_found") ||
-        s.equals("stopped") || s.equals("failed")
+priv fn is_state(word: U8[]): Bool //< whether a word is one of the five states an answer ends in
+    return word.equals("checked") || word.equals("unverified") || word.equals("not_found") ||
+        word.equals("stopped") || word.equals("failed")
 
 struct Pending //< the first question asked that has no answer yet
     id: U8[]
@@ -227,16 +227,17 @@ priv fn recent(turns: List<|Turn|>@, arena: Arena$@): List<|Turn|> //<
 // Writing a turn into the chat file
 // ==========================================
 
-fn turn_lines(p: Pending@, a: Answer@, partial: U8[], arena: Arena$@): U8[] //<
+fn turn_lines(pending: Pending@, reply: Answer@, partial: U8[], arena: Arena$@): U8[] //<
     //< The question's record and its answer's, as two lines that end in a line break
     //< `partial` is the unchecked text shown before an answer stopped. **It goes into its own
     //< member, `partial`, never into `text`**, so no reader can take it for an answer.
     $b: = Json_builder(arena)
-    question: = b.obj().set("type", b.str_val("question")).set("id", b.str_val(p.id))
-        .set("text", b.str_val(p.question)).set("lang", b.str_val(lang_word(p.lang))).build()
+    question: = b.obj().set("type", b.str_val("question")).set("id", b.str_val(pending.id))
+        .set("text", b.str_val(pending.question))
+        .set("lang", b.str_val(lang_word(pending.lang))).build()
     $sources: = b.arr()
-    for i in Range.asc(a.sources.len)
-        s: = a.sources.get(i)
+    for i in Range.asc(reply.sources.len)
+        s: = reply.sources.get(i)
         $one: = b.obj().set("path", b.str_val(s.path))
             .set("from_line", b.int_val(s.from_line)).set("to_line", b.int_val(s.to_line))
             .set("quote", b.str_val(answer.collapse_spaces(s.quote, arena)))
@@ -248,21 +249,21 @@ fn turn_lines(p: Pending@, a: Answer@, partial: U8[], arena: Arena$@): U8[] //<
                 .set("to_row", b.int_val(s.rows.to_row))
         sources = sources.push(one.build())
     $removed: = b.arr()
-    for i in Range.asc(a.removed.len)
-        removed = removed.push(b.str_val(a.removed.get(i)))
+    for i in Range.asc(reply.removed.len)
+        removed = removed.push(b.str_val(reply.removed.get(i)))
     $notes: = b.arr()
-    for line in notes_of(a, arena)
+    for line in notes_of(reply, arena)
         notes = notes.push(b.str_val(line))
-    $reply: = b.obj().set("type", b.str_val("answer")).set("id", b.str_val(p.id))
-        .set("state", b.str_val(state_of(a))).set("text", b.str_val(text_of(a)))
-        .set("sources", sources.build()).set("removed", removed.build())
-        .set("notes", notes.build())
-    if !a.is_answer() && partial.len > 0
-        reply = reply.set("partial", b.str_val(partial))
+    $answer_line: = b.obj().set("type", b.str_val("answer"))
+        .set("id", b.str_val(pending.id)).set("state", b.str_val(state_of(reply)))
+        .set("text", b.str_val(text_of(reply))).set("sources", sources.build())
+        .set("removed", removed.build()).set("notes", notes.build())
+    if !reply.is_answer() && partial.len > 0
+        answer_line = answer_line.set("partial", b.str_val(partial))
     defer $out: = Str_builder()
     question.dump(out@)
     out.c('\n')
-    reply.build().dump(out@)
+    answer_line.build().dump(out@)
     out.c('\n')
     return arena.dup_str(out.slice())
 
@@ -274,12 +275,12 @@ fn appended(chat_text: U8[], lines: U8[], arena: Arena$@): U8[] //<
         out.c('\n')
     return out.s(lines).take()
 
-fn state_of(a: Answer@): U8[] //< the state a record names: how the work on the question ended
+fn state_of(reply: Answer@): U8[] //< the state a record names: how the work on the question ended
     //< **`checked` only where a source passed the check**, so an unchecked answer never reads as
     //< checked in the file either.
-    switch a.outcome
+    switch reply.outcome
     case .answered
-        return "unverified" if a.is_unverified() else "checked"
+        return "unverified" if reply.is_unverified() else "checked"
     case .not_found
         return "not_found"
     case .stopped
@@ -287,26 +288,27 @@ fn state_of(a: Answer@): U8[] //< the state a record names: how the work on the 
     case .failed
         return "failed"
 
-priv fn text_of(a: Answer@): U8[] //< the answer's text: the model's, or ksagent's not-found line
-    switch a.outcome
+priv fn text_of(reply: Answer@): U8[] //<
+    //< the answer's text: the model's, or ksagent's not-found line
+    switch reply.outcome
     case .answered
-        return a.text
+        return reply.text
     case .not_found
-        return a.lang.not_found_line()
+        return reply.lang.not_found_line()
     default
         return ""
 
-priv fn notes_of(a: Answer@, arena: Arena$@): U8[][] //<
+priv fn notes_of(reply: Answer@, arena: Arena$@): U8[][] //<
     //< The lines ksagent adds under the answer, in the question's language
     $out: = List<|U8[]|>(arena)
-    ended: = answer.ended_line(a, arena)
+    ended: = answer.ended_line(reply, arena)
     if ended.len > 0
         out.push(ended)
-    if a.removed.len > 0
-        out.push(a.lang.removed_line(a.removed.len, arena))
-    if a.is_unverified()
-        out.push(a.lang.unverified_line())
+    if reply.removed.len > 0
+        out.push(reply.lang.removed_line(reply.removed.len, arena))
+    if reply.is_unverified()
+        out.push(reply.lang.unverified_line())
     return out.slice()
 
-fn lang_word(l: Lang): U8[] //< the language as a record names it: `en` or `ja`
-    return "ja" if l == Lang.ja else "en"
+fn lang_word(lang: Lang): U8[] //< the language as a record names it: `en` or `ja`
+    return "ja" if lang == Lang.ja else "en"

@@ -108,45 +108,45 @@ priv const JUMP_SPOTS: Spot[_] = ::{ //<
         .name = "a module's constant in an array's length" },
 }
 
-fn check_hover_marks(c: jsonrpc_client.Client$@, arena: Arena$@)
-    lsp_client.open(c, MARKS_URI, MARKS_SRC, arena)
-    defer lsp_client.close(c, MARKS_URI, arena)
+fn check_hover_marks(client: jsonrpc_client.Client$@, arena: Arena$@)
+    lsp_client.open(client, MARKS_URI, MARKS_SRC, arena)
+    defer lsp_client.close(client, MARKS_URI, arena)
     for spot in BLANK_SPOTS
         label: = arena.text().s("a hover on ").s(spot.name).s(" answers nothing").take()
         got: =
-            lsp_client.hover_at(c, MARKS_URI, MARKS_SRC, spot, lsp_client.READ_MS, arena) catch e
+            lsp_client.hover_at(client, MARKS_URI, MARKS_SRC, spot, lsp_client.READ_MS, arena) catch e
                 verdict.check(label, false, end_text(e))
                 continue
         text: = lsp_client.hover_text(got)
         verdict.check(label, is_missing(got.get("result")),
-            lsp_client.why_quoted(c, text, arena))
+            lsp_client.why_quoted(client, text, arena))
     // Caution: **These come after the empty ones**, which a dead worker would answer too: an answer
     // here shows the analysis is standing.
     for spot in NAMED_SPOTS
         label: = arena.text().s("a hover on ").s(spot.name).s(" answers it").take()
         got: =
-            lsp_client.hover_at(c, MARKS_URI, MARKS_SRC, spot, lsp_client.READ_MS, arena) catch e
+            lsp_client.hover_at(client, MARKS_URI, MARKS_SRC, spot, lsp_client.READ_MS, arena) catch e
                 verdict.check(label, false, end_text(e))
                 continue
         text: = lsp_client.hover_text(got)
         verdict.check(label, text.find_str(spot.want).is_some(),
-            lsp_client.why_quoted(c, text, arena))
-    check_length_jumps(c, arena)
+            lsp_client.why_quoted(client, text, arena))
+    check_length_jumps(client, arena)
 
-priv fn check_length_jumps(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+priv fn check_length_jumps(client: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< A jump from a name in an array's length lands on the constant, here and in another module
     for spot in JUMP_SPOTS
         label: = arena.text().s("a jump from ").s(spot.name).s(" lands on it").take()
         pos: = lsp_client.pos_at(MARKS_URI, MARKS_SRC, spot, arena)
-        res: = lsp_client.answer(c, "textDocument/definition", pos, lsp_client.READ_MS, arena)
-            .get("result")
+        res: = lsp_client
+            .answer(client, "textDocument/definition", pos, lsp_client.READ_MS, arena).get("result")
         uri: = res.get("uri").as_str().unwrap_or("").replace("\\", "/", arena)
         line: = res.get("range").get("start").get("line").as_int().unwrap_or(-1)
         landed: =
             (uri.equals(MARKS_URI) && line == I32::decl_line(MARKS_SRC, spot.want, arena)
             if spot.want.len > 0 else uri.ends_with("/net.kspl"))
         at: = arena.text().s("'").s(uri).s(":\{line\}'").take()
-        verdict.check(label, landed, lsp_client.why(c, at, arena))
+        verdict.check(label, landed, lsp_client.why(client, at, arena))
 
 // ==========================================
 // What a hover says on a value. **A literal shows the type it took in its place, and no name**:
@@ -255,7 +255,7 @@ priv const BOUND_ASKS: Ask[_] = ::{ //< the names where they are bound, and fiel
         .name = "a second field set by name in a struct literal", .want = "field b: U8[]" },
 }
 
-priv fn request_at(c: jsonrpc_client.Client$@, method: U8[], ask: Ask, arena: Arena$@):
+priv fn request_at(client: jsonrpc_client.Client$@, method: U8[], ask: Ask, arena: Arena$@):
     json.Value!jsonrpc.Rpc_end //<
         //< That request at that position (references count the declaration)
     col: = col_in_line(VALUES_SRC, ask.line, ask.needle, arena) + ask.step
@@ -268,38 +268,38 @@ priv fn request_at(c: jsonrpc_client.Client$@, method: U8[], ask: Ask, arena: Ar
     // References walk the workspace, a hover only its own file.
     wait: =
         lsp_client.WALK_MS if method.equals("textDocument/references") else lsp_client.READ_MS
-    return c.request(method, params, wait, arena)!.val
+    return client.request(method, params, wait, arena)!.val
 
 priv fn shown_line(text: U8[]): U8[] //< the answer's first line inside its code fence
     body: = text.strip_prefix("```kspl\n")
     return body.sub(0, body.find_char('\n').unwrap_or(body.len))
 
-priv fn check_asks(c: jsonrpc_client.Client$@, asks: Ask[], arena: Arena$@) //<
+priv fn check_asks(client: jsonrpc_client.Client$@, asks: Ask[], arena: Arena$@) //<
     //< Each hover shows exactly what that position's `want` says
     for ask in asks
         label: = arena.text().s("a hover on ").s(ask.name).s(" shows ")
             .s(ask.want if ask.want.len > 0 else "nothing").take()
-        got: = request_at(c, "textDocument/hover", ask, arena) catch e
+        got: = request_at(client, "textDocument/hover", ask, arena) catch e
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
         ok: =
             (is_missing(got.get("result")) if ask.want.len == 0
             else shown_line(text).equals(ask.want))
-        verdict.check(label, ok, lsp_client.why_quoted(c, text, arena))
+        verdict.check(label, ok, lsp_client.why_quoted(client, text, arena))
 
 priv const REF_ASKS: Ask[_] = ::{ //< the names whose references are listed, each with its count
     Ask::{ .line = "    $words: =", .needle = "words", .step = 1, .name = "words", .count = 3 },
     Ask::{ .line = "    for w", .needle = "w ", .name = "w", .count = 2 },
 }
 
-priv fn check_refs(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+priv fn check_refs(client: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< References from where a name is bound list that name's places, each on the name itself
     lines: = VALUES_SRC.lines(arena)
     for ask in REF_ASKS
         label: = arena.text().s("references from where '").s(ask.name).s("' is bound list its ")
             .s("\{ask.count\} places, each on it").take()
-        got: = request_at(c, "textDocument/references", ask, arena) catch e
+        got: = request_at(client, "textDocument/references", ask, arena) catch e
             verdict.check(label, false, end_text(e))
             continue
         spots: = got.get("result").arr_list(arena)
@@ -319,16 +319,16 @@ priv fn check_refs(c: jsonrpc_client.Client$@, arena: Arena$@) //<
                     .push(arena.text().s(uri).s(":\{line + 1\}:\{from\} '").s(on).s("'").take())
         found: = arena.text().s("\{spots.len\} found, off: ").s(lsp_client.join(off@, arena)).take()
         verdict.check(label, off.len == 0 && spots.len == ask.count,
-            lsp_client.why(c, found, arena))
+            lsp_client.why(client, found, arena))
 
-fn check_hover_values(c: jsonrpc_client.Client$@, arena: Arena$@)
-    lsp_client.open(c, VALUES_URI, VALUES_SRC, arena)
-    defer lsp_client.close(c, VALUES_URI, arena)
-    check_asks(c, Ask[]::LITERAL_ASKS, arena)
+fn check_hover_values(client: jsonrpc_client.Client$@, arena: Arena$@)
+    lsp_client.open(client, VALUES_URI, VALUES_SRC, arena)
+    defer lsp_client.close(client, VALUES_URI, arena)
+    check_asks(client, Ask[]::LITERAL_ASKS, arena)
     // Caution: **These come after the literals**, which hold an empty answer a dead worker would
     // give too: an answer here shows the analysis is standing.
-    check_asks(c, Ask[]::BOUND_ASKS, arena)
-    check_refs(c, arena)
+    check_asks(client, Ask[]::BOUND_ASKS, arena)
+    check_refs(client, arena)
 
 // ==========================================
 // A name that is not defined shows nothing
@@ -347,29 +347,29 @@ fn main(): I32
 
 priv const UNDEFINED_URI: U8[] = "file:///undefined_probe.kspl"
 
-priv fn hover_line(c: jsonrpc_client.Client$@, line: U8[], needle: U8[], arena: Arena$@):
+priv fn hover_line(client: jsonrpc_client.Client$@, line: U8[], needle: U8[], arena: Arena$@):
     json.Value //<
         //< The hover on `needle` of the probe line starting `line` (`null` where none came)
     col: = col_in_line(UNDEFINED_SRC, line, needle, arena)
     pos: = lsp_client.at_pos(UNDEFINED_URI, decl_line(UNDEFINED_SRC, line, arena), col, arena)
-    return lsp_client.answer(c, "textDocument/hover", pos, lsp_client.READ_MS, arena)
+    return lsp_client.answer(client, "textDocument/hover", pos, lsp_client.READ_MS, arena)
 
-fn check_hover_undefined(c: jsonrpc_client.Client$@, arena: Arena$@)
-    lsp_client.open(c, UNDEFINED_URI, UNDEFINED_SRC, arena)
-    defer lsp_client.close(c, UNDEFINED_URI, arena)
-    outside: = hover_line(c, "    return qq", "qq", arena)
+fn check_hover_undefined(client: jsonrpc_client.Client$@, arena: Arena$@)
+    lsp_client.open(client, UNDEFINED_URI, UNDEFINED_SRC, arena)
+    defer lsp_client.close(client, UNDEFINED_URI, arena)
+    outside: = hover_line(client, "    return qq", "qq", arena)
     verdict.check("a hover on a name not defined shows nothing",
         is_missing(outside.get("result")),
-        lsp_client.why(c, lsp_client.hover_text(outside), arena))
-    within: = hover_line(c, "    y: =", "bb", arena)
+        lsp_client.why(client, lsp_client.hover_text(outside), arena))
+    within: = hover_line(client, "    y: =", "bb", arena)
     verdict.check("a hover on a name not defined in a closure's body borrows no type",
         is_missing(within.get("result")),
-        lsp_client.why(c, lsp_client.hover_text(within), arena))
+        lsp_client.why(client, lsp_client.hover_text(within), arena))
     // An answer here shows the analysis is standing, which a dead worker's empty answers do not.
-    param: = hover_line(c, "    y: =", "item +", arena)
+    param: = hover_line(client, "    y: =", "item +", arena)
     verdict.check("a hover on a closure's parameter in its body still shows it",
         shown_line(lsp_client.hover_text(param)).equals("item: I32"),
-        lsp_client.why(c, lsp_client.hover_text(param), arena))
+        lsp_client.why(client, lsp_client.hover_text(param), arena))
 
 // ==========================================
 // What a declaration says of itself, as the editor shows it: the hover's description and
@@ -447,168 +447,173 @@ fn main(): I32
 
 priv const DOC_URI: U8[] = "file:///doc_probe.kspl"
 
-priv fn check_hover_doc(c: jsonrpc_client.Client$@, arena: Arena$@)
-    lsp_client.open(c, DOC_URI, DOC_SRC, arena)
-    defer lsp_client.close(c, DOC_URI, arena)
+priv fn check_hover_doc(client: jsonrpc_client.Client$@, arena: Arena$@)
+    lsp_client.open(client, DOC_URI, DOC_SRC, arena)
+    defer lsp_client.close(client, DOC_URI, arena)
     // The declaration's own line carries the summary, and the start of its contents the detail.
     text_at: = Spot::{ .line = "pub struct Row", .needle = "Row" }
     text: =
-        lsp_client.hover_text_at(c, DOC_URI, DOC_SRC, text_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, DOC_URI, DOC_SRC, text_at, lsp_client.READ_MS, arena) catch e
             verdict.check("a hover carries the documentation the declaration holds", false,
                 end_text(e))
             return
     verdict.check("a hover carries the documentation the declaration holds",
         text.find_str("one row of the table").is_some() &&
         text.find_str("not one line on the screen").is_some(),
-        lsp_client.why_quoted(c, text, arena))
+        lsp_client.why_quoted(client, text, arena))
     // **A `///` is read as nothing, not as the struct's**, or a field's description written the
     // Rust way lands silently on the struct. It is a warning (`[W0212]`).
     verdict.check("a /// is read as nothing, not as the struct's",
         text.find_str("What a row stands for").is_none(),
-        lsp_client.why_quoted(c, text, arena))
+        lsp_client.why_quoted(client, text, arena))
     // A head ending on a later line starts its run on that line, with **a mark carrying no
     // text**. One with text describes the return type (`return_doc` in `../../base/ast_doc.kspl`).
     w2_text_at: = Spot::{ .line = "  w2: = wrapped(1,", .needle = "wrapped" }
     w2_text: =
-        lsp_client.hover_text_at(c, DOC_URI, DOC_SRC, w2_text_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, DOC_URI, DOC_SRC, w2_text_at, lsp_client.READ_MS, arena)
+        catch e
             verdict.check("a head closing on a later line carries its run", false, end_text(e))
             return
     verdict.check("a head closing on a later line carries its run",
         w2_text.find_str("The summary of a head that closes on a later line").is_some() &&
         w2_text.find_str("The detail on the line after it.").is_some(),
-        lsp_client.why_quoted(c, w2_text, arena))
+        lsp_client.why_quoted(client, w2_text, arena))
     // **The run's first line is the summary**, and the line boundary parts it from the detail.
     verdict.check("the first line is the summary, set apart from the detail",
         w2_text.find_str("later line.\n\nThe detail on").is_some(),
-        lsp_client.why_quoted(c, w2_text, arena))
+        lsp_client.why_quoted(client, w2_text, arena))
 
     // Caution: **Test a field too.** It has no contents, and searching for a `{` would find the
     // struct's and show the wrong sentence.
     f_text_at: = Spot::{ .line = "  pub text: U8[]", .needle = "text" }
     f_text: =
-        lsp_client.hover_text_at(c, DOC_URI, DOC_SRC, f_text_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, DOC_URI, DOC_SRC, f_text_at, lsp_client.READ_MS, arena)
+        catch e
             verdict.check("a hover over a field carries that field's own sentence", false,
                 end_text(e))
             return
     verdict.check("a hover over a field carries that field's own sentence",
         f_text.find_str("the text as the writer typed it").is_some() &&
         f_text.find_str("What a row stands for").is_none(),
-        lsp_client.why_quoted(c, f_text, arena))
+        lsp_client.why_quoted(client, f_text, arena))
 
-priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+priv fn check_hover_params(client: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< It checks a hover shows the parameters one per line, each with its own `//<`
     //< The lines are as the source has them.
     //< A parameter with no comment stays bare, and a run continued below joins its parameter's
     //< line.
     //< Caution: **Test a signature written on one line too.** Its `//<` describes the declaration;
     //< taken per parameter, each would repeat the declaration\'s summary.
-    lsp_client.open(c, DOC_URI, DOC_SRC, arena)
-    defer lsp_client.close(c, DOC_URI, arena)
+    lsp_client.open(client, DOC_URI, DOC_SRC, arena)
+    defer lsp_client.close(client, DOC_URI, arena)
     text_at: = Spot::{ .line = "  n: = r.put(1, 2)", .needle = "put" }
     text: =
-        lsp_client.hover_text_at(c, DOC_URI, DOC_SRC, text_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, DOC_URI, DOC_SRC, text_at, lsp_client.READ_MS, arena) catch e
             verdict.check("a hover lists the parameters that carry a description", false,
                 end_text(e))
             return
     verdict.check("a hover lays a described parameter out on its own line",
         text.find_str("\n    at: Sz, //< which column it starts in. Counted from 0, not 1.\n")
-        .is_some(), lsp_client.why_quoted(c, text, arena))
+        .is_some(), lsp_client.why_quoted(client, text, arena))
     verdict.check("a parameter that describes nothing stands with nothing behind it",
         text.find_str("\n    times: Sz,\n").is_some() &&
-        text.find_str("times: Sz, //<").is_none(), lsp_client.why_quoted(c, text, arena))
+        text.find_str("times: Sz, //<").is_none(), lsp_client.why_quoted(client, text, arena))
     // Caution: **The return's line is described too, and by nothing else.** It is neither the
     // declaration's line (`decl_summary`) nor the last parameter's run, so if not read here it
     // shows nowhere (`return_doc` in `../../base/ast_doc.kspl`).
     verdict.check("a hover shows what the return type's own line says",
         text.find_str("): Sz //< how many characters the row now runs to").is_some(),
-        lsp_client.why_quoted(c, text, arena))
+        lsp_client.why_quoted(client, text, arena))
 
     w_text_at: = Spot::{ .line = "  w: = wide(3, 4)", .needle = "wide" }
     w_text: =
-        lsp_client.hover_text_at(c, DOC_URI, DOC_SRC, w_text_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, DOC_URI, DOC_SRC, w_text_at, lsp_client.READ_MS, arena)
+        catch e
             verdict.check("a one-line signature gives its summary to no parameter", false,
                 end_text(e))
             return
     verdict.check("a one-line signature gives its summary to no parameter",
         w_text.find_str("the whole of it written on one line").is_some() &&
-        w_text.find_str("//<").is_none(), lsp_client.why_quoted(c, w_text, arena))
+        w_text.find_str("//<").is_none(), lsp_client.why_quoted(client, w_text, arena))
     verdict.check("a signature that describes nothing and fits stays on one line",
         w_text.find_str("wide(a: I32, b: I32): I32").is_some(),
-        lsp_client.why_quoted(c, w_text, arena))
+        lsp_client.why_quoted(client, w_text, arena))
 
     // Caution: **Test the elision on a real declaration, not only on the count**: the return type's
     // line, which a reader needs, must still be shown.
     m_text_at: = Spot::{ .line = "fn many(a1: Sz,", .needle = "many" }
     m_text: =
-        lsp_client.hover_text_at(c, DOC_URI, DOC_SRC, m_text_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, DOC_URI, DOC_SRC, m_text_at, lsp_client.READ_MS, arena)
+        catch e
             verdict.check("a signature past the cap says how many were left out", false,
                 end_text(e))
             return
     verdict.check("a signature past the cap says how many were left out",
         m_text.find_str("    a16: Sz,\n    // ... 1 more\n").is_some(),
-        lsp_client.why_quoted(c, m_text, arena))
+        lsp_client.why_quoted(client, m_text, arena))
     verdict.check("an elided signature still carries the return type",
         m_text.find_str("\n): Sz").is_some() && m_text.find_str("a17").is_none(),
-        lsp_client.why_quoted(c, m_text, arena))
+        lsp_client.why_quoted(client, m_text, arena))
 
-priv fn check_hover_links(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@) //<
+priv fn check_hover_links(client: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@) //<
     //< A name the description mentions is shown as a link to where it is declared
     //< **It is resolved as `[W0211]` resolves it**, through the description's scope: `Row.put`
     //< links, `r.text` (unknown head) stays text, and so does `io.out` where a parameter `io` hides
     //< the module.
     //< Caution: **Check the line, not just the link**, or one opening the file at its start passes.
-    lsp_client.open(c, uri, DOC_SRC, arena)
-    defer lsp_client.close(c, uri, arena)
+    lsp_client.open(client, uri, DOC_SRC, arena)
+    defer lsp_client.close(client, uri, arena)
     text_at: = Spot::{ .line = "fn pointing(): Sz", .needle = "pointing" }
     text: =
-        lsp_client.hover_text_at(c, uri, DOC_SRC, text_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, uri, DOC_SRC, text_at, lsp_client.READ_MS, arena) catch e
             verdict.check("a name the description points at becomes a link", false, end_text(e))
             return
     put_line: = decl_line(DOC_SRC, "  fn put( //< writes one row out", arena)
     want: = arena.text().s("[`Row.put`](").s(uri).s("#L").s("\{put_line + 1\}").s(")").take()
     verdict.check("a name the description points at becomes a link to its line",
-        text.find_str(want).is_some(), lsp_client.why_quoted(c, text, arena))
+        text.find_str(want).is_some(), lsp_client.why_quoted(client, text, arena))
     verdict.check("a name the file does not know stays text",
         text.find_str("`r.text` alone").is_some() && text.find_str("[`r.text`]").is_none(),
-        lsp_client.why_quoted(c, text, arena))
+        lsp_client.why_quoted(client, text, arena))
     verdict.check("a link already written in a description stays as written",
         text.find_str("[`Row.put`](https://example.test/kept)").is_some() &&
-        text.find_str("[[`Row.put`]").is_none(), lsp_client.why(c, text, arena))
+        text.find_str("[[`Row.put`]").is_none(), lsp_client.why(client, text, arena))
     quiet_at: = Spot::{ .line = "fn quiet(io: Sz): Sz", .needle = "quiet" }
     quiet: =
-        lsp_client.hover_text_at(c, uri, DOC_SRC, quiet_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, uri, DOC_SRC, quiet_at, lsp_client.READ_MS, arena) catch e
             verdict.check("a parameter hides the module's name in its function", false,
                 end_text(e))
             return
     verdict.check("a parameter hides the module's name in its function",
         quiet.find_str("`io.out` here").is_some() && quiet.find_str("[`io.out`]").is_none(),
-        lsp_client.why_quoted(c, quiet, arena))
+        lsp_client.why_quoted(client, quiet, arena))
     // **The names are read in the run's joined text**, as `[W0211]` reads them. A writer may
     // break a name's backticks, or the "Python's" before one, across the summary's end.
     cross_at: = Spot::{ .line = "fn crossing(): Sz", .needle = "crossing" }
     cross: =
-        lsp_client.hover_text_at(c, uri, DOC_SRC, cross_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, uri, DOC_SRC, cross_at, lsp_client.READ_MS, arena) catch e
             verdict.check("a name cut across the summary's end is one link", false, end_text(e))
             return
     whole: = arena.text().s("the count [`Row.put(r, 1, 2)`](").s(uri).s("#L").s("\{put_line + 1\}")
         .s(") gives").take()
     verdict.check("a name cut across the summary's end is one link",
-        cross.find_str(whole).is_some(), lsp_client.why_quoted(c, cross, arena))
+        cross.find_str(whole).is_some(), lsp_client.why_quoted(client, cross, arena))
     foreign_at: = Spot::{ .line = "fn foreign(): Sz", .needle = "foreign" }
     foreign: =
-        lsp_client.hover_text_at(c, uri, DOC_SRC, foreign_at, lsp_client.READ_MS, arena) catch e
+        lsp_client.hover_text_at(client, uri, DOC_SRC, foreign_at, lsp_client.READ_MS, arena) catch e
             verdict.check("another product's name after the summary's end stays text", false,
                 end_text(e))
             return
     verdict.check("another product's name after the summary's end stays text",
         foreign.find_str("`Row.put` is no concern").is_some() &&
-        foreign.find_str("[`Row.put`]").is_none(), lsp_client.why_quoted(c, foreign, arena))
+        foreign.find_str("[`Row.put`]").is_none(),
+        lsp_client.why_quoted(client, foreign, arena))
 
-fn run_docs(c: jsonrpc_client.Client$@, arena: Arena$@)
-    check_hover_doc(c, arena)
-    check_hover_params(c, arena)
+fn run_docs(client: jsonrpc_client.Client$@, arena: Arena$@)
+    check_hover_doc(client, arena)
+    check_hover_params(client, arena)
     // Literal expectations are independent of the production URI encoder.
     for uri in(U8[][]::{ "file:///C:/doc_probe.kspl", "file:///C:/hover%20%E3%81%8B%25%23%3F.kspl" }
         if sys.is_windows()
         else U8[][]::{ "file:///doc_probe.kspl", "file:///hover%20%E3%81%8B%25%23%3F.kspl" })
-        check_hover_links(c, uri, arena)
+        check_hover_links(client, uri, arena)

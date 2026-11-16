@@ -6,7 +6,7 @@
 
 ## A diagnostic code (a `W`, `I` or `H` code)
 
-1. **Emit it from sema** with its code at the head of the message: `c.warn(node, "[W0xxx] ...")`, `c.information(...)` or `c.hint(...)` (`ksplc/sema/session/ctx.kspl`; `[W0203]` in `ksplc/sema/body/stmt.kspl` is an example). Ask `c.is_code_off(node, code)` before costly work. An information or a hint prints only under `ksplc lint`.
+1. **Emit it from sema** with its code at the head of the message: `ctx.warn(node, "[W0xxx] ...")`, `ctx.information(...)` or `ctx.hint(...)` (`ksplc/sema/session/ctx.kspl`; `[W0203]` in `ksplc/sema/body/stmt.kspl` is an example). Ask `ctx.is_code_off(node, code)` before costly work. An information or a hint prints only under `ksplc lint`.
 2. **Register it** in `CODES` in [`../base/lint_codes.kspl`](../base/lint_codes.kspl), and raise the array's length. A code off by default also goes into `OFF_BY_DEFAULT`. Left out, `make test-conventions` fails with "every code the compiler writes is registered".
 3. **Write its section**, `### [W0xxx] <title>`, in [`SPEC-diagnostics.md`](SPEC-diagnostics.md) under "2. The list of warnings (W)", "3. The list of information diagnostics (I)" or "4. The list of hints (H)". Left out, `make test-conventions` fails with "the diagnostic codes agree between the implementation and the spec".
 4. **Add material that fires it**: a case in its subject's file under `ksplc/tests/lint/`, opened by `// ==== case <name>` ([`HOWTO-add-a-fixture.md`](HOWTO-add-a-fixture.md)), with a `// EXPECT: [W0xxx] ...` line. For a code off by default, add `// ARGS: --lint=W0xxx=on` too. Without one, `make test-conventions` fails with "every diagnostic code has material holding it"; `make test-lint` runs the material.
@@ -37,7 +37,7 @@
 
 1. **`ksplc/cli.kspl`**: a `Face` variant (its name, with `_` written `-`, is the subcommand's), its row in `FACES` (raise the array's length), a `Mode` variant, and its case in `read_mode`. The row gives its line in the usage, its usage line, and whether it lays values out. Add the subcommand's name to the `only_for` of each option it takes.
 2. **`ksplc/main.kspl`**: its cases in `needs_grammar` and `dispatch`.
-3. **[`SPEC-tools.md`](SPEC-tools.md)**: a row in the table of commands and a section of its own. Left out, `make test-conventions` fails with "the CLI's entry points agree"; the only name let through is `UNDOCUMENTED_OK` in `tests/support/conventions_iface.kspl`.
+3. **[`SPEC-tools.md`](SPEC-tools.md)**: a row in the table of commands and a section of its own. Left out, `make test-conventions` fails with "ksplc's command line agrees"; the only name let through is `KSPLC_UNDOCUMENTED_OK` in `tests/support/conventions_iface.kspl`.
 4. **Run `make test-cli`**: `case_help_matches_behavior` tries every subcommand and option `--help` lists.
 5. **Update the seed** (below).
 

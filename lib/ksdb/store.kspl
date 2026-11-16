@@ -3,18 +3,18 @@
 //< `program` writes correctly only where the medium is erased. The erase unit is large and the
 //< write unit small (`erase` works per sector, `program` per byte). Tests use `ksdb/ram_store`.
 
-pub typedef Read_at = fn(at: Sz, dst: U8$[]) //< reads `dst.len` bytes from `at`; it cannot fail.
+pub typedef Read_at = fn(at: Sz, dst: U8$[]) //< reads `dst.len` bytes from `at`; it cannot fail
     //< Caution: **Do not pass a range past the end** (the caller checks it against `capacity`).
     //< Every medium can be read, so no failure is returned.
 
 pub typedef Program_at = fn(at: Sz, src: U8[]): Bool //<
-    //< writes `src` at `at`; false means it was not written.
+    //< writes `src` at `at`; false means it was not written
     //< **Most media report no failure when writing where nothing was erased**: the bits just turn
     //< to 0, and reading back gives a garbled value. So true does not mean "written correctly";
     //< the layer above checks the erase (`lib/ksdb/log.kspl`). false means "it was not written",
     //< not "try later"; retrying does not fix it.
 
-pub typedef Erase_sector = fn(at: Sz): Bool //< erases the sector holding `at` to all 1 bits.
+pub typedef Erase_sector = fn(at: Sz): Bool //< erases the sector holding `at` to all 1 bits
     //< Returns true if it erased. The address need not be the start of a sector. **The erase unit
     //< is `sector_size`**, so part of a sector cannot be erased on its own.
 
@@ -25,8 +25,8 @@ pub struct Store //< the medium a log is kept on: its three operations and its s
     pub read_at: Read_at //< how this medium is read
     pub program_at: Program_at //< how bytes are written to an area that is already erased
     pub erase_sector: Erase_sector //< how one sector is erased back to all 1 bits
-    pub capacity: Sz //< the medium's total size in bytes.
-    pub sector_size: Sz //< the erase unit's size in bytes; it must divide `capacity`.
+    pub capacity: Sz //< the medium's total size in bytes
+    pub sector_size: Sz //< the erase unit's size in bytes; it must divide `capacity`
         //< Caution: **Otherwise the last sector ends partway**, and erasing it reaches into the
         //< region beyond.
 

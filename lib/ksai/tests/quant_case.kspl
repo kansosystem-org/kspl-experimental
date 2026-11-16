@@ -22,13 +22,14 @@ struct Case //< one reference file, read
     encoded: U8[] //< the bytes, a view into the file
     decoded: F32$[] //< the reference's numbers, `rows × cols`
 
-priv fn field(file: U8[], k: Sz): Sz //< the k-th U32 after the magic
-    return Sz::file.get_u32_le(4 + 4 * k)
+priv fn field(file: U8[], index: Sz): Sz //< U32 number `index` after the magic, counting from 0
+    return Sz::file.get_u32_le(4 + 4 * index)
 
-fn floats_at(file: U8[], at: Sz, n: Sz, arena: Arena$@): F32$[] //< n F32s copied out of bytes
-    p: = F32$@::arena.alloc(n * 4 + 4)
-    mem.copy(Void$@::p, Void$@::(file.ptr + at), n * 4)
-    return F32$[]::{ .ptr = p, .len = n }
+fn floats_at(file: U8[], at: Sz, count: Sz, arena: Arena$@): F32$[] //<
+    //< `count` F32s copied out of bytes
+    p: = F32$@::arena.alloc(count * 4 + 4)
+    mem.copy(Void$@::p, Void$@::(file.ptr + at), count * 4)
+    return F32$[]::{ .ptr = p, .len = count }
 
 priv fn format_of(ggml_type: Sz): Quant_format //< ggml's `GGML_TYPE_*` number, as a format
     switch ggml_type
@@ -72,17 +73,19 @@ fn read_case(file: U8[], arena: Arena$@): Case //<
         .decoded = floats_at(file, HEAD + 4 * n_in + n_enc, n_dec, arena),
     }
 
-fn decode_mismatches(c: Case@, arena: Arena$@): Sz //<
+fn decode_mismatches(test_case: Case@, arena: Arena$@): Sz //<
     //< How many numbers ksai decodes to other bits than the reference; the first few are printed
-    m: = Quant_matrix.from_bytes(c.format, c.rows, c.cols, c.encoded) catch e
-        io.err().s("the sizes were refused: \{e\}\n")
-        return c.rows * c.cols
-    out: = F32$[]::{ .ptr = F32$@::arena.alloc(c.cols * 4), .len = c.cols }
+    m: =
+        Quant_matrix.from_bytes(test_case.format, test_case.rows, test_case.cols,
+        test_case.encoded) catch e
+            io.err().s("the sizes were refused: \{e\}\n")
+            return test_case.rows * test_case.cols
+    out: = F32$[]::{ .ptr = F32$@::arena.alloc(test_case.cols * 4), .len = test_case.cols }
     $bad: Sz = 0
-    for i in Range.asc(c.rows)
+    for i in Range.asc(test_case.rows)
         m.dequantize_row(i, out) catch panic("quant_case: dequantize_row refused a valid row")
-        for k in Range.asc(c.cols)
-            want: = bignat.f32_to_bits(c.decoded[i * c.cols + k])
+        for k in Range.asc(test_case.cols)
+            want: = bignat.f32_to_bits(test_case.decoded[i * test_case.cols + k])
             got: = bignat.f32_to_bits(out[k])
             if want != got
                 if bad < 5

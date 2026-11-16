@@ -18,28 +18,28 @@ import "std/ds"
 import "std/str" { Str_builder }
 import "std/strnum" // reading a floating-point literal's value
 
-fn infer_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
-    type_id: = literal_type_id(node, c, expected_id)
+fn infer_literal_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32
+    type_id: = literal_type_id(node, ctx, expected_id)
     if node.kind_id == .k_integer
-        check_integer_literal_width(c, node)
+        check_integer_literal_width(ctx, node)
         // **Only literals whose type is known get the range check.** An unknown one defaults to I32
         // but can sit in U32 arithmetic (`v * 0x85ebca6b`), so correct code would fail. The
         // right-hand side gets no expected type: see pass_right_id in infer_binary_expr in
         // `binary.kspl`.
         type_is_known: =
             !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(node.text)) ||
-            (!sema_type_env.is_unknown(expected_id) && c.env.is_integer(expected_id))
+            (!sema_type_env.is_unknown(expected_id) && ctx.env.is_integer(expected_id))
         // **In a generic's instance too**: the fit changes with the type argument, but a value
         // that does not fit changes silently in that instance (`y = 300` with T=U8 stores 44). The
         // error names the instance ("An error in a generic's body names its instantiation" in
         // ksplc/docs/DESIGN-diagnostics.md).
         if type_is_known
-            check_literal_bounds(c, node, type_id, c.fn_ctx.literal_negated)
+            check_literal_bounds(ctx, node, type_id, ctx.fn_ctx.literal_negated)
     else if node.kind_id == .k_float
-        check_float_literal_range(c, node, type_id)
+        check_float_literal_range(ctx, node, type_id)
     return type_id
 
-priv fn check_float_literal_range(c: Sema_ctx$@, node: Ast_node$@, type_id: I32) //<
+priv fn check_float_literal_range(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32) //<
     //< Refuses a floating-point literal that its type holds only as infinity, or as zero
     //< **An error, as for an integer** (check_literal_bounds): the value would change silently, and
     //< C only warns, for a `double` alone. Rounding to a nearby value and a subnormal pass: every
@@ -48,7 +48,7 @@ priv fn check_float_literal_range(c: Sema_ctx$@, node: Ast_node$@, type_id: I32)
     _stop: = node.text.append_clean_number(clean@, "F")
     v: = clean.slice().to_f64() catch
         return
-    held: = F64::(F32::v) if c.env.get_primitive_bit_size(type_id) == 32 else v
+    held: = F64::(F32::v) if ctx.env.get_primitive_bit_size(type_id) == 32 else v
     $becomes: = ""
     if held - held != 0.0
         becomes = "infinity"
@@ -56,11 +56,11 @@ priv fn check_float_literal_range(c: Sema_ctx$@, node: Ast_node$@, type_id: I32)
         becomes = "zero"
     else
         return
-    type_name: = c.env.display(type_id)
-    c.clear_scratch()
+    type_name: = ctx.env.display(type_id)
+    ctx.clear_scratch()
         .s("literal '\{node.text\}' becomes \{becomes\} in type '\{type_name\}'. Its value would \
             change silently. Write a value inside the type's range, or use a wider type")
-    c.err(node, c.scratch.slice())
+    ctx.err(node, ctx.scratch.slice())
 
 priv fn has_nonzero_digit(number: U8[]): Bool //< whether a decimal's significand is not zero
     for ch in number
@@ -104,11 +104,11 @@ fn is_untyped_numeric_expr(node: Ast_node$@): Bool //<
     default
         return false
 
-priv fn literal_type_id(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
+priv fn literal_type_id(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32
     if node.kind_id == .k_bool
         return I32::sema_type_env.Builtin_type_id.bool_type
     if node.kind_id == .k_null
-        return c.env.resolve_null_type(expected_id)
+        return ctx.env.resolve_null_type(expected_id)
 
     txt: = node.text
     suffix_id: = sema_decl_eval.int_suffix_type_id(txt)
@@ -122,36 +122,36 @@ priv fn literal_type_id(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
     // Caution: **A float literal takes only a float type.** Given an integer one, `x: I32 = 2.5`
     // and a `catch 2.5` for an `I32` passed silently, C keeping 2 and LLVM emitting `i32 2.5`.
     if node.kind_id == .k_float
-        if !sema_type_env.is_unknown(expected_id) && c.env.is_float(expected_id)
+        if !sema_type_env.is_unknown(expected_id) && ctx.env.is_float(expected_id)
             return expected_id
         return I32::sema_type_env.Builtin_type_id.f64_type
     // Caution: **Nor does an integer literal take a float type**, the other half of "between
     // integers and reals it is forbidden both ways". Given one, LLVM emitted `store double 2`,
     // which does not build. `2.0` is the one spelling of that value.
-    if !sema_type_env.is_unknown(expected_id) && c.env.is_numeric(expected_id) &&
-        !c.env.is_float(expected_id)
-        if c.env.is_scalar_enum(expected_id)
-            refuse_implicit_enum(c, node, I32::sema_type_env.Builtin_type_id.i32_type, expected_id)
+    if !sema_type_env.is_unknown(expected_id) && ctx.env.is_numeric(expected_id) &&
+        !ctx.env.is_float(expected_id)
+        if ctx.env.is_scalar_enum(expected_id)
+            refuse_implicit_enum(ctx, node, I32::sema_type_env.Builtin_type_id.i32_type, expected_id)
         return expected_id
     return I32::sema_type_env.Builtin_type_id.i32_type
 
-fn refuse_implicit_enum(c: Sema_ctx$@, node: Ast_node$@, from_id: I32, enum_id: I32) //<
+fn refuse_implicit_enum(ctx: Sema_ctx$@, node: Ast_node$@, from_id: I32, enum_id: I32) //<
     //< Reports an integer or another enum written where an enum is expected
     //< **Only the cast `E::n` makes an enum** ("Type conversion (`::`) and implicit casts" in
     //< docs/SPEC-programming-language.md). It checks that the value is a tag. Taken implicitly,
     //< `x: E = 5` would hold a value that is no variant, unchecked.
-    shown: = c.env.display(enum_id)
+    shown: = ctx.env.display(enum_id)
     $operand: = "(…)"
     if node.kind_id == .k_integer
         operand = node.text
     else if node.is_path_or_ident()
         operand = node.get_path_or_ident_name()
-    c.clear_scratch()
-        .s("cannot convert '\{c.env.display(from_id)\}' to the enum '\{shown\}' implicitly. Write \
+    ctx.clear_scratch()
+        .s("cannot convert '\{ctx.env.display(from_id)\}' to the enum '\{shown\}' implicitly. Write \
             the cast '\{shown\}::\{operand\}'")
-    c.err(node, c.scratch.slice())
+    ctx.err(node, ctx.scratch.slice())
 
-priv fn check_integer_literal_width(c: Sema_ctx$@, node: Ast_node$@) //<
+priv fn check_integer_literal_width(ctx: Sema_ctx$@, node: Ast_node$@) //<
     //< Reports an integer literal too long to fit any integer type
     //< **This is an error, not a lint.** The text goes to C / LLVM IR as written, and the C
     //< compiler's `integer literal is too large` is far from the KSPL source. See "Failing fast
@@ -159,12 +159,12 @@ priv fn check_integer_literal_width(c: Sema_ctx$@, node: Ast_node$@) //<
     //< type, so it applies even while a generic is instantiated.
     if !node.text.parse_int_literal_u64().overflow
         return
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("integer literal '\{node.text\}' is too large for any integer type. The widest integer \
             type is 64 bits")
-    c.err(node, c.scratch.slice())
+    ctx.err(node, ctx.scratch.slice())
 
-fn check_operand_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, other_id: I32) //<
+fn check_operand_literal_bounds(ctx: Sema_ctx$@, node: Ast_node$@, other_id: I32) //<
     //< Checks the range of an untyped integer literal on one side against the other side's type
     //< It applies to a binary operation.
     //< A suffixed literal is left to the ordinary type check (report_type_mismatch).
@@ -172,20 +172,20 @@ fn check_operand_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, other_id: I32) 
     if lit.node == null ||
         !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(lit.node.text))
         return
-    check_literal_bounds(c, lit.node, other_id, lit.is_neg)
+    check_literal_bounds(ctx, lit.node, other_id, lit.is_neg)
 
-fn settle_untyped_literal(c: Sema_ctx@, node: Ast_node$@, operand_id: I32): Bool //<
+fn settle_untyped_literal(ctx: Sema_ctx@, node: Ast_node$@, operand_id: I32): Bool //<
     //< Gives an untyped integer literal in a binary operation the type after promotion
     //< Caution: **Do not leave it at I32 under a cast.** `x + 4294967295` on a `U64` would then be
     //< a widening of an I32 whose bits read -1. A backend that extends the constant by its type
     //< then gets -1. Its range against that type is check_operand_literal_bounds's.
-    if node == null || node.kind_id != .k_integer || !c.env.is_integer(operand_id) ||
+    if node == null || node.kind_id != .k_integer || !ctx.env.is_integer(operand_id) ||
         !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(node.text))
         return false
     node.type_id = operand_id
     return true
 
-fn settle_negated_literal(c: Sema_ctx@, node: Ast_node$@, operand_id: I32): Bool //<
+fn settle_negated_literal(ctx: Sema_ctx@, node: Ast_node$@, operand_id: I32): Bool //<
     //< Gives a negated, untyped literal in a binary operation the type after promotion
     //< The literal is directly under a unary minus, on one side of the operation.
     //< Caution: **The width to negate at must be the promoted type.** Sometimes no expected type is
@@ -193,14 +193,14 @@ fn settle_negated_literal(c: Sema_ctx@, node: Ast_node$@, operand_id: I32): Bool
     //< from the left-hand side. There the literal is inferred at the default I32. But the generated
     //< code computes the unary minus at that node's type (emit_unary_expr in gen/c/expr.kspl).
     lit: = literal_under_minus(node)
-    if lit.node == null || !lit.is_neg || !c.env.is_integer(operand_id) ||
+    if lit.node == null || !lit.is_neg || !ctx.env.is_integer(operand_id) ||
         !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(lit.node.text))
         return false
     lit.node.type_id = operand_id
     node.type_id = operand_id
     return true
 
-fn check_settled_literals(c: Sema_ctx$@, body: Ast_node$@) //<
+fn check_settled_literals(ctx: Sema_ctx$@, body: Ast_node$@) //<
     //< Checks each untyped integer literal in a body against the type it ended with
     //< **A literal with no type of its own takes one in many places**: a ternary's branches, an
     //< inferred generic argument, a `~`, an interpolation. A check at each missed the next one
@@ -209,15 +209,15 @@ fn check_settled_literals(c: Sema_ctx$@, body: Ast_node$@) //<
     //< at the same place, reported once. A generic's instance is checked too (infer_literal_expr).
     if body == null
         return
-    walk_settled_literals(c, body, false)
+    walk_settled_literals(ctx, body, false)
 
-priv fn walk_settled_literals(c: Sema_ctx$@, node: Ast_node$@, is_neg: Bool)
+priv fn walk_settled_literals(ctx: Sema_ctx$@, node: Ast_node$@, is_neg: Bool)
     if node == null
         return
     if node.kind_id == .k_integer
         if !sema_type_env.is_unknown(node.type_id) &&
             sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(node.text))
-            check_literal_bounds(c, node, node.type_id, is_neg)
+            check_literal_bounds(ctx, node, node.type_id, is_neg)
         return
     // A type's literal (an array's length, a constant generic argument) has checks of its own.
     if node.kind_id == .k_type_expr
@@ -226,7 +226,7 @@ priv fn walk_settled_literals(c: Sema_ctx$@, node: Ast_node$@, is_neg: Bool)
         node.kind_id == .k_expr_unary && node.get_unary_op() != null &&
         node.get_unary_op().text.equals("-")
     for child in node.children
-        walk_settled_literals(c, child, negates && child == node.get_unary_target())
+        walk_settled_literals(ctx, child, negates && child == node.get_unary_target())
 
 fn cast_operand_type_id(node: Ast_node$@): I32 //<
     //< The type an untyped integer literal takes as a cast's operand, or unknown to leave it I32
@@ -268,7 +268,7 @@ priv fn literal_under_minus(node: Ast_node$@): Signed_literal
         return Signed_literal::{ .node = null, .is_neg = false }
     return Signed_literal::{ .node = lit, .is_neg = is_neg }
 
-fn check_inferred_decl_literal(c: Sema_ctx$@, expr_node: Ast_node$@, final_id: I32) //<
+fn check_inferred_decl_literal(ctx: Sema_ctx$@, expr_node: Ast_node$@, final_id: I32) //<
     //< Checks the range of an integer literal initializing an unannotated declaration
     //< For example `x: = 2147483648;`. The range is checked against the final type.
     //< **Not at the literal itself**, where the default I32 might still widen (type_is_known in
@@ -278,34 +278,34 @@ fn check_inferred_decl_literal(c: Sema_ctx$@, expr_node: Ast_node$@, final_id: I
     lit: = literal_under_minus(expr_node)
     if lit.node == null
         return
-    check_literal_bounds(c, lit.node, final_id, lit.is_neg)
+    check_literal_bounds(ctx, lit.node, final_id, lit.is_neg)
 
-priv fn check_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, is_neg: Bool) //<
+priv fn check_literal_bounds(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, is_neg: Bool) //<
     //< Checks that the literal fits the range of that type
     //< **This is an error, not a lint.** An out-of-range literal's value changes silently (`I32 =
     //< 2147483648` becomes -2147483648).
     //< Caution: **Take bit width and sign from Env's single source (get_primitive_bit_size /
     //< is_unsigned).** A per-type table here would let a forgotten width go unnoticed.
-    if !c.env.is_integer(type_id)
+    if !ctx.env.is_integer(type_id)
         return
     lit: = node.text.parse_int_literal_u64()
     if lit.overflow
         return // a literal too long for any type is already an error (check_integer_literal_width)
     // The bits for the absolute value (a signed type spends one on the sign).
     value_bits: =
-        c.env.get_portable_bit_size(type_id) - (0 if c.env.is_unsigned(type_id) else 1)
+        ctx.env.get_portable_bit_size(type_id) - (0 if ctx.env.is_unsigned(type_id) else 1)
     $out_of_range: = false
     if is_neg
         // No negative fits an unsigned type; a signed one goes down to -(2^value_bits).
         out_of_range =
-            c.env.is_unsigned(type_id) || lit.value > (U64::1 << U64::value_bits)
+            ctx.env.is_unsigned(type_id) || lit.value > (U64::1 << U64::value_bits)
     else if value_bits < 64
         out_of_range = lit.value > ((U64::1 << U64::value_bits) - U64::1)
     if out_of_range
         sign: = "-" if is_neg else ""
-        type_name: = c.env.display(type_id)
-        bits: = c.env.get_portable_bit_size(type_id)
-        unsigned: = c.env.is_unsigned(type_id)
+        type_name: = ctx.env.display(type_id)
+        bits: = ctx.env.get_portable_bit_size(type_id)
+        unsigned: = ctx.env.is_unsigned(type_id)
         // `U8::300` keeps the low bits, so the message shows the number that cast gives. A suffix
         // is not written on the cast's operand: `U8::300U8` repeats the type and is itself out of
         // range.
@@ -319,23 +319,23 @@ priv fn check_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, is_n
         if suffix_id != I32::sema_type_env.Builtin_type_id.unknown
             digits = digits.sub(0,
                 digits.len - sema_type_env.BUILTIN_TYPES[suffix_id].name.len)
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("literal '\{sign\}\{node.text\}' is out of range for type '\{type_name\}', which \
                 holds ")
         if unsigned
-            c.scratch.s("0 to \{mask\}")
+            ctx.scratch.s("0 to \{mask\}")
         else
-            c.scratch.s("-\{bottom\} to \{top\}")
-        c.scratch
+            ctx.scratch.s("-\{bottom\} to \{top\}")
+        ctx.scratch
             .s(". Its value would change silently. Use a wider type, or cast explicitly if the \
                 truncation is intended: '\{type_name\}::")
         if is_neg
-            c.scratch.s("-\{digits\}")
+            ctx.scratch.s("-\{digits\}")
         else
-            c.scratch.s(digits)
-        c.scratch.s("' keeps the low bits and gives ")
+            ctx.scratch.s(digits)
+        ctx.scratch.s("' keeps the low bits and gives ")
         if unsigned
-            c.scratch.s("\{U64::cast_value\}")
+            ctx.scratch.s("\{U64::cast_value\}")
         else
-            c.scratch.s("\{cast_value\}")
-        c.err(node, c.scratch.slice())
+            ctx.scratch.s("\{cast_value\}")
+        ctx.err(node, ctx.scratch.slice())

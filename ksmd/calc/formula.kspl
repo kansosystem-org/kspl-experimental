@@ -152,11 +152,11 @@ fn token_at(text: U8[], from: Sz): Token //< the token after any spaces and tabs
             return Token(.unequal, i, i + 2)
     return Token(operator(c), i, i + 1)
 
-fn next(t: Table@, cell: Cell, cur: Cursor$@): Token //<
+fn next(table: Table@, cell: Cell, cur: Cursor$@): Token //<
     //< The next token of a formula cell, read across its pieces; `.end` after the last
     for cur.piece < cell.count
         index: = cell.first + cur.piece
-        p: = t.pieces[index]@
+        p: = table.pieces[index]@
         switch p.kind
         case .text
             tok: = token_at(p.text, cur.at)
@@ -193,10 +193,10 @@ fn bind(doc: Document@, home: Sz, text: U8[], pieces: List<|Piece|>$@): Sz //<
         count += 1
     return count
 
-fn has_attachable(doc: Document@, home: Sz, t: Table@, cell: Cell): Bool //<
+fn has_attachable(doc: Document@, home: Sz, table: Table@, cell: Cell): Bool //<
     //< Whether a reference kept as text in a formula would attach if it were bound again
     for k in Range(cell.first, cell.first + cell.count, 1)
-        p: = t.pieces[k]@
+        p: = table.pieces[k]@
         if p.kind == .text
             if _found: = attachable(doc, home, p.text, 0)
                 return true
@@ -224,29 +224,29 @@ fn attachable(doc: Document@, home: Sz, text: U8[], from: Sz): Found? //<
 
 fn bind_all(doc: Document$@, arena: Arena$@) //<
     //< Binds each formula the reader read as one text piece, once every table's name is known
-    for u in Range.asc(doc.tables.len)
+    for table in Range.asc(doc.tables.len)
         $fresh: = List<|Piece|>(arena)
-        for i in Range.asc(doc.tables[u].cells.len)
-            cell: = doc.tables[u].cells[i]
+        for i in Range.asc(doc.tables[table].cells.len)
+            cell: = doc.tables[table].cells[i]
             if cell.kind == .formula
-                text: = doc.tables[u].pieces[cell.first].text
+                text: = doc.tables[table].pieces[cell.first].text
                 first: = fresh.len
-                count: = bind(doc, u, text, fresh@)
-                doc.tables[u].cells[i].first = first
-                doc.tables[u].cells[i].count = count
-        doc.tables[u].pieces = fresh
+                count: = bind(doc, table, text, fresh@)
+                doc.tables[table].cells[i].first = first
+                doc.tables[table].cells[i].count = count
+        doc.tables[table].pieces = fresh
 
 fn text_piece(text: U8[]): Piece //< a piece of bytes kept as written
     return Piece::{ .kind = .text, .text = text, .table = 0, .named = false, .from = no_corner(),
         .to = no_corner() }
 
-fn write_formula(doc: Document@, t: Table@, cell: Cell, at: Positions@, rows: Sz, columns: Sz,
+fn write_formula(doc: Document@, table: Table@, cell: Cell, at: Positions@, rows: Sz, columns: Sz,
     out: Str_builder$@) //<
         //< Writes a formula with each reference's coordinates as they are now
         //< `rows` and `columns` shift every axis without `$`, as a copy that far away does. A
         //< reference shifted outside its table becomes `#REF!`.
     for i in Range.asc(cell.count)
-        p: = t.pieces[cell.first + i]@
+        p: = table.pieces[cell.first + i]@
         switch p.kind
         case .text
             out.s(p.text)
@@ -270,9 +270,9 @@ fn shift_formula(doc: Document@, home: Sz, text: U8[], rows: Sz, columns: Sz, ou
         if tok.kind == .end
             break
         if tok.kind == .reference && !(after_number && tok.start == at)
-            if u: = table_of(doc, home, tok)
+            if table: = table_of(doc, home, tok)
                 out.s(text.sub(kept, tok.start - kept))
-                write_shifted(text, tok, doc.tables[u]@, rows, columns, out)
+                write_shifted(text, tok, doc.tables[table]@, rows, columns, out)
                 kept = tok.end
         after_number = tok.kind == .number
         at = tok.end
@@ -283,40 +283,40 @@ priv fn table_of(doc: Document@, home: Sz, tok: Token): Sz? //< the table a refe
         return .some(home)
     return find_written(doc, tok.table)
 
-priv fn write_shifted(text: U8[], tok: Token, t: Table@, rows: Sz, columns: Sz,
+priv fn write_shifted(text: U8[], tok: Token, table: Table@, rows: Sz, columns: Sz,
     out: Str_builder$@) //<
-        //< One reference token, shifted, its table's name as written; `#REF!` where it leaves `t`
+        //< One reference token, shifted, its table's name as written; `#REF!` where it leaves `table`
     $a: = tok.from
     $b: = tok.to
     // Whole columns hold every row, so only their columns shift.
-    height: = 1 if tok.whole else t.rows.len
+    height: = 1 if tok.whole else table.rows.len
     a.fixed_row = a.fixed_row || tok.whole
     b.fixed_row = b.fixed_row || tok.whole
-    a = moved(a, rows, columns, height, t.columns.len)
-    b = moved(b, rows, columns, height, t.columns.len)
+    a = moved(a, rows, columns, height, table.columns.len)
+    b = moved(b, rows, columns, height, table.columns.len)
     if a.row < 0 || b.row < 0
         out.s(BROKEN)
         return
     write_token(text, tok, a, b, out)
 
-priv fn write_token(text: U8[], tok: Token, a: Address, b: Address, out: Str_builder$@) //<
+priv fn write_token(text: U8[], tok: Token, left: Address, right: Address, out: Str_builder$@) //<
     //< A reference token with new corners: its table's name as written, then its addresses in the
     //< order written, a second only where the text has one
     if tok.table.len > 0
         out.s(tok.table).c('.')
     if tok.whole
-        write_letters(a, out)
+        write_letters(left, out)
     else
-        write_address(a, out)
+        write_address(left, out)
     // `map.D` and `map.D:D` both name one column, so the text tells whether a second stands.
     addresses: = tok.start + (tok.table.len + 1 if tok.table.len > 0 else 0)
     if text.sub(addresses, tok.end - addresses).find_char(':').is_none()
         return
     out.c(':')
     if tok.whole
-        write_letters(b, out)
+        write_letters(right, out)
     else
-        write_address(b, out)
+        write_address(right, out)
 
 fn cycle_fixed(text: U8[], from: Sz, to: Sz, out: Str_builder$@): Sz //<
     //< Writes a formula's text, without its `=`, with `$` turned to its next form in each reference
@@ -418,18 +418,18 @@ fn partner(text: U8[], at: Sz, arena: Arena$@): Sz //<
                 return tok.start
         from = tok.end
 
-priv fn write_reference(doc: Document@, p: Piece@, at: Positions@, rows: Sz, columns: Sz,
+priv fn write_reference(doc: Document@, piece: Piece@, at: Positions@, rows: Sz, columns: Sz,
     out: Str_builder$@) //<
         //< `[name.]A1`, or a range from its upper left corner to its lower right one
-    $a: = at.place(p.table, p.from, rows, columns)
-    $b: = at.place(p.table, p.to, rows, columns)
+    $a: = at.place(piece.table, piece.from, rows, columns)
+    $b: = at.place(piece.table, piece.to, rows, columns)
     if a.row < 0 || b.row < 0
         out.s(BROKEN)
         return
-    if p.named
-        write_table_name(doc.tables[p.table].name, out)
+    if piece.named
+        write_table_name(doc.tables[piece.table].name, out)
         out.c('.')
-    if p.kind == .cell
+    if piece.kind == .cell
         write_address(a, out)
         return
     // Each axis's place and `$` travel together, so a swap keeps which line a copy holds.
@@ -451,15 +451,16 @@ priv fn write_reference(doc: Document@, p: Piece@, at: Positions@, rows: Sz, col
     out.c(':')
     write_address(b, out)
 
-priv fn write_columns(doc: Document@, p: Piece@, at: Positions@, columns: Sz, out: Str_builder$@) //<
-    //< `[name.]D`, or `[name.]D:F` from the left column to the right one
-    $a: = at.column_place(p.table, p.from, columns)
-    $b: = at.column_place(p.table, p.to, columns)
+priv fn write_columns(doc: Document@, piece: Piece@, at: Positions@, columns: Sz,
+    out: Str_builder$@) //<
+        //< `[name.]D`, or `[name.]D:F` from the left column to the right one
+    $a: = at.column_place(piece.table, piece.from, columns)
+    $b: = at.column_place(piece.table, piece.to, columns)
     if a.column < 0 || b.column < 0
         out.s(BROKEN)
         return
-    if p.named
-        write_table_name(doc.tables[p.table].name, out)
+    if piece.named
+        write_table_name(doc.tables[piece.table].name, out)
         out.c('.')
     if a.column > b.column
         other: = a
@@ -470,16 +471,17 @@ priv fn write_columns(doc: Document@, p: Piece@, at: Positions@, columns: Sz, ou
         out.c(':')
         write_letters(b, out)
 
-fn write_address(a: Address, out: Str_builder$@) //< `$A$1`: letters for the column, then the row
-    write_letters(a, out)
-    if a.fixed_row
+fn write_address(address: Address, out: Str_builder$@) //<
+    //< `$A$1`: letters for the column, then the row
+    write_letters(address, out)
+    if address.fixed_row
         out.c('$')
-    out.s("\{a.row + 1\}")
+    out.s("\{address.row + 1\}")
 
-priv fn write_letters(a: Address, out: Str_builder$@) //< `$A`: the column's letters
-    if a.fixed_column
+priv fn write_letters(address: Address, out: Str_builder$@) //< `$A`: the column's letters
+    if address.fixed_column
         out.c('$')
-    write_column(a.column, out)
+    write_column(address.column, out)
 
 struct Positions //< where each row and column stands, by its identity, in every table
     //< It is built from the document, and a table's lists can be put in its place to measure an
@@ -493,80 +495,82 @@ impl Positions
     fn new(doc: Document@, arena: Arena$@): Positions
         $at: = Positions::{ .slots = List<|Sz|>(arena), .starts = List<|Sz|>(arena),
             .rows = List<|Sz|>(arena), .columns = List<|Sz|>(arena) }
-        for u in Range.asc(doc.tables.len)
-            t: = doc.tables[u]@
+        for table in Range.asc(doc.tables.len)
+            t: = doc.tables[table]@
             at.starts.push(at.slots.len)
             // One slot more than the identities given, for the one an insertion gives.
             for _ in Range.asc(t.next_id + 1)
                 at.slots.push(-1)
             at.rows.push(0)
             at.columns.push(0)
-            at.place_lists(u, t.rows@, t.columns@)
+            at.place_lists(table, t.rows@, t.columns@)
         return at
 
-    fn place_lists(at: Self$@, u: Sz, rows: List<|Sz|>@, columns: List<|Sz|>@) //<
-        //< Makes table `u`'s rows and columns stand as these lists order them
-        start: = at.starts[u]
-        end: = at.slots.len if u + 1 == at.starts.len else at.starts[u + 1]
+    fn place_lists(at: Self$@, table: Sz, rows: List<|Sz|>@, columns: List<|Sz|>@) //<
+        //< Makes the rows and columns of the table at `table` stand as these lists order them
+        start: = at.starts[table]
+        end: = at.slots.len if table + 1 == at.starts.len else at.starts[table + 1]
         for i in Range(start, end, 1)
             at.slots[i] = -1
         for i in Range.asc(rows.len)
             at.slots[start + rows[i]] = i
         for i in Range.asc(columns.len)
             at.slots[start + columns[i]] = i
-        at.rows[u] = rows.len
-        at.columns[u] = columns.len
+        at.rows[table] = rows.len
+        at.columns[table] = columns.len
 
-    fn of(at: Self@, u: Sz, id: Sz): Sz //< the place of a row or column of table `u`, or -1
-        slot: = at.starts[u] + id
+    fn of(at: Self@, table: Sz, id: Sz): Sz //<
+        //< the place of a row or column of the table at `table`, or -1
+        slot: = at.starts[table] + id
         return at.slots[slot]
 
-    fn column_place(at: Self@, u: Sz, c: Corner, columns: Sz): Address //<
+    fn column_place(at: Self@, table: Sz, corner: Corner, columns: Sz): Address //<
         //< Where a corner's column stands, shifted unless it has `$`; column -1 outside the table
         $a: =
-            moved(Address::{ .row = 0, .column = at.of(u, c.column), .fixed_row = true,
-            .fixed_column = c.fixed_column }, 0, columns, 1, at.columns[u])
+            moved(Address::{ .row = 0, .column = at.of(table, corner.column), .fixed_row = true,
+            .fixed_column = corner.fixed_column }, 0, columns, 1, at.columns[table])
         if a.row < 0
             a.column = -1
         a.fixed_row = false
         return a
 
-    fn place(at: Self@, u: Sz, c: Corner, rows: Sz, columns: Sz): Address //<
+    fn place(at: Self@, table: Sz, corner: Corner, rows: Sz, columns: Sz): Address //<
         //< Where a corner stands, shifted on each axis without `$`; row -1 outside the table
-        return moved(Address::{ .row = at.of(u, c.row), .column = at.of(u, c.column),
-            .fixed_row = c.fixed_row, .fixed_column = c.fixed_column }, rows, columns,
-            at.rows[u], at.columns[u])
+        return moved(Address::{ .row = at.of(table, corner.row),
+            .column = at.of(table, corner.column), .fixed_row = corner.fixed_row,
+            .fixed_column = corner.fixed_column }, rows, columns, at.rows[table],
+            at.columns[table])
 
-fn moved($a: Address, rows: Sz, columns: Sz, height: Sz, width: Sz): Address //<
+fn moved($address: Address, rows: Sz, columns: Sz, height: Sz, width: Sz): Address //<
     //< An address as a copy `rows` down and `columns` right writes it: each axis without `$`
     //< shifts, and one with `$` stays. Row -1 where it falls outside a table of `height` rows and
     //< `width` columns.
     //< Caution: **Shift a reference only here.** A fill, a copy and a paste of a formula then
     //< agree on which part moves.
-    if !a.fixed_row
-        a.row += rows
-    if !a.fixed_column
-        a.column += columns
-    if a.row < 0 || a.row >= height || a.column < 0 || a.column >= width
-        a.row = -1
-    return a
+    if !address.fixed_row
+        address.row += rows
+    if !address.fixed_column
+        address.column += columns
+    if address.row < 0 || address.row >= height || address.column < 0 || address.column >= width
+        address.row = -1
+    return address
 
 priv fn attach(doc: Document@, home: Sz, tok: Token): Piece? //<
     //< The piece of a reference that names a cell in this source, or none
-    $u: = home
+    $table: = home
     if tok.table.len > 0
-        u = find_written(doc, tok.table) catch
+        table = find_written(doc, tok.table) catch
             return .none
-    t: = doc.tables[u]@
+    t: = doc.tables[table]@
     if tok.whole
         if tok.from.column >= t.columns.len || tok.to.column >= t.columns.len
             return .none
-        return .some(Piece::{ .kind = .columns, .text = "", .table = u,
+        return .some(Piece::{ .kind = .columns, .text = "", .table = table,
             .named = tok.table.len > 0, .from = column_corner(t, tok.from),
             .to = column_corner(t, tok.to) })
     if !inside(t, tok.from) || tok.range && !inside(t, tok.to)
         return .none
-    return .some(Piece::{ .kind = .range if tok.range else .cell, .text = "", .table = u,
+    return .some(Piece::{ .kind = .range if tok.range else .cell, .text = "", .table = table,
         .named = tok.table.len > 0, .from = corner(t, tok.from), .to = corner(t, tok.to) })
 
 fn write_table_name(name: U8[], out: Str_builder$@) //<
@@ -658,21 +662,22 @@ priv fn write_joined(text: U8[], out: Str_builder$@) //<
         out.s(whole.slice())
 
 fn find_table(doc: Document@, name: U8[]): Sz? //< the table of this name in this source
-    for u in Range.asc(doc.tables.len)
-        if doc.tables[u].name.equals(name)
-            return .some(u)
+    for table in Range.asc(doc.tables.len)
+        if doc.tables[table].name.equals(name)
+            return .some(table)
     return .none
 
-priv fn inside(t: Table@, a: Address): Bool
-    return a.row < t.rows.len && a.column < t.columns.len
+priv fn inside(table: Table@, address: Address): Bool
+    return address.row < table.rows.len && address.column < table.columns.len
 
-priv fn corner(t: Table@, a: Address): Corner
-    return Corner::{ .row = t.rows[a.row], .column = t.columns[a.column],
-        .fixed_row = a.fixed_row, .fixed_column = a.fixed_column }
+priv fn corner(table: Table@, address: Address): Corner
+    return Corner::{ .row = table.rows[address.row], .column = table.columns[address.column],
+        .fixed_row = address.fixed_row, .fixed_column = address.fixed_column }
 
-priv fn column_corner(t: Table@, a: Address): Corner //< a whole column's corner: its row unused
-    return Corner::{ .row = 0, .column = t.columns[a.column], .fixed_row = false,
-        .fixed_column = a.fixed_column }
+priv fn column_corner(table: Table@, address: Address): Corner //<
+    //< a whole column's corner: its row unused
+    return Corner::{ .row = 0, .column = table.columns[address.column], .fixed_row = false,
+        .fixed_column = address.fixed_column }
 
 priv fn no_corner(): Corner
     return Corner::{ .row = 0, .column = 0, .fixed_row = false, .fixed_column = false }
@@ -750,8 +755,8 @@ priv fn address_at(text: U8[], from: Sz): Spot? //<
     a.column = column - 1
     return .some(Spot::{ .address = a, .end = i })
 
-priv fn capped(n: Sz): Sz
-    return n if n < CAP else CAP
+priv fn capped(count: Sz): Sz
+    return count if count < CAP else CAP
 
 priv fn number_end(text: U8[], from: Sz): Sz //<
     //< The end of the digits, a fraction and an exponent that start at `from`
@@ -772,8 +777,8 @@ priv fn number_end(text: U8[], from: Sz): Sz //<
             i = j
     return i
 
-priv fn operator(c: U8): Token_kind
-    switch c
+priv fn operator(byte: U8): Token_kind
+    switch byte
     case '+'
         return .plus
     case '-'

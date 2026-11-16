@@ -18,40 +18,42 @@ priv const ROUNDS: Sz = 7 //< the runs per thread count; the fastest is kept
 priv const TIMED_FROM: Sz = 1 << 20 //< the numbers a tensor holds before it is worth timing
 priv const PIECE: Sz = 64 //< the input rows of a prompt's piece, as `chat_server` reads them
 
-priv fn fastest_us(w: Quant_matrix@, x: Tensor<|F32|>, out: Tensor<|F32|>, per_round: Sz): F64 //<
-    //< The fastest round's time for one product, in microseconds
+priv fn fastest_us(weights: Quant_matrix@, inputs: Tensor<|F32|>, out: Tensor<|F32|>, per_round: Sz):
+    F64 //<
+        //< The fastest round's time for one product, in microseconds
     $best: I64 = 0x7FFFFFFFFFFFFFFF
     for _r in Range.asc(ROUNDS)
         began: = sys.mono_us()
         for _i in Range.asc(per_round)
-            w.mul_mat_into(x, out) catch panic("bench_quant: the product refused its shapes")
+            weights.mul_mat_into(inputs, out)
+                catch panic("bench_quant: the product refused its shapes")
         took: = sys.mono_us() - began
         if took < best
             best = took
     return F64::best / F64::per_round
 
-priv fn time_product(name: U8[], w: Quant_matrix@, n: Sz, arena: Arena$@) //<
-    //< `n` input rows times the matrix, on one thread and on every CPU
-    xs: Sz[2] = ::{ n, w.cols() }
+priv fn time_product(name: U8[], weights: Quant_matrix@, rows: Sz, arena: Arena$@) //<
+    //< `rows` input rows times the matrix, on one thread and on every CPU
+    xs: Sz[2] = ::{ rows, weights.cols() }
     $x: = Tensor<|F32|>(Sz[]::xs, arena)
     $rng: = prng.Prng(1)
     x.fill_uniform(rng@, 1.0)
-    os: Sz[2] = ::{ n, w.rows() }
+    os: Sz[2] = ::{ rows, weights.rows() }
     out: = Tensor<|F32|>(Sz[]::os, arena)
-    per_round: = 1 + 40000000 / (w.rows() * w.cols() * n)
+    per_round: = 1 + 40000000 / (weights.rows() * weights.cols() * rows)
     parallel.set_threads(1)
-    one: = fastest_us(w, x, out, per_round)
+    one: = fastest_us(weights, x, out, per_round)
     parallel.set_threads(0)
-    all: = fastest_us(w, x, out, per_round)
-    macs: = F64::(w.rows() * w.cols() * n)
-    io.out().s("\{name\}: \{w.rows()\} x \{w.cols()\} by \{n\} rows: ")
+    all: = fastest_us(weights, x, out, per_round)
+    macs: = F64::(weights.rows() * weights.cols() * rows)
+    io.out().s("\{name\}: \{weights.rows()\} x \{weights.cols()\} by \{rows\} rows: ")
         .s("one thread \{(one / 1000.0):.2\} ms, \{sys.cpu_count()\} CPUs \{(all / 1000.0):.2\} ms ")
         .s("(\{(one / all):.1\}x), \{(macs / all / 1000.0):.1\} G multiply-adds a second\n")
 
-priv fn time_matvec(name: U8[], w: Quant_matrix@, arena: Arena$@) //<
+priv fn time_matvec(name: U8[], weights: Quant_matrix@, arena: Arena$@) //<
     //< One input row and a prompt's piece times the matrix
-    time_product(name, w, 1, arena)
-    time_product(name, w, PIECE, arena)
+    time_product(name, weights, 1, arena)
+    time_product(name, weights, PIECE, arena)
 
 priv fn random_q4_k(rows: Sz, cols: Sz, arena: Arena$@): Quant_matrix //<
     //< Random Q4_K blocks with a small scale: the speed does not depend on the numbers

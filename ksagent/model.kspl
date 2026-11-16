@@ -95,11 +95,11 @@ enum Model_error //< why a request to the model server got no usable reply
     bad_reply(detail: U8[]) //< the reply cannot be read
 
 impl Model_error
-    fn describe(e: Self, s: Server@, arena: Arena$@): U8[] //<
+    fn describe(r: Self, server: Server@, arena: Arena$@): U8[] //<
         //< One line saying what went wrong, then what the person can do
-        where: = s.address(arena)
+        where: = server.address(arena)
         out: = arena.text()
-        switch e
+        switch r
         case .unreachable
             out
                 .s("the model server at \{where\} does not answer. Start it, for example with `make \
@@ -107,7 +107,7 @@ impl Model_error
         case .timed_out
             out
                 .s("the model server at \{where\} gave no whole reply within \
-                    \{s.timeout_ms / 1000\} seconds. Give it longer with --timeout, or use a \
+                    \{server.timeout_ms / 1000\} seconds. Give it longer with --timeout, or use a \
                     smaller model.")
         case .no_length
             out
@@ -122,8 +122,8 @@ impl Model_error
             out.s("the reply from the model server at \{where\} cannot be read: ").s(detail)
         return out.take()
 
-    fn is_bad_request(e: Self): Bool //< whether the server refused the request as malformed (400)
-        switch e
+    fn is_bad_request(r: Self): Bool //< whether the server refused the request as malformed (400)
+        switch r
         case .status(code, _detail)
             return code == 400
         default
@@ -162,24 +162,24 @@ struct Exchange //< one request to the model server, its reply arriving piece by
     scratch: Arena$@ //< one event's JSON, emptied after each
     arena: Arena$@
 
-fn open(s: Server@, body: U8[], arena: Arena$@): Exchange$@!Model_error //<
+fn open(server: Server@, body: U8[], arena: Arena$@): Exchange$@!Model_error //<
     //< Sends one request, and reads the head of its reply; the body follows through `next`
     //< A refusal is read whole here, so its message can be named. `--timeout` bounds the whole
     //< reply, head and body.
-    conn: = net.Tcp_stream.connect(s.host, s.port) catch
+    conn: = net.Tcp_stream.connect(server.host, server.port) catch
         throw .unreachable
-    host: = arena.text().s(s.host).s(":\{s.port\}").take()
+    host: = arena.text().s(server.host).s(":\{server.port\}").take()
     $head: = http.headers(arena).add("Host", host).add("Content-Type", "application/json")
         .add("Accept", "application/json, text/event-stream").add("Connection", "close")
-    if s.api_key.len > 0
+    if server.api_key.len > 0
         head = head.add("Authorization",
-            arena.text().s("Bearer ").s(s.api_key).take())
-    target: = arena.text().s(s.base).s(CHAT_PATH).take()
+            arena.text().s("Bearer ").s(server.api_key).take())
+    target: = arena.text().s(server.base).s(CHAT_PATH).take()
     http.write_request(conn, "POST", target, head.build(), body, SEND_WAIT_MS) catch e
         conn.free()
         throw http_failure(e)
     got: =
-        http_body.read_response_head(conn, arena, MAX_REPLY_BYTES, s.timeout_ms) catch e
+        http_body.read_response_head(conn, arena, MAX_REPLY_BYTES, server.timeout_ms) catch e
             conn.free()
             throw http_failure(e)
     x: = arena
@@ -192,7 +192,7 @@ fn open(s: Server@, body: U8[], arena: Arena$@): Exchange$@!Model_error //<
     if got.status != 200
         x.events = false
         for
-            step: = x.next(s.timeout_ms) catch
+            step: = x.next(server.timeout_ms) catch
                 break
             if step == Step.whole
                 break
@@ -311,8 +311,9 @@ priv fn too_many_calls(arena: Arena$@): Model_error //< a reply that asks for to
 priv fn is_cut(choice: json.Value): Bool //< whether a choice ended at the length limit
     return choice.get("finish_reason").as_str().unwrap_or("").equals("length")
 
-priv fn http_failure(e: http.Http_error): Model_error //< what a failure of `std/http` means here
-    switch e
+priv fn http_failure(error: http.Http_error): Model_error //<
+    //< what a failure of `std/http` means here
+    switch error
     case .io(net_error)
         switch net_error
         case .timed_out

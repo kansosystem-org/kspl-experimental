@@ -123,13 +123,13 @@ priv fn jpeg(padding: Sz, width: Sz, height: Sz, arena: Arena$@): U8[] //<
     b.s(U8[]::{ 3U8, 1U8, 0x22U8, 0U8 })
     return arena.dup_str(b.slice())
 
-priv fn word(b: Str_builder$@, v: I64)
+priv fn word(out: Str_builder$@, value: I64)
     for shift in U8[]::{ 24U8, 16U8, 8U8, 0U8 }
-        b.c(U8::((v >> I64::shift) & 255I64))
+        out.c(U8::((value >> I64::shift) & 255I64))
 
-priv fn half(b: Str_builder$@, v: Sz)
-    b.c(U8::((v >> 8) & 255))
-    b.c(U8::(v & 255))
+priv fn half(out: Str_builder$@, value: Sz)
+    out.c(U8::((value >> 8) & 255))
+    out.c(U8::(value & 255))
 
 priv fn shows(bytes: U8[], want: U8[]): Bool
     defer arena: = Arena(1024)
@@ -145,8 +145,9 @@ priv fn refused(bytes: U8[], want: Image_refusal): Bool
 priv fn said(bytes: U8[], arena: Arena$@): U8[] //< what `measure` says of a whole file
     return describe(measure(bytes, 0, bytes.len), arena)
 
-priv fn describe(m: Measure, arena: Arena$@): U8[] //< `png 640x480`, `refused: …` or `more at N`
-    switch m
+priv fn describe(size: Measure, arena: Arena$@): U8[] //<
+    //< `png 640x480`, `refused: …` or `more at N`
+    switch size
     case .size(s)
         return arena.text().s("png" if s.format == .png else "jpeg").s(" \{s.width\}x\{s.height\}")
             .take()

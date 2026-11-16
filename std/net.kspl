@@ -35,11 +35,11 @@ extern fn kspl_net_raw_fd(handle: I64): I32 //<
 extern fn kspl_net_resolve_all(host_ptr: U8@, host_len: Sz, texts: U8$@, stride: Sz, lens: Sz$@,
     cap: Sz): I32
 // The same declaration as std/reactor's, held here so a connect does not bring the reactor in.
-extern fn kspl_net_poll(handles: I64$@, interest: U8$@, n: Sz, timeout_ms: I32, revents_out: U8$@):
-    I32
+extern fn kspl_net_poll(handles: I64$@, interest: U8$@, count: Sz, timeout_ms: I32,
+    revents_out: U8$@): I32
 extern fn kspl_mono_us(): I64
 
-pub const ADDR_TEXT_MAX: Sz = 46 //< a buffer size that any address in text form fits in.
+pub const ADDR_TEXT_MAX: Sz = 46 //< a buffer size that any address in text form fits in
     //< C's INET6_ADDRSTRLEN. **A buffer that is too small is refused, not truncated**: a truncated
     //< `2001:db8::1` reads as another address, `2001:db8:`, in logs and in matching.
 
@@ -50,7 +50,7 @@ pub enum Net_error //< why a socket operation failed
     io_failed //< the send or receive failed (a disconnection, for example)
     would_block //< in non-blocking mode, the socket is just not ready yet
     set_option_failed //< changing a socket option failed
-    resolve_failed //< the host name did not resolve to an address.
+    resolve_failed //< the host name did not resolve to an address
         //< **Keep "it did not resolve" apart from "it did not connect".** Otherwise a wrong name
         //< and a missing peer look the same, and nobody can tell which to fix.
     addr_buffer_too_small //< the buffer for the address is shorter than `ADDR_TEXT_MAX`
@@ -79,12 +79,12 @@ priv fn bound_port(handle: I64): I32!Net_error //< the port a socket is bound to
         throw .io_failed
     return p
 
-priv fn transferred(n: I32): Sz!Net_error //<
+priv fn transferred(result: I32): Sz!Net_error //<
     //< Turns the return value of a C send or receive (negative on failure) into a byte count
     //< write and read both use this one check.
-    if n < 0
+    if result < 0
         throw Net_error.io_failed.would_block_or()
-    return Sz::n
+    return Sz::result
 
 // ============================ Tcp_listener ============================
 priv fn handle_set_nonblocking(handle: I64): Void!Net_error //< makes a handle non-blocking
@@ -241,8 +241,8 @@ pub struct Peer_addr //< the address of the peer of a connection
     pub port: I32 //< the peer's port
 
 impl Tcp_stream
-    priv fn connected_stream(h: I64): Tcp_stream$@ //< wraps a successfully opened socket
-        return mem.new(Tcp_stream::{ .handle = h })
+    priv fn connected_stream(handle: I64): Tcp_stream$@ //< wraps a successfully opened socket
+        return mem.new(Tcp_stream::{ .handle = handle })
 
     pub fn connect( //< connects by name, trying the candidate addresses in overlapping attempts
         //< The connection it returns is blocking. Why the attempts overlap is "Connecting by name
@@ -399,7 +399,7 @@ impl Tcp_stream
         if kspl_net_shutdown_write(r.handle) != 0
             throw .io_failed // the peer is already gone, or the socket is already closed
 
-impl Tcp_listener: Manual_free //< it owns its resources and frees them with `free()`.
+impl Tcp_listener: Manual_free //< it owns its resources and frees them with `free()`
     pub fn free(r: Self$@) //< closes the listener and frees it
         kspl_tcp_close(r.handle)
         dealloc(Void$@::r)

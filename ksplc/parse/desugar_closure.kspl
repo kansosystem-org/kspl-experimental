@@ -2,7 +2,8 @@
 //< A closure's captures become the fields of a synthesized environment struct. The place it was
 //< written becomes a value of that struct. The declarations are written as KSPL source and
 //< parsed with the file's grammar. `desugar_node` in `desugar.kspl` calls it.
-import "ksplc/base/ast" as base_ast + { Ast_node, build_anon_env_name, build_anon_fn_name }
+import "ksplc/base/ast" as base_ast + { Ast_node, build_anon_env_name, build_anon_env_ctor_name,
+    build_anon_fn_name }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as _base_ast_place // `is_const_gen_param`
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -401,19 +402,15 @@ priv fn reject_repeated_names(ctx: Desugar_ctx$@, params: Ast_node$@, captures: 
             names.push(id_node)
     return true
 
-priv fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
-    //< Caution: Start every one with `_`, or [W0206] fires where one goes unused.
-    return build_temp_name("_anon_env_new_", serial_str(serial))
-
 priv fn build_anon_env_val_name(serial: Sz): U8[]
     return base_c_name.made_name(build_temp_name("anon_env_v_", serial_str(serial)))
 
-priv fn written_gen_param(p: Ast_node$@, name: U8[]): Gen_param //<
+priv fn written_gen_param(node: Ast_node$@, name: U8[]): Gen_param //<
     //< One type parameter as its declaration writes it: `T`, or `const N: Sz` with its type
-    if !p.is_const_gen_param()
+    if !node.is_const_gen_param()
         return Gen_param::{ .name = name, .written = name, .is_const = false }
     out: = base_core.arena.text().s("const ").s(name)
-    ty: = p.find_child(.k_type_expr)
+    ty: = node.find_child(.k_type_expr)
     if ty != null
         out.s(": ").s(spell_as_written(ty))
     return Gen_param::{ .name = name, .written = out.take(), .is_const = true }

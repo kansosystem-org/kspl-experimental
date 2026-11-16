@@ -221,7 +221,7 @@ priv fn check_reactor_bits(arena: Arena$@)
 
 // ==========================================
 // The child's stdio bits agree between the KSPL side and the C side `std/subproc.kspl` sums the
-// `stdio_*` constants, and `kspl_proc_start` tests each by its number. A bit that one side moves
+// `STDIO_*` constants, and `kspl_proc_start` tests each by its number. A bit that one side moves
 // pipes the wrong stream. Nothing fails until a child's output goes missing.
 // ==========================================
 priv const STDIO_KSPL: U8[] = "std/subproc.kspl"
@@ -246,6 +246,71 @@ priv fn check_stdio_bits(arena: Arena$@)
     scan.diff_into(theirs@, ours@, STDIO_C, STDIO_KSPL, bad@, arena)
     verdict.check_list("the child's stdio bits agree between the KSPL side and the C side",
         ours.len, "bits", bad@, "to add a bit, add it on both sides")
+
+// ==========================================
+// The extensions a bare program name is looked up with on Windows are the ones that can be started
+// `kspl_win_run_exts` (the runtime) finds a bare name such as `tool` with each extension in turn.
+// `RUN_EXTS` in `std/fs.kspl` says which files can be started. One left out of one side starts a
+// file std calls unrunnable, or fails to find one it calls runnable. Only a Windows run shows it.
+// ==========================================
+priv const RUN_EXTS_KSPL: U8[] = "std/fs.kspl"
+priv const RUN_EXTS_KSPL_HEAD: U8[] = "priv const RUN_EXTS:"
+priv const RUN_EXTS_C_HEAD: U8[] = "kspl_win_run_exts[] = {"
+
+priv fn listed_after(text: U8[], head: U8[], quote: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The quoted texts between `head` and the first `}` after it, in order; empty where none is
+    if at: = text.find_str(head)
+        rest: = text.sub_from(at + head.len)
+        return scan.find_all(rest.sub(0, rest.find_char('}').unwrap_or(rest.len)), quote, "\"",
+            arena)
+    return List<|U8[]|>(arena)
+
+priv fn run_exts_disagree(text: U8[], arena: Arena$@): Bool //<
+    //< Whether a sample's C half and KSPL half fail to list the same extensions in the same order
+    //< **The order counts**: the runtime tries them in turn, so `tool.exe` wins over `tool.bat`.
+    switch text.find_str(STATUS_SPLIT)
+    case .none
+        return true
+    case .some(at)
+        c: = listed_after(text.sub(0, at), RUN_EXTS_C_HEAD, "L\"", arena)
+        ours: =
+            listed_after(text.sub_from(at + STATUS_SPLIT.len), RUN_EXTS_KSPL_HEAD, "\"", arena)
+        if c.len == 0 || c.len != ours.len
+            return true
+        for i in Range.asc(c.len)
+            if !c.get(i).equals(ours.get(i))
+                return true
+        return false
+
+// The samples for the judgment above: the agreeing pair, and one break of each kind.
+priv const RUN_EXTS_SAMPLES: Sample[_] = ::{
+    Sample::{ .text =
+        "static const wchar_t *const kspl_win_run_exts[] = {L\".exe\", L\".bat\"};\n@@@\npriv const \
+            RUN_EXTS: U8[][2] = ::{ \".exe\", \".bat\" } //< what can be started\n",
+        .hits = false },
+    Sample::{ .text =
+        "static const wchar_t *const kspl_win_run_exts[] = {L\".exe\"};\n@@@\npriv const RUN_EXTS: \
+            U8[][2] = ::{ \".exe\", \".bat\" }\n", .hits = true },
+    Sample::{ .text =
+        "static const wchar_t *const kspl_win_run_exts[] = {L\".exe\", L\".cmd\"};\n@@@\npriv const \
+            RUN_EXTS: U8[][2] = ::{ \".exe\", \".bat\" }\n", .hits = true },
+    Sample::{ .text =
+        "static const wchar_t *const kspl_win_run_exts[] = {L\".bat\", L\".exe\"};\n@@@\npriv const \
+            RUN_EXTS: U8[][2] = ::{ \".exe\", \".bat\" }\n", .hits = true },
+    Sample::{ .text = "static const int other[] = {1};\n@@@\npriv const OTHER: I32 = 1\n",
+        .hits = true },
+}
+
+priv fn check_run_exts(arena: Arena$@)
+    scan.check_samples("the judgment of the run extensions' agreement can fire",
+        Sample[]::RUN_EXTS_SAMPLES, "run_exts_samples", run_exts_disagree, arena)
+    joined: = arena.text().s(harness.read_under_root(STDIO_C_WIN)).s(STATUS_SPLIT)
+        .s(harness.read_under_root(RUN_EXTS_KSPL)).take()
+    verdict.check(arena.text().s("kspl_win_run_exts in ").s(STDIO_C_WIN)
+        .s(" lists RUN_EXTS's extensions in its order").take(),
+        !run_exts_disagree(joined, arena),
+        arena.text().s("change both together: RUN_EXTS in ").s(RUN_EXTS_KSPL)
+        .s(" says what can be started").take())
 
 // ==========================================
 // Windows's exit codes read as POSIX signals: the runtime's table and std's DESIGN-system.md
@@ -429,6 +494,7 @@ fn run(arena: Arena$@) //< runs every check that the runtime and the KSPL side a
     //< Caution: **Call it from `conventions_match.kspl`'s `run`** (there is one suite).
     check_reactor_bits(arena)
     check_stdio_bits(arena)
+    check_run_exts(arena)
     check_status_table(arena)
     check_path_cap(arena)
     check_host_spellings(arena)

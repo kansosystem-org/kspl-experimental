@@ -298,25 +298,25 @@ impl Task
     fn at(i: Sz): Task$@
         return g_tasks[i]
 
-priv fn slot_of(t: Task@): Sz //< t's index in g_tasks, or MAX_TASKS if it is not there
+priv fn slot_of(task: Task@): Sz //< task's index in g_tasks, or MAX_TASKS if it is not there
     $slot: Sz = MAX_TASKS
     for i in Range.asc(g_task_count)
-        if g_tasks[i] == t
+        if g_tasks[i] == task
             slot = i
     return slot
 
-priv fn end_task(t: Task$@) //< [Call it inside a critical section] makes t done
+priv fn end_task(task: Task$@) //< [Call it inside a critical section] makes `task` done
     //< Its entry returned, or Task.delete ended it.
     //< Caution: **A task ending with a mutex held is stopped.** Nobody could unlock that mutex, so
     //< every later lock would wait forever, and after delete_dyn it would name freed memory.
-    if t.held != null
+    if task.held != null
         panic("ksos: a task ended holding a mutex (unlock it before Task.delete or returning)")
-    t.state = .done
+    task.state = .done
 
-priv fn check_stack_guard(t: Task$@) //< checks that t's stack guard is still as written
+priv fn check_stack_guard(task: Task$@) //< checks that task's stack guard is still as written
     //< If it is damaged, that is an overflow and it panics at once.
     for i in Range.asc(STACK_GUARD_BYTES)
-        if (t.stack_guard + i)$ != STACK_GUARD_BYTE
+        if (task.stack_guard + i)$ != STACK_GUARD_BYTE
             panic("ksos: stack overflow detected")
 // The trampoline each port's initial context (from ksos_port_ctx_create) calls. It runs the
 // current task's entry, marks it done and switches away for good. The task keeps its slot and
@@ -360,15 +360,15 @@ priv fn wake_delayed_to(now: U64) //< makes ready every task that should wake by
     if gave_up
         relend_all()
 
-priv fn wakes_by_clock(t: Task$@): Bool //<
+priv fn wakes_by_clock(task: Task$@): Bool //<
     //< Whether it is in a wait that ends by time (a delay, or blocked with a timeout)
     //< tickless idle uses it to find the next time to move the clock to.
     //< **A deadline saturated at the last tick does not count** (deadline_after): it stands for a
     //< wait too long to end. Moving the clock there would end that wait at once, and leave every
     //< later deadline saturated too, so each delay would return at once.
-    if t.delay_until == LAST_TICK
+    if task.delay_until == LAST_TICK
         return false
-    return t.state == .delayed || (t.state == .blocked && t.deadline_set)
+    return task.state == .delayed || (task.state == .blocked && task.deadline_set)
 priv fn pick_next(): Task$@? //< picks the runnable task with the highest priority
     //< **With none runnable and no tick running, it moves the clock forward** without waiting in
     //< real time. Under cooperative scheduling that is the only path that advances g_tick (without
@@ -552,15 +552,15 @@ priv fn make_ready_waiters(obj: Void$@, all: Bool) //<
         best.state = .ready
         best.woken_from = obj
 
-priv fn pass_on_wake(t: Task$@) //<
-    //< [Call it inside a critical section] Hands a wake t has not acted on to the next waiter
+priv fn pass_on_wake(task: Task$@) //<
+    //< [Call it inside a critical section] Hands a wake `task` has not acted on to the next waiter
     //< For a task leaving the run (suspended or deleted) between its wake and its recheck. Without
     //< it the resource stays free while the next waiter waits for ever. If the resource is gone by
     //< then, the waiter woken here checks again and waits again. It does not switch; the caller
-    //< does, once t is out of the way.
-    obj: = t.woken_from
+    //< does, once `task` is out of the way.
+    obj: = task.woken_from
     if obj != null
-        t.woken_from = null
+        task.woken_from = null
         make_ready_waiters(obj, false)
 
 priv fn preempt_if_outranked() //<
@@ -623,13 +623,13 @@ impl Holding
         r.holder = null
         h.prio = lent_prio(h)
 
-fn lent_prio(h: Task$@): I32 //<
-    //< [Call it inside a critical section] The priority h runs at for the mutexes it holds
+fn lent_prio(holder: Task$@): I32 //<
+    //< [Call it inside a critical section] The priority `holder` runs at for the mutexes it holds
     //< The highest of its own priority and of every task waiting on one of them. A single
     //< per-mutex saved priority cannot give this: releasing one mutex would drop a priority still
     //< lent through another.
-    $top: = h.base_prio
-    $m: = h.held
+    $top: = holder.base_prio
+    $m: = holder.held
     for m != null
         w: = highest_waiter_prio(Void$@::m)
         if w > top

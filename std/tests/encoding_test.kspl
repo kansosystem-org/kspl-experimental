@@ -115,9 +115,9 @@ fn test_base64_codec()
 // Caution: **Keep an integer and a fraction in separate variants.** F64 alone silently rounds an
 // integer beyond 53 bits (an offset in a safetensors file); integers alone cannot hold a fraction.
 // ==========================================
-priv fn dumped(v: json.Value, out: Str_builder$@): U8[]
+priv fn dumped(value: json.Value, out: Str_builder$@): U8[]
     out.clear()
-    v.dump(out)
+    value.dump(out)
     return out.slice()
 
 priv fn round_trip(src: U8[], want: U8[], arena: Arena$@, out: Str_builder$@)
@@ -125,8 +125,8 @@ priv fn round_trip(src: U8[], want: U8[], arena: Arena$@, out: Str_builder$@)
     round_ok: = dumped(v.val, out).equals(want)
     assert(round_ok, "json: number round-trip must keep both the value and the kind")
 
-priv fn parsed(s: U8[]): F64 //< tries `to_f64` once
-    return s.to_f64() catch
+priv fn parsed(text: U8[]): F64 //< tries `to_f64` once
+    return text.to_f64() catch
         return -987654.0
 
 priv struct Loose_case //< a string whose power of 10 goes beyond ±22, and its correct value
@@ -512,7 +512,7 @@ priv fn repeat_at(src: U8[], arena: Arena$@): I64 //< where parse finds a repeat
 
 fn test_json_duplicate_keys(arena: Arena$@) //<
     //< std/json: a repeated key is refused, and the builder replaces
-    //< Caution: **Test both sizes of object.** Past `key_scan_max` members the parser sorts the
+    //< Caution: **Test both sizes of object.** Past `KEY_SCAN_MAX` members the parser sorts the
     //< keys, a path a small object never takes.
     verdict.start("[Json] a duplicated key test...")
     defer $out: = Str_builder()
@@ -548,9 +548,10 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
         .set("x", jb.int_val(3I64)).build()
     assert(dumped(order, out@).equals("{\"x\":3,\"y\":2}"), "json: replacing must keep the order")
     verdict.pass("a repeated key is refused at any size, and building replaces in order.")
-priv fn members_to(out: Str_builder$@, n: Sz) //< writes `{` and n members `"k0":0` to `"k<n-1>"`
+priv fn members_to(out: Str_builder$@, count: Sz) //<
+    //< writes `{` and `count` members `"k0":0` to `"k<count-1>"`
     out.c('{')
-    for i in Range.asc(n)
+    for i in Range.asc(count)
         if i > 0
             out.c(',')
         out.s("\"k\{i\}\":\{i\}")

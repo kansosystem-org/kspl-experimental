@@ -197,9 +197,9 @@ priv enum Step //< the result of reading one more part
     absent //< the owner holds no such member
     unsure //< the owner's members are not listed here
 
-priv fn declared_in(c: Sema_ctx$@, file: U8[], name: U8[]): Sema_symbol$@? //<
+priv fn declared_in(ctx: Sema_ctx$@, file: U8[], name: U8[]): Sema_symbol$@? //<
     //< The top-level declaration `name` in `file`, whatever its visibility
-    env: = c.env.files.get(file).unwrap_or(null)
+    env: = ctx.env.files.get(file).unwrap_or(null)
     if env == null
         return .none
     sym: = env.symbols.get(name).unwrap_or(null)
@@ -210,22 +210,22 @@ priv fn declared_in(c: Sema_ctx$@, file: U8[], name: U8[]): Sema_symbol$@? //<
 priv fn on_symbol(sym: Sema_symbol$@, fqn: U8[]): At
     return At::{ .module = "", .sym = sym, .node = sym.node, .fqn = fqn }
 
-priv fn head_of(c: Sema_ctx$@, file: U8[], head: U8[], out: At$@): Bool //<
+priv fn head_of(ctx: Sema_ctx$@, file: U8[], head: U8[], out: At$@): Bool //<
     //< What the first part names in `file`'s own scope
     //< **The file's own declaration is checked first**: a name the prelude brings in yields to one
     //< the file declares, as in the code.
-    if own: = declared_in(c, file, head)
-        out$ = on_symbol(own, c.build_mod_fqn(file, head))
+    if own: = declared_in(ctx, file, head)
+        out$ = on_symbol(own, ctx.build_mod_fqn(file, head))
         return true
-    named: = c.peek_file_alias(file, head)
+    named: = ctx.peek_file_alias(file, head)
     if named != null
         out$ = At::{ .module = named.target_path, .sym = null, .node = null, .fqn = "" }
         return true
-    info: = c.peek_import_symbol(file, head)
+    info: = ctx.peek_import_symbol(file, head)
     if info == null
         return false
-    if sym: = declared_in(c, info.target_path, info.name)
-        out$ = on_symbol(sym, c.build_mod_fqn(info.target_path, info.name))
+    if sym: = declared_in(ctx, info.target_path, info.name)
+        out$ = on_symbol(sym, ctx.build_mod_fqn(info.target_path, info.name))
         return true
     return false
 
@@ -279,14 +279,14 @@ priv fn declares_in_text(text: U8[], name: U8[]): Bool //<
         at = end + 1
     return false
 
-priv fn left_out_by_cfg(c: Sema_ctx$@, file: U8[], name: U8[]): Bool //<
+priv fn left_out_by_cfg(ctx: Sema_ctx$@, file: U8[], name: U8[]): Bool //<
     //< Whether `file` declares `name` inside a range `#cfg` excluded from this compilation
     //< **Another configuration has it**, so a reference to it is correct even though this
     //< compilation has no such declaration (`mem.init_freestanding_heap` exists only under
     //< `freestanding`).
     if base_core.arena == null
         return false
-    src: = base_core.source_of(c.source_map, file)
+    src: = base_core.source_of(ctx.source_map, file)
     for region in base_cfg_inactive.cfg_inactive
         if !base_locate.is_same_file(region.file, file) ||
             region.offset + region.span > src.len
@@ -295,21 +295,21 @@ priv fn left_out_by_cfg(c: Sema_ctx$@, file: U8[], name: U8[]): Bool //<
             return true
     return false
 
-priv fn type_member(c: Sema_ctx$@, owner: At, part: U8[], next: At$@): Step //<
+priv fn type_member(ctx: Sema_ctx$@, owner: At, part: U8[], next: At$@): Step //<
     //< The member `part` of the type `owner` names: a method, a variant, a field
     //< **A method another file adds is on the same table**, found while that file is compiled.
     key: = join_dotted_name(owner.fqn, part)
-    sym: = c.symtab.by_fqn.get(key).unwrap_or(null)
+    sym: = ctx.symtab.by_fqn.get(key).unwrap_or(null)
     if sym != null
         next$ = on_symbol(sym, key)
         return .on
-    template: = c.generics.templates.get(key).unwrap_or(null)
+    template: = ctx.generics.templates.get(key).unwrap_or(null)
     if template != null
         next$ = At::{ .module = "", .sym = null, .node = template, .fqn = key }
         return .on
     $decl: = owner.node
     if decl == null
-        decl = c.generics.templates.get(owner.fqn).unwrap_or(null)
+        decl = ctx.generics.templates.get(owner.fqn).unwrap_or(null)
     if decl == null
         return .unsure
     for ch in decl.children
@@ -320,19 +320,19 @@ priv fn type_member(c: Sema_ctx$@, owner: At, part: U8[], next: At$@): Step //<
         if id != null && id.text.equals(part)
             next$ = At::{ .module = "", .sym = null, .node = ch, .fqn = key }
             return .on
-    if left_out_by_cfg(c, decl.loc.file(), part)
+    if left_out_by_cfg(ctx, decl.loc.file(), part)
         return .unsure
     return .absent
 
-priv fn member_of(c: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
+priv fn member_of(ctx: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
     //< What `part` names on what the walk stands on
     if cur.module.len > 0
-        if c.env.files.get(cur.module).is_none()
+        if ctx.env.files.get(cur.module).is_none()
             return .unsure
-        if sym: = declared_in(c, cur.module, part)
-            next$ = on_symbol(sym, c.build_mod_fqn(cur.module, part))
+        if sym: = declared_in(ctx, cur.module, part)
+            next$ = on_symbol(sym, ctx.build_mod_fqn(cur.module, part))
             return .on
-        return .unsure if left_out_by_cfg(c, cur.module, part) else .absent
+        return .unsure if left_out_by_cfg(ctx, cur.module, part) else .absent
     sym: = cur.sym
     if sym == null
         return .unsure
@@ -340,23 +340,23 @@ priv fn member_of(c: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
     if sym.kind.is_var_or_const() || sym.kind.is_alias()
         if sym.type_id == 0
             return .unsure
-        base: = bare_type(c.env.get_str(c.env.get_real_type(sym.type_id)))
-        typed: = c.symtab.by_fqn.get(base).unwrap_or(null)
+        base: = bare_type(ctx.env.get_str(ctx.env.get_real_type(sym.type_id)))
+        typed: = ctx.symtab.by_fqn.get(base).unwrap_or(null)
         if typed == null || !typed.kind.is_type() || typed.kind.is_alias()
             return .unsure
-        return type_member(c, on_symbol(typed, base), part, next)
+        return type_member(ctx, on_symbol(typed, base), part, next)
     if sym.kind.is_type()
-        return type_member(c, cur, part, next)
+        return type_member(ctx, cur, part, next)
     return .unsure
 
 priv fn names_a_file(part: U8[]): Bool //< whether the last part is a file's tail (`edit.kspl`)
     return (U8[][]::FILE_EXTS).contains(part)
 
-fn pointed_at(c: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): Pointed //<
+fn pointed_at(ctx: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): Pointed //<
     //< What `name`, written in a comment at position `at` of `file`, stands for
     //< `root` is the compilation's tree, where the function containing `at` is found, so that its
     //< parameters and locals are asked before the file's own names.
-    got: = read_in_scope(c, file, name)
+    got: = read_in_scope(ctx, file, name)
     switch got
     case .not_a_pointer
         return got
@@ -364,7 +364,7 @@ fn pointed_at(c: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): 
     head: = name.fqn_head()
     return .not_a_pointer if hidden_by_local(root, file, at, head) else got
 
-fn read_in_scope(c: Sema_ctx$@, file: U8[], name: U8[]): Pointed //<
+fn read_in_scope(ctx: Sema_ctx$@, file: U8[], name: U8[]): Pointed //<
     //< What the dotted `name` stands for in `file`'s own scope, with no local in the way
     //< **The caller knows the locals.** For a comment, they are those of the function it is in
     //< (`pointed_at`). For the analysis, they are the scopes it has open (a `::` written as a path,
@@ -379,11 +379,11 @@ fn read_in_scope(c: Sema_ctx$@, file: U8[], name: U8[]): Pointed //<
         part: = name.sub(start, stop - start)
         last: = stop >= name.len
         if index == 0
-            if !head_of(c, file, part, cur@)
+            if !head_of(ctx, file, part, cur@)
                 return .not_a_pointer
         else
             $next: = At::{ .module = "", .sym = null, .node = null, .fqn = "" }
-            switch member_of(c, cur, part, next@)
+            switch member_of(ctx, cur, part, next@)
             case .on
                 cur = next
             case .absent
@@ -404,21 +404,22 @@ priv const MAX_LOCAL_DEPTH: Sz = 256 //< how deep the search for a local goes be
     //< **Giving up answers "not hidden"**, so a pathological nesting is reported rather than
     //< silenced.
 
-priv fn declares_local(n: Ast_node$@, name: U8[], depth: Sz): Bool //<
-    //< Whether a variable named `name` is declared anywhere inside `n`
-    if n == null || depth > MAX_LOCAL_DEPTH
+priv fn declares_local(node: Ast_node$@, name: U8[], depth: Sz): Bool //<
+    //< Whether a variable named `name` is declared anywhere inside `node`
+    if node == null || depth > MAX_LOCAL_DEPTH
         return false
-    if n.kind_id == .k_decl_var || n.kind_id == .k_decl_var_item || n.kind_id == .k_decl_const
-        id: = n.get_var_decl_id()
+    if node.kind_id == .k_decl_var || node.kind_id == .k_decl_var_item ||
+        node.kind_id == .k_decl_const
+        id: = node.get_var_decl_id()
         if id != null && id.text.equals(name)
             return true
-    for ch in n.children
+    for ch in node.children
         if declares_local(ch, name, depth + 1)
             return true
     return false
 
-priv fn holds(n: Ast_node$@, at: Sz): Bool //< whether position `at` is inside `n`
-    sp: = n.get_span_offset()
+priv fn holds(node: Ast_node$@, at: Sz): Bool //< whether position `at` is inside `node`
+    sp: = node.get_span_offset()
     return at >= sp.offset && at < sp.offset + sp.span
 
 priv fn enclosing_fn(root: Ast_node$@, file: U8[], at: Sz): Ast_node$@? //<

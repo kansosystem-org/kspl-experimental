@@ -150,7 +150,7 @@ fn test_struct_operators()
 // The selective import `import "path" { A, B };` (dropping the namespace).
 // A `typedef` taken by a selective import can be written as a type. **That this declaration
 // compiles at all is the check.**
-priv fn _uses_selective_alias(_h: Panic_hook) {}
+priv fn _uses_selective_alias(_hook: Panic_hook) {}
 
 fn test_selective_import()
     verdict.start("[Import] the selective import (namespace-free) test...")
@@ -190,13 +190,13 @@ fn test_selective_import()
         .pass("the selective import takes effect for a type, a function, a constant, an enum's \
             variant and an alias alike, and lives together with a renaming and an ordinary alias.")
 
-fn first_or<|T|>(v: T, has: Bool): T? //<
+fn first_or<|T|>(value: T, has: Bool): T? //<
     //< A free generic function whose return type builds another generic from its own T
     //< It is a free function, not an impl method, and its return type is `T?`.
     //< The return type is resolved in collect.kspl's registration while T is still unbound. T must
     //< not be taken for a real type (an unsubstituted "T" in the C), called or not.
     if has
-        return .some(v)
+        return .some(value)
     return .none
 
 fn test_generic_fn_returning_own_type_param()
@@ -212,25 +212,25 @@ fn test_generic_fn_returning_own_type_param()
         assert(false, "first_or(42, false) must not yield some")
     verdict.pass("the generic monomorphization of a free function returning `T?` works correctly.")
 
-fn pick_second<|T|>(_flag: Bool, v: T): T //<
+fn pick_second<|T|>(_flag: Bool, value: T): T //<
     //< The type inference of a call whose T-declaring parameter is the second or later
     //< The inference looks through the parameters for the one declaring T
     //< (inferred_type_args in sema/body/generic_infer.kspl). If it took the first one,
     //< `pick(true, 42)` would bind T = Bool.
-    return v
+    return value
 
 struct Pick_box
     tag: I32
 
 impl Pick_box
-    fn pick_method<|T|>(_r: Self$@, _flag: Bool, v: T): T
-        return v
+    fn pick_method<|T|>(_r: Self$@, _flag: Bool, value: T): T
+        return value
 
-priv fn take_two<|A, B|>(a: A, _b: B): A //<
+priv fn take_two<|A, B|>(first: A, _second: B): A //<
     //< A call with two generic type variables, both standing as "a parameter's declared type"
     //< One must not be inferred with the rest left unbound. If the first argument filled them all,
     //< the second would fail with "expected 'T', but got …".
-    return a
+    return first
 
 fn test_two_generic_params_inferred()
     verdict.start("[Generics] the type inference of a call with two type variables test...")
@@ -278,8 +278,8 @@ fn test_generic_param_not_first_arg()
 // Caution: Keep the two declarations below **before** the impl block. Reordered, they test nothing.
 priv $early_bag: Order_bag<|I32|> = ::{ .slot = 7 }
 
-priv fn peek_early(b: Order_bag<|I32|>@): I32
-    return b.peek()
+priv fn peek_early(bag: Order_bag<|I32|>@): I32
+    return bag.peek()
 
 struct Order_bag<|T|>
     slot: T
@@ -462,26 +462,26 @@ fn test_slice_views(arena: Arena$@)
     verdict
         .pass("out of range, a negative start and a negative len come out empty, and no view of \
             negative length is built.")
-priv fn one_default(a: I32, b: I32 = 2): I32 //< the set of functions holding default values
+priv fn one_default(left: I32, right: I32 = 2): I32 //< the set of functions holding default values
     //< Caution: **Do not list functions that are only declared** — here each one is checked by
     //< value.
-    return a * 10 + b
+    return left * 10 + right
 
-priv fn all_default(a: I32 = 5): I32
-    return a * 100
+priv fn all_default(value: I32 = 5): I32
+    return value * 100
 
-priv fn two_defaults(a: I32, b: I32 = 2, c: I32 = 3): I32
-    return a * 100 + b * 10 + c
+priv fn two_defaults(first: I32, second: I32 = 2, third: I32 = 3): I32
+    return first * 100 + second * 10 + third
 
-priv fn null_default(p: Void@ = null): Bool
-    return p == null
+priv fn null_default(pointer: Void@ = null): Bool
+    return pointer == null
 
-priv fn str_default(s: U8[] = "none"): Sz
-    return s.len
+priv fn str_default(text: U8[] = "none"): Sz
+    return text.len
 
-priv fn neg_default(b: I32 = -1, f: F64 = -1.5, low: I8 = -128): F64 //<
+priv fn neg_default(whole: I32 = -1, real: F64 = -1.5, low: I8 = -128): F64 //<
     //< Negative numbers as defaults: the minus and the digits are one value, at a type's minimum too
-    return F64::b + f + F64::low
+    return F64::whole + real + F64::low
 
 priv struct Counter
     n: I32
@@ -640,11 +640,11 @@ fn test_noreturn_as_catch_value()
     assert(nr_via_fallback(true) == 7, "the same in the fallback statement")
     verdict.pass("a `#noreturn` call passes as catch's alternative value.")
 
-priv fn bind_probe(n: I32): I32? //<
+priv fn bind_probe(value: I32): I32? //<
     //< `if name: = expr { … }` binds an Option ("Branching" in `../../docs/SPEC-programming-language.md`)
     //< Caution: **Check that the body is skipped when the binding fails**, or a non-empty `.none`
     //< branch passes. **Check that `else` means "when there was none" too.**
-    return .some(n * 2) if n > 0 else .none
+    return .some(value * 2) if value > 0 else .none
 
 fn test_if_binds_option()
     verdict.start("[Lang] if binds an Option test...")
@@ -667,59 +667,60 @@ fn test_if_binds_option()
     assert(got == 27, "the bindings do not mix even nested")
     verdict.pass("`if name: = expr` binds an Option, and does nothing where there is none.")
 
-priv fn only_if(n: I32, want: I32): I32? //< `n * 10` where n is `want`, none otherwise
-    return .some(n * 10) if n == want else .none
+priv fn only_if(value: I32, want: I32): I32? //<
+    //< `value * 10` where `value` is `want`, none otherwise
+    return .some(value * 10) if value == want else .none
 
-priv fn bind_else_bind(n: I32, with_else: Bool): I32 //<
+priv fn bind_else_bind(value: I32, with_else: Bool): I32 //<
     //< Which branch a binding `else if` after a binding `if` takes, plus the value it bound
     //< Caution: **Reuse the name `v`.** Each binding is a `switch` of its own, so the second `v`
     //< is a new name, not the first one's.
     $got: I32 = 0
     if with_else
-        if v: = only_if(n, 1)
+        if v: = only_if(value, 1)
             got = 100 + v
-        else if v: = only_if(n, 2)
+        else if v: = only_if(value, 2)
             got = 200 + v
         else
             got = 300
     else
-        if v: = only_if(n, 1)
+        if v: = only_if(value, 1)
             got = 100 + v
-        else if v: = only_if(n, 2)
+        else if v: = only_if(value, 2)
             got = 200 + v
     return got
 
-priv fn bind_else_plain(n: I32): I32 //< a plain `else if` after a binding `if`
+priv fn bind_else_plain(value: I32): I32 //< a plain `else if` after a binding `if`
     $got: I32 = 0
-    if v: = only_if(n, 1)
+    if v: = only_if(value, 1)
         got = 100 + v
-    else if n == 2
+    else if value == 2
         got = 200
     else
         got = 300
     return got
 
-priv fn plain_else_bind(n: I32): I32 //< a binding `else if` after a plain `if … else if`
+priv fn plain_else_bind(value: I32): I32 //< a binding `else if` after a plain `if … else if`
     $got: I32 = 0
-    if n == 1
+    if value == 1
         got = 100
-    else if n == 2
+    else if value == 2
         got = 200
-    else if v: = only_if(n, 3)
+    else if v: = only_if(value, 3)
         got = 300 + v
     else
         got = 400
     return got
 
-priv fn bind_three_deep(n: I32): I32 //< three binding `else if`s, then `else`
+priv fn bind_three_deep(value: I32): I32 //< three binding `else if`s, then `else`
     $got: I32 = 0
-    if a: = only_if(n, 1)
+    if a: = only_if(value, 1)
         got = 100 + a
-    else if b: = only_if(n, 2)
+    else if b: = only_if(value, 2)
         got = 200 + b
-    else if c: = only_if(n, 3)
+    else if c: = only_if(value, 3)
         got = 300 + c
-    else if d: = only_if(n, 4)
+    else if d: = only_if(value, 4)
         got = 400 + d
     else
         got = 500
@@ -744,14 +745,14 @@ fn test_if_bind_in_else_if()
 // ("Loops" in `../../docs/SPEC-programming-language.md`). The shapes that still need a `return`
 // after the loop are the cases `endless_for_*` in `tests/negative/control.kspl`.
 // ==========================================
-priv fn first_square_above(n: I32): I32 //< the first i whose square exceeds n
+priv fn first_square_above(value: I32): I32 //< the first i whose square exceeds `value`
     $i: I32 = 0
     for
-        if i * i > n
+        if i * i > value
             return i
         i += 1
 
-priv fn rounds_until(n: I32): I32 //<
+priv fn rounds_until(value: I32): I32 //<
     //< The same, with an inner loop's `break`, which leaves only the inner loop
     $i: I32 = 0
     $inner: I32 = 0
@@ -759,7 +760,7 @@ priv fn rounds_until(n: I32): I32 //<
         for
             inner += 1
             break
-        if i >= n
+        if i >= value
             return i * 10 + inner
         i += 1
 
@@ -782,8 +783,8 @@ priv struct Sz_of_value
 priv $sz_global: Sz_of_value = ::{}
 priv const SZ_OF_GLOBAL: Sz = sizeof(sz_global)
 
-priv fn sz_of_param(p: I16): Sz
-    return sizeof(p)
+priv fn sz_of_param(param: I16): Sz
+    return sizeof(param)
 
 fn test_sizeof_of_a_value()
     verdict.start("[sizeof] the size of a variable, a parameter and a field test...")

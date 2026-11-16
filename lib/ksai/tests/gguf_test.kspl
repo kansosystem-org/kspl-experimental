@@ -15,8 +15,8 @@ embed "ksai/tests/qwen_data/tiny_qwen3.gguf" as tiny_file
 fn tiny(arena: Arena$@): Gguf //< the tiny model's file, parsed
     return Gguf.parse(tiny_file, arena) catch panic("gguf: the tiny model is refused")
 
-fn said(e: Gguf_error, arena: Arena$@): U8[] //< an error as `<variant> <what it names>`
-    switch e
+fn said(error: Gguf_error, arena: Arena$@): U8[] //< an error as `<variant> <what it names>`
+    switch error
     case .read_failed
         return "read_failed"
     case .not_gguf
@@ -156,64 +156,64 @@ impl Spec
             .align_type = 4, .a_dims = 2, .a_rows = 2, .a_type = 0, .b_name = "b", .b_len = 64,
             .b_offset = 256 }
 
-fn put32(b: Str_builder$@, v: U32) //< four bytes, least significant first
+fn put32(out: Str_builder$@, value: U32) //< four bytes, least significant first
     for i in Range.asc(4)
-        b.c(U8::((v >> U32::(i * 8)) & 0xFF))
+        out.c(U8::((value >> U32::(i * 8)) & 0xFF))
 
-fn put64(b: Str_builder$@, v: U64) //< eight bytes, least significant first
+fn put64(out: Str_builder$@, value: U64) //< eight bytes, least significant first
     for i in Range.asc(8)
-        b.c(U8::((v >> U64::(i * 8)) & 0xFF))
+        out.c(U8::((value >> U64::(i * 8)) & 0xFF))
 
-fn put_str(b: Str_builder$@, s: U8[]) //< a string: its length, then its bytes
-    put64(b, U64::s.len)
-    b.s(s)
+fn put_str(out: Str_builder$@, text: U8[]) //< a string: its length, then its bytes
+    put64(out, U64::text.len)
+    out.s(text)
 
-priv fn built(s: Spec, arena: Arena$@): U8[] //< the file a spec describes
+priv fn built(spec: Spec, arena: Arena$@): U8[] //< the file a spec describes
     defer $b: = Str_builder()
-    put32(b@, s.magic)
-    put32(b@, s.version)
-    put64(b@, s.n_tensors)
-    put64(b@, s.n_kvs)
+    put32(b@, spec.magic)
+    put32(b@, spec.version)
+    put64(b@, spec.n_tensors)
+    put64(b@, spec.n_kvs)
     put_str(b@, "general.architecture")
     put32(b@, 8)
     put_str(b@, "test")
     put_str(b@, "x.count")
-    put32(b@, s.count_type)
-    if s.count_type == 10 || s.count_type == 11
-        put64(b@, s.count_value)
+    put32(b@, spec.count_type)
+    if spec.count_type == 10 || spec.count_type == 11
+        put64(b@, spec.count_value)
     else
-        put32(b@, U32::s.count_value)
-    put_str(b@, s.list_key)
+        put32(b@, U32::spec.count_value)
+    put_str(b@, spec.list_key)
     put32(b@, 9)
-    put32(b@, s.list_elem)
+    put32(b@, spec.list_elem)
     put64(b@, 3)
     for v in Range.asc(3)
         put32(b@, U32::(v + 1))
     $align: Sz = 32
-    if s.align != 0
+    if spec.align != 0
         put_str(b@, "general.alignment")
-        put32(b@, s.align_type)
-        if s.align_type == 10
-            put64(b@, s.align)
+        put32(b@, spec.align_type)
+        if spec.align_type == 10
+            put64(b@, spec.align)
         else
-            put32(b@, s.align)
-        align = Sz::s.align
+            put32(b@, spec.align)
+        align = Sz::spec.align
     else
         put_str(b@, "x.none")
         put32(b@, 7)
         b.c(1)
     put_str(b@, "a")
-    put32(b@, U32::s.a_dims)
+    put32(b@, U32::spec.a_dims)
     put64(b@, 32)
-    for _d in Range(1, s.a_dims, 1)
-        put64(b@, s.a_rows)
-    put32(b@, s.a_type)
+    for _d in Range(1, spec.a_dims, 1)
+        put64(b@, spec.a_rows)
+    put32(b@, spec.a_type)
     put64(b@, 0)
-    put_str(b@, s.b_name)
+    put_str(b@, spec.b_name)
     put32(b@, 1)
-    put64(b@, s.b_len)
+    put64(b@, spec.b_len)
     put32(b@, 8)
-    put64(b@, s.b_offset)
+    put64(b@, spec.b_offset)
     for b.len % align != 0
         b.c(0)
     // `a` as 2 rows of 32 F32 numbers, then `b`'s two Q8_0 blocks at 256.

@@ -37,7 +37,9 @@ make ksagent                                   # -> out/ksagent.exe
 | [`ksagent/progress.kspl`](progress.kspl) | What the console and the live file show while an answer is written |
 | [`ksagent/chat.kspl`](chat.kspl) | Reading an ask file and a chat file, and recording a question with its answer |
 | [`ksagent/watch.kspl`](watch.kspl) | Following the ask files under the folder |
-| [`ksagent/page/chat.html`](page/chat.html) | The chat page: asking, stopping, and showing the model's Markdown safely |
+| [`ksagent/page/chat.html`](page/chat.html) | The chat page: asking, stopping, and showing each answer |
+| [`ksagent/page/chat.css`](page/chat.css) | The chat page's look: each colour a role, each pair of them 4.5:1 or more; the build puts it inside the page |
+| [`ksagent/page/markdown.js`](page/markdown.js) | The chat page's reader of the model's Markdown, which shows it safely; the build puts it inside the page |
 | [`ksagent/evaluate.kspl`](evaluate.kspl) | `eval`: the questions file, the scoring and the table |
 | [`ksagent/tests/`](tests/) | The tests `make test` runs ("The tests" below) |
 

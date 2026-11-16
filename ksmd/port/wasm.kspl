@@ -44,39 +44,39 @@ fn builtins(ends: I64, arena: Arena$@): U8[] //<
     path: = arena.dup_str(got.stdout_data).trim_spaces()
     return path if got.exited_with(0) && fs.exists(path) else ""
 
-fn build(b: Wasm_build@, arena: Arena$@): Void!U8[] //<
+fn build(request: Wasm_build@, arena: Arena$@): Void!U8[] //<
     //< Compiles, then links; the failure is the step's own output, for the person to read
-    rt: = builtins(b.ends, arena)
-    if rt.len == 0 && left_ms(b.ends) == 0
+    rt: = builtins(request.ends, arena)
+    if rt.len == 0 && left_ms(request.ends) == 0
         throw "the build ran out of time at its first step"
     if rt.len == 0
         throw "clang's wasm32 builtins are not installed. Debian/Ubuntu: install \
             libclang-rt-<version>-dev-wasm32 for your clang version"
-    fs.mkdir_all(b.work) catch
-        throw arena.text().s("cannot make \{b.work\}").take()
-    c: = fs.join(b.work, "module.c", arena)
-    o: = fs.join(b.work, "module.o", arena)
+    fs.mkdir_all(request.work) catch
+        throw arena.text().s("cannot make \{request.work\}").take()
+    c: = fs.join(request.work, "module.c", arena)
+    o: = fs.join(request.work, "module.o", arena)
     $kspl: = List<|U8[]|>(arena)
     kspl
-        .push_all(U8[][]::{ b.ksplc, "--freestanding",
+        .push_all(U8[][]::{ request.ksplc, "--freestanding",
         arena.text().s("--machine=").s(MACHINE).take() })
-    if b.deps.len > 0
-        kspl.push(arena.text().s("--emit-deps=").s(b.deps).take())
-    kspl.push_all(b.options)
-    kspl.push_all(U8[][]::{ b.entry, c })
-    step(kspl.slice(), b.cwd, b.ends, arena)!
+    if request.deps.len > 0
+        kspl.push(arena.text().s("--emit-deps=").s(request.deps).take())
+    kspl.push_all(request.options)
+    kspl.push_all(U8[][]::{ request.entry, c })
+    step(kspl.slice(), request.cwd, request.ends, arena)!
     // **Put the stack first**: after the data, a deep call runs past its end into the heap without
     // a trap. `-fno-strict-aliasing` is ksplc's own (`ksplc info exe-flags`): KSPL lets two pointer
     // types reach one address, which `-O2` would otherwise ignore.
     step(U8[][]::{ "clang", arena.text().s("--target=").s(MACHINE).take(), "-std=c99", "-O2",
         "-fno-strict-aliasing", "-ffreestanding", "-nostdlib", "-Wall", "-mbulk-memory",
-        "-ffunction-sections", "-fdata-sections", "-c", c, "-o", o }, "", b.ends, arena)!
+        "-ffunction-sections", "-fdata-sections", "-c", c, "-o", o }, "", request.ends, arena)!
     // Caution: **Do not use `--allow-undefined`**: only what `imports` names comes from the
     // script, so anything else fails the link rather than the page.
     step(U8[][]::{ "wasm-ld", "--no-entry", "--gc-sections", "--stack-first", "-z",
         "stack-size=1048576",
-        arena.text().s("--allow-undefined-file=").s(b.imports).take(), o, rt, "-o", b.out }, "",
-        b.ends, arena)!
+        arena.text().s("--allow-undefined-file=").s(request.imports).take(), o, rt, "-o",
+        request.out }, "", request.ends, arena)!
 
 fn step(argv: U8[][], cwd: U8[], ends: I64, arena: Arena$@): Void!U8[] //<
     //< Runs one step to its end, or stops it once `ends` passes

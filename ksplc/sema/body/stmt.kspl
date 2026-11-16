@@ -44,29 +44,29 @@ priv const GUARANTEED_BLOCK_NESTING: Sz = 64 //<
     //< Caution: **Do not show max_block_nesting above in a diagnostic.** It counts scope levels,
     //< including the function's and the file's, so it promises more than is actually accepted.
 
-priv fn report_bad_ptr_compound_op(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, op_text: U8[]) //<
+priv fn report_bad_ptr_compound_op(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, op_text: U8[]) //<
     //< Rejects an operator that cannot be applied to a pointer
-    shown: = c.env.display(type_id)
-    c.clear_scratch().s("operator '\{op_text\}' cannot be applied to the pointer type ")
+    shown: = ctx.env.display(type_id)
+    ctx.clear_scratch().s("operator '\{op_text\}' cannot be applied to the pointer type ")
         .s("'\{shown\}'. Only '+=' and '-=' move a pointer, and they take an integer step ")
         .s("(it counts elements, like 'p = p + i')")
-    c.err(node, c.scratch.slice())
+    ctx.err(node, ctx.scratch.slice())
 
-priv fn report_bad_ptr_step(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, right_id: I32,
+priv fn report_bad_ptr_step(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, right_id: I32,
     op_text: U8[]) //<
-        //< Rejects a pointer step that is not an integer.
+        //< Rejects a pointer step that is not an integer
         //< Caution: **Do not merge it with the operator message.** In `p += q` the `+=` is fine, so
         //< "`+=` cannot be used" does not say how to fix it.
-    l_shown: = c.env.display(type_id)
-    r_shown: = c.env.display(right_id)
-    c.clear_scratch().s("the step of '\{op_text\}' on the pointer type '\{l_shown\}' must ")
+    l_shown: = ctx.env.display(type_id)
+    r_shown: = ctx.env.display(right_id)
+    ctx.clear_scratch().s("the step of '\{op_text\}' on the pointer type '\{l_shown\}' must ")
         .s("be an integer (it counts elements), but got '\{r_shown\}'")
-    c.err(node, c.scratch.slice())
+    ctx.err(node, ctx.scratch.slice())
 
 priv const NO_NAME_LABEL: U8[] = "_" //< the label for a level with no name
     //< **The name is defined only here** (`infer_stmt_break_continue` uses it).
 
-priv fn reject_receiverless_cleanup(c: Sema_ctx$@, block: Ast_node$@): Void!Sema_error //<
+priv fn reject_receiverless_cleanup(ctx: Sema_ctx$@, block: Ast_node$@): Void!Sema_error //<
     //< Rejects a `defer` whose statement calls a method on nothing (`defer .free()`)
     //< **A `defer` names what it cleans up.** The leading `.` reads as an enum's value there, and
     //< "no type to infer it from" would send the writer looking at enums.
@@ -78,34 +78,34 @@ priv fn reject_receiverless_cleanup(c: Sema_ctx$@, block: Ast_node$@): Void!Sema
         return
     name: = head.safe_get_child(0)
     method: = name.text if name != null else "free"
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("a 'defer' must name its resource. '.\{method\}()' has no receiver. Write the variable: \
             'defer x.\{method\}()'")
     if method.equals("free")
-        c.scratch.s(", or put 'defer' in front of its declaration ('defer x: = …')")
-    c.err(head, c.scratch.slice())
+        ctx.scratch.s(", or put 'defer' in front of its declaration ('defer x: = …')")
+    ctx.err(head, ctx.scratch.slice())
     throw .analysis_failed
 
-priv fn push_optional_label(c: Sema_ctx$@, name_node: Ast_node$@, stmt: Ast_node$@) //<
+priv fn push_optional_label(ctx: Sema_ctx$@, name_node: Ast_node$@, stmt: Ast_node$@) //<
     //< Registers a jump target only where a label is written
     //< if and labeled_block call it; for and switch always register one.
     if name_node != null && name_node.text.len > 0
-        c.jump_stack
+        ctx.jump_stack
             .push(sema_session_ctx.Jump_label::{ .name = name_node.text, .is_loop = false,
             .name_node = name_node, .stmt = stmt })
 
-priv fn pop_optional_label(c: Sema_ctx$@, name_node: Ast_node@)
+priv fn pop_optional_label(ctx: Sema_ctx$@, name_node: Ast_node@)
     if name_node != null && name_node.text.len > 0
-        c.jump_stack.truncate(c.jump_stack.len - 1)
-priv fn refuse_dropped_result(c: Sema_ctx$@, node: Ast_node$@, result_id: I32) //<
+        ctx.jump_stack.truncate(ctx.jump_stack.len - 1)
+priv fn refuse_dropped_result(ctx: Sema_ctx$@, node: Ast_node$@, result_id: I32) //<
     //< Refuses a Result nobody takes apart: a statement's value, or one bound to a `_` name
     //< **A failure is dropped only where it is written down**: `catch {}` says so; a value left
     //< standing does not.
-    shown: = c.env.display(result_id)
-    c.clear_scratch()
+    shown: = ctx.env.display(result_id)
+    ctx.clear_scratch()
         .s("a result of type '\{shown\}' is dropped. Handle it with '!' to propagate failure, or \
             with 'catch'. Write 'catch {}' to drop a failure on purpose")
-    c.err(node, c.scratch.slice())
+    ctx.err(node, ctx.scratch.slice())
 
 priv enum Index_write //< what `infer_index_write` did with an assignment's left-hand side
     not_index //< not a subscript: the statement infers the left-hand side itself
@@ -113,73 +113,73 @@ priv enum Index_write //< what `infer_index_write` did with an assignment's left
     inferred //< a subscript, inferred in full (its type is the left-hand side's `type_id`)
 
 impl Ast_node
-    fn infer_stmts(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+    fn infer_stmts(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error
         if r == null
             return
 
         kind: = r.kind_id
 
-        sema_body_lint_stmt.lint_multiline_nested_call(c, r)
+        sema_body_lint_stmt.lint_multiline_nested_call(ctx, r)
 
         switch kind
         case .k_stmt_block
-            r.infer_stmt_block(c)!
+            r.infer_stmt_block(ctx)!
         case .k_stmt_labeled_block
-            r.infer_stmt_labeled_block(c)!
+            r.infer_stmt_labeled_block(ctx)!
         case .k_decl_var, .k_decl_const
-            r.infer_var_decl(c)!
+            r.infer_var_decl(ctx)!
         case .k_stmt_if
-            r.infer_if_stmt(c)!
+            r.infer_if_stmt(ctx)!
         case .k_stmt_for
-            r.infer_loop_stmt(c)!
+            r.infer_loop_stmt(ctx)!
         case .k_stmt_break, .k_stmt_continue
-            r.infer_stmt_break_continue(c)!
+            r.infer_stmt_break_continue(ctx)!
         case .k_stmt_return
-            r.infer_stmt_return(c)!
+            r.infer_stmt_return(ctx)!
         case .k_stmt_throw
-            r.infer_stmt_throw(c)!
+            r.infer_stmt_throw(ctx)!
         case .k_stmt_fallback
-            r.infer_stmt_fallback(c)!
+            r.infer_stmt_fallback(ctx)!
         case .k_stmt_defer
-            r.infer_stmt_defer(c)!
+            r.infer_stmt_defer(ctx)!
         case .k_stmt_expr
-            r.infer_assign_stmt(c)!
+            r.infer_assign_stmt(ctx)!
         case .k_stmt_switch
-            r.infer_switch_stmt(c)!
+            r.infer_switch_stmt(ctx)!
         default
-            r.infer_unknown_stmt(c)!
+            r.infer_unknown_stmt(ctx)!
 
-    priv fn infer_stmts_failed(r: Self$@, c: Sema_ctx$@): Bool //<
+    priv fn infer_stmts_failed(r: Self$@, ctx: Sema_ctx$@): Bool //<
         //< infer_stmts with the analysis error swallowed into a Bool, for accumulating into has_err
-        r.infer_stmts(c) catch
+        r.infer_stmts(ctx) catch
             return true
         return false
 
-    fn resolve_inferred_array(r: Self$@, c: Sema_ctx$@, expected_id: I32, expr_id: I32,
+    fn resolve_inferred_array(r: Self$@, ctx: Sema_ctx$@, expected_id: I32, expr_id: I32,
         type_node: Ast_node$@, err_node: Ast_node$@): I32 //<
-            //< Decides the element count of an inferred array `T[_]` from the initializer's type.
+            //< Decides the element count of an inferred array `T[_]` from the initializer's type
             //< Once decided, it returns the resolved id and writes it into type_node and sym;
             //< otherwise it returns expected_id, diagnosing if needed. The caller uses the result
             //< as the type.
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
         $is_inferred: = false
         if expected_id != 0 && expected_id != unknown
-            switch c.env.get_info(c.env.get_real_type(expected_id))
+            switch ctx.env.get_info(ctx.env.get_real_type(expected_id))
             case .array(_b, s)
                 is_inferred = (s == -1)
             default {}
         if !is_inferred
             return expected_id
         if expr_id == 0 || expr_id == unknown
-            c.err(err_node, "cannot infer array size without a valid initializer.")
+            ctx.err(err_node, "cannot infer array size without a valid initializer.")
             return expected_id
         $match_base: = false
-        switch c.env.get_info(c.env.get_real_type(expr_id))
+        switch ctx.env.get_info(ctx.env.get_real_type(expr_id))
         case .array(eb, _es)
-            match_base = (c.env.strip_array(expected_id) == eb)
+            match_base = (ctx.env.strip_array(expected_id) == eb)
         default {}
         if !match_base
-            c.err(err_node, "array type mismatch for inferred array size.")
+            ctx.err(err_node, "array type mismatch for inferred array size.")
             return expected_id
         if type_node != null
             type_node.type_id = expr_id
@@ -188,7 +188,7 @@ impl Ast_node
             sym.type_id = expr_id
         return expr_id
 
-    fn infer_var_decl(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+    fn infer_var_decl(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error
         id_node: = r.get_var_decl_id()
         type_node: = r.get_var_decl_type_node()
         expr_node: = r.get_var_decl_expr()
@@ -201,34 +201,34 @@ impl Ast_node
         kw_text: = kw_node.text if kw_node != null else ""
 
         // The error count before either half is read, for the check further down.
-        err_before: = c.error_mark()
+        err_before: = ctx.error_mark()
         $declared_id: = I32::sema_type_env.Builtin_type_id.unknown
         if type_node.kind_id != .k_empty
-            declared_id = type_node.resolve_type(c)!
+            declared_id = type_node.resolve_type(ctx)!
 
         $expr_id: = I32::sema_type_env.Builtin_type_id.unknown
         if expr_node.kind_id != .k_empty
-            prev_unread: = c.fn_ctx.catch_value_unread
-            c.fn_ctx.catch_value_unread = id_node.text.starts_with("_")
-            expr_id = expr_node.infer_expr(c, declared_id) catch e
-                c.fn_ctx.catch_value_unread = prev_unread
+            prev_unread: = ctx.fn_ctx.catch_value_unread
+            ctx.fn_ctx.catch_value_unread = id_node.text.starts_with("_")
+            expr_id = expr_node.infer_expr(ctx, declared_id) catch e
+                ctx.fn_ctx.catch_value_unread = prev_unread
                 throw e
-            c.fn_ctx.catch_value_unread = prev_unread
+            ctx.fn_ctx.catch_value_unread = prev_unread
             // **A declaration with no type takes a function's own type** from a name that stands
             // for one function: `f: = twice`. See own_type_of_name in sema/decl/name.kspl.
             if sema_type_env.is_unknown(declared_id) &&
-                expr_id == c.env.generic_fn_value_type_id()
-                expr_id = c.own_type_of_name(expr_node)
+                expr_id == ctx.env.generic_fn_value_type_id()
+                expr_id = ctx.own_type_of_name(expr_node)
                 expr_node.type_id = expr_id
             if r.is_for_in_subject()
-                expr_id = r.hold_for_in_subject(c, expr_id)!
+                expr_id = r.hold_for_in_subject(ctx, expr_id)!
 
-        declared_id = r.resolve_inferred_array(c, declared_id, expr_id, type_node, id_node)
+        declared_id = r.resolve_inferred_array(ctx, declared_id, expr_id, type_node, id_node)
 
         if !sema_type_env.is_unknown(declared_id) && !sema_type_env.is_unknown(expr_id) &&
             declared_id != expr_id
-            c.report_type_mismatch(expr_node, declared_id, expr_id)
-        sema_body_lint_stmt.lint_repeated_type(c, type_node, expr_node, declared_id, expr_id)
+            ctx.report_type_mismatch(expr_node, declared_id, expr_id)
+        sema_body_lint_stmt.lint_repeated_type(ctx, type_node, expr_node, declared_id, expr_id)
 
         $final_id: = declared_id
         if sema_type_env.is_unknown(final_id) && !sema_type_env.is_unknown(expr_id)
@@ -236,24 +236,24 @@ impl Ast_node
             // No annotation: the initializer's type is the declaration's. An integer literal's
             // default type becomes **the final type** here. This is the only place its range is
             // checked (check_inferred_decl_literal in sema/body/literal.kspl).
-            sema_body_literal.check_inferred_decl_literal(c, expr_node, final_id)
+            sema_body_literal.check_inferred_decl_literal(ctx, expr_node, final_id)
             // **Once rejected, make the type Unknown**, or the one mistake is reported again at
             // every use.
-            if check_fn_value_binding(c, id_node, expr_node)
+            if check_fn_value_binding(ctx, id_node, expr_node)
                 final_id = I32::sema_type_env.Builtin_type_id.unknown
             // `null` fits every pointer type, so alone it names none ("2.3 Literals").
             if expr_node.kind_id == .k_null
-                c.clear_scratch()
+                ctx.clear_scratch()
                     .s("cannot infer type for '\{id_node.text\}'. 'null' fits every pointer type. \
                         Write the type: '\{id_node.text\}: T@ = null'")
-                c.err(id_node, c.scratch.slice())
+                ctx.err(id_node, ctx.scratch.slice())
                 final_id = I32::sema_type_env.Builtin_type_id.unknown
 
         // `_` silences the unread-variable warning, and so would drop the failure with no word.
-        if id_node.text.starts_with("_") && c.env.is_result(final_id)
-            refuse_dropped_result(c, id_node, final_id)
-        if sema_type_env.is_void(c.env.get_real_type(final_id))
-            c.err(id_node, "variables cannot be of type 'Void'")
+        if id_node.text.starts_with("_") && ctx.env.is_result(final_id)
+            refuse_dropped_result(ctx, id_node, final_id)
+        if sema_type_env.is_void(ctx.env.get_real_type(final_id))
+            ctx.err(id_node, "variables cannot be of type 'Void'")
             final_id = I32::sema_type_env.Builtin_type_id.unknown
 
         if sema_type_env.is_unknown(final_id)
@@ -262,26 +262,26 @@ impl Ast_node
             // goes).
             // Caution: **Say nothing where one of the halves already reported**, or one mistake is
             // reported twice.
-            if c.error_mark() == err_before
+            if ctx.error_mark() == err_before
                 // Nor after an earlier error in the function: the name check holds back an unknown
                 // name there (report_undefined_path), and a message about types would replace it.
                 $say: = true
                 if expr_node.kind_id == .k_empty
-                    c.clear_scratch()
+                    ctx.clear_scratch()
                         .s("cannot infer type for '\{id_node.text\}'. Add a type annotation (e.g. \
                             '\{id_node.text\}: I32') or an initializer\n  Note: if \
                             '\{id_node.text\}' is meant as a label, a label alone on its line names \
                             the indented block under it. To label a 'for', 'switch' or 'if', write \
                             the label on its line ('\{id_node.text\}: for i in ...')")
-                else if sema_body_resolve_path.refuse_type_name(c, expr_node) ||
-                    c.has_error_in_fn()
+                else if sema_body_resolve_path.refuse_type_name(ctx, expr_node) ||
+                    ctx.has_error_in_fn()
                     say = false
                 else
-                    c.clear_scratch()
+                    ctx.clear_scratch()
                         .s("cannot infer type for '\{id_node.text\}'. Its initializer has no type \
                             of its own. A type name is not a value")
                 if say
-                    c.err(id_node, c.scratch.slice())
+                    ctx.err(id_node, ctx.scratch.slice())
             final_id = I32::sema_type_env.Builtin_type_id.unknown
         is_const: = r.kind_id == .k_decl_const || kw_text.equals("const")
         is_mut: = !is_const && kw_text.is_mut_binding_kw()
@@ -294,22 +294,22 @@ impl Ast_node
         // (emit_var_decl in gen/c/stmt.kspl), so fixing only the symbol emits `const U8 data[N]`
         // and C fails. The desugaring splits a multi-name declaration (`$a: T[N], b: T[N]`) into
         // separate nodes, so rewriting the type node per name does not collide.
-        final_id = c.binding_value_type(final_id, is_mut)
+        final_id = ctx.binding_value_type(final_id, is_mut)
         if type_node != null && type_node.kind_id != .k_empty
             type_node.type_id = final_id
         if is_const
-            c.check_const_decl_storage(final_id, id_node.text, id_node)
+            ctx.check_const_decl_storage(final_id, id_node.text, id_node)
         sym: = Sema_symbol(sym_kind, id_node.text, r)
         sym.type_id = final_id
         sym.flags.is_mut = is_mut
         // A read-only "var_synth" is a `for … in`'s item (build_item_decl in base/ast.kspl).
         sym.flags.is_made_binding = !is_mut && r.text.equals("var_synth")
         if sym.flags.is_made_binding
-            c.refuse_interior_mutable_copy(final_id, id_node.text, id_node)
-        c.declare_symbol(id_node.text, sym, false)
+            ctx.refuse_interior_mutable_copy(final_id, id_node.text, id_node)
+        ctx.declare_symbol(id_node.text, sym, false)
         id_node.def_node = r
         if expr_node.kind_id != .k_empty
-            note_frame_pointer(c, id_node, expr_node)
+            note_frame_pointer(ctx, id_node, expr_node)
 
         r.type_id = final_id
         if expr_node.kind_id != .k_empty && expr_node.type_id == 0
@@ -318,13 +318,13 @@ impl Ast_node
             // Align the initializer's type too: an array literal is inferred with immutable
             // elements, and C rejects a `(Const_U8_Array_N){...}` assigned to a mutable variable
             // (another struct).
-            expr_node.type_id = c.binding_value_type(expr_node.type_id, is_mut)
+            expr_node.type_id = ctx.binding_value_type(expr_node.type_id, is_mut)
 
-    priv fn infer_if_stmt(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_if_stmt(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error
         $has_err: = false
         label_node: = r.get_if_label()
-        push_optional_label(c, label_node, r)
-        defer pop_optional_label(c, label_node)
+        push_optional_label(ctx, label_node, r)
+        defer pop_optional_label(ctx, label_node)
 
         cond_node: = r.get_if_cond()
         then_block: = r.get_if_then_block()
@@ -335,108 +335,108 @@ impl Ast_node
 
         if cond_node != null
             if base_core.config.run_lint_checks && cond_node.was_parenthesized()
-                c.hint(cond_node, "[H0301] Unnecessary parentheses around 'if' condition.")
-            sema_body_lint_stmt.lint_constant_condition(c, cond_node, false)
-            sema_body_lint_stmt.lint_multiline_call_subject(c, cond_node, "if")
+                ctx.hint(cond_node, "[H0301] Unnecessary parentheses around 'if' condition.")
+            sema_body_lint_stmt.lint_constant_condition(ctx, cond_node, false)
+            sema_body_lint_stmt.lint_multiline_call_subject(ctx, cond_node, "if")
 
-            switch c.try_eval_constexpr(cond_node)
+            switch ctx.try_eval_constexpr(cond_node)
             case .some(v)
                 is_static = true
                 static_val = v
             default {}
-            cond_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.bool_type)!
+            cond_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.bool_type)!
 
         if is_static && static_val != 0
-            if then_block != null && then_block.infer_stmts_failed(c)
+            if then_block != null && then_block.infer_stmts_failed(ctx)
                 has_err = true
             if else_block != null
                 else_block.morph(.k_empty, "")
                 else_block.clear_children()
         else if is_static && static_val == 0
-            if else_block != null && else_block.infer_stmts_failed(c)
+            if else_block != null && else_block.infer_stmts_failed(ctx)
                 has_err = true
             if then_block != null
                 then_block.morph(.k_stmt_block, "stmt_block")
                 then_block.clear_children()
         else
-            if then_block != null && then_block.infer_stmts_failed(c)
+            if then_block != null && then_block.infer_stmts_failed(ctx)
                 has_err = true
-            if else_block != null && else_block.infer_stmts_failed(c)
+            if else_block != null && else_block.infer_stmts_failed(ctx)
                 has_err = true
 
-        sema_body_lint_stmt.lint_if_stmt(c, r, then_block, else_block)
+        sema_body_lint_stmt.lint_if_stmt(ctx, r, then_block, else_block)
         if has_err
             throw .analysis_failed
 
-    priv fn infer_loop_stmt(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_loop_stmt(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error
         // Read before the expansion, which makes a `for x in` look like a counting loop.
-        counting: = sema_body_lint_loop.read_counting_loop(c, r)
+        counting: = sema_body_lint_loop.read_counting_loop(ctx, r)
         // `for x in` arrives unexpanded; the subject's type decides its form
         // (sema/body/for_in.kspl).
-        r.expand_for_in(c)!
+        r.expand_for_in(ctx)!
         $has_err: = false
         label_node: = r.get_loop_label()
         label_name: = label_node.text if label_node != null else ""
 
-        c.jump_stack
+        ctx.jump_stack
             .push(sema_session_ctx.Jump_label::{ .name = label_name, .is_loop = true,
             .name_node = label_node, .stmt = r })
-        c.symtab.enter_scope()
+        ctx.symtab.enter_scope()
         defer
-            c.symtab.exit_scope()
-            c.jump_stack.truncate(c.jump_stack.len - 1)
+            ctx.symtab.exit_scope()
+            ctx.jump_stack.truncate(ctx.jump_stack.len - 1)
 
         init_node: = r.get_for_init()
         cond_node: = r.get_loop_cond()
         step_node: = r.get_for_step()
         block_node: = r.get_loop_block()
 
-        if init_node.kind_id != .k_empty && init_node.infer_stmts_failed(c)
+        if init_node.kind_id != .k_empty && init_node.infer_stmts_failed(ctx)
             has_err = true
         if cond_node.kind_id != .k_empty
             if base_core.config.run_lint_checks && cond_node.was_parenthesized()
-                c.hint(cond_node, "[H0301] Unnecessary parentheses around 'for' condition.")
-            sema_body_lint_stmt.lint_constant_condition(c, cond_node, true)
-            cond_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.bool_type)!
+                ctx.hint(cond_node, "[H0301] Unnecessary parentheses around 'for' condition.")
+            sema_body_lint_stmt.lint_constant_condition(ctx, cond_node, true)
+            cond_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.bool_type)!
         if step_node.kind_id != .k_empty
             // A step that needs temporaries runs at the end of the body's own block
             // (lower_stmt_for in lower/root.kspl). So it is checked one scope inside the loop's,
             // as the body is: what it makes dies with each pass.
-            c.symtab.enter_scope()
-            if step_node.infer_stmts_failed(c)
+            ctx.symtab.enter_scope()
+            if step_node.infer_stmts_failed(ctx)
                 has_err = true
-            c.symtab.exit_scope()
-        if block_node.kind_id != .k_empty && block_node.infer_stmts_failed(c)
+            ctx.symtab.exit_scope()
+        if block_node.kind_id != .k_empty && block_node.infer_stmts_failed(ctx)
             has_err = true
 
-        sema_body_lint_stmt.lint_loop_stmt(c, block_node, label_name,
+        sema_body_lint_stmt.lint_loop_stmt(ctx, block_node, label_name,
             cond_node.kind_id != .k_empty)
         if shape: = counting
-            sema_body_lint_loop.lint_counting_loop(c, r, shape, block_node)
+            sema_body_lint_loop.lint_counting_loop(ctx, r, shape, block_node)
 
         if has_err
             throw .analysis_failed
 
-    priv fn infer_discarded_value(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
+    priv fn infer_discarded_value(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error //<
         //< An expression statement, whose value no one reads: a Result or a pure value is reported
-        prev_unread: = c.fn_ctx.catch_value_unread
-        c.fn_ctx.catch_value_unread = true
+        prev_unread: = ctx.fn_ctx.catch_value_unread
+        ctx.fn_ctx.catch_value_unread = true
         type_id: =
-            r.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown) catch e
-                c.fn_ctx.catch_value_unread = prev_unread
+            r.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown) catch e
+                ctx.fn_ctx.catch_value_unread = prev_unread
                 throw e
-        c.fn_ctx.catch_value_unread = prev_unread
+        ctx.fn_ctx.catch_value_unread = prev_unread
         if sema_type_env.is_unknown(type_id) || sema_type_env.is_void(type_id)
             return
-        if c.env.is_result(type_id)
-            refuse_dropped_result(c, r, type_id)
+        if ctx.env.is_result(type_id)
+            refuse_dropped_result(ctx, r, type_id)
         else if base_core.config.run_lint_checks && !r.has_side_effect()
-            c.clear_scratch()
-                .s("[W0202] Expression result of type '\{c.env.display(type_id)\}' is unused and \
+            ctx.clear_scratch()
+                .s("[W0202] Expression result of type '\{ctx.env.display(type_id)\}' is unused and \
                     has no side effects.")
-            c.warn(r, c.scratch.slice())
+            ctx.warn(r, ctx.scratch.slice())
 
-    priv fn infer_index_write(r: Self$@, c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@,
+    priv fn infer_index_write(r: Self$@, ctx: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@,
         is_simple_assign: Bool): Index_write!Sema_error //<
             //< It checks a write through a subscript (`xs[i] = v`), and says what it did
             //< A write through `Index_mut`'s `set` becomes that call. Elsewhere the subscript is
@@ -457,64 +457,65 @@ impl Ast_node
         if index_node == null || index_node.text.equals("]")
             return .not_index
         recv_node: = left.get_postfix_receiver()
-        recv_type_id: = recv_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!
+        recv_type_id: = recv_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!
 
         // An `Index_place` type's left-hand side is already an lvalue (no `set`).
         // Caution: **Do not include `ref_place` here.** What `at_ref` points at is immutable, and
         // treated as an lvalue the rejection would mention only the element's type.
-        route: = c.index_route(recv_node, recv_type_id)
+        route: = ctx.index_route(recv_node, recv_type_id)
         switch route
         case .place
-            sema_body_postfix.infer_subscript_of(left, c, recv_type_id)!
+            sema_body_postfix.infer_subscript_of(left, ctx, recv_type_id)!
             return .inferred
         default {}
         // A temporary that owns its elements took `at_ref` for the read, so the cause is the
         // temporary, not a read-only location.
-        if c.env.receiver_needs_hoist(recv_node) && c.env.index_owns_elements(recv_type_id)
-            refuse_temporary_index_write(c, left, "at")
+        if ctx.env.receiver_needs_hoist(recv_node) &&
+            ctx.env.index_owns_elements(recv_type_id)
+            refuse_temporary_index_write(ctx, left, "at")
             throw .analysis_failed
-        if c.index_only_reads(route, recv_type_id)
-            sema_body_write_perm.refuse_read_only_element_write(c, left, recv_node)
+        if ctx.index_only_reads(route, recv_type_id)
+            sema_body_write_perm.refuse_read_only_element_write(ctx, left, recv_node)
             throw .analysis_failed
         // Caution: **Do not check a built-in slice's or array's element mutability here.** Only the
         // outermost `[` is visible, so `b.imm[0].v = v` would get through; the per-step check is
         // `check_write_path` (`sema/body/write_perm.kspl`).
-        set_op: = c.resolve_operator_call(recv_type_id, "Index_mut", "set", "Index assignment",
+        set_op: = ctx.resolve_operator_call(recv_type_id, "Index_mut", "set", "Index assignment",
             "[]=", r)
         switch set_op
         case .user(method_sym)
-            infer_index_set(c, left, right, recv_node, index_node, method_sym, is_simple_assign)!
+            infer_index_set(ctx, left, right, recv_node, index_node, method_sym, is_simple_assign)!
             return .by_set
         case .failed
             throw .analysis_failed
         case .builtin {}
-        sema_body_postfix.infer_subscript_of(left, c, recv_type_id)!
+        sema_body_postfix.infer_subscript_of(left, ctx, recv_type_id)!
         return .inferred
 
-    priv fn infer_assign_stmt(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_assign_stmt(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error
         left: = r.get_assign_left()
         right: = r.get_assign_right()
         op_node: = r.get_assign_op()
 
         if right == null && op_node == null
             if left != null
-                left.infer_discarded_value(c)!
+                left.infer_discarded_value(ctx)!
             return
 
         // A non-place has no root name, so this lets it through; `enforce_assignable_place` below
         // refuses it once the types are known.
-        left.enforce_mutability(c)!
+        left.enforce_mutability(ctx)!
 
         is_simple_assign: = op_node != null && op_node.text.equals("=")
 
         // genc writes no assignment for it, so the same question decides both.
         if base_core.config.run_lint_checks && r.is_self_assignment()
-            c.warn(r, "[W0203] Meaningless self-assignment: both sides are the same place.")
+            ctx.warn(r, "[W0203] Meaningless self-assignment: both sides are the same place.")
 
         // Check an index write for **both** `=` and compound assignment, or `s[0] += 1` writes a
         // read-only slice's element. C's const applies only to the slice descriptor, so C misses
         // it.
-        write: = r.infer_index_write(c, left, right, is_simple_assign)!
+        write: = r.infer_index_write(ctx, left, right, is_simple_assign)!
         if write == .by_set
             return
 
@@ -522,14 +523,14 @@ impl Ast_node
         if left != null
             type_id =
                 (left.type_id if write == .inferred
-                else left.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!)
+                else left.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!)
             // Caution: Call both **after** the inference. Whether a field is a place depends on a
             // pointer on its path (`p().x` through a returned pointer is one, `f().x` of a returned
             // value is not). A path that cannot be followed is allowed (what enforce_mutability
             // above misses). A left side whose inference failed has its error already.
             if !sema_type_env.is_unknown(type_id)
-                left.enforce_assignable_place(c)!
-            left.check_write_path(c)!
+                left.enforce_assignable_place(ctx)!
+            left.check_write_path(ctx)!
 
         // A pointer accepts only `p += i` and `p -= i` (as `p = p + i`, counting **elements**).
         // Caution: **Reject the other operators**: `p *= 2` gets past the type comparison below and
@@ -537,12 +538,12 @@ impl Ast_node
         // **Check before inferring the right-hand side**, or "expected `I32@`, got `I32`" comes
         // first.
         ptr_step: =
-            op_node != null && !op_node.text.equals("=") && c.env.is_pointer(type_id)
+            op_node != null && !op_node.text.equals("=") && ctx.env.is_pointer(type_id)
         if ptr_step && !op_node.text.equals("+=") && !op_node.text.equals("-=")
-            report_bad_ptr_compound_op(c, r, type_id, op_node.text)
+            report_bad_ptr_compound_op(ctx, r, type_id, op_node.text)
             throw .analysis_failed
         if op_node != null && !op_node.text.equals("=") &&
-            sema_body_binary.refuses_fn_operator(c, r, op_node.text, type_id)
+            sema_body_binary.refuses_fn_operator(ctx, r, op_node.text, type_id)
             throw .analysis_failed
 
         // Caution: **Do not pass the left-hand side's type down to the step.** The `2` of `p += 2`
@@ -551,70 +552,71 @@ impl Ast_node
         if ptr_step
             right_expected = I32::sema_type_env.Builtin_type_id.unknown
         else if !is_simple_assign && op_node != null
-            right_expected = sema_body_binary.compound_right_expected(c, right, type_id,
+            right_expected = sema_body_binary.compound_right_expected(ctx, right, type_id,
                 op_node.text)
         $right_id: = I32::sema_type_env.Builtin_type_id.unknown
         if right != null
-            right_id = right.infer_expr(c, right_expected)!
+            right_id = right.infer_expr(ctx, right_expected)!
 
         // Caution: **Check that the step is an integer.** `p += q` with two pointers gets past the
         // type comparison below, and would surface only as the C compiler's diagnostic.
-        if ptr_step && !c.env.is_integer(right_id)
-            report_bad_ptr_step(c, r, type_id, right_id, op_node.text)
+        if ptr_step && !ctx.env.is_integer(right_id)
+            report_bad_ptr_step(ctx, r, type_id, right_id, op_node.text)
             throw .analysis_failed
 
-        if sema_type_env.is_void(c.env.get_real_type(type_id)) ||
-            sema_type_env.is_void(c.env.get_real_type(right_id))
-            c.err(r, "cannot assign or evaluate 'Void' values")
+        if sema_type_env.is_void(ctx.env.get_real_type(type_id)) ||
+            sema_type_env.is_void(ctx.env.get_real_type(right_id))
+            ctx.err(r, "cannot assign or evaluate 'Void' values")
             throw .analysis_failed
 
         // A compound assignment's operands are the binary operator's (`x <<= 32` / `x /= 0` follow
         // the same rule as `x = x << 32` / `x = x / 0`), and two numbers are promoted there.
         compound: = op_node != null && !is_simple_assign && !ptr_step
         if compound &&
-            sema_body_binary.refuses_compound_operands(c, r, op_node.text, left, type_id, right,
+            sema_body_binary.refuses_compound_operands(ctx, r, op_node.text, left, type_id, right,
             right_id)
             throw .analysis_failed
 
         // A pointer step legitimately has different types on its two sides, and two numbers were
         // promoted above, so both skip the comparison.
-        numbers: = compound && c.env.is_numeric(type_id) && c.env.is_numeric(right_id)
+        numbers: =
+            compound && ctx.env.is_numeric(type_id) && ctx.env.is_numeric(right_id)
         if !ptr_step && !numbers && !sema_type_env.is_unknown(type_id) &&
             !sema_type_env.is_unknown(right_id) && type_id != right_id
-            c.report_type_mismatch(right, type_id, right_id)
+            ctx.report_type_mismatch(right, type_id, right_id)
             throw .analysis_failed
         if is_simple_assign
-            sema_body_lint_stmt.lint_type_given(c, right, type_id,
+            sema_body_lint_stmt.lint_type_given(ctx, right, type_id,
                 "The assigned place's type already gives it.")
         if is_simple_assign && left != null
-            check_frame_store(c, left, right)
+            check_frame_store(ctx, left, right)
 
-    priv fn infer_stmt_labeled_block(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_stmt_labeled_block(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error
         $has_err: = false
         $name_node: Ast_node$@ = null
         l_node: = r.get_labeled_block_label()
         if l_node != null
             name_node = l_node.find_child(.k_identifier)
-        push_optional_label(c, name_node, r)
-        defer pop_optional_label(c, name_node)
+        push_optional_label(ctx, name_node, r)
+        defer pop_optional_label(ctx, name_node)
         inner_block: = r.get_labeled_block_inner()
-        if inner_block != null && inner_block.infer_stmts_failed(c)
+        if inner_block != null && inner_block.infer_stmts_failed(ctx)
             has_err = true
         if has_err
             throw .analysis_failed
 
-    priv fn infer_stmt_block(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_stmt_block(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
         $has_err: = false
-        c.symtab.enter_scope()
-        defer c.symtab.exit_scope()
+        ctx.symtab.enter_scope()
+        defer ctx.symtab.exit_scope()
         // The scope levels count the depth (one per block).
         // Caution: Stop once reported, or one cause is reported once per nesting level.
-        if c.symtab.scope_stack.len > MAX_BLOCK_NESTING
-            c.clear_scratch()
+        if ctx.symtab.scope_stack.len > MAX_BLOCK_NESTING
+            ctx.clear_scratch()
                 .s("block nesting too deep. The language guarantees \{GUARANTEED_BLOCK_NESTING\} \
                     levels of block nesting. The C backend emits one brace level per block. C \
                     compilers reject deeper nesting")
-            c.err(r, c.scratch.slice())
+            ctx.err(r, ctx.scratch.slice())
             throw .analysis_failed
         // For [W0103]: whether a preceding sibling held an early-exit check, accumulated in one
         // walk.
@@ -625,19 +627,19 @@ impl Ast_node
             // through an expression (`deepen(s).tag()`) would be too late here.** So
             // sema/body/dot.kspl drains the queue just before its lookup (drain_pending_instances
             // in mono.kspl).
-            c.drain_pending_instances() catch
+            ctx.drain_pending_instances() catch
                 has_err = true
-            if child.infer_stmts_failed(c)
+            if child.infer_stmts_failed(ctx)
                 has_err = true
             if child.kind_id == .k_stmt_for
-                sema_body_lint_stmt.lint_accumulator_overflow(c, child, has_bound_check)
+                sema_body_lint_stmt.lint_accumulator_overflow(ctx, child, has_bound_check)
             if base_core.config.run_lint_checks && !has_bound_check &&
                 sema_body_lint_stmt.contains_throw_guard(child)
                 has_bound_check = true
         if has_err
             throw .analysis_failed
 
-    priv fn infer_stmt_break_continue(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_stmt_break_continue(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
         label_node: = r.get_jump_label()
         $target_label: = ""
         if label_node != null
@@ -648,156 +650,157 @@ impl Ast_node
         // Caution: **Do not silently choose the innermost**: the writer may have meant another
         // level (Principle 5 of docs/DESIGN-principles.md).
         if target_label.equals(NO_NAME_LABEL)
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("cannot '\{r.text\}' to the label '_'. '_' means the block has no name and can \
                     be ")
-            c.scratch
+            ctx.scratch
                 .s("repeated, so the target is not determined. Give the block a name to jump to it")
-            c.err(label_node, c.scratch.slice())
+            ctx.err(label_node, ctx.scratch.slice())
             throw .analysis_failed
 
         $target_idx: I32 = -1
         if target_label.len > 0
             $found: = false
-            for $i: = I32::c.jump_stack.len - 1; i >= 0; i -= 1
-                if c.jump_stack.get(i).name.equals(target_label)
+            for $i: = I32::ctx.jump_stack.len - 1; i >= 0; i -= 1
+                if ctx.jump_stack.get(i).name.equals(target_label)
                     found = true
                     target_idx = i
                     break
             if !found
-                c.clear_scratch().s("undeclared label '\{target_label\}'")
-                c.err(label_node, c.scratch.slice())
+                ctx.clear_scratch().s("undeclared label '\{target_label\}'")
+                ctx.err(label_node, ctx.scratch.slice())
                 throw .analysis_failed
-            if r.kind_id == .k_stmt_continue && !c.jump_stack.get(target_idx).is_loop
-                c.clear_scratch().s("cannot 'continue' to a non-loop label '\{target_label\}'")
-                c.err(r, c.scratch.slice())
+            if r.kind_id == .k_stmt_continue && !ctx.jump_stack.get(target_idx).is_loop
+                ctx.clear_scratch().s("cannot 'continue' to a non-loop label '\{target_label\}'")
+                ctx.err(r, ctx.scratch.slice())
                 throw .analysis_failed
             // The name is linked to the label it leaves, **as this search resolved it**. The
             // editor's hover and jump read it here rather than matching the name a second way.
-            label_node.def_node = c.jump_stack.get(target_idx).name_node
+            label_node.def_node = ctx.jump_stack.get(target_idx).name_node
         else
-            for $i: = I32::c.jump_stack.len - 1; i >= 0; i -= 1
-                if c.jump_stack.get(i).is_loop
+            for $i: = I32::ctx.jump_stack.len - 1; i >= 0; i -= 1
+                if ctx.jump_stack.get(i).is_loop
                     target_idx = i
                     break
             if target_idx == -1
-                c.clear_scratch().s("cannot use unlabeled '\{r.text\}' outside of a loop")
-                c.err(r, c.scratch.slice())
+                ctx.clear_scratch().s("cannot use unlabeled '\{r.text\}' outside of a loop")
+                ctx.err(r, ctx.scratch.slice())
                 throw .analysis_failed
 
-        if c.fn_ctx.in_defer && target_idx < (I32::c.fn_ctx.defer_boundary)
-            c.clear_scratch().s("cannot \{r.text\} to an outer scope from inside a defer block")
-            c.err(r, c.scratch.slice())
+        if ctx.fn_ctx.in_defer && target_idx < (I32::ctx.fn_ctx.defer_boundary)
+            ctx.clear_scratch().s("cannot \{r.text\} to an outer scope from inside a defer block")
+            ctx.err(r, ctx.scratch.slice())
             throw .analysis_failed
         // The construct a jump leaves is recorded **as this search resolved it**. So the flow
         // checks read where it goes (which defers it runs, whether control continues after the
         // construct). They do not find the target again.
-        r.def_node = c.jump_stack.get(target_idx).stmt
+        r.def_node = ctx.jump_stack.get(target_idx).stmt
         if r.kind_id == .k_stmt_break
-            c.jump_stack.get(target_idx).stmt.mark_left_by_break()
+            ctx.jump_stack.get(target_idx).stmt.mark_left_by_break()
 
-    priv fn infer_stmt_return(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
-        if c.fn_ctx.in_defer
-            c.err(r, "cannot return from inside a defer block")
+    priv fn infer_stmt_return(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
+        if ctx.fn_ctx.in_defer
+            ctx.err(r, "cannot return from inside a defer block")
             throw .analysis_failed
         expr_node: = r.get_return_expr()
-        expected_id: = c.fn_ctx.ret_id
+        expected_id: = ctx.fn_ctx.ret_id
 
         if expr_node != null
-            expr_node.infer_expr(c, expected_id)!
-            check_frame_escape(c, expr_node, "return")
-            sema_body_lint_stmt.lint_type_given(c, expr_node, expected_id,
+            expr_node.infer_expr(ctx, expected_id)!
+            check_frame_escape(ctx, expr_node, "return")
+            sema_body_lint_stmt.lint_type_given(ctx, expr_node, expected_id,
                 "The return type already gives it.")
         else
             is_void_ok: =
                 sema_type_env.is_void(expected_id) || sema_type_env.is_unknown(expected_id) ||
-                (c.env.is_result(expected_id) &&
-                sema_type_env.is_void(c.env.strip_result(expected_id)))
+                (ctx.env.is_result(expected_id) &&
+                sema_type_env.is_void(ctx.env.strip_result(expected_id)))
             if !is_void_ok
-                c.clear_scratch()
-                    .s("expected return value of type '\{c.env.display(c.fn_ctx.ret_id)\}', but got \
-                        none")
-                c.err(r, c.scratch.slice())
+                ctx.clear_scratch()
+                    .s("expected return value of type '\{ctx.env.display(ctx.fn_ctx.ret_id)\}', but \
+                        got none")
+                ctx.err(r, ctx.scratch.slice())
                 throw .analysis_failed
 
-    priv fn infer_stmt_throw(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
-        if c.fn_ctx.in_defer
-            c.err(r, "cannot throw from inside a defer block")
+    priv fn infer_stmt_throw(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
+        if ctx.fn_ctx.in_defer
+            ctx.err(r, "cannot throw from inside a defer block")
             throw .analysis_failed
         expr_node: = r.get_throw_expr()
         if expr_node != null
-            expected_err_id: = c.env.get_result_err_id(c.fn_ctx.ret_id)
-            expr_node.infer_expr(c, expected_err_id)!
-            sema_body_lint_stmt.lint_type_given(c, expr_node, expected_err_id,
+            expected_err_id: = ctx.env.get_result_err_id(ctx.fn_ctx.ret_id)
+            expr_node.infer_expr(ctx, expected_err_id)!
+            sema_body_lint_stmt.lint_type_given(ctx, expr_node, expected_err_id,
                 "The function's error type already gives it.")
             // A throw leaves the frame too, with the same dangle as a return.
-            check_frame_escape(c, expr_node, "throw")
+            check_frame_escape(ctx, expr_node, "throw")
 
-    priv fn infer_stmt_fallback(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
-        if c.fn_ctx.catch_depth == 0
-            c.err(r, "cannot use 'fallback' outside of a catch block")
+    priv fn infer_stmt_fallback(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
+        if ctx.fn_ctx.catch_depth == 0
+            ctx.err(r, "cannot use 'fallback' outside of a catch block")
             throw .analysis_failed
-        if c.fn_ctx.catch_on_option
-            c.err(r,
+        if ctx.fn_ctx.catch_on_option
+            ctx.err(r,
                 "'fallback' cannot be written in a 'catch' block on an optional. Leave the block \
                     with 'return', 'throw', 'break' or 'continue'\n  Note: write 'opt.unwrap_or(v)' \
                     to use 'v' where 'opt' is '.none'.")
             throw .analysis_failed
-        if c.fn_ctx.in_defer
-            c.err(r, "cannot fallback from inside a defer block")
+        if ctx.fn_ctx.in_defer
+            ctx.err(r, "cannot fallback from inside a defer block")
             throw .analysis_failed
         expr_node: = r.get_fallback_expr()
         if expr_node != null
-            exp: = c.fn_ctx.fallback_type
-            prev_in_fallback: = c.fn_ctx.in_fallback_value
-            c.fn_ctx.in_fallback_value = true
-            defer c.fn_ctx.in_fallback_value = prev_in_fallback
-            expr_node.infer_expr(c, exp)!
-            sema_body_lint_stmt.lint_type_given(c, expr_node, exp,
+            exp: = ctx.fn_ctx.fallback_type
+            prev_in_fallback: = ctx.fn_ctx.in_fallback_value
+            ctx.fn_ctx.in_fallback_value = true
+            defer ctx.fn_ctx.in_fallback_value = prev_in_fallback
+            expr_node.infer_expr(ctx, exp)!
+            sema_body_lint_stmt.lint_type_given(ctx, expr_node, exp,
                 "The type of the value it stands in for already gives it.")
 
-    priv fn infer_stmt_defer(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_stmt_defer(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
         $has_err: = false
         if r.made_by_compiler()
-            sema_body_defer_decl.refuse_unfreeable(c, r)!
+            sema_body_defer_decl.refuse_unfreeable(ctx, r)!
         if block_node: = r.get_defer_block()
             if block_node.children.len == 0
-                sema_body_lint_stmt.lint_empty_block(c, r, "defer", "Consider removing it.")
-            reject_receiverless_cleanup(c, block_node)!
+                sema_body_lint_stmt.lint_empty_block(ctx, r, "defer", "Consider removing it.")
+            reject_receiverless_cleanup(ctx, block_node)!
 
-            prev_in_defer: = c.fn_ctx.in_defer
-            prev_defer_boundary: = c.fn_ctx.defer_boundary
-            c.fn_ctx.in_defer = true
-            c.fn_ctx.defer_boundary = c.jump_stack.len
+            prev_in_defer: = ctx.fn_ctx.in_defer
+            prev_defer_boundary: = ctx.fn_ctx.defer_boundary
+            ctx.fn_ctx.in_defer = true
+            ctx.fn_ctx.defer_boundary = ctx.jump_stack.len
 
             defer
-                c.fn_ctx.in_defer = prev_in_defer
-                c.fn_ctx.defer_boundary = prev_defer_boundary
+                ctx.fn_ctx.in_defer = prev_in_defer
+                ctx.fn_ctx.defer_boundary = prev_defer_boundary
 
-            if block_node.infer_stmts_failed(c)
+            if block_node.infer_stmts_failed(ctx)
                 has_err = true
         if has_err
             throw .analysis_failed
 
-    priv fn infer_unknown_stmt(_r: Ast_node$@, _c: Sema_ctx$@): Void!Sema_error {}
+    priv fn infer_unknown_stmt(_r: Ast_node$@, _ctx: Sema_ctx$@): Void!Sema_error {}
 
-priv fn refuse_temporary_index_write(c: Sema_ctx$@, left: Ast_node$@, method: U8[]) //<
+priv fn refuse_temporary_index_write(ctx: Sema_ctx$@, left: Ast_node$@, method: U8[]) //<
     //< Reports a write to an element of a temporary through a method that writes its receiver
     //< It is the rule a `Self$@` method call on a temporary follows (refuse_writing_receiver in
     //< `../decl/access.kspl`), said in the terms of the `[]` the writer wrote.
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("cannot write to an element of a temporary object. The subscript writes through \
             '\{method\}', which takes its receiver as 'Self$@', so the write would affect a copy \
             that is then discarded. Bind the object first (`$x: = ...;`) and write to 'x[i]'")
-    c.err(left, c.scratch.slice())
+    ctx.err(left, ctx.scratch.slice())
 
-priv fn infer_index_set(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@, recv_node: Ast_node$@,
-    index_node: Ast_node$@, method_sym: Sema_symbol$@, is_simple_assign: Bool): Void!Sema_error //<
+priv fn infer_index_set(ctx: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@,
+    recv_node: Ast_node$@, index_node: Ast_node$@, method_sym: Sema_symbol$@,
+    is_simple_assign: Bool): Void!Sema_error //<
         //< `xs[i] = v` through `Index_mut`'s `set`: the call's operands, checked as `set`'s
     // `Index` / `Index_mut` exchange values, not places, so a compound assignment cannot be built.
     // If it were allowed, genc would pass the getter three arguments and C would fail.
     if !is_simple_assign
-        c.err(left,
+        ctx.err(left,
             "compound assignment is not supported for types that index through 'Index_mut'. Its \
                 'get'/'set' exchange values, not places. Write it as 'x.set(i, x.get(i) <op> v)'")
         throw .analysis_failed
@@ -805,16 +808,16 @@ priv fn infer_index_set(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@, recv
     // that an ordinary call goes through (infer_call_args in sema/body/call.kspl). So `xs[i] = v`
     // on `xs: List<|T|>@` would pass with zero diagnostics, and the C discards const (Principle 2).
     // A temporary receiver gets the method call's rule: `set(r: Self$@, …)` would write a copy.
-    if c.env.receiver_needs_hoist(recv_node)
-        switch c.env.method_receiver_permission(method_sym.node)
+    if ctx.env.receiver_needs_hoist(recv_node)
+        switch ctx.env.method_receiver_permission(method_sym.node)
         case .some(need)
             if need.mut_ptr
-                refuse_temporary_index_write(c, left, "set")
+                refuse_temporary_index_write(ctx, left, "set")
                 throw .analysis_failed
         case .none {}
-    if c.place_is_readonly(recv_node)
-        sema_body_write_perm.refuse_read_only_receiver(c, recv_node, recv_node)
+    if ctx.place_is_readonly(recv_node)
+        sema_body_write_perm.refuse_read_only_receiver(ctx, recv_node, recv_node)
     left.def_node = method_sym.node
     left.type_id = method_sym.type_id
-    index_node.infer_expr(c, c.operator_index_param_id(method_sym))!
-    right.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!
+    index_node.infer_expr(ctx, ctx.operator_index_param_id(method_sym))!
+    right.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!

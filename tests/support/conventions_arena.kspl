@@ -98,32 +98,32 @@ priv fn past_type_args(text: U8[], open: Sz): Sz //< the place after the `|>` cl
             i += 1
     return text.len
 
-priv fn has_null_type_call(text: U8[], c: Arena_call, arena: Arena$@): Bool //<
+priv fn has_null_type_call(text: U8[], arena_call: Arena_call, arena: Arena$@): Bool //<
     //< Whether text calls the type's `new` as the type (`List<|I32|>(null)`), with `null`
     $from: Sz = 0
     for
-        switch text.sub_from(from).find_str(c.before)
+        switch text.sub_from(from).find_str(arena_call.before)
         case .none
             return false
         case .some(off)
             at: = from + off
             from = at + 1
-            $e: = at + c.before.len
+            $e: = at + arena_call.before.len
             if e + 1 < text.len && text[e] == '<' && text[e + 1] == '|'
                 e = past_type_args(text, e)
             starts_name: = at == 0 || !(text[at - 1].is_alnum() || text[at - 1] == '_')
             if starts_name && e < text.len && text[e] == '('
                 args: = args_at(text, e, arena)
-                if c.at < args.len && args.get(c.at).equals("null")
+                if arena_call.at < args.len && args.get(arena_call.at).equals("null")
                     return true
 
-priv fn has_null_call(text: U8[], c: Arena_call, modules: U8[][], arena: Arena$@): Bool //<
+priv fn has_null_call(text: U8[], arena_call: Arena_call, modules: U8[][], arena: Arena$@): Bool //<
     //< Whether text calls the function with `null` where the arena goes
     //< A method's receiver may be anything but a module, so `json.parse(…)` is not `Parser.parse`.
     //< A type's `new` is called as the type itself (has_null_type_call), never by its name.
-    if c.name.equals("new") && c.before.len > 0
-        return has_null_type_call(text, c, arena)
-    want: = arena.text().c('.').s(c.name).c('(').take()
+    if arena_call.name.equals("new") && arena_call.before.len > 0
+        return has_null_type_call(text, arena_call, arena)
+    want: = arena.text().c('.').s(arena_call.name).c('(').take()
     $from: Sz = 0
     for
         switch text.sub_from(from).find_str(want)
@@ -133,15 +133,15 @@ priv fn has_null_call(text: U8[], c: Arena_call, modules: U8[][], arena: Arena$@
             dot: = from + off
             from = dot + 1
             who: = word_before(text, dot)
-            $fits: = who.equals(c.before)
-            if c.before.len == 0
+            $fits: = who.equals(arena_call.before)
+            if arena_call.before.len == 0
                 fits = true
                 for m in modules
                     if who.equals(m)
                         fits = false
             if fits
                 args: = args_at(text, dot + want.len - 1, arena)
-                if c.at < args.len && args.get(c.at).equals("null")
+                if arena_call.at < args.len && args.get(arena_call.at).equals("null")
                     return true
 
 priv fn arena_call_of(file: U8[], key: U8[], sig: U8[], arena: Arena$@): Arena_call? //<

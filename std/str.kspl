@@ -98,15 +98,15 @@ impl Str_builder
         //< the next one. It frees no memory: a long-lived buffer stays at the size of the longest
         //< message.
         r: Self$@,
-        n: Sz, //< how many bytes to drop; the length or more empties it, negative does nothing
+        count: Sz, //< how many bytes to drop; the length or more empties it, negative does nothing
     ): Self$@
-        if n <= 0
+        if count <= 0
             return r
-        if n >= r.len
+        if count >= r.len
             r.len = 0
             return r
-        rest: = r.len - n
-        mem.move(Void$@::r.ptr, Void$@::(r.ptr + n), rest) // the two ranges overlap
+        rest: = r.len - count
+        mem.move(Void$@::r.ptr, Void$@::(r.ptr + count), rest) // the two ranges overlap
         r.len = rest
         return r
     #ends_views
@@ -141,10 +141,11 @@ impl Str_builder
         r.ptr = new_ptr
         r.cap = cap
         return old
-    priv fn holds(r: Self@, s: U8[]): Bool //< whether `s` overlaps the memory this builder holds
-        at: = Sz::s.ptr
+    priv fn holds(r: Self@, text: U8[]): Bool //<
+        //< whether `text` overlaps the memory this builder holds
+        at: = Sz::text.ptr
         base: = Sz::r.ptr
-        return r.cap > 0 && s.len > 0 && at < base + r.cap && base < at + s.len
+        return r.cap > 0 && text.len > 0 && at < base + r.cap && base < at + text.len
     #gives_view
     pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until the next change
         return U8$[]::{ .ptr = r.ptr, .len = r.len }
@@ -152,26 +153,26 @@ impl Str_builder
 impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     #ends_views
     #inline
-    pub fn s(r: Self$@, s: U8[]): Self$@ //< writes a string, growing if needed
-        //< `s` can be a view of this builder's own bytes (`b.s(b.slice())`).
-        if s.len > 0
-            // Caution: **Read `s` before the old buffer is freed, and with `move`.** It can be a
+    pub fn s(r: Self$@, text: U8[]): Self$@ //< writes a string, growing if needed
+        //< `text` can be a view of this builder's own bytes (`b.s(b.slice())`).
+        if text.len > 0
+            // Caution: **Read `text` before the old buffer is freed, and with `move`.** It can be a
             // view of this buffer: growing frees it, and a view taken before `clear()` can overlap
             // where the bytes land.
-            old: = r.grow(r.len + s.len)
-            mem.move(Void$@::(r.ptr + r.len), Void$@::s.ptr, s.len)
+            old: = r.grow(r.len + text.len)
+            mem.move(Void$@::(r.ptr + r.len), Void$@::text.ptr, text.len)
             if block: = old
                 dealloc(Void$@::block)
-            r.len += s.len
+            r.len += text.len
         return r
 
     #ends_views
     #inline
-    pub fn c(r: Self$@, c: U8): Self$@ //< writes one byte, growing if needed
+    pub fn c(r: Self$@, byte: U8): Self$@ //< writes one byte, growing if needed
         if r.len >= r.cap
             r.reserve(r.len + 1)
         dest: U8$@ = r.ptr + r.len
-        dest$ = c
+        dest$ = byte
         r.len += 1
         return r
 
@@ -179,12 +180,13 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         return r
 
 impl Str_builder: Formattable //< so it can be used inside an interpolation
-    pub fn fmt(r: Self$@, w: Writer): Writer //< writes its contents to `w`
-        return w.s(r.slice())
+    pub fn fmt(r: Self$@, out: Writer): Writer //< writes its contents to `out`
+        return out.s(r.slice())
 
 #inline
-priv fn plain_json_byte(c: U8): Bool //< whether a JSON string holds this byte as it is, unescaped
-    return c >= 0x20U8 && c < 0x80U8 && c != '"' && c != '\\'
+priv fn plain_json_byte(byte: U8): Bool //<
+    //< whether a JSON string holds this byte as it is, unescaped
+    return byte >= 0x20U8 && byte < 0x80U8 && byte != '"' && byte != '\\'
 
 priv fn write_utf8(dst: U8$@, cp: I32): Sz //<
     //< Writes a code point in UTF-8 and returns the bytes written

@@ -9,6 +9,8 @@ make help        # every target you can type, one line each
 make ci          # every gate this machine can run: run it before you propose a change
 ```
 
+**`make ci` is a long run**: on four cores it takes a quarter of an hour or more. **A gate whose tool is missing can pass with a `SKIP` line**, so a green round need not have checked everything. The round lists each SKIP last. Which gates can skip, and how to require their tools, is "Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md#gates-that-pass-silently-where-a-tool-is-missing).
+
 **Use the table in [`README.md`](README.md) to find a document for your task.** These three starting points are outside it:
 
 | To | Read |

@@ -42,7 +42,7 @@ function ksmdFigures(ks) {
         const v = wrap.values[row] && wrap.values[row][column];
         if (!v || v.length < 2) continue;
         filled += 1;
-        if (v[0] === 1) numbers.push(v[1]);
+        if (v[0] === ks.CELL.NUMBER) numbers.push(v[1]);
       }
     }
     const sum = numbers.reduce((a, x) => a + x, 0);

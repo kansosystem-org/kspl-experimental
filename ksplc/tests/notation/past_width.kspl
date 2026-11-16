@@ -1,0 +1,38 @@
+//< Shapes the formatter must leave as they are, laid out by indentation
+//< Each one reads as a different program once the formatter changes it. `ksplc fmt` leaves the
+//< file unchanged, and the reader gives the same C as before.
+import "std/io"
+
+priv enum Reason //< why a step refuses
+    too_far
+
+priv fn step(value: I32): I32!Reason //< a step that fails past 100
+    if value > 100
+        throw .too_far
+    return value + 1
+
+// **A handler that names the error is not broken on `catch <name>`**, though the line runs past
+// the width. Broken there, the handler lands at the block's own column and is read as its first
+// statement ("The formatting settings (`--style`)" in `ksplc/docs/SPEC-tools.md`).
+priv fn far(left: I32, right: I32): I32
+    return step(1000 + left + right + left * right + (left - right) + (right - left) + 7) catch refusal
+        switch refusal
+        case .too_far
+            io.out().s("too far.\n")
+        fallback -2
+
+// **A block holding only a comment keeps its braces.** A comment is not a statement, so by
+// indentation the block would be empty, and the arm would take the next line as its body.
+priv fn counted(xs: I32[]): Sz
+    $n: Sz = 0
+    for x in xs
+        switch x
+        case 0 {
+            // A zero is not counted.
+        } default
+            n += 1
+    return n
+
+fn main(): I32
+    io.out().s("\{far(1, 2)\} \{counted(I32[]::{ 0, 1, 2 })\}\n")
+    return 0

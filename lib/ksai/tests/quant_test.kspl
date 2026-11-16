@@ -140,7 +140,7 @@ priv fn reference_file(format: Quant_format): U8[] //<
     default
         panic("quant: a float format has no tiled reference")
 
-priv const PRODUCT_TOL: F64 = 1.0e-5 //< the error allowed, as a share of Σ|w × x|.
+priv const PRODUCT_TOL: F64 = 1.0e-5 //< the error allowed, as a share of Σ|w × x|
     //< The F32 sums run in 16 lanes over a few hundred numbers, which bounds the rounding near
     //< 1e-6 of that sum; ten times that is room, and a wrong decode is off by far more.
 
@@ -195,9 +195,9 @@ priv fn product_cases(arena: Arena$@): Product_case[] //< every product file
     (cases + 5)$ = quant_case.read_product_case(dot_q5_k_file, arena)
     return Product_case[]::{ .ptr = cases, .len = 6 }
 
-priv fn product_weight(c: Product_case@): Quant_matrix //< the case's weight
-    return Quant_matrix.from_bytes(c.format, c.rows, c.cols, c.weights)
-        catch panic("quant: a product file's weight was refused")
+priv fn product_weight(test_case: Product_case@): Quant_matrix //< the case's weight
+    return Quant_matrix.from_bytes(test_case.format, test_case.rows, test_case.cols,
+        test_case.weights) catch panic("quant: a product file's weight was refused")
 
 fn test_quant_inputs_round_as_ggml(arena: Arena$@) //<
     //< Each input row rounded to 8 bits is llama.cpp's Q8_K or Q8_0 blocks: scales, numbers, sums
@@ -237,66 +237,66 @@ fn test_quant_inputs_round_as_ggml(arena: Arena$@) //<
 // The plain reference: each weight's whole number read straight from the block, one at a time, as
 // ggml's own `vec_dot_*_generic` reads them, and summed in 64 bits.
 
-priv fn q4_k_term(blk: U8@, e: Sz, x: I64): I64 //<
-    //< weight `e` of a Q4_K block times `x`, with its scale
-    group: = e / 32
-    byte: = (blk + 16 + (e / 64) * 32 + e % 32)$
-    q: = I64::(byte & 0xF) if e % 64 < 32 else I64::(byte >> 4)
-    return I64::quant.k4_scale(group, blk + 4) * q * x
+priv fn q4_k_term(blk: U8@, element: Sz, input: I64): I64 //<
+    //< weight `element` of a Q4_K block times `input`, with its scale
+    group: = element / 32
+    byte: = (blk + 16 + (element / 64) * 32 + element % 32)$
+    q: = I64::(byte & 0xF) if element % 64 < 32 else I64::(byte >> 4)
+    return I64::quant.k4_scale(group, blk + 4) * q * input
 
-priv fn q3_k_term(blk: U8@, e: Sz, x: I64): I64 //<
-    //< weight `e` of a Q3_K block times `x`, with its scale
-    half: = e / 128
-    group: = (e % 128) / 32
-    l: = e % 32
+priv fn q3_k_term(blk: U8@, element: Sz, input: I64): I64 //<
+    //< weight `element` of a Q3_K block times `input`, with its scale
+    half: = element / 128
+    group: = (element % 128) / 32
+    l: = element % 32
     low: = I64::(((blk + 32 + half * 32 + l)$ >> U8::(2 * group)) & 3)
     high: = ((blk + l)$ >> U8::(4 * half + group)) & 1
     q: = low - (0 if high != 0 else 4)
-    return I64::quant.k3_scale(half * 8 + group * 2 + l / 16, blk + 96) * q * x
+    return I64::quant.k3_scale(half * 8 + group * 2 + l / 16, blk + 96) * q * input
 
-priv fn q5_k_term(blk: U8@, e: Sz, x: I64): I64 //<
-    //< weight `e` of a Q5_K block times `x`, with its scale
-    group: = e / 32
-    byte: = (blk + 48 + (e / 64) * 32 + e % 32)$
-    low: = I64::(byte & 0xF) if e % 64 < 32 else I64::(byte >> 4)
-    high: = I64::(((blk + 16 + e % 32)$ >> U8::group) & 1)
-    return I64::quant.k4_scale(group, blk + 4) * (low | (high << 4)) * x
+priv fn q5_k_term(blk: U8@, element: Sz, input: I64): I64 //<
+    //< weight `element` of a Q5_K block times `input`, with its scale
+    group: = element / 32
+    byte: = (blk + 48 + (element / 64) * 32 + element % 32)$
+    low: = I64::(byte & 0xF) if element % 64 < 32 else I64::(byte >> 4)
+    high: = I64::(((blk + 16 + element % 32)$ >> U8::group) & 1)
+    return I64::quant.k4_scale(group, blk + 4) * (low | (high << 4)) * input
 
-priv fn q6_k_term(blk: U8@, e: Sz, x: I64): I64 //<
-    //< weight `e` of a Q6_K block times `x`, with its scale
-    half: = e / 128
-    quarter: = (e % 128) / 32
-    l: = e % 32
+priv fn q6_k_term(blk: U8@, element: Sz, input: I64): I64 //<
+    //< weight `element` of a Q6_K block times `input`, with its scale
+    half: = element / 128
+    quarter: = (element % 128) / 32
+    l: = element % 32
     low_byte: = (blk + half * 64 + l + (32 if quarter % 2 == 1 else 0))$
     low: = I64::(low_byte & 0xF) if quarter < 2 else I64::(low_byte >> 4)
     high: = I64::(((blk + 128 + half * 32 + l)$ >> U8::(2 * quarter)) & 3)
     scale: = I64::I8::(blk + 192 + half * 8 + quarter * 2 + l / 16)$
-    return scale * ((low | (high << 4)) - 32) * x
+    return scale * ((low | (high << 4)) - 32) * input
 
-priv fn small_block_term(format: Quant_format, blk: U8@, e: Sz, x: I64): I64 //<
-    //< Weight `e` of a Q8_0 or Q5_0 block times `x`
+priv fn small_block_term(format: Quant_format, blk: U8@, element: Sz, input: I64): I64 //<
+    //< Weight `element` of a Q8_0 or Q5_0 block times `input`
     if format == .q8_0
-        return I64::I8::(blk + 2 + e)$ * x
+        return I64::I8::(blk + 2 + element)$ * input
     high: =
-        (U32::quant.half_at(blk + 2) | (U32::quant.half_at(blk + 4) << 16)) >> U32::e
-    byte: = (blk + 6 + e % 16)$
-    low: = I64::(byte & 0xF) if e < 16 else I64::(byte >> 4)
-    return ((low | (I64::(high & 1) << 4)) - 16) * x
+        (U32::quant.half_at(blk + 2) | (U32::quant.half_at(blk + 4) << 16)) >> U32::element
+    byte: = (blk + 6 + element % 16)$
+    low: = I64::(byte & 0xF) if element < 16 else I64::(byte >> 4)
+    return ((low | (I64::(high & 1) << 4)) - 16) * input
 
-priv fn plain_product(w: Quant_matrix@, row: Sz, q8: Q8_input@, t: Sz): F32 //<
+priv fn plain_product(weights: Quant_matrix@, row: Sz, q8: Q8_input@, input_row: Sz): F32 //<
     //< One output computed plainly: integer sums per block, then the kernel's float steps
     block: = q8.block
-    per_row: = w.cols() / block
-    bytes: = w.format().block_bytes()
-    row_len: = w.format().row_bytes(w.cols()) catch panic("quant: a row's size")
+    per_row: = weights.cols() / block
+    bytes: = weights.format().block_bytes()
+    row_len: = weights.format().row_bytes(weights.cols()) catch panic("quant: a row's size")
     $o: F32 = 0.0
     for b in Range.asc(per_row)
-        blk: = w.bytes().ptr + row * row_len + b * bytes
+        blk: = weights.bytes().ptr + row * row_len + b * bytes
         $sumi: I64 = 0
         $summ: I64 = 0
         for e in Range.asc(block)
-            x: = I64::(q8.q + t * w.cols() + b * block + e)$
-            switch w.format()
+            x: = I64::(q8.q + input_row * weights.cols() + b * block + e)$
+            switch weights.format()
             case .q3_k
                 sumi += q3_k_term(blk, e, x)
             case .q4_k
@@ -308,18 +308,18 @@ priv fn plain_product(w: Quant_matrix@, row: Sz, q8: Q8_input@, t: Sz): F32 //<
             case .q6_k
                 sumi += q6_k_term(blk, e, x)
             case .q5_0, .q8_0
-                sumi += small_block_term(w.format(), blk, e, x)
+                sumi += small_block_term(weights.format(), blk, e, x)
             case .f32, .f16, .bf16 {}
-        dx: = (q8.d + t * per_row + b)$
+        dx: = (q8.d + input_row * per_row + b)$
         $d_at: Sz = 0
-        if w.format() == .q6_k
+        if weights.format() == .q6_k
             d_at = 208
-        else if w.format() == .q3_k
+        else if weights.format() == .q3_k
             d_at = 108
         scale: = quant.f16_to_f32(quant.half_at(blk + d_at)) * dx
         part: = scale * F32::I32::sumi
         o = o + part
-        if w.format().has_mins()
+        if weights.format().has_mins()
             low_scale: = quant.f16_to_f32(quant.half_at(blk + 2)) * dx
             low: = low_scale * F32::I32::summ
             o = o - low
@@ -349,7 +349,7 @@ fn test_quant_integer_products_are_exact(arena: Arena$@) //<
         q8.free()
     verdict.pass(arena.text().s("\{checked\} products, each the same bits").take())
 
-priv const LLAMA_TOL: F64 = 1.0e-5 //< the difference allowed from llama.cpp, a share of Σ|w × x|.
+priv const LLAMA_TOL: F64 = 1.0e-5 //< the difference allowed from llama.cpp, a share of Σ|w × x|
     //< Both sides sum the same whole numbers; only the F32 sums of the blocks' parts run in
     //< another order, which moves a result by far less.
 
@@ -509,8 +509,9 @@ fn check_matmul_threads(arena: Arena$@) //< ksai's F32 matmul: several threads w
 fn check_matmul_threads(arena: Arena$@) //< nothing to check: BLAS's gemm runs its own threads
     assert(arena != null, "quant: the test needs its arena")
 
-priv fn refused<|T|>(r: T!Quant_error, want: Quant_error): Bool //< whether it failed with `want`
-    switch r
+priv fn refused<|T|>(result: T!Quant_error, want: Quant_error): Bool //<
+    //< whether it failed with `want`
+    switch result
     case .ok
         return false
     case .err(e)
@@ -552,9 +553,9 @@ fn test_quant_refuses_wrong_sizes(arena: Arena$@) //<
     assert(refused<|Void|>(misshapen, .shape_mismatch), "quant: a misshapen result was taken")
     verdict.pass(arena.text().s("each wrong size fails with its own name").take())
 
-priv fn expect_refused(r: Quant_matrix!Quant_error, want: Quant_error, what: U8[]) //<
+priv fn expect_refused(result: Quant_matrix!Quant_error, want: Quant_error, what: U8[]) //<
     //< A matrix that must be refused, with the reason named
-    switch r
+    switch result
     case .ok
         io.err().s("\{what\}\n")
         panic("quant: a matrix that does not fit its bytes was made")

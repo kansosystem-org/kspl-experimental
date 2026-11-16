@@ -35,7 +35,7 @@ An RTOS does two things:
 1. **Scheduling** selects the next task by priority. A task behaves like a thread. Switching tasks restores the selected task's CPU registers, called its context.
 2. **Synchronization** lets tasks wait for conditions and share resources exclusively through semaphores, queues, mutexes, and event flags.
 
-The table maps each RTOS word to everyday words and to the name in the code. Task states are in [the scheduler design](docs/DESIGN-rtos.md#-what-sets-the-scheduler-apart).
+The table maps each RTOS word to everyday words and to the name in the code. Task states are in [the scheduler design](docs/DESIGN-rtos.md#what-sets-the-scheduler-apart).
 
 | RTOS term | In everyday words | In KSPL |
 |---|---|---|
@@ -95,13 +95,13 @@ Read from the bottom of the dependencies up, so each file's prerequisites come f
 ### Heap allocation and task management
 
 - `lib/ksos/kernel/heap.kspl` provides `heap_alloc` and `heap_free`, the freestanding heap of `std/mem.kspl` made safe from tasks and interrupt handlers.
-- `lib/ksos/kernel/dynamic.kspl` adds heap-allocated creation and deletion (`Task.create_dyn`, `t.delete_dyn()`; the full list is in [`lib/ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md#-what-sets-the-scheduler-apart)).
+- `lib/ksos/kernel/dynamic.kspl` adds heap-allocated creation and deletion (`Task.create_dyn`, `t.delete_dyn()`; the full list is in [`lib/ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md#what-sets-the-scheduler-apart)).
 - `enable_idle_task(stack, hook)` in `lib/ksos/kernel/task.kspl` adds a priority-0 task that calls `hook` when nothing else can run.
 - Task managers use `t.cpu_percent()`, `Task.get_prio`, `get_name`, `get_state`, `Task.count`, and `Task.at` (`make ksos-task-manager`). Heap usage comes from `heap_used_bytes` and `heap_peak_used_bytes` in `std/mem.kspl`.
 
 ### Ports: `port/posix/`, `port/cortex_m/`, `port/cortex_m0/`, `port/rp2040/`, `port/nrf51/`
 
-Each port implements the nine `extern` functions declared in `lib/ksos/kernel/task.kspl`. Start with `lib/ksos/port/posix/` (`make ksos`), which needs no special tools. What each port runs on, and how it is checked, is "🔌 The ports" in [`lib/ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md). Only the RP2040 car has real-chip confirmation.
+Each port implements the nine `extern` functions declared in `lib/ksos/kernel/task.kspl`. Start with `lib/ksos/port/posix/` (`make ksos`), which needs no special tools. What each port runs on, and how it is checked, is "The ports" in [`lib/ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md). Only the RP2040 car has real-chip confirmation.
 
 ### Worked examples: `demo/`
 
@@ -113,71 +113,7 @@ Each file directly inside `demo/<port>/` of a bare-metal port (`cortex_m`, `rp20
 | `demo/<port>/common/` | parts only that port's demos share (the RP2040's USB CDC console, …) |
 | `lib/ksos/demo/common/` | Shared components: a semihosting console that prints through QEMU's debugger, a reader for received policies, and the two tasks of the heap-tasks demos |
 
-One demo per feature. The POSIX ones need no special tools:
-
-| The demo | The make target | What it demonstrates |
-|---|---|---|
-| `lib/ksos/demo/posix/producer_consumer.kspl` | `make ksos` | cooperating on a semaphore (run in "Run it" above) |
-| `lib/ksos/demo/posix/msgq_demo.kspl` | `make ksos-mq` | a message queue blocking when full |
-| `lib/ksos/demo/posix/mutex_demo.kspl` | `make ksos-mutex` | exclusive holding with a mutex |
-| `lib/ksos/demo/posix/mutex_nested_demo.kspl` | `make ksos-mutex-nested` | Two mutexes released in either order, with inheritance kept through the one still held |
-| `lib/ksos/demo/posix/lend_timeout_demo.kspl` | `make ksos-lend-timeout` | A waiter that gives up at its timeout stops lending its priority in that tick, even when deleted before it runs again |
-| `lib/ksos/demo/posix/wake_preempt_demo.kspl` | `make ksos-wake-preempt` | A higher-priority task woken by `give`, `unlock`, `send`, `set`, or `resume` runs before the waker continues, with no timer |
-| `lib/ksos/demo/posix/wake_pass_on_demo.kspl` | `make ksos-wake-pass-on` | A woken waiter deleted or suspended before it runs passes the wake on |
-| `lib/ksos/demo/posix/event_demo.kspl` | `make ksos-event` | Waiting for all or any bits. One `set` releases three waiters, each clearing the bit on exit |
-| `lib/ksos/demo/posix/posix_preempt_demo.kspl` | `make ksos-preempt` | timer-driven preemption |
-| `lib/ksos/demo/posix/delay_until_demo.kspl` | `make ksos-delay-until` | a period with no drift, via `Task.delay_until` |
-| `lib/ksos/demo/posix/lifecycle_demo.kspl` | `make ksos-lifecycle` | `Task.suspend`/`Task.resume`/`Task.delete` |
-| `lib/ksos/demo/posix/panic_demo.kspl stack-overflow` | `make ksos-stack-overflow` | the canary catching a stack overflow |
-| `lib/ksos/demo/posix/panic_demo.kspl stack-overflow-single` | `make ksos-stack-overflow-single` | the tick catching a damaged canary in a single task that never yields |
-| `lib/ksos/demo/posix/isr_signal_demo.kspl` | `make ksos-isr` | `Queue<\|T\|>.try_send` from an ISR (SIGUSR1 stands in for the interrupt) |
-| `lib/ksos/demo/posix/isr_timeout_demo.kspl` | `make ksos-isr-timeout` | With a tick running, `take_for` waits in real time while idle, and takes an interrupt's give |
-| `lib/ksos/demo/posix/sleep_demo.kspl` | `make ksos-sleep` | With every task waiting on an interrupt, CPU time shows the scheduler sleeps |
-| `lib/ksos/demo/posix/task_manager_demo.kspl` | `make ksos-task-manager` | Heap-allocated tasks and queues, and `Task.cpu_percent` following each task's load |
-| `lib/ksos/demo/posix/kernel_check.kspl` | `make ksos-kernel-check` | Wake order, suspension and deletion while waiting, lent priority taken back, the task limit |
-| `lib/ksos/demo/posix/panic_demo.kspl mutex-relock` | `make ksos-mutex-relock` | Relocking a held mutex panics instead of waiting forever |
-| `lib/ksos/demo/posix/panic_demo.kspl mutex-foreign-unlock` | `make ksos-mutex-foreign-unlock` | Unlocking another task's mutex panics |
-| `lib/ksos/demo/posix/panic_demo.kspl delete-holder` | `make ksos-delete-holder` | Deleting a mutex holder panics instead of leaving the lock held forever |
-| `lib/ksos/demo/posix/timeout_demo.kspl` | `make ksos-timeout` | Every `_for` timeout, oversized timeouts, immediate `try_take` and `try_lock`, and `ms_to_ticks` rounding up |
-| `lib/ksos/demo/posix/panic_demo.kspl timeout-zero` | `make ksos-timeout-zero` | A zero timeout panics instead of acting like `try_` |
-| `lib/ksos/demo/posix/panic_demo.kspl event-no-bits` | `make ksos-event-no-bits` | Waiting for no event bits panics instead of waiting forever |
-| `lib/ksos/demo/posix/panic_demo.kspl stop-outside` | `make ksos-stop-outside` | `stop_scheduler` with no running scheduler panics |
-| `lib/ksos/demo/posix/panic_demo.kspl wait-masked` | `make ksos-wait-masked` | A `take` between `irq_save` and `irq_restore` panics instead of waiting |
-| `lib/ksos/demo/posix/panic_demo.kspl delay-before-start` | `make ksos-delay-before-start` | `Task.delay` before `start_scheduler` panics instead of crashing |
-| `lib/ksos/demo/posix/panic_demo.kspl create-again` | `make ksos-create-again` | `Task.create` again on a task not deleted panics instead of using one more slot |
-| `lib/ksos/demo/posix/tick_mid_switch_demo.kspl` | `make ksos-tick-mid-switch` | A tick delayed across a switch into a new task (at the start, and at a `Task.resume`), and thousands of starts under a tick every 30 μs |
-| `lib/ksos/demo/posix/dyn_race_demo.kspl` | `make ksos-dyn-race` | Three tasks create and delete heap-allocated tasks under a tick every 100 μs; each returns to the heap exactly once |
-| `lib/ksos/demo/posix/heap_tasks_demo.kspl` | `make ksos-heap-tasks` | Two tasks of different priority allocate through `List` and `Arc`, one preempting the other inside `malloc` |
-
-For a `panic_demo` target, the expected panic is the pass.
-
-The Cortex-M demos need a cross compiler and QEMU, both in the development container. `make test-ksos-qemu` runs them all. `make ksos-cm` builds `cortex_m_min.kspl` and checks its vector table and PendSV with objdump; the other targets build and run together.
-
-Each runs on QEMU's `mps2-an385` (a Cortex-M3). Those that fit 16 KB of RAM and need no atomics also run on the Cortex-M0 layer, under QEMU's micro:bit. There each task has a 1 KB stack.
-
-| The demo | Cortex-M3 target | Cortex-M0 target | What it demonstrates |
-|---|---|---|---|
-| `lib/ksos/demo/cortex_m/cortex_m_min.kspl` | `make ksos-cm-run` | `make ksos-cm0-min` | Cooperative scheduling on bare metal: priority order regardless of registration, `Task.delay` and `Task.yield` |
-| `lib/ksos/demo/cortex_m/cortex_m_preempt.kspl` | `make ksos-cm-preempt` | `make ksos-cm0-preempt` | SysTick preempts two tasks that never yield; each keeps its r4–r11 (on the M0, moved by way of r4-r7) |
-| `lib/ksos/demo/cortex_m/cortex_m_pi.kspl` | `make ksos-cm-pi` | `make ksos-cm0-pi` | Priority inheritance gets a high-priority requester the lock despite a medium task that never yields |
-| `lib/ksos/demo/cortex_m/cortex_m_event.kspl` | `make ksos-cm-event` | `make ksos-cm0-event` | a barrier of event flags: three workers' bits raised under preemption, and clear-on-exit |
-| `lib/ksos/demo/cortex_m/cortex_m_mq.kspl` | `make ksos-cm-mq` | `make ksos-cm0-mq` | a queue under preemption (the critical section) |
-| `lib/ksos/demo/cortex_m/cortex_m_timeout.kspl` | `make ksos-cm-timeout` | `make ksos-cm0-timeout` | SysTick alone carrying `take_for`'s timeout while a spinner that never yields holds the CPU |
-| `lib/ksos/demo/cortex_m/cortex_m_isr_block.kspl` | `make ksos-cm-isr-block` | `make ksos-cm0-isr-block` | `Sem.take` in an interrupt handler panics, even with a positive count (panic = pass) |
-| `lib/ksos/demo/cortex_m/cortex_m_wait_masked.kspl` | `make ksos-cm-wait-masked` | `make ksos-cm0-wait-masked` | `Sem.take` between `irq_save` and `irq_restore` panics, as on POSIX (panic = pass) |
-| `lib/ksos/demo/cortex_m/cortex_m_isr_unlock.kspl` | `make ksos-cm-isr-unlock` | `make ksos-cm0-isr-unlock` | `Mutex.unlock` in an interrupt handler panics (panic = pass) |
-| `lib/ksos/demo/cortex_m/cortex_m_isr_give.kspl` | `make ksos-cm-isr-give` | `make ksos-cm0-isr-give` | Two gives in one handler: the woken tasks run as it returns, highest first, and PendSV saves the task really running |
-| `lib/ksos/demo/cortex_m/cortex_m_stack_guard.kspl` | `make ksos-cm-stack-guard` | `make ksos-cm0-stack-guard` | A damaged canary panics at the next preempting switch (panic = pass) |
-| `lib/ksos/demo/cortex_m/cortex_m_panic_probe.kspl` | `make ksos-cm-panic-probe` | `make ksos-cm0-panic-probe` | a panic's crash record read back across a real soft reset (AIRCR, which Armv6-M has too) |
-| `lib/ksos/demo/cortex_m/cortex_m_panic_record_bounds.kspl` | `make ksos-cm-panic-record-bounds` | — | A crash record whose lengths pass its buffers is refused, not read past its end |
-| `lib/ksos/demo/cortex_m/cortex_m_heap_probe.kspl` | `make ksos-cm-heap-probe` | — | The freestanding heap and `Arc<T>` with no OS; 120 tasks reuse the port's 33 contexts |
-| `lib/ksos/demo/cortex_m/cortex_m_heap_tasks.kspl` | `make ksos-cm-heap-tasks` | — | Two tasks of different priority allocate through `List` and `Arc`, one preempting the other inside the heap |
-| `lib/ksos/demo/cortex_m/cortex_m_ai_probe.kspl` | `make ksos-cm-ai-probe` | — | `ksai` inference (a whole `Transformer_block`) on bare metal, matching the host's numbers |
-| `lib/ksos/demo/cortex_m/cortex_m_ai_train_probe.kspl` | `make ksos-cm-ai-train-probe` | — | On-device LoRA training, with `Lora.save_raw` and `load_raw` |
-| `lib/ksos/demo/cortex_m/cortex_m_ai_weights_probe.kspl` | `make ksos-cm-ai-weights-probe` | — | real weights (a safetensors made a static array by `embed`) read with zero copies and no filesystem |
-| `lib/ksos/demo/cortex_m/cortex_m_control_ai_probe.kspl` | `make ksos-cm-control-ai-probe` | — | a control loop and continuing AI inference side by side, undisturbed |
-| `lib/ksos/demo/cortex_m/cortex_m_pilot_probe.kspl` | `make ksos-cm-pilot-probe` | — | A received policy selects the next manoeuvre locally |
-| `lib/ksos/demo/nrf51/nrf51_wfi.kspl` | — | `make ksos-nrf51-wfi` | Every task waits while the scheduler sleeps with `WFI`; the nRF51 timer interrupt gives the semaphore |
+The demos, one per feature with its make target, are listed in "The demos, one per feature" in [`lib/ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md). `make test-ksos-posix` runs the POSIX ones and `make test-ksos-qemu` the Cortex-M and nRF51 ones.
 
 #### How far CI looks, per port
 

@@ -169,10 +169,10 @@ ksos ksos-cm ksos-rp2040 test-ksos-link test-ksos-ramtext test-ksos-qemu test-ks
 	@$(ksos_make) $@
 .PHONY: ksos ksos-cm ksos-rp2040 test-ksos-link test-ksos-ramtext test-ksos-qemu test-ksos-posix
 
-## Run|ksos-*|One POSIX host demo (the listing is in `lib/ksos/README.md`, the accounts in `lib/ksos/docs/DESIGN-rtos.md`)
-## Run|ksos-cm-*|One Cortex-M demo (the listing is in `lib/ksos/README.md`, the accounts in `lib/ksos/docs/DESIGN-rtos.md`)
-## Run|ksos-cm0-*|One Cortex-M demo on the Cortex-M0, under QEMU's micro:bit (listed in `lib/ksos/README.md`)
-## Run|ksos-nrf51-*|One nRF51 demo, under QEMU's micro:bit (listed in `lib/ksos/README.md`)
+## Run|ksos-*|One POSIX host demo (listed, with the accounts, in `lib/ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-cm-*|One Cortex-M demo (listed, with the accounts, in `lib/ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-cm0-*|One Cortex-M demo on the Cortex-M0, under QEMU's micro:bit (listed in `lib/ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-nrf51-*|One nRF51 demo, under QEMU's micro:bit (listed in `lib/ksos/docs/DESIGN-rtos.md`)
 ## Run|ksos-rp2040-*|One RP2040 demo (the listing is in `lib/ksos/README.md`, the accounts in `lib/ksos/docs/DESIGN-rtos.md`)
 ## Per-item|ksos-linkcheck-*|One target's worth of `test-ksos-link`
 ## Per-item|ksos-qemugate-*|One target's worth of `test-ksos-qemu`

@@ -14,8 +14,8 @@ struct Sort_key //< where one data row sorts, by the value of its cell in the so
     text: U8[] //< a text's bytes; an error's mark, so equal errors stay together
     row: Sz //< the row's place before the sort
 
-fn sort_rows(doc: Document$@, u: Sz, keys: List<|Sort_key|>@, descending: Bool, arena: Arena$@):
-    Void!Edit_error //<
+fn sort_rows(doc: Document$@, table: Sz, keys: List<|Sort_key|>@, descending: Bool,
+    arena: Arena$@): Void!Edit_error //<
         //< Orders the data rows by their keys, one key per row; rows with equal keys keep their order
         //< Ascending puts numbers first, smallest first, then dates, earliest first, then text
         //< from A to Z, then false and true, then errors. Descending reverses that order.
@@ -23,12 +23,12 @@ fn sort_rows(doc: Document$@, u: Sz, keys: List<|Sort_key|>@, descending: Bool, 
         //< Z without regard to case, then by the bytes of other characters. Each row moves with
         //< its identity. A formula on a sorted row moves as a copy (`move_as_copies`), and one in
         //< another table keeps its references as `keep_ranges` says.
-    t: = table_at(doc, u)!
+    t: = table_at(doc, table)!
     if keys.len != t.rows.len
         throw .outside
     at: = Positions(doc, arena)
-    sorted: = keys.order_by(fn(a: Sort_key@, b: Sort_key@; descending: Bool): I32 {
-        return compare_keys(a, b, descending);
+    sorted: = keys.order_by(fn(left: Sort_key@, right: Sort_key@; descending: Bool): I32 {
+        return compare_keys(left, right, descending);
     }, arena)
     columns: = t.columns.len
     $rows: = List<|Sz|>(arena)
@@ -43,8 +43,8 @@ fn sort_rows(doc: Document$@, u: Sz, keys: List<|Sort_key|>@, descending: Bool, 
         for c in Range.asc(columns)
             t.cells[t.at(i, c)] = cells[from * columns + c]
     $saved: = List<|Saved|>(arena)
-    move_as_copies(doc, u, at@, sorted@, saved@)
-    keep_ranges(doc, u, at@, saved@)
+    move_as_copies(doc, table, at@, sorted@, saved@)
+    keep_ranges(doc, table, at@, saved@)
     fits(doc) catch
         restore(doc, saved@)
         for i in Range.asc(rows.len)
@@ -53,15 +53,15 @@ fn sort_rows(doc: Document$@, u: Sz, keys: List<|Sort_key|>@, descending: Bool, 
                 t.cells[t.at(i, c)] = cells[i * columns + c]
         throw .too_long
 
-priv fn move_as_copies(doc: Document$@, u: Sz, at: Positions@, sorted: List<|Sort_key|>@,
+priv fn move_as_copies(doc: Document$@, table: Sz, at: Positions@, sorted: List<|Sort_key|>@,
     saved: List<|Saved|>$@) //<
-        //< Rewrites each formula on a sorted row of table `u` as a copy to the row's new place
+        //< Rewrites each formula on a sorted row of the table as a copy to the row's new place
         //< `at` holds where each row stood before, and `sorted[i].row` where row `i` stood. A row
-        //< part without `$` of a reference into `u` shifts as far as its row moved, and one with
-        //< `$` stays (`moved` in `ksmd/calc/formula.kspl`). So `=sum(B$1:B3)` landing on row 1
+        //< part without `$` of a reference into that table shifts as far as its row moved, and one
+        //< with `$` stays (`moved` in `ksmd/calc/formula.kspl`). So `=sum(B$1:B3)` landing on row 1
         //< becomes `=sum(B$1:B1)`. A reference that the shift would take outside the table keeps
         //< its places instead. Another table's reference keeps its cells. `saved` gets each change.
-    t: = doc.tables[u]@
+    t: = doc.tables[table]@
     for i in Range.asc(sorted.len)
         rows: = i - sorted[i].row
         if rows == 0
@@ -72,36 +72,36 @@ priv fn move_as_copies(doc: Document$@, u: Sz, at: Positions@, sorted: List<|Sor
                 continue
             for k in Range(cell.first, cell.first + cell.count, 1)
                 p: = t.pieces[k]
-                if p.table != u || p.kind != .cell && p.kind != .range
+                if p.table != table || p.kind != .cell && p.kind != .range
                     continue
-                $a: = at.place(u, p.from, rows, 0)
-                $b: = at.place(u, p.to, rows, 0)
+                $a: = at.place(table, p.from, rows, 0)
+                $b: = at.place(table, p.to, rows, 0)
                 // A copy would give `#REF!` here; the sort keeps the places the reference named.
                 if a.row < 0 || b.row < 0
-                    a = at.place(u, p.from, 0, 0)
-                    b = at.place(u, p.to, 0, 0)
-                saved.push(Saved::{ .table = u, .index = k, .piece = p })
+                    a = at.place(table, p.from, 0, 0)
+                    b = at.place(table, p.to, 0, 0)
+                saved.push(Saved::{ .table = table, .index = k, .piece = p })
                 $q: = p
                 q.from.row = t.rows[a.row]
                 q.to.row = t.rows[b.row]
-                doc.tables[u].pieces[k] = q
+                doc.tables[table].pieces[k] = q
 
-priv fn keep_ranges(doc: Document$@, u: Sz, at: Positions@, saved: List<|Saved|>$@) //<
-    //< Puts each range over several rows of table `u` that another table names back on the
+priv fn keep_ranges(doc: Document$@, table: Sz, at: Positions@, saved: List<|Saved|>$@) //<
+    //< Puts each range over several rows of the table that another table names back on the
     //< places it spanned before. `at` holds where each row stood then. So `=sum(t.B1:B5)` in
     //< another table still adds the first five rows, whatever order they now stand in. A range
     //< within one row moves with it, as a reference to one cell does, so `=sum(t.B1:C1)` stays
     //< that row's total. Each changed piece goes into `saved`, to put back on a refusal.
-    t: = doc.tables[u]@
+    t: = doc.tables[table]@
     for v in Range.asc(doc.tables.len)
-        if v == u
+        if v == table
             continue
         for k in Range.asc(doc.tables[v].pieces.len)
             $p: = doc.tables[v].pieces[k]
-            if p.kind != .range || p.table != u || p.from.row == p.to.row
+            if p.kind != .range || p.table != table || p.from.row == p.to.row
                 continue
-            from: = at.of(u, p.from.row)
-            to: = at.of(u, p.to.row)
+            from: = at.of(table, p.from.row)
+            to: = at.of(table, p.to.row)
             if from < 0 || to < 0
                 continue
             saved.push(Saved::{ .table = v, .index = k, .piece = p })
@@ -109,17 +109,17 @@ priv fn keep_ranges(doc: Document$@, u: Sz, at: Positions@, saved: List<|Saved|>
             p.to.row = t.rows[to]
             doc.tables[v].pieces[k] = p
 
-priv fn compare_keys(a: Sort_key@, b: Sort_key@, descending: Bool): I32 //<
-    //< Below zero when `a` sorts first; empty cells sort last in either direction
-    if a.group == b.group
-        within: = compare_within(a, b)
+priv fn compare_keys(left: Sort_key@, right: Sort_key@, descending: Bool): I32 //<
+    //< Below zero when `left` sorts first; empty cells sort last in either direction
+    if left.group == right.group
+        within: = compare_within(left, right)
         return -within if descending else within
-    if a.group == 5 || b.group == 5
-        return -1 if b.group == 5 else 1
-    first: = a.group > b.group if descending else a.group < b.group
+    if left.group == 5 || right.group == 5
+        return -1 if right.group == 5 else 1
+    first: = left.group > right.group if descending else left.group < right.group
     return -1 if first else 1
 
-priv fn compare_within(a: Sort_key@, b: Sort_key@): I32 //< two keys of one group
-    if a.group != 2 && a.group != 4
-        return -1 if a.number < b.number else 1 if a.number > b.number else 0
-    return compare_text(a.text, b.text)
+priv fn compare_within(left: Sort_key@, right: Sort_key@): I32 //< two keys of one group
+    if left.group != 2 && left.group != 4
+        return -1 if left.number < right.number else 1 if left.number > right.number else 0
+    return compare_text(left.text, right.text)

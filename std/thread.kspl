@@ -13,7 +13,7 @@ pub enum Thread_error //< why the OS could not create a thread or a lock
     mutex_create_failed //< the OS failed to initialize the mutex
     cond_create_failed //< the OS failed to initialize the condition variable
 
-pub typedef Thread_entry = fn(arg: Void$@): Void$@ //< the function a thread starts running.
+pub typedef Thread_entry = fn(arg: Void$@): Void$@ //< the function a thread starts running
     //< The function passed here is published with `extern`, so it links with C's callback
     //< convention and no name mangling.
 
@@ -45,11 +45,11 @@ priv $running: Sz = 0
 fn threads_running(): Sz //< the threads started and not yet waited for, at this moment
     return kspl_atomic_load_relaxed(running@)
 
-priv fn require_handle(h: I64, err: Thread_error): I64!Thread_error //<
-    //< Throws err when h, the handle an OS create call returned, is 0 (a failure)
-    if h == 0
+priv fn require_handle(handle: I64, err: Thread_error): I64!Thread_error //<
+    //< Throws err when `handle`, the handle an OS create call returned, is 0 (a failure)
+    if handle == 0
         throw err
-    return h
+    return handle
 
 // ============================ Thread ============================
 pub struct Thread //< one running OS thread, which `free()` waits for
@@ -63,7 +63,7 @@ impl Thread: Move_only //< a copy would wait for one OS thread twice
         //< Caution: **Only the type is checked, not whether the data is safe to share.** Threads
         //< that touch what `arg` points at race; change a shared value through a `Mutex<|T|>` or an
         //< `Atomic_sz`, held in an `Arc` where several own it (the count of an `Rc<|T|>` breaks).
-        entry: fn(arg: T$@): Void$@, //< the function the thread runs, published with `extern`.
+        entry: fn(arg: T$@): Void$@, //< the function the thread runs, published with `extern`
             //< Its result is not read: it returns `null`, and hands a result back through `arg`.
         arg: T$@, //< the argument passed to it; the signature fixes its type, so it cannot mismatch
     ): Thread!Thread_error
@@ -128,19 +128,19 @@ impl Cond_var: Move_only //< copying it would destroy one OS object twice
         //< Caution: **A spurious wakeup is possible**, so check the condition again in a `for` and
         //< wait again if it does not hold. Waiting without holding the lock stops the program.
         r: Self@,
-        m: Mutex<|T|>@, //< the lock, which the caller must already hold
+        mutex: Mutex<|T|>@, //< the lock, which the caller must already hold
     )
-        kspl_cond_wait(r.handle, m.mutex.handle)
+        kspl_cond_wait(r.handle, mutex.mutex.handle)
 
     pub fn wait_for<|T|>( //< waits as `wait` does, for no longer than the limit
         //< Caution: **Check the condition again whatever comes back**: `woken` can be spurious, and
         //< the condition can come true just as the limit passes. The limit is on the monotonic
         //< clock, so setting the date neither stretches nor cuts it.
         r: Self@,
-        m: Mutex<|T|>@, //< the lock, which the caller must already hold
+        mutex: Mutex<|T|>@, //< the lock, which the caller must already hold
         timeout_ms: I32, //< the limit, read as every wait in std reads it: 0 or less looks once
     ): Cond_wait //< whether it was woken or the limit passed; it holds the lock again either way
-        if kspl_cond_wait_for(r.handle, m.mutex.handle, timeout_ms) == 0
+        if kspl_cond_wait_for(r.handle, mutex.mutex.handle, timeout_ms) == 0
             return .woken
         return .timed_out
 
@@ -148,24 +148,24 @@ impl Cond_var: Move_only //< copying it would destroy one OS object twice
         //< Caution: **Signalling without holding the lock stops the program.** Given without it, a
         //< signal can come between a waiter's check of its condition and its wait, and be lost.
         r: Self@,
-        m: Mutex<|T|>@, //< the lock the waiters take, which the caller must hold
+        mutex: Mutex<|T|>@, //< the lock the waiters take, which the caller must hold
     )
-        kspl_cond_wake_one(r.handle, m.mutex.handle)
+        kspl_cond_wake_one(r.handle, mutex.mutex.handle)
 
     pub fn broadcast<|T|>( //< wakes every waiting thread
         //< For a change every waiter must see (a queue closing, a stop): `signal` wakes one, and
         //< the others sleep on past it. As with `signal`, the caller holds the lock.
         r: Self@,
-        m: Mutex<|T|>@, //< the lock the waiters take, which the caller must hold
+        mutex: Mutex<|T|>@, //< the lock the waiters take, which the caller must hold
     )
-        kspl_cond_wake_all(r.handle, m.mutex.handle)
+        kspl_cond_wake_all(r.handle, mutex.mutex.handle)
 
 impl Cond_var: Manual_free //< it owns an OS object and releases it with `free()`
     pub fn free(r: Self$@) //< destroys the OS condition variable
         //< As with `Raw_mutex.free`, the value itself has no memory to free.
         kspl_cond_destroy(r.handle)
 
-// ============================ Mutex<T> ============================
+// ============================ Mutex<|T|> ============================
 pub struct Mutex<|T|> //< a lock and the data it protects, kept together so neither is forgotten
     //< Only lock() reaches the data. It takes `Self@`, so an `Arc` can share it. The only mutex.
     //< Caution: **It is not re-entrant: locking it again on the thread that holds it stops the
@@ -198,7 +198,7 @@ impl<|T|> Mutex<|T|>: Manual_free //< it owns an OS object and releases it with 
 
 // ============================ Atomic_sz ============================
 pub struct Atomic_sz //< a shared counter or flag that changes without taking a lock
-    //< Lock-free; it uses the same kspl_atomic_add/cas as the `Arc<T>` reference counts in
+    //< Lock-free; it uses the same kspl_atomic_add/cas as the `Arc<|T|>` reference counts in
     //< std/refcount. Its methods take a read-only pointer, so threads share one through an `Arc`.
     priv value: Sz
 

@@ -1,0 +1,113 @@
+#!/usr/bin/env -S ksplc run
+//< Reads one byte sequence from outside through ksos's network receive path, then answers it
+//< **ksos takes two things from a host it does not control**: a USB block (an NCM NTB16) and the
+//< Ethernet frames inside it. A frame goes to the ARP and ping answers and to the TCP reader, as
+//< the RP2040 demos hand it on.
+//< Caution: **Do not stop after reading.** A wrong offset shows only where the frame's bytes are
+//< used, so each answer is built and each payload is read to its last byte.
+//< **The exit code is the only result**: 0 where some reader took it, 1 where all refused it.
+
+// ==========================================
+// Usage:
+//   read_prog <kind> <file>      (the kind is `ntb` or `frame`)
+// ==========================================
+import "ksos/drivers/cdc_ncm" as ncm
+import "ksos/net/mini_ipv4" as net
+import "std/bytes"
+import "std/chars"
+import "std/ds" // `equals`
+import "std/io"
+import "std/mem" { dealloc }
+import "std/sys"
+
+// The ends a frame must name for the TCP reader to take it, and our address for ARP and ping.
+// Caution: **Keep them in step with the seeds** (`fuzz_main.kspl`): otherwise every frame is
+// refused at the address and the offsets after it are never read.
+priv const PEER_IP: U32 = 0x0A000001 // 10.0.0.1
+priv const OUR_IP: U32 = 0x0A000005 // 10.0.0.5
+priv const PEER_PORT: U16 = 80
+priv const OUR_PORT: U16 = 40000
+
+priv const FRAME_CAP: Sz = 1514 //< the largest Ethernet frame without its CRC, as a driver holds
+priv const NTB_CAP: Sz = 2048 //< the RP2040 driver's receive block (`RX_NTB_CAP`)
+priv const MAX_DATAGRAMS: Sz = 4096 //< more than an NTB of NTB_CAP bytes can index
+
+// Where each byte read is mixed in. **Do not leave a value unused**: one discarded can be removed
+// at translation time.
+priv $used: U32 = 0
+
+priv fn our_mac(): net.Mac
+    return net.Mac::{ .hi = 0x0202, .lo = 0x03040506 }
+
+priv fn reply_fits(what: U8[], len: Sz, out: U8[]) //< a built answer lies inside its buffer
+    if len > out.len
+        panic(what)
+    for i in Range.asc(len)
+        used += out[i]
+
+priv fn read_frame(frame: U8[]): Bool //< hands one frame to every reader; whether one took it
+    $took: = false
+    used += net.frame_ethertype(frame, frame.len)
+    probe: = net.probe_arp(frame, frame.len)
+    if probe.is_arp
+        used += probe.sender_ip + probe.sender_mac.lo
+    reply: = net.parse_arp_reply(frame, frame.len, PEER_IP)
+    if reply.ok
+        took = true
+        used += reply.sender_mac.hi
+    $out: U8[FRAME_CAP] = ::{}
+    arp: = net.build_arp_reply(U8$[]::out, frame, frame.len, OUR_IP, our_mac())
+    if arp > 0
+        took = true
+        reply_fits("an ARP answer runs past its buffer", arp, U8[]::out)
+    ping: = net.build_icmp_echo_reply(U8$[]::out, frame, frame.len, OUR_IP, our_mac())
+    if ping > 0
+        took = true
+        reply_fits("a ping answer runs past its buffer", ping, U8[]::out)
+    seg: = net.parse_tcp_segment(frame, frame.len, PEER_IP, PEER_PORT, OUR_PORT)
+    if seg.ok
+        took = true
+        if seg.payload_off + seg.payload_len > frame.len
+            panic("a TCP payload runs past the frame")
+        for i in Range.asc(seg.payload_len)
+            used += frame[seg.payload_off + i]
+        used += seg.seq + seg.ack + seg.flags
+    return took
+
+priv fn read_ntb(block: U8[]): Bool //< takes the block apart as the driver does, then each frame
+    //< **As `usb_cdc.kspl` takes it**: the length from the header, refused where it is more than
+    //< arrived or than the buffer holds, then each datagram copied into a frame buffer.
+    total: = ncm.block_length(block, block.len)
+    if total == 0 || total > block.len || total > NTB_CAP
+        return false
+    $took: = false
+    $frame: U8[FRAME_CAP] = ::{}
+    for index in Range.asc(MAX_DATAGRAMS)
+        d: = ncm.datagram_at(block, total, index)
+        if !d.ok
+            return took
+        if d.offset + d.len > total
+            panic("a datagram runs past the block")
+        took = true
+        n: = (U8$[]::frame).copy_from(0, block.sub(d.offset, d.len))
+        read_frame((U8[]::frame).sub(0, n))
+    panic("an NTB indexes more datagrams than its bytes can hold")
+
+fn main(): I32
+    args: = sys.args()
+    if args.len < 3
+        io.err().s("usage: read_prog <ntb|frame> <file>\n")
+        return 2
+    raw: = io.read_file(args[2], null) catch
+        return 1
+    defer dealloc(Void$@::raw.ptr)
+    $took: = false
+    if args[1].equals("ntb")
+        took = read_ntb(raw)
+    else if args[1].equals("frame")
+        took = read_frame(raw)
+    else
+        io.err().s("unknown kind\n")
+        return 2
+    io.out().s("used=\{used\}\n")
+    return 0 if took else 1

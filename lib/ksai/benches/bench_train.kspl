@@ -17,22 +17,22 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/sys"
 
-priv fn new2d(a: Arena$@, r: Sz, c: Sz): Tensor<|F32|>
-    shape: Sz[2] = ::{ r, c }
-    return Tensor<|F32|>(Sz[]::shape, a)
+priv fn new2d(arena: Arena$@, rows: Sz, cols: Sz): Tensor<|F32|>
+    shape: Sz[2] = ::{ rows, cols }
+    return Tensor<|F32|>(Sz[]::shape, arena)
 
-priv fn min_step_us(m: Sz, k: Sz, n: Sz, iters: Sz, repeats: Sz, arena: Arena$@): I64 //<
-    //< The three training matrix products of m×k @ k×n, `iters` times
+priv fn min_step_us(rows: Sz, inner: Sz, cols: Sz, iters: Sz, repeats: Sz, arena: Arena$@): I64 //<
+    //< The three training matrix products of rows×inner @ inner×cols, `iters` times
     //< The outputs y/dw/dx are reused. Returns the min μs/step.
-    $x: = new2d(arena, m, k)
+    $x: = new2d(arena, rows, inner)
     x.fill(F32::0.5)
-    w: = new2d(arena, k, n)
+    w: = new2d(arena, inner, cols)
     w.fill(F32::0.1)
-    $dy: = new2d(arena, m, n)
+    $dy: = new2d(arena, rows, cols)
     dy.fill(F32::0.1)
-    y: = new2d(arena, m, n)
-    dw: = new2d(arena, k, n)
-    dx: = new2d(arena, m, k)
+    y: = new2d(arena, rows, cols)
+    dw: = new2d(arena, inner, cols)
+    dx: = new2d(arena, rows, inner)
 
     // The warm-up (keeps BLAS's thread-pool start-up and cache filling out of the measurement)
     for _i in Range.asc(3)
@@ -54,9 +54,10 @@ priv fn min_step_us(m: Sz, k: Sz, n: Sz, iters: Sz, repeats: Sz, arena: Arena$@)
             best_us = batch
     return best_us / I64::iters
 
-priv fn one(label: U8[], m: Sz, k: Sz, n: Sz, iters: Sz, arena: Arena$@)
-    us: = min_step_us(m, k, n, iters, 7, arena)
-    io.out().s(label).s(" M=\{I32::m\} K=\{I32::k\} N=\{I32::n\}  min=\{I32::us\}us/step\n")
+priv fn one(label: U8[], rows: Sz, inner: Sz, cols: Sz, iters: Sz, arena: Arena$@)
+    us: = min_step_us(rows, inner, cols, iters, 7, arena)
+    io.out().s(label)
+        .s(" M=\{I32::rows\} K=\{I32::inner\} N=\{I32::cols\}  min=\{I32::us\}us/step\n")
 
 fn main() //< times one training step, three matrix products, at each size
     defer arena: = Arena(1024 * 1024 * 512)

@@ -86,7 +86,7 @@ fn functions_of(tsv: U8[], arena: Arena$@): List<|Function|>!U8[] //<
 priv const EXAMPLE: U8[] = "For example, `" //< how the sentence that gives the example begins
 priv const EXAMPLE_IS: U8[] = "` is `" //< what stands between its call and what the call is
 
-priv fn described(f: Function$@, doc: U8[], arena: Arena$@) //<
+priv fn described(function: Function$@, doc: U8[], arena: Arena$@) //<
     //< Splits a doc comment as the record joins it into the summary, the detail and the example
     //< The record closes the first line with a full stop, so the summary ends at the first `. `.
     $text: = doc
@@ -94,20 +94,20 @@ priv fn described(f: Function$@, doc: U8[], arena: Arena$@) //<
         sentence: = doc.sub_from(at)
         code: = sentence.sub_from(EXAMPLE.len)
         close: = code.find_char('`').unwrap_or(code.len)
-        f.example = code.sub(0, close)
+        function.example = code.sub(0, close)
         said: = code.sub_from(close)
         if said.starts_with(EXAMPLE_IS)
             given: = said.sub_from(EXAMPLE_IS.len)
-            f.gives = given.sub(0, given.find_char('`').unwrap_or(given.len))
+            function.gives = given.sub(0, given.find_char('`').unwrap_or(given.len))
         $after: U8[] = ""
         if stop: = sentence.find_str(". ")
             after = sentence.sub_from(stop + 2)
         text = arena.text().s(doc.sub(0, at)).s(after).take().trim_spaces()
     if end: = text.find_str(". ")
-        f.summary = text.sub(0, end)
-        f.detail = text.sub_from(end + 2)
+        function.summary = text.sub(0, end)
+        function.detail = text.sub_from(end + 2)
     else
-        f.summary = text.sub(0, text.len - 1) if text.ends_with(".") else text
+        function.summary = text.sub(0, text.len - 1) if text.ends_with(".") else text
 
 fn grouped(fns: List<|Function|>$@, source: U8[], arena: Arena$@): Void!U8[] //<
     //< Gives each function the group its divider names: the line between two `// ====` lines
@@ -150,15 +150,16 @@ fn undocumented(fns: List<|Function|>@, arena: Arena$@): U8[]? //<
             return .some(arena.text().s("\{f.name\}: its example calls another function").take())
     return .none
 
-fn help_of(f: Function@, arena: Arena$@): Help //< what a person reads of one function
+fn help_of(function: Function@, arena: Arena$@): Help //< what a person reads of one function
     $args: = List<|Arg|>(arena)
-    for p in f.params
+    for p in function.params
         if p.kind != .arena
             args
                 .push(Arg::{ .name = p.name, .meaning = p.meaning, .optional = p.optional,
                 .rest = p.kind == .rest })
-    return Help::{ .name = f.name, .group = f.group, .args = args.slice(), .summary = f.summary,
-        .detail = f.detail, .example = f.example, .gives = f.gives }
+    return Help::{ .name = function.name, .group = function.group, .args = args.slice(),
+        .summary = function.summary, .detail = function.detail, .example = function.example,
+        .gives = function.gives }
 
 priv fn function_of(sig: U8[], arena: Arena$@): Function!U8[] //<
     //< `name(params): result`, without `pub fn `, read into what the table needs
@@ -284,12 +285,12 @@ fn table_source( //< the KSPL source of the table for these functions
         .s("import \"ksmd/calc/help\" { Arg, Help }\n").s("import \"\{module\}\" as fns\n")
         .s("import \"ksmd/calc/value\" { ").s(joined(values@, arena)).s(" }\n")
         .s("import \"std/ds\"\n\n")
-    out.s("fn call(name: U8[], a: Raw_args$@): Value? //<\n")
-        .s("    //< The value of the function `name` on the arguments `a` reads; none for no such \
-            name\n")
+    out.s("fn call(name: U8[], args: Raw_args$@): Value? //<\n")
+        .s("    //< The value of the function `name` on the arguments `args` reads; none for no \
+            such name\n")
     for i in Range.asc(fns.len)
         f: = fns.get(i)
-        out.s("    if name.equals(\"\{f.name\}\")\n        return .some(call_\{f.name\}(a))\n")
+        out.s("    if name.equals(\"\{f.name\}\")\n        return .some(call_\{f.name\}(args))\n")
     out.s("    return .none\n")
     out.s("\nconst NAMES: U8[][_] = ::{\n")
     for i in Range.asc(fns.len)
@@ -325,28 +326,29 @@ priv fn joined(xs: List<|U8[]|>@, arena: Arena$@): U8[] //< the names, `, ` betw
         t.s(", " if i > 0 else "").s(xs.get(i))
     return t.take()
 
-priv fn reader(f: Function@, out: Str_builder$@, arena: Arena$@) //< the reader of one function
-    out.s("\npriv fn call_\{f.name\}(a: Raw_args$@): Value //< `\{f.name\}(…)`\n")
-    fallible: = can_fail(f)
+priv fn reader(function: Function@, out: Str_builder$@, arena: Arena$@) //<
+    //< the reader of one function
+    out.s("\npriv fn call_\{function.name\}(args: Raw_args$@): Value //< `\{function.name\}(…)`\n")
+    fallible: = can_fail(function)
     if fallible
         out.s("    $first: = First_error::{ .broken = false, .error = .syntax }\n")
-    for i in Range.asc(f.params.len)
-        p: = f.params.get(i)
+    for i in Range.asc(function.params.len)
+        p: = function.params.get(i)
         read_param(p@, out, arena)
-    out.s("    if !a.calculating()\n        return empty()\n")
+    out.s("    if !args.calculating()\n        return empty()\n")
     if fallible
         out.s("    if first.broken\n        return Value.failed(first.error)\n")
     t: = arena.text()
-    for i in Range.asc(f.params.len)
-        p: = f.params.get(i)
+    for i in Range.asc(function.params.len)
+        p: = function.params.get(i)
         t.s(", " if i > 0 else "")
-            .s("a.arena()" if p.kind == .arena else local(p.name, arena))
-    call: = arena.text().s("fns.\{f.name\}(").s(t.take()).c(')').take()
-    if f.throws
+            .s("args.arena()" if p.kind == .arena else local(p.name, arena))
+    call: = arena.text().s("fns.\{function.name\}(").s(t.take()).c(')').take()
+    if function.throws
         out.s("    r: = ").s(call).s(" catch e\n        return Value.failed(e)\n")
     else
         out.s("    r: = ").s(call).c('\n')
-    switch f.result
+    switch function.result
     case .number
         out.s("    return number(r)\n")
     case .whole
@@ -358,9 +360,10 @@ priv fn reader(f: Function@, out: Str_builder$@, arena: Arena$@) //< the reader 
     case .value
         out.s("    return r\n")
 
-priv fn can_fail(f: Function@): Bool //< whether reading an argument can throw: any but `Value[]`
-    for i in Range.asc(f.params.len)
-        k: = f.params.get(i).kind
+priv fn can_fail(function: Function@): Bool //<
+    //< whether reading an argument can throw: any but `Value[]`
+    for i in Range.asc(function.params.len)
+        k: = function.params.get(i).kind
         if k != .rest && k != .arena
             return true
     return false
@@ -368,17 +371,17 @@ priv fn can_fail(f: Function@): Bool //< whether reading an argument can throw: 
 priv fn local(name: U8[], arena: Arena$@): U8[] //< a parameter's local, apart from the reader's own
     return arena.text().s("p_").s(name).take()
 
-priv fn read_param(p: Param@, out: Str_builder$@, arena: Arena$@) //< reads one argument
-    if p.kind == .arena
+priv fn read_param(param: Param@, out: Str_builder$@, arena: Arena$@) //< reads one argument
+    if param.kind == .arena
         return
-    name: = local(p.name, arena)
-    if p.kind == .rest
-        out.s("    \{name\}: = a.rest()\n")
+    name: = local(param.name, arena)
+    if param.kind == .rest
+        out.s("    \{name\}: = args.rest()\n")
         return
     $method: U8[] = ""
     $zero: U8[] = ""
     $ty: U8[] = ""
-    switch p.kind
+    switch param.kind
     case .number
         method = "number"
         zero = "0.0"
@@ -399,22 +402,22 @@ priv fn read_param(p: Param@, out: Str_builder$@, arena: Arena$@) //< reads one 
         method = "value"
         zero = "empty()"
         ty = "Value"
-    if !p.optional
-        out.s("    \{name\}: = a.\{method\}() catch e\n        first.take(e)\n        fallback ")
+    if !param.optional
+        out.s("    \{name\}: = args.\{method\}() catch e\n        first.take(e)\n        fallback ")
             .s(zero).c('\n')
         return
-    out.s("    $\{name\}: \{ty\}? = .none\n    if a.more()\n")
-        .s("        got: = a.\{method\}() catch e\n            first.take(e)\n            fallback ")
-        .s(zero).s("\n        \{name\} = .some(got)\n")
+    out.s("    $\{name\}: \{ty\}? = .none\n    if args.more()\n")
+        .s("        got: = args.\{method\}() catch e\n            first.take(e)\n            \
+            fallback ").s(zero).s("\n        \{name\} = .some(got)\n")
 
-priv fn help_source(h: Help@, out: Str_builder$@) //< one entry of `HELP`, as KSPL source
+priv fn help_source(help: Help@, out: Str_builder$@) //< one entry of `HELP`, as KSPL source
     out.s("    Help::{ .name = ")
-    literal(h.name, out)
+    literal(help.name, out)
     out.s(", .group = ")
-    literal(h.group, out)
+    literal(help.group, out)
     out.s(", .args = Arg[]::{ ")
-    for i in Range.asc(h.args.len)
-        a: = h.args[i]
+    for i in Range.asc(help.args.len)
+        a: = help.args[i]
         out.s(", " if i > 0 else "").s("Arg::{ .name = ")
         literal(a.name, out)
         out.s(", .meaning = ")
@@ -422,13 +425,13 @@ priv fn help_source(h: Help@, out: Str_builder$@) //< one entry of `HELP`, as KS
         out.s(", .optional = ").s("true" if a.optional else "false").s(", .rest = ")
             .s("true" if a.rest else "false").s(" }")
     out.s(" }, .summary = ")
-    literal(h.summary, out)
+    literal(help.summary, out)
     out.s(", .detail = ")
-    literal(h.detail, out)
+    literal(help.detail, out)
     out.s(", .example = ")
-    literal(h.example, out)
+    literal(help.example, out)
     out.s(", .gives = ")
-    literal(h.gives, out)
+    literal(help.gives, out)
     out.s(" },\n")
 
 priv fn literal(text: U8[], out: Str_builder$@) //< `text` as a KSPL string literal

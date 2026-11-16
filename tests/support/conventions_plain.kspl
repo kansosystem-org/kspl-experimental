@@ -40,8 +40,8 @@ priv struct Finding //< one sentence or heading over its cap
     cap: Sz
     lead: U8[] //< its first words, for the message
 
-priv fn is_letter(c: U8): Bool //< a letter of a word: ASCII's, or any byte past ASCII
-    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80U8
+priv fn is_letter(byte: U8): Bool //< a letter of a word: ASCII's, or any byte past ASCII
+    return byte >= 'a' && byte <= 'z' || byte >= 'A' && byte <= 'Z' || byte >= 0x80U8
 
 priv fn word_end(text: U8[], at: Sz): Sz //< where the word starting at `at` ends
     $i: = at
@@ -111,26 +111,26 @@ priv fn quote_free(raw: U8[]): U8[] //< the line without its indent and its quot
         s = s.sub_from(1).trim_spaces()
     return s
 
-priv fn item_marker(s: U8[]): Sz //< the length of a list item's marker (`* `, `12. `), or 0
-    if s.starts_with("* ") || s.starts_with("- ") || s.starts_with("+ ")
+priv fn item_marker(line: U8[]): Sz //< the length of a list item's marker (`* `, `12. `), or 0
+    if line.starts_with("* ") || line.starts_with("- ") || line.starts_with("+ ")
         return 2
     $n: Sz = 0
-    for n < s.len && s[n].is_digit()
+    for n < line.len && line[n].is_digit()
         n += 1
-    if n > 0 && s.sub_from(n).starts_with(". ")
+    if n > 0 && line.sub_from(n).starts_with(". ")
         return n + 2
     return 0
 
-priv fn heading_marker(s: U8[]): Sz //< the length of a heading's `## `, or 0
+priv fn heading_marker(line: U8[]): Sz //< the length of a heading's `## `, or 0
     $n: Sz = 0
-    for n < s.len && s[n] == '#'
+    for n < line.len && line[n] == '#'
         n += 1
-    if n > 0 && n <= 6 && n < s.len && s[n] == ' '
+    if n > 0 && n <= 6 && n < line.len && line[n] == ' '
         return n + 1
     return 0
 
-priv fn is_table_rule(s: U8[]): Bool //< whether it is a table's separator row (`|---|---|`)
-    for c in s
+priv fn is_table_rule(line: U8[]): Bool //< whether it is a table's separator row (`|---|---|`)
+    for c in line
         if c != '|' && c != '-' && c != ':' && c != ' ' && c != '\t'
             return false
     return true
@@ -187,15 +187,15 @@ priv fn sentence_ends(text: U8[], at: Sz): Sz //<
         return j
     return 0
 
-priv fn judge(u: Unit@, from: Sz, to: Sz, text: U8[], out: List<|Finding|>$@, arena: Arena$@) //<
+priv fn judge(unit: Unit@, from: Sz, to: Sz, text: U8[], out: List<|Finding|>$@, arena: Arena$@) //<
     //< Adds a finding for `text[from..to]` if it is over its cap
     part: = text.sub(from, to - from)
-    cap: = MAX_HEADING_WORDS if u.heading else MAX_WORDS
+    cap: = MAX_HEADING_WORDS if unit.heading else MAX_WORDS
     n: = count_words(part)
     if n <= cap
         return
     skip: = part.len - part.trim_start().len
-    line: = u.line + scan.count_char(text.sub(0, from + skip), '\n')
+    line: = unit.line + scan.count_char(text.sub(0, from + skip), '\n')
     out
         .push(Finding::{ .line = line, .words = n, .cap = cap, .lead = lead_of(part, arena) })
 

@@ -149,12 +149,12 @@ priv fn overlap(ctx: Sema_ctx$@, op: U8[], left: Ast_node$@, right: Ast_node$@):
             return overlap_of(ctx, op, left, right, a, b)
     return .none
 
-priv fn overlap_of(ctx: Sema_ctx$@, op: U8[], left: Ast_node$@, right: Ast_node$@, a: Test, b: Test):
-    Fixed_comparison? //< overlap's answer, once both sides are tests
-    if !a.side.spells_same_value(b.side) || fixed_comparison(ctx, left).is_some() ||
-        fixed_comparison(ctx, right).is_some()
+priv fn overlap_of(ctx: Sema_ctx$@, op: U8[], left: Ast_node$@, right: Ast_node$@, left_test: Test,
+    right_test: Test): Fixed_comparison? //< overlap's answer, once both sides are tests
+    if !left_test.side.spells_same_value(right_test.side) ||
+        fixed_comparison(ctx, left).is_some() || fixed_comparison(ctx, right).is_some()
         return .none
-    r: = tested_values(ctx, a.side)
+    r: = tested_values(ctx, left_test.side)
     if !r.known
         return .none
     both: = op.equals("&&")
@@ -162,13 +162,14 @@ priv fn overlap_of(ctx: Sema_ctx$@, op: U8[], left: Ast_node$@, right: Ast_node$
     $seen_false: = false
     for which in Range.asc(2 if r.two else 1)
         span: = r.first if which == 0 else r.second
-        tries: sema_body_value_range.Num?[5] = ::{ .some(span.lo), .some(a.k),
-            sema_body_value_range.next(a.k), .some(b.k), sema_body_value_range.next(b.k) }
+        tries: sema_body_value_range.Num?[5] = ::{ .some(span.lo), .some(left_test.k),
+            sema_body_value_range.next(left_test.k), .some(right_test.k),
+            sema_body_value_range.next(right_test.k) }
         for t in tries
             if v: = t
                 if sema_body_value_range.within_span(v, span)
-                    pa: = sema_body_value_range.holds(a.op, v, a.k)
-                    pb: = sema_body_value_range.holds(b.op, v, b.k)
+                    pa: = sema_body_value_range.holds(left_test.op, v, left_test.k)
+                    pb: = sema_body_value_range.holds(right_test.op, v, right_test.k)
                     if (pa && pb) if both else (pa || pb)
                         seen_true = true
                     else
@@ -176,7 +177,7 @@ priv fn overlap_of(ctx: Sema_ctx$@, op: U8[], left: Ast_node$@, right: Ast_node$
     if seen_true == seen_false
         return .none
     return .some(Fixed_comparison::{ .answer = seen_true, .by = .overlap, .type_id = 0, .range = r,
-        .constant = a.constant, .second = b.constant, .side = a.side })
+        .constant = left_test.constant, .second = right_test.constant, .side = left_test.side })
 
 priv fn tested_values(ctx: Sema_ctx$@, side: Ast_node$@): Value_range //<
     //< The values a tested side can hold: a `Bool` 0 or 1, `Sz` every `I64`
@@ -190,8 +191,8 @@ priv fn tested_values(ctx: Sema_ctx$@, side: Ast_node$@): Value_range //<
         return sema_body_value_range.between(-9223372036854775807I64 - 1, 9223372036854775807I64)
     return r
 
-priv fn negates(n: Ast_node$@, x: Ast_node$@): Bool //< whether n is `!x`
-    at: = n.without_parens()
+priv fn negates(node: Ast_node$@, x: Ast_node$@): Bool //< whether `node` is `!x`
+    at: = node.without_parens()
     return at.kind_id == .k_expr_unary && at.get_unary_op().text.equals("!") &&
         at.get_unary_target().spells_same_value(x)
 
@@ -203,8 +204,8 @@ priv fn compares_reflexively(ctx: Sema_ctx$@, id: I32): Bool //<
     return ctx.env.is_integer(id) || ctx.env.is_bool(id) || ctx.env.is_pointer(id) ||
         ctx.env.is_fn_ptr(id) || ctx.env.is_scalar_enum(id)
 
-priv fn mask_rules_out(ctx: Sema_ctx$@, side: Ast_node$@, k: I64): Bool? //<
-    //< Whether `side` is `e & C` or `e | C` whose result can never equal k, none for another shape
+priv fn mask_rules_out(ctx: Sema_ctx$@, side: Ast_node$@, constant: I64): Bool? //<
+    //< Whether `side` is `e & C` or `e | C` that can never equal `constant`; none for another shape
     //< `e & C` keeps no bit outside C, and `e | C` keeps every bit of C. The bits are compared at
     //< the side's width, so a negative value keeps its two's-complement bits.
     at: = side.without_parens()
@@ -219,7 +220,7 @@ priv fn mask_rules_out(ctx: Sema_ctx$@, side: Ast_node$@, k: I64): Bool? //<
     if mask: = c
         bits: = ctx.env.get_primitive_bit_size(side.type_id)
         width: = ~0U64 if bits >= 64 else (1U64 << U64::bits) - 1U64
-        km: = U64::k & width
+        km: = U64::constant & width
         cm: = U64::mask & width
         if op.text.equals("&")
             return .some((km & ~cm) != 0U64)
@@ -251,13 +252,13 @@ fn lint_fixed_comparison(ctx: Sema_ctx$@, node: Ast_node$@) //<
                 report(ctx, node, f)
         case .constants {}
 
-priv fn is_one_value(r: Value_range): Bool //< whether a side holds a single value: constants
-    return r.known && !r.two && r.first.lo.bits == r.first.hi.bits &&
-        r.first.lo.neg == r.first.hi.neg
+priv fn is_one_value(range: Value_range): Bool //< whether a side holds a single value: constants
+    return range.known && !range.two && range.first.lo.bits == range.first.hi.bits &&
+        range.first.lo.neg == range.first.hi.neg
 
-priv fn is_written_number(n: Ast_node$@): Bool //<
+priv fn is_written_number(node: Ast_node$@): Bool //<
     //< Whether a constant side is a number written out (`255U8`, `-1`, `U32::0`), not a name
-    $at: = n.without_parens()
+    $at: = node.without_parens()
     for at != null
         if at.is_explicit_cast()
             at = at.get_postfix_receiver().without_parens()
@@ -267,10 +268,10 @@ priv fn is_written_number(n: Ast_node$@): Bool //<
             break
     return at != null && (at.kind_id == .k_integer || at.kind_id == .k_char)
 
-priv fn report(ctx: Sema_ctx$@, node: Ast_node$@, f: Fixed_comparison)
-    verdict: = "true" if f.answer else "false"
+priv fn report(ctx: Sema_ctx$@, node: Ast_node$@, comparison: Fixed_comparison)
+    verdict: = "true" if comparison.answer else "false"
     ctx.clear_scratch().s("[W0204] Meaningless comparison: ")
-    switch f.by
+    switch comparison.by
     case .place
         ctx.scratch.s("both sides are the same expression")
     case .negation
@@ -278,12 +279,12 @@ priv fn report(ctx: Sema_ctx$@, node: Ast_node$@, f: Fixed_comparison)
     case .mask
         ctx.scratch.s("the '&' or '|' on one side rules out the constant on the other")
     case .overlap
-        if f.answer
+        if comparison.answer
             ctx.scratch.s("every value the tested side can hold passes one of the two tests")
         else
             ctx.scratch.s("no value the tested side can hold passes both tests")
     default
-        r: = f.range
+        r: = comparison.range
         ctx.scratch.s("one side ")
         if r.type_id != 0
             ctx.scratch.s("is a '").s(ctx.env.display(r.type_id)).s("', which ")
@@ -293,6 +294,6 @@ priv fn report(ctx: Sema_ctx$@, node: Ast_node$@, f: Fixed_comparison)
     ctx.scratch.s(", so it is always \{verdict\}.")
     ctx.warn(node, ctx.scratch.slice())
 
-priv fn span_text(s: sema_body_value_range.Span): U8[] //< `lo to hi`
-    return base_core.arena.text().s(sema_body_value_range.num_text(s.lo)).s(" to ")
-        .s(sema_body_value_range.num_text(s.hi)).take()
+priv fn span_text(span: sema_body_value_range.Span): U8[] //< `lo to hi`
+    return base_core.arena.text().s(sema_body_value_range.num_text(span.lo)).s(" to ")
+        .s(sema_body_value_range.num_text(span.hi)).take()

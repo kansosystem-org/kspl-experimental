@@ -33,9 +33,9 @@ priv fn from_page(target: U8[], arena: Arena$@): U8[] //<
             b.s("../")
     return b.s(target).take()
 
-priv fn link_to(b: Str_builder$@, target: U8[], arena: Arena$@) //< ``[`target`](relative)``
+priv fn link_to(out: Str_builder$@, target: U8[], arena: Arena$@) //< ``[`target`](relative)``
     rel: = from_page(target, arena)
-    b.s("[`").s(rel).s("`](").s(rel).c(')')
+    out.s("[`").s(rel).s("`](").s(rel).c(')')
 
 priv fn declared_name(head: U8[]): U8[] //<
     //< The name a top-level declaration's line declares
@@ -139,25 +139,25 @@ fn walk_steps(laid: U8[], arena: Arena$@): List<|Step|>!Walk_error //<
             Step::{ .name = last.name, .title = last.title, .prose = last.prose, .code = joined })
     return out
 
-priv fn fenced(b: Str_builder$@, tag: U8[], body: U8[]) //< one code fence, closed on its own line
-    b.s("```").s(tag).c('\n').s(body)
+priv fn fenced(out: Str_builder$@, tag: U8[], body: U8[]) //< one code fence, closed on its own line
+    out.s("```").s(tag).c('\n').s(body)
     if !body.ends_with("\n")
-        b.c('\n')
-    b.s("```\n")
+        out.c('\n')
+    out.s("```\n")
 
-priv fn page_head(b: Str_builder$@, arena: Arena$@) //<
+priv fn page_head(out: Str_builder$@, arena: Arena$@) //<
     //< the title, what the page is, how to run what is on it, and the notice
-    b.s("# A tutorial of KSPL\n\n")
+    out.s("# A tutorial of KSPL\n\n")
         .s("**This page teaches KSPL by walking through one small program, one declaration at a ")
         .s("time.** It is for programmers who know another language, such as Python, JavaScript ")
         .s("or C. Each section shows one piece of the program and says what that piece teaches. ")
         .s("At the end, `main` puts the pieces together, and the page shows what the program ")
         .s("prints. Joined in order, the code blocks are the whole program, which the gates ")
         .s("compile and run; it is also one file, ")
-    link_to(b, LAID_SRC, arena)
-    b.s(".\n\n").s("**To run it, or anything of your own, the quick start is in the root ")
-    link_to(b, FRONT_DOOR, arena)
-    b.s(".** It fetches `ksplc`, writes a first file and runs it in three steps. Nothing on ")
+    link_to(out, LAID_SRC, arena)
+    out.s(".\n\n").s("**To run it, or anything of your own, the quick start is in the root ")
+    link_to(out, FRONT_DOOR, arena)
+    out.s(".** It fetches `ksplc`, writes a first file and runs it in three steps. Nothing on ")
         .s("this page needs more than that.\n\n")
         .s("**Do not edit this page.** It is written by `make tutorial` from the program and the ")
         .s("program's own output, and `make test-docs` refuses a page older than its program.\n\n")
@@ -171,15 +171,18 @@ priv fn page_head(b: Str_builder$@, arena: Arena$@) //<
         .s("| `T@` / `T$@` | A pointer to a `T` that only reads / that can write |\n")
         .s("| `T!E` | A `T`, or the error `E` when the function fails |\n\n").s("## The steps\n\n")
 
-priv fn page_foot(b: Str_builder$@, arena: Arena$@) //< where to go on from the walk
-    b.s("## Where to go from here\n\n").s("| You want to | Read |\n| :-- | :-- |\n")
+priv fn page_foot(out: Str_builder$@, arena: Arena$@) //< where to go on from the walk
+    out.s("## Where to go from here\n\n").s("| You want to | Read |\n| :-- | :-- |\n")
         .s("| Look a rule up: the language rule by rule, not for reading through | ")
-    link_to(b, LANGUAGE_DOC, arena)
-    b.s(" |\n| Set a project of your own up. That covers an executable to hand out and a ")
+    link_to(out, LANGUAGE_DOC, arena)
+    out.s(" |\n| Set a project of your own up. That covers an executable to hand out and a ")
         .s("program split over files. It also covers VS Code with the language server and the ")
         .s("debugger | ")
-    link_to(b, PROJECT_DOC, arena)
-    b.s(" |\n")
+    link_to(out, PROJECT_DOC, arena)
+    out.s(" |\n| Find what the standard library offers: every module, then one module's names | ")
+        .s("`ksplc doc std`, then `ksplc doc std/io` |\n")
+        .s("| Understand a message from the compiler that carries a code, such as `W0207` | ")
+        .s("`ksplc explain <code>` |\n")
 
 fn render(laid: U8[], printed: U8[], arena: Arena$@): U8[]!Walk_error //<
     //< The whole page: the steps in order and the printout

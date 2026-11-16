@@ -194,8 +194,8 @@ fn masked_code(text: U8[], arena: Arena$@): U8[] //<
         i = close
     return b.take()
 
-priv fn span_close(text: U8[], from: Sz, n: Sz): Sz //<
-    //< Just past the run of `n` backticks closing the code span whose opening run ends at `from`
+priv fn span_close(text: U8[], from: Sz, count: Sz): Sz //<
+    //< Just past the run of `count` backticks closing the code span whose opening run ends at `from`
     //< It is 0 where none does. A span closes inside its own paragraph (a blank line or a fence
     //< ends the search).
     //< Caution: **Do not search past the paragraph.** One run left open would pair with the next of
@@ -214,7 +214,7 @@ priv fn span_close(text: U8[], from: Sz, n: Sz): Sz //<
         $m: Sz = 0
         for j + m < text.len && text[j + m] == '`'
             m += 1
-        if m == n
+        if m == count
             return j + m
         j += m
     return 0
@@ -267,10 +267,11 @@ fn find_links(raw: U8[], arena: Arena$@): List<|Hit|> //< the `](path#anchor)` l
 // Where a naming lands
 // ==========================================
 
-fn is_external(t: U8[]): Bool //< whether a link points outside this repository
+fn is_external(link: U8[]): Bool //< whether a link points outside this repository
     //< Caution: **Do not check existence** (what is out on the network is not this check's
     //< business).
-    return t.starts_with("http://") || t.starts_with("https://") || t.starts_with("mailto:")
+    return link.starts_with("http://") || link.starts_with("https://") ||
+        link.starts_with("mailto:")
 
 fn normalize(path: U8[], arena: Arena$@): U8[] //< folds `a/../b` into `b`
     //< A `..` left at the start is returned as it is. **The filesystem is not consulted**: a path
@@ -411,21 +412,21 @@ fn src_places(here: U8[], raw: U8[], arena: Arena$@): Src_places //<
     bases.push(arena.text().s("tests/\{raw\}").take())
     return Src_places::{ .bases = bases, .raw = raw }
 
-fn src_place(p: Src_places@, k: Sz, arena: Arena$@): U8[] //<
+fn src_place(places: Src_places@, index: Sz, arena: Arena$@): U8[] //<
     //< The k-th location (from 0), folded; empty past the last
     //< Every base as written comes first, then each base with each extension added, but only where
     //< the last step has no extension of its own.
     //< Caution: **Build a location only when asked.** Built all at once, the work per reference
     //< multiplies and the arena runs out over the whole tree.
-    n: = p.bases.len
-    if k < n
-        return normalize(p.bases.get(k), arena)
-    if last_segment_has_dot(p.raw)
+    n: = places.bases.len
+    if index < n
+        return normalize(places.bases.get(index), arena)
+    if last_segment_has_dot(places.raw)
         return ""
-    j: = k - n
+    j: = index - n
     if j >= n * SRC_SUFFIX.len
         return ""
-    base: = p.bases.get(j / SRC_SUFFIX.len)
+    base: = places.bases.get(j / SRC_SUFFIX.len)
     return normalize(arena.text().s(base).s(SRC_SUFFIX[j % SRC_SUFFIX.len]).take(), arena)
 
 priv fn last_segment_has_dot(raw: U8[]): Bool //< whether the last step has an extension

@@ -34,177 +34,178 @@ import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // testing and slicing single characters
 import "std/ds" { List }
 
-priv fn require_toplevel_type(c: Sema_ctx$@, name: U8[], loc: Ast_node$@): I32 //<
+priv fn require_toplevel_type(ctx: Sema_ctx$@, name: U8[], loc: Ast_node$@): I32 //<
     //< The diagnostic for a top-level `const` / `var` / `extern` with no annotation
     //< Type inference is only for local variables ("The shape of a declaration" in
     //< docs/SPEC-programming-language.md); the top level is a file's interface.
     //< Caution: Do not default a missing annotation to I32: `g: = 2.5;` truncates to 2 silently.
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("top-level declaration '\{name\}' requires a type annotation. Type inference is only \
             available for local variables")
-    c.err(loc, c.scratch.slice())
+    ctx.err(loc, ctx.scratch.slice())
     return I32::sema_type_env.Builtin_type_id.unknown
 
-fn run(r: Ast_node$@, c: Sema_ctx$@, parser: kspeg.Target$@): Void!Sema_error //<
+fn run(root: Ast_node$@, ctx: Sema_ctx$@, parser: kspeg.Target$@): Void!Sema_error //<
     //< Collects the top-level declarations of every file, pass by pass
     //< `parser` is for the declarations a pass writes as source (`synthesize_suite_runs`).
     //< It also registers the `std/lang` every file imports implicitly. That import cannot be
     //< written explicitly (collect_import_decl rejects it).
-    collect_imports_and_lint(r, c)
-    sema_session_import_table.register_implicit_lang_imports(r, c)
-    check_all_attributes(r, c)
+    collect_imports_and_lint(root, ctx)
+    sema_session_import_table.register_implicit_lang_imports(root, ctx)
+    check_all_attributes(root, ctx)
     // **Stop here if the attributes do not pass.** A later pass takes a leftover statement
     // attribute (see elide_attributed_stmt in parse/normalize.kspl) as a statement. It then becomes
     // an ICE that hides the real cause.
-    if c.has_error()
+    if ctx.has_error()
         throw .analysis_failed
-    register_type_symbols(r, c)
+    register_type_symbols(root, ctx)
     // Pass 1a: each trait after the first in `impl T: A, B` gets an empty block of its own, so
     // every later pass reads one trait per block (`sema/decl/trait_default.kspl`).
-    c.split_listed_traits(r)
+    ctx.split_listed_traits(root)
     // Pass 1b: copy a trait declaration's default values to the implementing types.
     // **It must come before generic instantiation**, which copies the template's tree; instances
     // copied earlier lack the default values (`sema/decl/trait_default.kspl`).
-    c.propagate_trait_defaults(r)
-    if c.has_error()
+    ctx.propagate_trait_defaults(root)
+    if ctx.has_error()
         throw .analysis_failed
-    collect_early_values(r, c)!
+    collect_early_values(root, ctx)!
     // Pass 2a': each suite's `run`. **It must come after 2a**: resolving its types instantiates
     // generics. **It must come before 2b**, which registers the method it adds.
-    c.synthesize_suite_runs(r, parser)
-    if c.has_error()
+    ctx.synthesize_suite_runs(root, parser)
+    if ctx.has_error()
         throw .analysis_failed
-    register_value_symbols(r, c)!
-    build_registries(r, c)!
-    check_const_storage(r, c)
-    check_visibility_widths(r, c)!
+    register_value_symbols(root, ctx)!
+    build_registries(root, ctx)!
+    check_const_storage(root, ctx)
+    check_visibility_widths(root, ctx)!
 
-priv fn check_all_attributes(r: Ast_node@, c: Sema_ctx$@) //<
+priv fn check_all_attributes(root: Ast_node@, ctx: Sema_ctx$@) //<
     //< The attributes' check: after `##lint` is collected, before any other diagnostic
     //< Caution: **Walk from the wrapper (`top_level_item`).** unwrap_top_level skips past the
     //< attributes. So one not moved onto the declaration (apply_modifiers_to_targets in
     //< parse/normalize.kspl) would be invisible there.
-    for top_node in r.children
-        c.set_current_file(top_node.unwrap_top_level().loc.file())
-        sema_decl_attrs.check_attributes(top_node, c)
+    for top_node in root.children
+        ctx.set_current_file(top_node.unwrap_top_level().loc.file())
+        sema_decl_attrs.check_attributes(top_node, ctx)
 
-priv fn check_visibility_widths(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
+priv fn check_visibility_widths(root: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error //<
     //< Pass 5: whether a member's visibility is wider than the enclosing one
     //< It must come after Pass 3 and Pass 2b: it compares type ids, and before they exist every
     //< check passes. Caution: **Drain the constraints after that**: the line above fills the
     //< conformance table they read (Pending_constraint in sema/session/state.kspl).
-    c.drain_pending_instances()!
-    c.drain_pending_constraints()
-    sema_decl_access.check_member_visibility_width(r, c)
+    ctx.drain_pending_instances()!
+    ctx.drain_pending_constraints()
+    sema_decl_access.check_member_visibility_width(root, ctx)
     // Caution: **Report the accumulated `sizeof` cycles here.** They are found inside
     // `eval_constexpr_quiet`, which discards diagnostics (report_registry_cycle in
     // sema/decl/layout.kspl).
-    c.report_registry_cycle()
+    ctx.report_registry_cycle()
 
-priv fn collect_imports_and_lint(r: Ast_node@, c: Sema_ctx$@) //<
+priv fn collect_imports_and_lint(root: Ast_node@, ctx: Sema_ctx$@) //<
     //< Pass 0: each file's imports and `##lint` settings
     //< A `##lint` must take effect before any diagnostic, so this pass reports nothing.
-    for top_node in r.children
+    for top_node in root.children
         child: = top_node.unwrap_top_level()
-        c.set_current_file(child.loc.file())
+        ctx.set_current_file(child.loc.file())
         if child.kind_id == .k_decl_import
-            child.collect_import_decl(c)
+            child.collect_import_decl(ctx)
         else if child.kind_id == .k_decl_directive
             // **A bad name or argument shape is rejected here** (the grammar accepts any).
-            switch sema_decl_attrs.check_directive(child, c)
+            switch sema_decl_attrs.check_directive(child, ctx)
             case .settings
-                child.collect_lint_decl(c)
+                child.collect_lint_decl(ctx)
             case .assertion { // an expression folds once the types are known (sema/body/infer.kspl).
             } case .libraries { // read by the link (`append_program_libs` in tools/libs.kspl).
             } case .unknown {}
 
-priv fn register_type_symbols(r: Ast_node@, c: Sema_ctx$@) //<
+priv fn register_type_symbols(root: Ast_node@, ctx: Sema_ctx$@) //<
     //< Pass 1: a symbol, and an empty definition, for each struct, enum, trait and typedef
-    for top_node in r.children
+    for top_node in root.children
         child: = top_node.unwrap_top_level()
-        c.set_current_file(child.loc.file())
+        ctx.set_current_file(child.loc.file())
         top_vis: = child.get_visibility()
         // A non-generic declaration gets a `pending_decl`. It is the hint for filling in the layout
         // when it is requested before Pass 3 (ensure_type_registry in sema/decl/layout.kspl).
         is_generic_decl: = child.find_child(.k_type_gen_params) != null
         switch child.kind_id
         case .k_decl_struct
-            child.check_struct_decl_shape(c)
-            struct_reg: = child.register_type_sym(c, top_vis, .struct_def, .generic_struct)
+            child.check_struct_decl_shape(ctx)
+            struct_reg: = child.register_type_sym(ctx, top_vis, .struct_def, .generic_struct)
             switch struct_reg
             case .ok(_n, _f, type_id)
                 struct_def: = sema_type_def.Struct_def()
                 struct_def.pending_decl = null if is_generic_decl else child
-                c.env.id_to_type.get(type_id).info = .struct_type(struct_def)
+                ctx.env.id_to_type.get(type_id).info = .struct_type(struct_def)
             default {}
         case .k_decl_enum
-            enum_reg: = child.register_type_sym(c, top_vis, .enum_def, .generic_enum)
+            enum_reg: = child.register_type_sym(ctx, top_vis, .enum_def, .generic_enum)
             switch enum_reg
             case .ok(_n, _f, type_id)
                 i32_id: = I32::sema_type_env.Builtin_type_id.i32_type
                 enum_def: = sema_type_def.Enum_def(i32_id)
                 enum_def.pending_decl = null if is_generic_decl else child
-                c.env.id_to_type.get(type_id).info = .enum_type(enum_def)
+                ctx.env.id_to_type.get(type_id).info = .enum_type(enum_def)
             default {}
         case .k_decl_trait
-            trait_reg: = child.register_type_sym(c, top_vis, .trait_def, .generic_trait)
+            trait_reg: = child.register_type_sym(ctx, top_vis, .trait_def, .generic_trait)
             switch trait_reg
             case .ok(_n, _f, type_id)
-                c.env.id_to_type.get(type_id).info = .trait_type(sema_type_def.Trait_def())
+                ctx.env.id_to_type.get(type_id).info =
+                    .trait_type(sema_type_def.Trait_def())
             default {}
         case .k_decl_typedef
             name: = child.get_decl_id_text()
             if name.len > 0
                 sym: = Sema_symbol(.alias_def, name, child)
                 sym.vis = top_vis
-                c.declare_global_symbol(name, sym)
+                ctx.declare_global_symbol(name, sym)
         default {}
 
-priv fn collect_early_values(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error //<
+priv fn collect_early_values(root: Ast_node@, ctx: Sema_ctx$@): Void!Sema_error //<
     //< Pass 2a: the registrations that resolve no type, before any type is resolved
     //< Caution: Keep it apart from Pass 2b, which resolves types and so triggers instantiations.
     //< One run before all the names and generic impls exist misses a later `const` or `impl`.
     //<   * a `var`'s / `const`'s name … folding an array length (`U8[n]`) looks it up
     //<   * a generic impl … an instantiation needs all of them for the method table and the trait
     //<     conformance (instantiate_generic_methods / register_generic_trait_impls in mono.kspl)
-    for top_node in r.children
+    for top_node in root.children
         child: = top_node.unwrap_top_level()
         k: = child.kind_id
         if k != .k_decl_var && k != .k_decl_const && k != .k_decl_impl
             continue
-        c.set_current_file(child.loc.file())
+        ctx.set_current_file(child.loc.file())
         if k == .k_decl_impl
             if impl_needs_early_collect(child)
-                child.collect_impl_decl(c)!
+                child.collect_impl_decl(ctx)!
             continue
-        child.declare_var_syms(c, child.get_visibility())
+        child.declare_var_syms(ctx, child.get_visibility())
 
-priv fn register_value_symbols(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error //<
+priv fn register_value_symbols(root: Ast_node@, ctx: Sema_ctx$@): Void!Sema_error //<
     //< Pass 2b: the functions, impls, externs, embeds and variables, and each typedef's target
-    for top_node in r.children
+    for top_node in root.children
         child: = top_node.unwrap_top_level()
-        c.set_current_file(child.loc.file())
+        ctx.set_current_file(child.loc.file())
         top_vis: = child.get_visibility()
         switch child.kind_id
         case .k_decl_typedef
             name: = child.get_decl_id_text()
             if name.len > 0
-                fqn: = c.make_fqn(name)
-                sym: = c.symtab.resolve(fqn).unwrap_or(null)
+                fqn: = ctx.make_fqn(name)
+                sym: = ctx.symtab.resolve(fqn).unwrap_or(null)
                 if sym != null
-                    c.resolve_alias_sym(sym)!
+                    ctx.resolve_alias_sym(sym)!
             // Caution: **Run a typedef through the leak check too.** Wider than its target, it lets
             // code that cannot name the target receive its value. See "Why a typedef cannot be
             // published wider than its target" in docs/DESIGN-programming-language.md.
-            c.check_type_vis_leak(child.get_decl_type_node(), top_vis, "target type", "typedef")
+            ctx.check_type_vis_leak(child.get_decl_type_node(), top_vis, "target type", "typedef")
         case .k_decl_fn
-            child.collect_fn_def(c, top_vis)!
+            child.collect_fn_def(ctx, top_vis)!
         case .k_decl_impl
             // Done in Pass 2a; doing it again inserts the type arguments into the methods twice.
             if !impl_needs_early_collect(child)
-                child.collect_impl_decl(c)!
+                child.collect_impl_decl(ctx)!
         case .k_decl_extern, .k_decl_extern_block
-            child.collect_extern_decl(c)!
+            child.collect_extern_decl(ctx)!
         case .k_decl_embed
             id_node: = child.get_embed_id()
             child.ice_assert(id_node != null, "AST Access Error: embed missing identifier")
@@ -213,58 +214,58 @@ priv fn register_value_symbols(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error //<
             sym.vis = top_vis
             // An embed is "a slice of immutable elements" (`U8[]`): make_const goes on the element,
             // not on the slice (that is "an immutable slice descriptor").
-            sym.type_id = c
-                .slice_type_of(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
+            sym.type_id = ctx
+                .slice_type_of(ctx.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
             // Caution: **Set it on the declaration's node too.** genc needs it to write the
             // instance's C name. With `--slice-struct` on, it becomes `std/lang`'s `Slice<|U8|>`
             // instance. So hard-coding `kspl_Const_U8_Slice` disagrees with what the vtable expects
             // (emit_embed_decl in `../../gen/c/decl.kspl`).
             child.type_id = sym.type_id
-            c.declare_global_symbol(name, sym)
+            ctx.declare_global_symbol(name, sym)
             // The gen layer reads the embedded file once and reports a failure at the source
             // position; sema does not read it in advance.
         case .k_decl_var, .k_decl_const
-            child.collect_var_decl(c, top_vis)!
+            child.collect_var_decl(ctx, top_vis)!
         default {}
 
-priv fn build_registries(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error //<
+priv fn build_registries(root: Ast_node@, ctx: Sema_ctx$@): Void!Sema_error //<
     //< Pass 3: each type's fields, variants and methods, and every written type checked
     // The instantiations queued up to 2b are created here.
     // Caution: **Finish this before the registries are built**: a struct field of an instantiated
     // type needs that type's conformance.
-    c.drain_pending_instances()!
+    ctx.drain_pending_instances()!
     defer gen_params: = base_core.arena.create(List<|Ast_node$@|>(null))
 
-    for top_node in r.children
+    for top_node in root.children
         child: = top_node.unwrap_top_level()
-        c.set_current_file(child.loc.file())
+        ctx.set_current_file(child.loc.file())
 
         switch child.kind_id
         case .k_decl_struct
-            child.build_struct_registry(c)!
+            child.build_struct_registry(ctx)!
         case .k_decl_enum
-            child.build_enum_registry(c)!
+            child.build_enum_registry(ctx)!
         case .k_decl_trait
-            child.build_trait_registry(c)!
+            child.build_trait_registry(ctx)!
         default {}
 
-        child.validate_all_type_exprs(c, gen_params)
-        child.check_spelled_out_sugar(c)
-    c.drain_pending_instances()!
+        child.validate_all_type_exprs(ctx, gen_params)
+        child.check_spelled_out_sugar(ctx)
+    ctx.drain_pending_instances()!
 
-priv fn check_const_storage(r: Ast_node@, c: Sema_ctx$@) //<
+priv fn check_const_storage(root: Ast_node@, ctx: Sema_ctx$@) //<
     //< Pass 4: the storage check on `const` declarations
     // Caution: It must come after Pass 3. The field list is complete only after
     // build_struct_registry; earlier, it misses a `const D: D` whose field is an array of mutable
     // elements.
-    for top_node in r.children
+    for top_node in root.children
         child: = top_node.unwrap_top_level()
         if child.kind_id != .k_decl_const
             continue
-        c.set_current_file(child.loc.file())
+        ctx.set_current_file(child.loc.file())
         for name_node in child.children
             if name_node.kind_id == .k_identifier
-                c.check_const_decl_storage(child.type_id, name_node.text, name_node)
+                ctx.check_const_decl_storage(child.type_id, name_node.text, name_node)
 
 priv fn impl_needs_early_collect(node: Ast_node$@): Bool //<
     //< Whether monomorphization builds this impl's method table
@@ -289,10 +290,10 @@ priv fn is_own_param(raw_target: U8[], gen_params_node: Ast_node@): Bool //<
             return true
     return false
 
-priv fn resolve_ret_type_or_void(type_node: Ast_node$@, c: Sema_ctx$@): I32!Sema_error //<
+priv fn resolve_ret_type_or_void(type_node: Ast_node$@, ctx: Sema_ctx$@): I32!Sema_error //<
     //< Resolves the return-type node, or returns Void where unspecified
     if type_node != null
-        return type_node.resolve_type(c)!
+        return type_node.resolve_type(ctx)!
     return I32::sema_type_env.Builtin_type_id.void_type
 
 impl Sema_ctx
@@ -306,31 +307,31 @@ impl Sema_ctx
         r.err(node, r.scratch.slice())
 
 impl Ast_node
-    priv fn check_struct_decl_shape(r: Ast_node$@, c: Sema_ctx$@) //<
+    priv fn check_struct_decl_shape(r: Ast_node$@, ctx: Sema_ctx$@) //<
         //< Refuses a `struct S;`, which has a `;` in place of its fields
         //< The grammar takes the form for `extern struct S`, a C type held by pointer. Without
         //< `extern`, nothing says what the type holds or how much space it takes.
         if r.find_child(.k_struct_field) != null
             return
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("'\{r.get_decl_id_text()\}' has no fields. A struct declaration must include its \
                 fields. A type defined in C is declared with 'extern' ('extern struct \
                 \{r.get_decl_id_text()\}') and held by pointer")
-        c.err(r, c.scratch.slice())
+        ctx.err(r, ctx.scratch.slice())
 
-    priv fn refuse_missing_body(r: Ast_node$@, c: Sema_ctx$@, name: U8[]) //<
+    priv fn refuse_missing_body(r: Ast_node$@, ctx: Sema_ctx$@, name: U8[]) //<
         //< Refuses a function written with `;` in place of its body
         //< The grammar takes the form for a trait's requirement and for `extern fn`, a C function.
         //< Anywhere else nothing would define it.
         if r.find_child(.k_stmt_block) != null
             return
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("'\{name\}' has no body. A function is defined where it is declared. A function \
                 defined in C, or in a library built from KSPL, is declared with 'extern' before it \
                 and no body. For a KSPL library, generate the declaration with 'ksplc --library='")
-        c.err(r, c.scratch.slice())
+        ctx.err(r, ctx.scratch.slice())
 
-    priv fn collect_fn_def(r: Ast_node$@, c: Sema_ctx$@, top_vis: sema_type_scope.Visibility):
+    priv fn collect_fn_def(r: Ast_node$@, ctx: Sema_ctx$@, top_vis: sema_type_scope.Visibility):
         Void!Sema_error
         name_node: = r.find_child(.k_identifier)
         name: = name_node.text if name_node != null else ""
@@ -339,15 +340,15 @@ impl Ast_node
         type_node: = r.get_decl_type_node()
         has_gen: = (r.find_child(.k_type_gen_params) != null)
 
-        r.refuse_missing_body(c, name)
+        r.refuse_missing_body(ctx, name)
 
-        fqn: = c.make_fqn(name)
+        fqn: = ctx.make_fqn(name)
         // Caution: **Register the template under its FQN alone.** The template table is one for the
         // whole build, while a function's short name names it only inside its file. Under the short
         // name, another file's `priv fn same<|T|>` answered a call of this file's own `same`. A
         // bare name finds it through read_written_name (name.kspl).
         if has_gen
-            sema_decl_declare.register_template(c, fqn, r)
+            sema_decl_declare.register_template(ctx, fqn, r)
 
         $sym_kind: = sema_type_scope.Sym_kind.function(false)
         if has_gen
@@ -359,12 +360,12 @@ impl Ast_node
         // bound to nothing yet, so resolve_type would take `T?`'s T for a real type. An
         // unsubstituted "T" would then leak into the generated C.
         if !has_gen
-            sym.type_id = resolve_ret_type_or_void(type_node, c)!
+            sym.type_id = resolve_ret_type_or_void(type_node, ctx)!
         sym.apply_attributes()
 
-        c.declare_symbol_with_fqn(name, fqn, sym)
+        ctx.declare_symbol_with_fqn(name, fqn, sym)
 
-    priv fn collect_impl_decl(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn collect_impl_decl(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
         target_node: = r.get_decl_type_node()
         $gen_params_node: = r.find_child(.k_type_gen_params)
 
@@ -374,27 +375,27 @@ impl Ast_node
         // A postfix `$` stays in the text of its k_type_postfix, so extract_type_name shows it, and
         // it is rejected at any level.
         if ts.ends_with("@") || ts.find_char_out('%') >= 0
-            c.err(target_node,
+            ctx.err(target_node,
                 "cannot define 'impl' directly on pointers (@) or immutable types (const). Use the \
                     base type instead.")
 
         base_slice: = ts.get_generic_base_name()
-        target_fqn: = c.impl_target_fqn(r)
+        target_fqn: = ctx.impl_target_fqn(r)
         has_gen: = (gen_params_node != null)
 
         if has_gen
-            if !r.check_impl_gen_params(c, gen_params_node, ts, base_slice)
+            if !r.check_impl_gen_params(ctx, gen_params_node, ts, base_slice)
                 return
-            c.generics.impls.push(r)
+            ctx.generics.impls.push(r)
         // An impl whose target is one instantiation (`impl Slice<|U8|> { ... }`).
         // No new name is added.
         // Caution: **Confirm the base is generic first.** A `<|...|>` on a non-generic name, added
         // to the templates, would silently match no instance (Principle 5).
         inst_target: = !has_gen && ts.find_str("<|").is_some()
-        if inst_target && c.generics.templates.get(target_fqn).is_none()
-            c.clear_scratch()
+        if inst_target && ctx.generics.templates.get(target_fqn).is_none()
+            ctx.clear_scratch()
                 .s("'\{target_fqn\}' is not a generic type. It takes no type arguments here")
-            c.err(r, c.scratch.slice())
+            ctx.err(r, ctx.scratch.slice())
             return
         if inst_target
             // Marked as a template with no type arguments (`impl<||> Slice<|U8|>`).
@@ -402,35 +403,35 @@ impl Ast_node
             // base/ast_ext.kspl cannot walk to the parent.
             gen_params_node = Ast_node(.k_type_gen_params, "", r.loc)
             r.insert_child(0, gen_params_node)
-            c.generics.impls.push(r)
+            ctx.generics.impls.push(r)
 
-        if r.refuses_trait_target(c, target_fqn)
+        if r.refuses_trait_target(ctx, target_fqn)
             return
 
-        c.fn_ctx.impl_name = target_fqn
-        defer c.fn_ctx.impl_name = ""
+        ctx.fn_ctx.impl_name = target_fqn
+        defer ctx.fn_ctx.impl_name = ""
 
         // Registers the conformance that `impl T: Trait` declares, once, with or without methods (a
         // marker trait such as Move_only too). mono registers a generic type's instance through
         // generics.impls.
         if !has_gen && !inst_target
             if trait_node: = r.get_impl_trait_node()
-                trait_id: = trait_node.resolve_type(c) catch 0
+                trait_id: = trait_node.resolve_type(ctx) catch 0
                 if trait_id != 0 && !sema_type_env.is_unknown(trait_id)
-                    c.env.add_implemented_trait(c.env.get_or_add(target_fqn), trait_id)
+                    ctx.env.add_implemented_trait(ctx.env.get_or_add(target_fqn), trait_id)
 
         for m in r.children
             if m.kind_id == .k_decl_fn
-                m.collect_impl_method(c, gen_params_node, base_slice, target_fqn)!
+                m.collect_impl_method(ctx, gen_params_node, base_slice, target_fqn)!
 
-    priv fn check_impl_gen_params(r: Ast_node$@, c: Sema_ctx$@, gen_params_node: Ast_node$@,
+    priv fn check_impl_gen_params(r: Ast_node$@, ctx: Sema_ctx$@, gen_params_node: Ast_node$@,
         target: U8[], base_name: U8[]): Bool //<
             //< Checks a generic impl's own type parameters; false when the impl is refused outright
             //< A blanket impl (impl<|T: Trait|> T ...) is not supported: monomorphization has no
             //< concrete type to instantiate. Silently dropped, it would surface only as "there is
             //< no such method" at some distant use.
         if is_own_param(base_name, gen_params_node)
-            c.err(r,
+            ctx.err(r,
                 "cannot implement methods for every type satisfying a constraint at once ('impl<|T: \
                     Trait|> T: Other_trait'). Name a concrete type per impl ('impl I32: Other_trait \
                     { ... }'). Alternatively, put the constraint on a generic free function ('fn \
@@ -441,49 +442,49 @@ impl Ast_node
         // generation (Principle 5).
         for gp in gen_params_node.children
             if gp.kind_id == .k_type_gen_param && gp.has_mut_binding_marker()
-                c.err(gp,
+                ctx.err(gp,
                     "'$' on an impl's own type parameter has no effect. The target type decides \
                         which instance the impl attaches to. Write 'impl<|T|> Box<|$T|>' for the \
                         mutable instance, or 'impl<|T|> Box<|T|>' for both. Remove the '$' here")
             if id_node: = gp.gen_param_id_node()
                 if !base_ast_spell.mentions_ident(target, id_node.text)
-                    c.report_unbound_impl_gen_param(id_node, id_node.text, target)
+                    ctx.report_unbound_impl_gen_param(id_node, id_node.text, target)
         return true
 
-    priv fn refuses_trait_target(r: Ast_node$@, c: Sema_ctx$@, target_fqn: U8[]): Bool //<
+    priv fn refuses_trait_target(r: Ast_node$@, ctx: Sema_ctx$@, target_fqn: U8[]): Bool //<
         //< Refuses an impl that adds methods to a trait itself (`impl Writer { fn hex(...) }`)
         //< A method not in the declaration has no vtable slot, and `vtable->hex` does not compile.
         //< A default **body** on a trait's method (`trait_default.kspl`) is only copied into the
         //< implementing types, so it needs no extra slot.
         if r.get_impl_trait_node().is_some()
             return false
-        t_id: = c.env.type_to_id.get(target_fqn).unwrap_or(0)
+        t_id: = ctx.env.type_to_id.get(target_fqn).unwrap_or(0)
         if t_id == 0
             return false
-        switch c.env.get_info(c.env.get_real_type(t_id))
+        switch ctx.env.get_info(ctx.env.get_real_type(t_id))
         case .trait_type {}
         default
             return false
-        c.clear_scratch().s("cannot add methods to trait '").s(target_fqn)
+        ctx.clear_scratch().s("cannot add methods to trait '").s(target_fqn)
             .s("'. A trait value's method table holds slots only for the methods the trait \
                 declares. An extension method would have no slot through which to dispatch. Use a \
                 free function, or a small wrapper type conforming to the trait (see 'Int_fmt' / \
                 'Hex_fmt' in std/strfmt)")
-        c.err(r, c.scratch.slice())
+        ctx.err(r, ctx.scratch.slice())
         return true
 
-    priv fn collect_impl_method(m: Ast_node$@, c: Sema_ctx$@, impl_params: Ast_node$@,
+    priv fn collect_impl_method(node: Ast_node$@, ctx: Sema_ctx$@, impl_params: Ast_node$@,
         base_name: U8[], target_fqn: U8[]): Void!Sema_error //<
             //< Registers one impl method: a template if generic, else a symbol of the target
             //< `impl_params` is null unless the impl is generic or targets one instantiation; the
             //< method then takes the impl's parameters too.
-        m.refuse_missing_body(c, m.find_text(.k_identifier))
-        m_has_gen: = m.find_child(.k_type_gen_params) != null
+        node.refuse_missing_body(ctx, node.find_text(.k_identifier))
+        m_has_gen: = node.find_child(.k_type_gen_params) != null
         if impl_params != null && !m_has_gen
-            m.insert_child(0, impl_params.clone())
+            node.insert_child(0, impl_params.clone())
 
-        m_name: = m.find_text(.k_identifier)
-        type_node: = m.get_decl_type_node()
+        m_name: = node.find_text(.k_identifier)
+        type_node: = node.get_decl_type_node()
         local_full_name: = sema_session_ctx.join_dotted_name(base_name, m_name)
         arena_full_name: = sema_session_ctx.join_dotted_name(target_fqn, m_name)
 
@@ -491,46 +492,46 @@ impl Ast_node
             // Caution: **Reject the same name defined twice.** The template table overwrites by
             // name, so if `impl<|T|> Box<|T|>` and `impl Box<|I32|>` define one method name, the
             // earlier one silently has no effect (Principle 5).
-            prev: = c.generics.templates.get(arena_full_name).unwrap_or(null)
-            if prev != null && prev != m
-                c.clear_scratch().s("method '\{m_name\}' is already defined for this type")
-                c.err(m, c.scratch.slice())
-            sema_decl_declare.register_template(c, arena_full_name, m)
+            prev: = ctx.generics.templates.get(arena_full_name).unwrap_or(null)
+            if prev != null && prev != node
+                ctx.clear_scratch().s("method '\{m_name\}' is already defined for this type")
+                ctx.err(node, ctx.scratch.slice())
+            sema_decl_declare.register_template(ctx, arena_full_name, node)
             return
 
         m_kind: = sema_type_scope.Sym_kind.function(false)
-        sym: = Sema_symbol(m_kind, arena_full_name, m)
-        sym.vis = m.get_visibility()
+        sym: = Sema_symbol(m_kind, arena_full_name, node)
+        sym.vis = node.get_visibility()
         sym.flags.is_method = true
 
-        sym.type_id = resolve_ret_type_or_void(type_node, c)!
+        sym.type_id = resolve_ret_type_or_void(type_node, ctx)!
 
         sym.apply_attributes()
-        c.declare_symbol_with_fqn(local_full_name, arena_full_name, sym)
+        ctx.declare_symbol_with_fqn(local_full_name, arena_full_name, sym)
 
-        t_id: = c.env.get_or_add(target_fqn)
-        t_entry: = c.env.id_to_type.get(c.env.get_real_type(t_id))
+        t_id: = ctx.env.get_or_add(target_fqn)
+        t_entry: = ctx.env.id_to_type.get(ctx.env.get_real_type(t_id))
         if t_entry == null
             return
         switch t_entry.get_method(m_name)
         case .some
-            c.clear_scratch().s("method '\{m_name\}' is already defined for this type")
-            c.err(m, c.scratch.slice())
+            ctx.clear_scratch().s("method '\{m_name\}' is already defined for this type")
+            ctx.err(node, ctx.scratch.slice())
         case .none
             t_entry.add_method(m_name, sym)
 
-    priv fn collect_extern_decl(r: Ast_node@, c: Sema_ctx$@): Void!Sema_error
+    priv fn collect_extern_decl(r: Ast_node@, ctx: Sema_ctx$@): Void!Sema_error
         for item in r.children
             switch item.kind_id
             case .k_decl_fn_proto
-                item.collect_extern_fn(c)!
+                item.collect_extern_fn(ctx)!
             case .k_decl_var
-                item.collect_extern_var(c)!
+                item.collect_extern_var(ctx)!
             case .k_decl_extern_struct
-                item.collect_extern_struct(c)
+                item.collect_extern_struct(ctx)
             default {}
 
-    priv fn collect_extern_fn(item: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
+    priv fn collect_extern_fn(item: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error //<
         //< Declares a C function of an `extern` block, and checks its types cross to C
         name: = item.find_text(.k_identifier)
         type_node: = item.get_decl_type_node()
@@ -541,38 +542,38 @@ impl Ast_node
         sym.vis = item.get_visibility()
         sym.flags.is_ext = true
 
-        sym.type_id = resolve_ret_type_or_void(type_node, c)!
+        sym.type_id = resolve_ret_type_or_void(type_node, ctx)!
         if type_node != null
-            c.check_ffi_safety(sym.type_id, type_node)
+            ctx.check_ffi_safety(sym.type_id, type_node)
 
         sym.apply_attributes()
-        c.declare_global_symbol(name, sym)
+        ctx.declare_global_symbol(name, sym)
         params: = item.get_fn_params()
         if params == null
             return
         for p_node in base_ast_ext.Param_cursor(params, false)
             pt_node: = p_node.get_decl_type_node()
             if pt_node != null
-                pt_id: = pt_node.resolve_type(c)!
-                c.check_ffi_safety(pt_id, pt_node)
+                pt_id: = pt_node.resolve_type(ctx)!
+                ctx.check_ffi_safety(pt_id, pt_node)
             // **The C side has no notion of a default value**, so nothing fills it (Principle 5).
             d_node: = p_node.get_param_default()
             if d_node != null
-                c.err(d_node,
+                ctx.err(d_node,
                     "an extern function parameter cannot have a default value. C does not support \
                         default parameter values")
 
-    priv fn collect_extern_var(item: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
+    priv fn collect_extern_var(item: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error //<
         //< Declares a C variable of an `extern` block, which must name its type
         type_node: = item.get_decl_type_node()
         $t_id: = 0
         id_node: = item.find_child(.k_identifier)
         if type_node != null && type_node.kind_id != .k_empty
-            t_id = type_node.resolve_type(c)!
-            c.check_ffi_safety(t_id, type_node)
+            t_id = type_node.resolve_type(ctx)!
+            ctx.check_ffi_safety(t_id, type_node)
         else
             // An extern variable has no initializer to guess from.
-            t_id = require_toplevel_type(c, id_node.text if id_node != null else "", item)
+            t_id = require_toplevel_type(ctx, id_node.text if id_node != null else "", item)
 
         if id_node == null
             return
@@ -582,9 +583,9 @@ impl Ast_node
         sym.flags.is_ext = true
         sym.type_id = t_id
         sym.apply_attributes()
-        c.declare_global_symbol(id_node.text, sym)
+        ctx.declare_global_symbol(id_node.text, sym)
 
-    priv fn collect_extern_struct(item: Ast_node$@, c: Sema_ctx$@) //<
+    priv fn collect_extern_struct(item: Ast_node$@, ctx: Sema_ctx$@) //<
         //< Declares a C type of an `extern` block, held by pointer and known by its name
         //< The path through the file's alias (`lib.Handle` from another file) is a second key for
         //< the same type. Caution: **Do not give the second key a type of its own**: the two would
@@ -596,18 +597,18 @@ impl Ast_node
         sym: = Sema_symbol(.struct_def, name, item)
         sym.vis = item.get_visibility()
         sym.flags.is_ext = true
-        sym.type_id = c.env.get_or_add(name)
-        qualified: = c.make_fqn(name)
-        if c.declare_symbol(name, sym, true)
-            c.declare_symbol(qualified, sym, true)
-            c.env.type_to_id.set(qualified, sym.type_id)
+        sym.type_id = ctx.env.get_or_add(name)
+        qualified: = ctx.make_fqn(name)
+        if ctx.declare_symbol(name, sym, true)
+            ctx.declare_symbol(qualified, sym, true)
+            ctx.env.type_to_id.set(qualified, sym.type_id)
 
         struct_def: = sema_type_def.Struct_def()
-        entry: = c.env.id_to_type.get(c.env.get_real_type(sym.type_id))
+        entry: = ctx.env.id_to_type.get(ctx.env.get_real_type(sym.type_id))
         if entry != null
             entry.info = .struct_type(struct_def)
 
-    priv fn declare_var_syms(r: Ast_node$@, c: Sema_ctx$@, top_vis: sema_type_scope.Visibility) //<
+    priv fn declare_var_syms(r: Ast_node$@, ctx: Sema_ctx$@, top_vis: sema_type_scope.Visibility) //<
         //< Registers only the names of the top-level `var` / `const` (types are not resolved yet)
         //< Caution: **Do this for every declaration before anything resolves a type.** An array
         //< length (`U8[n]`) folds from the declaration node found by name, reading only its
@@ -623,57 +624,57 @@ impl Ast_node
                 sym.vis = top_vis
                 sym.flags.is_mut = !is_const && r.text.is_mut_binding_kw()
                 sym.apply_attributes()
-                c.declare_global_symbol(c_child.text, sym)
+                ctx.declare_global_symbol(c_child.text, sym)
                 c_child.def_node = r
 
-    priv fn collect_var_decl(r: Ast_node$@, c: Sema_ctx$@, top_vis: sema_type_scope.Visibility):
+    priv fn collect_var_decl(r: Ast_node$@, ctx: Sema_ctx$@, top_vis: sema_type_scope.Visibility):
         Void!Sema_error //<
-            //< Sets the resolved declared type on the names declare_var_syms registered.
+            //< Sets the resolved declared type on the names declare_var_syms registered
             //< Registering them again would add each name twice.
         // **A top-level binding is `const` or `$`.** One with neither would be read-only data
         // kept in RAM: a `const` that misses ROM, a second way to write it.
         if r.kind_id == .k_decl_var && r.has_keyword("let")
             id: = r.find_child(.k_identifier)
             name: = id.text if id != null else ""
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("top-level binding '\{name\}' needs 'const' or '$'. Make it a 'const' (named in \
                     capitals) for data nothing writes, which goes in ROM. Write '$\{name\}' for a \
                     variable the program changes")
-            c.err(id if id != null else r, c.scratch.slice())
+            ctx.err(id if id != null else r, ctx.scratch.slice())
         children_len: = r.children.len
         type_node: = r.get_decl_type_node()
         $shared_type_id: I32 = 0
 
         if type_node != null
-            shared_type_id = type_node.resolve_type(c)!
-            c.check_type_vis_leak(type_node, top_vis, "declared type", "declaration")
+            shared_type_id = type_node.resolve_type(ctx)!
+            ctx.check_type_vis_leak(type_node, top_vis, "declared type", "declaration")
 
         for k in Range(1, children_len, 1)
             c_child: = r.get_child(k)
             if c_child.kind_id == .k_identifier
                 name: = c_child.text
-                sym: = c.symtab.resolve(c.make_fqn(name)).unwrap_or(null)
+                sym: = ctx.symtab.resolve(ctx.make_fqn(name)).unwrap_or(null)
                 if sym == null
                     continue
                 sym.type_id =
                     (shared_type_id if shared_type_id != 0
-                    else require_toplevel_type(c, name, c_child))
+                    else require_toplevel_type(ctx, name, c_child))
                 // As in infer_var_decl (sema/body/stmt.kspl), the `$` before the name sets a
                 // fixed-length array's element immutability. It is written back to the type node
                 // too.
-                sym.type_id = c.binding_value_type(sym.type_id, sym.flags.is_mut)
+                sym.type_id = ctx.binding_value_type(sym.type_id, sym.flags.is_mut)
                 r.type_id = sym.type_id
                 if type_node != null && type_node.kind_id != .k_empty
                     type_node.type_id = sym.type_id
-    fn mark_template_symbols_used(r: Self$@, c: Sema_ctx$@)
+    fn mark_template_symbols_used(r: Self$@, ctx: Sema_ctx$@)
         if r == null
             return
         if r.kind_id == .k_identifier || r.kind_id == .k_expr_path
             if r.def_node == null
                 name: = r.get_path_name()
                 if name.len > 0
-                    sym: = c.symtab.resolve(name).unwrap_or(null)
+                    sym: = ctx.symtab.resolve(name).unwrap_or(null)
                     if sym != null
                         sym.flags.is_used = true
         for item in r.children
-            item.mark_template_symbols_used(c)
+            item.mark_template_symbols_used(ctx)

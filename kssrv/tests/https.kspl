@@ -46,11 +46,11 @@ priv fn write_pem(dir: U8[], name: U8[], text: U8[], arena: Arena$@): U8[] //<
     return fs.write_unique(dir, name, ".pem", text, arena)
         catch panic("a PEM file should be written")
 
-fn write_cert(dir: U8[], c: Test_cert, arena: Arena$@): Pem_files //< writes `c`'s four texts
-    return Pem_files::{ .cert = write_pem(dir, "cert_", c.cert_pem, arena),
-        .key = write_pem(dir, "key_", c.key_pem, arena),
-        .locked_key = write_pem(dir, "locked_", c.locked_key_pem, arena),
-        .other_key = write_pem(dir, "other_", c.other_key_pem, arena) }
+fn write_cert(dir: U8[], cert: Test_cert, arena: Arena$@): Pem_files //< writes `cert`'s four texts
+    return Pem_files::{ .cert = write_pem(dir, "cert_", cert.cert_pem, arena),
+        .key = write_pem(dir, "key_", cert.key_pem, arena),
+        .locked_key = write_pem(dir, "locked_", cert.locked_key_pem, arena),
+        .other_key = write_pem(dir, "other_", cert.other_key_pem, arena) }
 
 priv fn tls_flags(chain: U8[], key: U8[], arena: Arena$@): U8[][] //< `--cert=` and `--key=`
     $out: = List<|U8[]|>(arena)
@@ -58,13 +58,13 @@ priv fn tls_flags(chain: U8[], key: U8[], arena: Arena$@): U8[][] //< `--cert=` 
     out.push(arena.text().s("--key=").s(key).take())
     return out.slice()
 
-priv fn read_to_end(s: tls.Tls_stream$@, arena: Arena$@): U8[]? //<
+priv fn read_to_end(stream: tls.Tls_stream$@, arena: Arena$@): U8[]? //<
     //< What the server sends until its close_notify; none where the stream breaks first
     //< **Only a close_notify ends it** (the client's rule), so this also checks kssrv sends one.
     got: = arena.text()
     $buf: U8[4096] = ::{}
     for
-        n: = s.read(U8$[]::buf) catch
+        n: = stream.read(U8$[]::buf) catch
             return .none
         if n == 0
             return .some(got.take())

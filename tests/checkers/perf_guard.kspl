@@ -94,13 +94,13 @@ priv const VALUE_CEILING: I64 = 1_000_000_000_000_000I64 //< the cap on a readab
     //< positive number", so a regression passes as an "improvement"; the cap stops before the next
     //< digit.
 
-priv fn digits_value(s: U8[]): I64 //< drops the grouping commas and returns an integer
+priv fn digits_value(text: U8[]): I64 //< drops the grouping commas and returns an integer
     //< It returns -1 past the cap. The capture is `[\d,]+`, so the comma is the only non-digit.
     $v: I64 = 0
-    for i in Range.asc(s.len)
-        if !s[i].is_digit()
+    for i in Range.asc(text.len)
+        if !text[i].is_digit()
             continue
-        v = v * 10I64 + I64::(s[i] - '0')
+        v = v * 10I64 + I64::(text[i] - '0')
         if v > VALUE_CEILING
             return -1I64
     return v
@@ -194,9 +194,10 @@ priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
         return false
     return true
 
-priv fn metrics_value(m: Metrics, jb: json.Json_builder$@): json.Value //< one side as an object
-    return jb.obj().set(TIME_KEY, jb.int_val(m.compile_ms))
-        .set(PEAK_KEY, jb.int_val(m.peak_bytes)).build()
+priv fn metrics_value(metrics: Metrics, jb: json.Json_builder$@): json.Value //<
+    //< one side as an object
+    return jb.obj().set(TIME_KEY, jb.int_val(metrics.compile_ms))
+        .set(PEAK_KEY, jb.int_val(metrics.peak_bytes)).build()
 
 priv fn read_number(side: json.Value, side_key: U8[], key: U8[]): I64!Guard_error //<
     //< One number of one side, refused where it is absent or not an integer

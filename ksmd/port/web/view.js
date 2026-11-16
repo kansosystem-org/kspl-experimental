@@ -94,9 +94,9 @@ function ksmdView(ks) {
   function render(b) {
     const el = shape(b);
     el.classList.toggle("print-hidden", !!b.iv);
-    const remove = ["g", "i", "n", "x"].includes(b.k) && !b.included && el.querySelector(".block-remove");
+    const remove = [ks.BLOCK.CHART, ks.BLOCK.IMAGE, ks.BLOCK.INCLUDE, ks.BLOCK.DIAGRAM].includes(b.k) && !b.included && el.querySelector(".block-remove");
     if (remove) remove.before(printButton(!!b.iv));
-    if (b.k === "g" || b.k === "i") ks.drawings.attach(el, b);
+    if (b.k === ks.BLOCK.CHART || b.k === ks.BLOCK.IMAGE) ks.drawings.attach(el, b);
     return el;
   }
 
@@ -107,22 +107,22 @@ function ksmdView(ks) {
 
   function shape(b) {
     switch (b.k) {
-      case "p":
-      case "h": {
-        const el = unit(b.k === "h" ? `h${b.n}` : "p", "b u");
+      case ks.BLOCK.PARAGRAPH:
+      case ks.BLOCK.HEADING: {
+        const el = unit(b.k === ks.BLOCK.HEADING ? `h${b.n}` : "p", "b u");
         if (b.a) el.style.textAlign = b.a;
         ks.notes.markBlock(el, b.no);
         segsInto(el, b.s);
         return el;
       }
-      case "c": {
+      case ks.BLOCK.CODE: {
         const el = unit("pre", "b u code");
         if (b.label) el.dataset.label = b.label;
         el.appendChild(document.createTextNode(b.t));
         if (b.t === "" || b.t.endsWith("\n")) placeholder(el);
         return el;
       }
-      case "l": {
+      case ks.BLOCK.LIST: {
         const el = unit("div", "b list");
         el.setAttribute("role", "list");
         const marks = markers(b.items);
@@ -134,31 +134,31 @@ function ksmdView(ks) {
         });
         return el;
       }
-      case "q": {
+      case ks.BLOCK.QUOTE: {
         const el = unit("blockquote", "b u");
         segsInto(el, b.s);
         return el;
       }
       // A blank line: an empty line of a paragraph's height, which Enter in a gap puts there. The
       // caret stands before or after it, and Backspace or Delete takes it away, as a divider's.
-      case "e": {
+      case ks.BLOCK.BLANK: {
         const el = unit("div", "b blank");
         el.contentEditable = "false";
         el.appendChild(document.createElement("br"));
         return el;
       }
-      case "d": {
+      case ks.BLOCK.DIVIDER: {
         const el = unit("div", "b divider");
         el.contentEditable = "false";
         el.appendChild(document.createElement("hr"));
         el.appendChild(removeButton("Remove this divider"));
         return el;
       }
-      case "t":
+      case ks.BLOCK.TABLE:
         return ks.table.render(b);
-      case "g":
+      case ks.BLOCK.CHART:
         return ks.chart.render(b);
-      case "i": {
+      case ks.BLOCK.IMAGE: {
         const el = unit("figure", "b figure");
         el.contentEditable = "false";
         el.appendChild(removeButton("Remove this image from the document; the image file stays"));
@@ -198,11 +198,11 @@ function ksmdView(ks) {
         }
         return el;
       }
-      case "f":
+      case ks.BLOCK.FUNCTIONS:
         return functionsBox(b);
-      case "s":
+      case ks.BLOCK.SETTINGS:
         return ks.settings.render(b);
-      case "x":
+      case ks.BLOCK.DIAGRAM:
         return ks.diagram.render(b);
       default:
         return include(b);
@@ -393,10 +393,10 @@ function ksmdView(ks) {
       r.setEnd(node, offset);
       const before = r.cloneContents();
       const breaks = before.querySelectorAll("br:not([data-ph])").length;
-      return [0, block, item, u8len(before.textContent) + breaks];
+      return [ks.SPOT.TEXT, block, item, u8len(before.textContent) + breaks];
     }
     const b = closest(node, ".b");
-    if (b) return [1, blocks().indexOf(b), 0, 0];
+    if (b) return [ks.SPOT.BLOCK_GAP, blocks().indexOf(b), 0, 0];
     // Between blocks: `offset` counts the root's children, the gap element among them.
     const kids = Array.from(ks.root.childNodes).slice(0, offset);
     return [1, kids.filter((k) => k.nodeType === Node.ELEMENT_NODE && !k.classList.contains("gap"))
@@ -428,16 +428,16 @@ function ksmdView(ks) {
   // The element that shows a gap: an empty line of the kind a block typed there takes.
   function makeGap(spot, style) {
     let el;
-    if (style.k === "h") el = unit(`h${style.n}`, "gap u");
-    else if (style.k === "c") el = unit("pre", "gap u code");
-    else if (style.k === "l") {
+    if (style.k === ks.BLOCK.HEADING) el = unit(`h${style.n}`, "gap u");
+    else if (style.k === ks.BLOCK.CODE) el = unit("pre", "gap u code");
+    else if (style.k === ks.BLOCK.LIST) {
       el = itemEl(style.d, style.o === 1, style.o ? "#" : "•");
       el.classList.add("gap");
     } else el = unit("p", "gap u");
     placeholder(el);
     el.spot = spot.slice();
     const all = blocks();
-    if (spot[0] === 2 && all[spot[1]]) {
+    if (spot[0] === ks.SPOT.ITEM_GAP && all[spot[1]]) {
       const list = all[spot[1]];
       list.insertBefore(el, items(list)[spot[2]] || null);
     } else {
@@ -472,13 +472,13 @@ function ksmdView(ks) {
     if (ks.inTable()) return hideCaret();
     removeGap();
     const s = window.getSelection();
-    if (sel.f[0] !== 0) {
+    if (sel.f[0] !== ks.SPOT.TEXT) {
       const g = makeGap(sel.f, sel.g);
       if (caret) s.setBaseAndExtent(g, 0, g, 0);
       return;
     }
     if (!caret) return;
-    const a = pointOf(sel.a[0] === 0 ? sel.a : sel.f);
+    const a = pointOf(sel.a[0] === ks.SPOT.TEXT ? sel.a : sel.f);
     const f = pointOf(sel.f);
     s.setBaseAndExtent(a.node, a.offset, f.node, f.offset);
   }
@@ -506,7 +506,7 @@ function ksmdView(ks) {
     // A table in place shows its new JSON in the cells that changed; any other block, or a table
     // whose rows, columns or settings changed, is drawn anew.
     const show = (old, b, json = JSON.stringify(b)) => {
-      if (b.k === "t" && old.classList.contains("table") && (old.drawnFrom === json || ks.table.update(old, b))) {
+      if (b.k === ks.BLOCK.TABLE && old.classList.contains("table") && (old.drawnFrom === json || ks.table.update(old, b))) {
         old.drawnFrom = json;
         kept.push(old);
         return;

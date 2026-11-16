@@ -75,10 +75,10 @@ impl Notes
             return ""
         return r.texts.get(pos)
 
-priv fn notes_of(z: Zip$@, part: U8[], doc: Doc$@): Notes!U8[] //<
+priv fn notes_of(zip: Zip$@, part: U8[], doc: Doc$@): Notes!U8[] //<
     //< The notes of a footnotes or endnotes part; none where there is no part
     $w: =
-        (walk(doc, z.part(part, doc.arena)!, .notes)! if part.len > 0
+        (walk(doc, zip.part(part, doc.arena)!, .notes)! if part.len > 0
         else Part.notes.new_walk(doc.arena))
     return Notes::{ .ids = sorted_names.sorted(w.note_ids@, doc.arena), .texts = w.note_texts }
 
@@ -151,10 +151,12 @@ impl Box
 // ==========================================
 
 impl Part
-    fn new_walk(r: Self, a: Arena$@): Walk //< a walk of a part of this kind, with nothing open yet
-        return Walk::{ .part = r, .boxes = List<|Box$@|>(a), .tables = List<|Table$@|>(a),
-            .in_t = false, .hidden = false, .vanish = -1, .run_style = "",
-            .note_ids = List<|Keyed|>(a), .note_texts = List<|U8[]|>(a) }
+    fn new_walk(r: Self, arena: Arena$@): Walk //<
+        //< a walk of a part of this kind, with nothing open yet
+        return Walk::{ .part = r, .boxes = List<|Box$@|>(arena),
+            .tables = List<|Table$@|>(arena), .in_t = false, .hidden = false, .vanish = -1,
+            .run_style = "", .note_ids = List<|Keyed|>(arena),
+            .note_texts = List<|U8[]|>(arena) }
 
 priv fn walk(doc: Doc$@, src: U8[], part: Part): Walk!U8[] //<
     //< Reads one part to its end, sending each finished line where it belongs
@@ -184,103 +186,104 @@ priv fn skipped(name: U8[]): Bool //< whether an element and all it holds are le
         name.equals("tabs") || name.ends_with("Change") || name.equals("sectPr") ||
         name.equals("rt")
 
-priv fn start_of(doc: Doc$@, x: xml.Reader$@, w: Walk$@): Void!U8[] //< takes one start tag
+priv fn start_of(doc: Doc$@, reader: xml.Reader$@, walk: Walk$@): Void!U8[] //< takes one start tag
     //< Each paragraph, table, row and cell is charged to the file's work before it is made.
     a: = doc.arena
-    name: = x.name
+    name: = reader.name
     if name.equals("p") || name.equals("tbl") || name.equals("tr") || name.equals("tc") ||
         name.equals("footnote") || name.equals("endnote")
         doc.view.work.charge(package.ITEM_WORK)!
     if name.equals("p")
-        w.boxes.push(Kind.para.new_box(x.depth(), a))
+        walk.boxes.push(Kind.para.new_box(reader.depth(), a))
     else if name.equals("t")
-        w.in_t = true
-        w.hidden = hidden_now(doc, w)
+        walk.in_t = true
+        walk.hidden = hidden_now(doc, walk)
     else if name.equals("r")
-        w.vanish = -1
-        w.run_style = ""
+        walk.vanish = -1
+        walk.run_style = ""
     else if name.equals("tbl")
         tb: = a
-            .create(Table::{ .depth = x.depth(), .cells = List<|U8[]|>(a), .col = 0,
+            .create(Table::{ .depth = reader.depth(), .cells = List<|U8[]|>(a), .col = 0,
             .above = List<|U8[]|>(a) })
-        w.tables.push(tb)
-    else if name.equals("tr") && w.tables.len > 0
-        tb: = w.tables.get(w.tables.len - 1)
+        walk.tables.push(tb)
+    else if name.equals("tr") && walk.tables.len > 0
+        tb: = walk.tables.get(walk.tables.len - 1)
         tb.cells = List<|U8[]|>(a)
         tb.col = 0
-    else if name.equals("tc") && w.tables.len > 0
-        w.boxes.push(Kind.cell.new_box(x.depth(), a))
-    else if name.equals("gridBefore") && w.tables.len > 0
+    else if name.equals("tc") && walk.tables.len > 0
+        walk.boxes.push(Kind.cell.new_box(reader.depth(), a))
+    else if name.equals("gridBefore") && walk.tables.len > 0
         // **The cells skipped stop at the widest grid read**: past it no cell merges downwards,
         // and a few bytes could otherwise ask for millions of empty cells.
-        tb: = w.tables.get(w.tables.len - 1)
-        before: = count_of(x.attr_or("val", "0", a)!)
+        tb: = walk.tables.get(walk.tables.len - 1)
+        before: = count_of(reader.attr_or("val", "0", a)!)
         for _k in Range.asc(before)
             if tb.col >= MAX_GRID
                 break
             doc.view.work.charge(package.ITEM_WORK)!
             tb.cells.push("")
             tb.col += 1
-    else if (name.equals("footnote") || name.equals("endnote")) && w.part == Part.notes
-        kind: = x.attr_or("type", "normal", a)!
+    else if (name.equals("footnote") || name.equals("endnote")) && walk.part == Part.notes
+        kind: = reader.attr_or("type", "normal", a)!
         if kind.equals("separator") || kind.equals("continuationSeparator") ||
             kind.equals("continuationNotice")
-            x.skip()!
+            reader.skip()!
             return
-        box: = Kind.note.new_box(x.depth(), a)
-        box.id = x.attr_or("id", "", a)!
-        w.boxes.push(box)
-    else if w.boxes.len > 0
-        in_box(doc, x, w.boxes.get(w.boxes.len - 1), w)!
+        box: = Kind.note.new_box(reader.depth(), a)
+        box.id = reader.attr_or("id", "", a)!
+        walk.boxes.push(box)
+    else if walk.boxes.len > 0
+        in_box(doc, reader, walk.boxes.get(walk.boxes.len - 1), walk)!
 
-priv fn in_box(doc: Doc$@, x: xml.Reader@, top: Box$@, w: Walk$@): Void!U8[] //<
+priv fn in_box(doc: Doc$@, reader: xml.Reader@, top: Box$@, walk: Walk$@): Void!U8[] //<
     //< Takes a start tag that changes the innermost open box
     a: = doc.arena
-    name: = x.name
+    name: = reader.name
     if name.equals("vanish")
-        w.vanish = 1 if styles.is_on(x.attr_or("val", "true", a)!) else 0
+        walk.vanish = 1 if styles.is_on(reader.attr_or("val", "true", a)!) else 0
     else if name.equals("rStyle")
-        w.run_style = x.attr_or("val", "", a)!
+        walk.run_style = reader.attr_or("val", "", a)!
     else if name.equals("sym")
-        if !hidden_now(doc, w)
-            top.put_raw(symbol(x.attr_or("font", "", a)!, x.attr_or("char", "", a)!, a),
-                doc.view@)!
+        if !hidden_now(doc, walk)
+            shown: =
+                symbol(reader.attr_or("font", "", a)!, reader.attr_or("char", "", a)!, a)
+            top.put_raw(shown, doc.view@)!
     else if name.equals("tab") || name.equals("br") || name.equals("cr")
         top.put_raw(" ", doc.view@)!
     else if name.equals("noBreakHyphen")
         top.put_raw("-", doc.view@)!
     else if name.equals("pStyle")
-        top.style = x.attr_or("val", "", a)!
+        top.style = reader.attr_or("val", "", a)!
     else if name.equals("numId")
-        top.num_id = x.attr_or("val", "", a)!
+        top.num_id = reader.attr_or("val", "", a)!
     else if name.equals("ilvl")
-        top.level = styles.small(x.attr_or("val", "", a)!)
+        top.level = styles.small(reader.attr_or("val", "", a)!)
     else if name.equals("outlineLvl")
-        top.outline = styles.small(x.attr_or("val", "", a)!)
+        top.outline = styles.small(reader.attr_or("val", "", a)!)
     else if name.equals("gridSpan")
-        span: = count_of(x.attr_or("val", "1", a)!)
+        span: = count_of(reader.attr_or("val", "1", a)!)
         top.span = span if span > 1 else 1
     else if name.equals("vMerge")
-        top.merge = 1 if x.attr_or("val", "continue", a)!.equals("restart") else 2
+        top.merge = 1 if reader.attr_or("val", "continue", a)!.equals("restart") else 2
     else if name.equals("footnoteReference") || name.equals("endnoteReference")
         mark: =
-            note_mark(doc, name.equals("endnoteReference"), x.attr_or("id", "", a)!)!
+            note_mark(doc, name.equals("endnoteReference"), reader.attr_or("id", "", a)!)!
         top.put_raw(mark, doc.view@)!
 
-priv fn hidden_now(doc: Doc@, w: Walk@): Bool //<
+priv fn hidden_now(doc: Doc@, walk: Walk@): Bool //<
     //< Whether the current run's text is hidden: by the run itself, or else by its styles
     //< **A run's own `vanish` decides alone.** Without one, the character style and the
     //< paragraph style each turn it over, as Word turns an on-off property in a style over.
-    if w.vanish >= 0
-        return w.vanish == 1
+    if walk.vanish >= 0
+        return walk.vanish == 1
     $para: U8[] = ""
-    $k: = w.boxes.len
+    $k: = walk.boxes.len
     for k > 0
         k -= 1
-        if w.boxes.get(k).kind == Kind.para
-            para = w.boxes.get(k).style
+        if walk.boxes.get(k).kind == Kind.para
+            para = walk.boxes.get(k).style
             break
-    by_run: = w.run_style.len > 0 && doc.styles.hides(w.run_style)
+    by_run: = walk.run_style.len > 0 && doc.styles.hides(walk.run_style)
     by_para: = para.len > 0 && doc.styles.hides(para)
     return by_run != by_para
 
@@ -332,8 +335,8 @@ priv fn hex_number(text: U8[]): I32 //< a number of 1 to 6 hex digits; -1 for no
         v = v * 16 + d
     return v if v <= 0x10FFFF else -1
 
-priv fn hex_digit(v: I32): U8 //< one hex digit, lower case
-    return U8::(v + '0') if v < 10 else U8::(v - 10 + 'a')
+priv fn hex_digit(value: I32): U8 //< one hex digit, lower case
+    return U8::(value + '0') if value < 10 else U8::(value - 10 + 'a')
 
 priv fn count_of(text: U8[]): Sz //< a count of grid columns, 0 to 1000; 0 where the text is none
     v: = text.trim_spaces().to_i64() catch
@@ -358,31 +361,31 @@ priv fn note_mark(doc: Doc$@, endnote: Bool, id: U8[]): U8[]!U8[] //<
     doc.notes.push(Note_ref::{ .endnote = endnote, .id = id, .mark = mark })
     return mark
 
-priv fn end_of(doc: Doc$@, x: xml.Reader@, w: Walk$@): Void!U8[] //< takes one end tag
-    if x.name.equals("t")
-        w.in_t = false
+priv fn end_of(doc: Doc$@, reader: xml.Reader@, walk: Walk$@): Void!U8[] //< takes one end tag
+    if reader.name.equals("t")
+        walk.in_t = false
         return
-    if w.tables.len > 0
-        tb: = w.tables.get(w.tables.len - 1)
-        if x.name.equals("tr") && x.depth() == tb.depth
-            row_done(doc, tb, w)!
+    if walk.tables.len > 0
+        tb: = walk.tables.get(walk.tables.len - 1)
+        if reader.name.equals("tr") && reader.depth() == tb.depth
+            row_done(doc, tb, walk)!
             return
-        if x.name.equals("tbl") && x.depth() + 1 == tb.depth
-            _done: = w.tables.pop()
+        if reader.name.equals("tbl") && reader.depth() + 1 == tb.depth
+            _done: = walk.tables.pop()
             return
-    if w.boxes.len == 0
+    if walk.boxes.len == 0
         return
-    top: = w.boxes.get(w.boxes.len - 1)
-    if x.depth() + 1 != top.depth
+    top: = walk.boxes.get(walk.boxes.len - 1)
+    if reader.depth() + 1 != top.depth
         return
-    _popped: = w.boxes.pop()
+    _popped: = walk.boxes.pop()
     switch top.kind
     case .para
-        para_done(doc, top, w)!
+        para_done(doc, top, walk)!
     case .cell
-        if w.tables.len == 0
+        if walk.tables.len == 0
             return
-        tb: = w.tables.get(w.tables.len - 1)
+        tb: = walk.tables.get(walk.tables.len - 1)
         $text: = top.text.take()
         if tb.col < MAX_GRID
             for tb.above.len <= tb.col
@@ -394,20 +397,20 @@ priv fn end_of(doc: Doc$@, x: xml.Reader@, w: Walk$@): Void!U8[] //< takes one e
         tb.cells.push(text)
         tb.col += top.span
     case .note
-        w.note_ids.push(Keyed::{ .key = top.id, .pos = w.note_texts.len })
-        w.note_texts.push(package.one_line(top.text.take(), doc.arena))
+        walk.note_ids.push(Keyed::{ .key = top.id, .pos = walk.note_texts.len })
+        walk.note_texts.push(package.one_line(top.text.take(), doc.arena))
 
-priv fn para_done(doc: Doc$@, p: Box$@, w: Walk$@): Void!U8[] //<
+priv fn para_done(doc: Doc$@, box: Box$@, walk: Walk$@): Void!U8[] //<
     //< Sends a finished paragraph's line, and its text boxes' lines, where they belong
     a: = doc.arena
-    $num_id: = p.num_id
-    $level: = p.level
+    $num_id: = box.num_id
+    $level: = box.level
     if num_id.len == 0
-        num_id = doc.styles.numbering(p.style)
+        num_id = doc.styles.numbering(box.style)
         if level < 0
-            level = doc.styles.numbering_level(p.style)
+            level = doc.styles.numbering_level(box.style)
     // **A paragraph with no text counts in its list, and builds no label**: it shows no line.
-    body: = package.one_line(p.text.take(), a)
+    body: = package.one_line(box.text.take(), a)
     $line: U8[] = ""
     at: = level if level >= 0 else 0
     if num_id.len > 0
@@ -418,33 +421,33 @@ priv fn para_done(doc: Doc$@, p: Box$@, w: Walk$@): Void!U8[] //<
     if body.len > 0
         line = a.text().s(line).s(body).take()
     heading: =
-        (p.outline + 1 if p.outline >= 0 && p.outline < 9
-        else (0 if p.outline >= 9 else doc.styles.heading(p.style)))
-    send(doc, w, line, heading)!
-    for i in Range.asc(p.after.len)
-        send(doc, w, p.after.get(i), 0)!
+        (box.outline + 1 if box.outline >= 0 && box.outline < 9
+        else (0 if box.outline >= 9 else doc.styles.heading(box.style)))
+    send(doc, walk, line, heading)!
+    for i in Range.asc(box.after.len)
+        send(doc, walk, box.after.get(i), 0)!
 
-priv fn row_done(doc: Doc$@, tb: Table$@, w: Walk$@): Void!U8[] //<
+priv fn row_done(doc: Doc$@, tb: Table$@, walk: Walk$@): Void!U8[] //<
     //< Sends a finished table row as one line, its cells joined by ` | `; an empty row as none
     $any: = false
     for i in Range.asc(tb.cells.len)
         any = any || tb.cells.get(i).len > 0
     if any
-        send(doc, w, doc.view.row_of("", tb.cells.slice())!, 0)!
+        send(doc, walk, doc.view.row_of("", tb.cells.slice())!, 0)!
 
-priv fn send(doc: Doc$@, w: Walk$@, line: U8[], heading: I32): Void!U8[] //<
+priv fn send(doc: Doc$@, walk: Walk$@, line: U8[], heading: I32): Void!U8[] //<
     //< Sends a finished line to the box it stands in, or to the view outside every box
     //< A heading's `#` marks go on only at the top level; in a cell they would split no text.
     if line.len == 0
         return
-    if w.boxes.len > 0
-        below: = w.boxes.get(w.boxes.len - 1)
+    if walk.boxes.len > 0
+        below: = walk.boxes.get(walk.boxes.len - 1)
         if below.kind == Kind.para
             below.after.push(line)
         else
             below.put(line, doc.view@)!
         return
-    if w.part == Part.notes
+    if walk.part == Part.notes
         return
     if heading <= 0
         doc.view.add(line)!

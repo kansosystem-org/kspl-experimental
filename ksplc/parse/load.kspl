@@ -133,8 +133,8 @@ impl Profiler
         // A copy sorted by call count, descending: sorting kspeg_list itself would make where the
         // next measurement lands depend on whether it was printed.
         ranked: = r.kspeg_list
-            .order_by(fn(a: Kspeg_prof_entry$@@, b: Kspeg_prof_entry$@@; ): I32 {
-                return base_core.by_descending(a.calls, b.calls);
+            .order_by(fn(left: Kspeg_prof_entry$@@, right: Kspeg_prof_entry$@@; ): I32 {
+                return base_core.by_descending(left.calls, right.calls);
             }, base_core.arena)
 
         // Counts, unlike wall-clock time, are the same on every backend. The total comes first,
@@ -230,15 +230,15 @@ enum Parse_error
     kspeg(err: Kspeg_signal)
 
 impl Parse_error
-    priv fn report_bad_import(e: Self, decl: Ast_node$@, wanted: U8[], importer: U8[],
+    priv fn report_bad_import(r: Self, decl: Ast_node$@, wanted: U8[], importer: U8[],
         importer_src: U8[]): Bool //<
-            //< It reports an import that could not be read, at the position where it is written.
+            //< It reports an import that could not be read, at the position where it is written
             //< Caution: **Do not print the name alone**: finding which file asked for it would take
             //< a full-text search. On true the caller throws `syntax_error`, the signal for
             //< "already reported" (as parse_raw_ast does) that outer stages pass along, so it is
             //< reported once.
         defer $why: = Str_builder()
-        switch e
+        switch r
         case .io(io_err)
             // Caution: **Print the absolute name.** Some import names are looked up from the
             // **working directory** rather than beside the entry file. A relative name hides
@@ -419,8 +419,8 @@ priv fn read_source(file_path: U8[]): U8[]!Parse_error //< it reads one file
         // changes with --std-dir / KSPLC_STD_DIR.
         throw read_error(e, base_core.arena.dup_str(file_path))
 
-priv fn read_error(e: io.Io_error, failed_path: U8[]): Parse_error
-    switch e
+priv fn read_error(error: io.Io_error, failed_path: U8[]): Parse_error
+    switch error
     case .read_failed
         return .io(.read_failed(failed_path))
     default {}
@@ -604,7 +604,7 @@ priv fn check_embeds(decls: List<|Ast_node$@|>@, import_path: U8[], src: U8[]): 
 
 fn parse_synth_decls(src: U8[], file_path: U8[], parser: kspeg.Target$@,
     out: List<|Ast_node$@|>$@): Void!Parse_error //<
-        //< It turns an assembled KSPL source string into top-level declarations appended to `out`.
+        //< It turns an assembled KSPL source string into top-level declarations appended to `out`
         //< Caution: **Synthesize declarations through here.** A hand-built AST shows its mistakes
         //< only in the generated C. It must also track every change to a declaration's shape (the
         //< grammar `ksplc/kspl.kspeg` would stop being the canonical source).
@@ -679,14 +679,15 @@ priv fn append_enum_members(decls: List<|Ast_node$@|>$@, file_path: U8[],
     for i in Range.asc(origins.len)
         decls.get(from + i).place_as_made(origins.get(i))
 
-priv fn write_variant_name(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: U8[], p: U8[],
+priv fn write_variant_name(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: U8[], path: U8[],
     out: Str_builder$@) //<
         //< It writes `variant_name(r: E): U8[]` into out, unless the file writes its own
         //< Nothing is written when no variant could be read.
     if has_user_method(decls, name, "variant_name")
         return
     defer $one: = Str_builder()
-    one.s("  ").s(enum_vis(decl)).s("fn variant_name(r: ").s(name).s(p).s("): U8[] {\n    switch r")
+    one.s("  ").s(enum_vis(decl)).s("fn variant_name(r: ").s(name).s(path)
+        .s("): U8[] {\n    switch r")
     $any: = false
     for v in decl.children
         if v.kind_id != .k_enum_variant || v.children.len == 0

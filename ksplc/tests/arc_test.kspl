@@ -25,10 +25,10 @@ struct Arc_cell<|T|>
     priv ctrl: _Arc_cell_ctrl<|T|>$@
 
 impl<|T|> Arc_cell<|T|>
-    fn new(v: T): Arc_cell<|T|>
+    fn new(value: T): Arc_cell<|T|>
         c: = mem.new(_Arc_cell_ctrl<|T|>::{})
         c.count = 1
-        c.value = v
+        c.value = value
         return ::{ .ctrl = c }
     fn get(r: Self$@): T$@
         return r.ctrl.value@
@@ -65,10 +65,10 @@ struct Arc_counter
     priv ctrl: _Arc_counter_ctrl$@
 
 impl Arc_counter
-    fn new(v: I32): Arc_counter
+    fn new(value: I32): Arc_counter
         c: = mem.new(_Arc_counter_ctrl::{})
         c.count = 1
-        c.value = v
+        c.value = value
         return ::{ .ctrl = c }
     fn get(r: Self$@): I32$@
         return r.ctrl.value@
@@ -86,12 +86,12 @@ impl Arc_counter: Ref_counted
             dealloc(Void$@::r.ctrl)
 
 priv fn arc_auto_single() //<
-    //< One binding (count 1 at new()) -> an automatic release on leaving the scope -> freed at 0.
+    //< One binding (count 1 at new()) -> an automatic release on leaving the scope -> freed at 0
     $a: = Arc_counter(42)
     assert(a.get()$ == 42 && a.refcount() == 1, "a single ARC binding must have count 1")
 
 priv fn arc_auto_copy() //<
-    //< A copy (b := a) retains -> count 2; leaving releases b then a -> 0.
+    //< A copy (b := a) retains -> count 2; leaving releases b then a -> 0
     a: = Arc_counter(7)
     $b: = a
     assert(a.refcount() == 2, "a plain copy of an ARC value must auto-retain to count 2")
@@ -112,15 +112,16 @@ fn test_arc_auto_local()
     verdict
         .pass("the retain on copy and the release on leaving a scope balanced exactly, both \
             compiler-inserted.")
-priv fn arc_consume($c: Arc_counter) //< another function taking an ARC target's value by value
+priv fn arc_consume($counter: Arc_counter) //<
+    //< another function taking an ARC target's value by value
     //< It pairs with the caller's retain and is released at this function's end (count 2 until
     //< then).
-    assert(c.get()$ == 99, "the callee must see the shared ARC value")
-    assert(c.refcount() == 2, "during the call both caller and callee owners are counted")
+    assert(counter.get()$ == 99, "the callee must see the shared ARC value")
+    assert(counter.refcount() == 2, "during the call both caller and callee owners are counted")
 
-priv fn arc_make(v: I32): Arc_counter //< a factory allocating an ARC target and returning it
+priv fn arc_make(value: I32): Arc_counter //< a factory allocating an ARC target and returning it
     //< A retain at the return offsets the local's release, so the caller owns it at count 1.
-    x: = Arc_counter(v)
+    x: = Arc_counter(value)
     return x
 
 priv fn arc_cross_scenario()
@@ -198,22 +199,22 @@ enum Arc_wrap
     empty
     filled(v: Rc<|I32|>)
 
-priv fn arc_is_alive(r: Rc<|I32|>@): Bool
-    w: = r.downgrade()
+priv fn arc_is_alive(value: Rc<|I32|>@): Bool
+    w: = value.downgrade()
     $alive: = true
     _got: = w.upgrade() catch
         alive = false
         fallback Rc<|I32|>(0)
     return alive
 
-priv fn arc_store_into_field(v: Rc<|I32|>): Arc_holder
-    return Arc_holder::{ .v = v }
+priv fn arc_store_into_field(value: Rc<|I32|>): Arc_holder
+    return Arc_holder::{ .v = value }
 
-priv fn arc_store_into_array(v: Rc<|I32|>): Rc<|I32|>[2]
-    return ::{ v, v }
+priv fn arc_store_into_array(value: Rc<|I32|>): Rc<|I32|>[2]
+    return ::{ value, value }
 
-priv fn arc_store_into_enum(v: Rc<|I32|>): Arc_wrap
-    return .filled(v)
+priv fn arc_store_into_enum(value: Rc<|I32|>): Arc_wrap
+    return .filled(value)
 
 fn test_arc_retain_on_every_copy_site()
     verdict
@@ -308,20 +309,20 @@ priv fn arc_place_expr_copy_body() //< a copy from a place expression (`g.arr[0]
     assert(origin_alive,
         "copying an array element must retain it (the original storage still owns a reference)")
 
-priv fn arc_multi_exit_body(n: I32): I32 //<
+priv fn arc_multi_exit_body(value: I32): I32 //<
     //< the three routes of a return, a break and a normal exit
     //< The cleanup is duplicated per exit, and the synthesized switch (payload binding included)
     //< must still resolve after duplication.
-    e: = Arc_multi.two(1, Rc<|I32|>(n))
+    e: = Arc_multi.two(1, Rc<|I32|>(value))
     $arr: Rc<|I32|>[2] = ::{ Rc<|I32|>(1), Rc<|I32|>(2) }
     for i in Range.asc(3)
-        if i == n
+        if i == value
             return arr[0].get()$
         if i == 2
             break
     switch e
     case .two(_t, v)
-        return v.get()$ - n + arr[1].get()$
+        return v.get()$ - value + arr[1].get()$
     default
         return arr[1].get()$
 
@@ -375,7 +376,7 @@ priv fn arc_result_dropped_body() //<
     arc_hold(arc_make_ok())
     arc_hold(arc_make_err())
 
-priv fn arc_hold(_r: Rc<|I32|>!Arc_err) {} //< takes a Result and reads nothing of it
+priv fn arc_hold(_result: Rc<|I32|>!Arc_err) {} //< takes a Result and reads nothing of it
 
 priv fn arc_result_unwrapped_body() //< the receiving shape
     r: = arc_make_ok()
@@ -418,8 +419,9 @@ fn test_arc_result_payload_release()
 // copy. The heap still balances while the freed memory reads as before. So a weak handle and the
 // final balance are what tell.
 // ==========================================
-priv fn arc_unwrap_place(r: Rc<|I32|>!Arc_err): Rc<|I32|> //< unwraps a Result it does not give up
-    v: = r catch
+priv fn arc_unwrap_place(result: Rc<|I32|>!Arc_err): Rc<|I32|> //<
+    //< unwraps a Result it does not give up
+    v: = result catch
         fallback Rc<|I32|>(0)
     return v
 
@@ -557,9 +559,9 @@ priv struct Arc_self_watch //< a value holding the only weak handle to its own b
 priv fn arc_nested_body(inner: Rc<|I32|>$@)
     _outer: = Rc<|Arc_holder|>(Arc_holder::{ .v = inner$ })
 
-priv fn arc_chain_body(n: I32, walk: Bool)
+priv fn arc_chain_body(value: I32, walk: Bool)
     $head: = Rc<|Arc_node|>.empty()
-    for i in Range.asc(n)
+    for i in Range.asc(value)
         head = Rc<|Arc_node|>(Arc_node::{ .v = I32::i, .next = head })
     if !walk
         return
@@ -578,8 +580,8 @@ priv fn arc_self_watch_body()
 priv fn arc_keep(x: Rc<|I32|>): I32 //< takes a count by value, as any parameter does
     return x.get()$
 
-priv fn arc_give(b: Rc<|Arc_holder|>$@): Rc<|I32|> //< returns a copy read through `get()`
-    bb: = b$
+priv fn arc_give(holder: Rc<|Arc_holder|>$@): Rc<|I32|> //< returns a copy read through `get()`
+    bb: = holder$
     return bb.get().v
 
 priv fn arc_through_call_body()
@@ -762,10 +764,10 @@ fn test_arc_container_owns_elements()
 // ==========================================
 // A receiver passed by value takes a count, as an argument does: the callee releases it.
 // ==========================================
-priv fn arc_store_after_reading(k: Arc_key, at: Arc_key$@) //<
-    //< reads k through a method, then keeps it
-    _h: = k.hash()
-    at$ = k
+priv fn arc_store_after_reading(key: Arc_key, at: Arc_key$@) //<
+    //< reads `key` through a method, then keeps it
+    _h: = key.hash()
+    at$ = key
 
 fn test_arc_value_receiver_takes_a_count()
     verdict.start("[ARC] a receiver passed by value is retained as an argument is test...")
@@ -781,8 +783,9 @@ fn test_arc_value_receiver_takes_a_count()
 // A question to an Option lends it (`is_some` and `is_none` take `Self@`), so asking takes no
 // count and drops none. Asked on every pass of a loop, the count stays where it was.
 // ==========================================
-priv fn arc_counter_if(c: Arc_counter, keep: Bool): Arc_counter? //< c where keep, none otherwise
-    return .some(c) if keep else .none
+priv fn arc_counter_if(counter: Arc_counter, keep: Bool): Arc_counter? //<
+    //< `counter` where keep, none otherwise
+    return .some(counter) if keep else .none
 
 priv fn arc_option_asked_in_a_loop_body(): Bool
     c: = Arc_counter(3)
@@ -810,9 +813,9 @@ fn test_arc_question_takes_no_count()
 priv struct Arc_box
     rc: Rc<|I32|>
 
-priv fn arc_read_field(b: Arc_box$@): Rc<|I32|> //<
+priv fn arc_read_field(box: Arc_box$@): Rc<|I32|> //<
     //< A function holding not one cleanup (no local ARC binding and no defer)
-    return b.rc
+    return box.rc
 
 priv fn arc_return_without_cleanup_body()
     $box: Arc_box = ::{ .rc = Rc<|I32|>(21) }
@@ -844,16 +847,16 @@ priv struct Arc_duo
     a: Rc<|I32|>
     n: I32
 
-priv fn arc_duo(v: I32): Arc_duo
-    return ::{ .a = Rc<|I32|>(v), .n = v }
+priv fn arc_duo(value: I32): Arc_duo
+    return ::{ .a = Rc<|I32|>(value), .n = value }
 
-priv fn arc_duo_pass(p: Arc_duo): Arc_duo
-    return p
+priv fn arc_duo_pass(duo: Arc_duo): Arc_duo
+    return duo
 
-priv fn arc_maybe_duo(v: I32): Arc_duo!Arc_err
-    if v < 0
+priv fn arc_maybe_duo(value: I32): Arc_duo!Arc_err
+    if value < 0
         throw .failed
-    return arc_duo(v)
+    return arc_duo(value)
 
 priv fn arc_unbound_body(): I32
     arc_duo(1)

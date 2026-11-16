@@ -61,15 +61,16 @@ fn engine_over(model: U8[], arena: Arena$@): Engine //< a fresh engine over a ti
     m: = Qwen.load(g@, CONTEXT, arena) catch panic("the tiny chat model loads")
     return Engine(m, tok, marks, CONTEXT, arena)
 
-priv fn rendered(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@ //<
+priv fn rendered(body: U8[], engine: Engine$@, arena: Arena$@): List<|I32|>$@ //<
     //< The prompt a request body renders to
     c: = request.read_chat(body, arena) catch why
         panic(arena.text().s("the request is refused: ").s(why).take())
-    return template.render(c.conv@, e.tok, e.marks, arena)
+    return template.render(c.conv@, engine.tok, engine.marks, arena)
 
-fn marks_in(ids: List<|I32|>@, m: template.Marks): Sz //< how many marker IDs the list holds
-    all: I32[9] = ::{ m.im_start, m.im_end, m.end_of_text, m.call_open, m.call_close,
-        m.response_open, m.response_close, m.think_open, m.think_close }
+fn marks_in(ids: List<|I32|>@, marks: template.Marks): Sz //< how many marker IDs the list holds
+    all: I32[9] = ::{ marks.im_start, marks.im_end, marks.end_of_text, marks.call_open,
+        marks.call_close, marks.response_open, marks.response_close, marks.think_open,
+        marks.think_close }
     $n: Sz = 0
     for id in ids
         for k in all
@@ -97,8 +98,8 @@ priv fn texts_in(text: U8[], all: U8[][]): Sz //< how many times the text holds 
             rest = rest.sub_from(at + t.len)
     return n
 
-fn check_cases(cases_text: U8[], e: Engine$@,
-    render: fn(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@, arena: Arena$@): Sz //<
+fn check_cases(cases_text: U8[], engine: Engine$@,
+    render: fn(body: U8[], engine: Engine$@, arena: Arena$@): List<|I32|>$@, arena: Arena$@): Sz //<
         //< Checks that each template case renders to llama.cpp's text; gives the number of cases
         //< **Decoding the IDs gives the text back**, and each marker's text in it stands as the
         //< marker's ID, never as the bytes of its text. Each template's tests give their own
@@ -110,8 +111,8 @@ fn check_cases(cases_text: U8[], e: Engine$@,
         defer $body: = Str_builder()
         cases.get(i).get("request").dump(body@)
         want: = cases.get(i).get("prompt").as_str().unwrap_or("")
-        got: = render(body.slice(), e, arena)
-        text: = e.tok.decode(got, arena)
+        got: = render(body.slice(), engine, arena)
+        text: = engine.tok.decode(got, arena)
         if !text.equals(want)
             panic(arena.text().s("case \{i\} renders otherwise:\n").s(text)
                 .s("\n--- llama.cpp renders:\n").s(want).take())
@@ -123,7 +124,7 @@ fn check_cases(cases_text: U8[], e: Engine$@,
             m: = messages.get(k)
             if !m.get("role").as_str().unwrap_or("").equals("assistant")
                 in_messages += control_texts_in(m.get("content").as_str().unwrap_or(""))
-        assert(marks_in(got, e.marks) + in_messages == mark_texts_in(want),
+        assert(marks_in(got, engine.marks) + in_messages == mark_texts_in(want),
             arena.text().s("case \{i\}: a marker is written as text").take())
     return cases.len
 
@@ -285,12 +286,12 @@ fn test_chat_null_fields(arena: Arena$@) //<
 fn greedy(): Picker //< the picker that always takes the top score
     return Picker::{ .cfg = sampler.Sample_config.greedy(), .rng = prng.Prng(1U64) }
 
-priv fn same_start(g: Generated@, want: List<|I32|>@, n: Sz): Bool //<
-    //< whether the generation holds exactly the first n tokens of want
-    if g.tokens.len != n
+priv fn same_start(generated: Generated@, want: List<|I32|>@, count: Sz): Bool //<
+    //< whether the generation holds exactly the first `count` tokens of want
+    if generated.tokens.len != count
         return false
-    for i in Range.asc(n)
-        if g.tokens.get(i) != want.get(i)
+    for i in Range.asc(count)
+        if generated.tokens.get(i) != want.get(i)
             return false
     return true
 
@@ -333,28 +334,28 @@ fn test_chat_stops_and_limits(arena: Arena$@) //<
         .take())
     verdict.pass("the end marker stops before itself; the limit and a full context cut the answer")
 
-fn generated(e: Engine$@, prompt: I32[], limit: Sz, pick: Picker$@, arena: Arena$@): Generated //<
+fn generated(engine: Engine$@, prompt: I32[], limit: Sz, pick: Picker$@, arena: Arena$@): Generated //<
     //< A generation that no watch stops, as an answer sent whole runs
     $quiet: = Unwatched::{ .none = true }
-    return e.generate(prompt, limit, pick, quiet@, arena)
+    return engine.generate(prompt, limit, pick, quiet@, arena)
 
-fn fed(e: Engine$@, prompt: I32[]): Sz //< the tokens a feed that no watch stops keeps
+fn fed(engine: Engine$@, prompt: I32[]): Sz //< the tokens a feed that no watch stops keeps
     $quiet: = Unwatched::{ .none = true }
-    kept: = e.feed(prompt, quiet@) catch
+    kept: = engine.feed(prompt, quiet@) catch
         panic("a feed with no watch reads the whole prompt")
     return kept
 
-fn last_scores(e: Engine$@, arena: Arena$@): List<|F32|> //< a copy of the engine's scores
+fn last_scores(engine: Engine$@, arena: Arena$@): List<|F32|> //< a copy of the engine's scores
     $out: = List<|F32|>(arena)
-    for i in Range.asc(e.logits.size)
-        out.push((e.logits.data + i)$)
+    for i in Range.asc(engine.logits.size)
+        out.push((engine.logits.data + i)$)
     return out
 
-fn same_scores(a: List<|F32|>@, b: List<|F32|>@): Bool //< whether the scores match exactly
-    if a.len != b.len
+fn same_scores(left: List<|F32|>@, right: List<|F32|>@): Bool //< whether the scores match exactly
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if a.get(i) != b.get(i)
+    for i in Range.asc(left.len)
+        if left.get(i) != right.get(i)
             return false
     return true
 

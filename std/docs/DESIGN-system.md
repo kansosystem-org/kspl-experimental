@@ -444,6 +444,13 @@ Caution: **Read the sign in one place, the runtime's entry** (`kspl_wait_ms`). E
 
 ## Files and paths
 
+**Two files hold the functions that read a path as text and never touch the file system.** Each sits where its result belongs:
+
+| Kind | Where | Functions | Why there |
+| :-- | :-- | :-- | :-- |
+| Taking a path apart | `std/sys` | `get_dir_name`, `get_file_name`, `last_ext`, `strip_last_ext`, `is_absolute`, `root_len`, `is_safe_relative` | Each returns a part of the text it was given, or a yes or no. It needs no memory, so a module that does not import `std/fs` can use it |
+| Building a path | `std/fs` | `join`, `absolute`, `lies_under` | Each writes a new path into an arena. `join_under` is there too, but it also looks on the disk for a link at each step |
+
 ### Paths are UTF-8, converted to the wide API on Windows
 
 KSPL keeps every path, and every string, as UTF-8, like the source text and POSIX. On Windows, it calls only the *wide* functions, which take UTF-16, and converts at one place in the C runtime, in both directions. Windows offers most functions twice:

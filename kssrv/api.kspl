@@ -23,27 +23,27 @@ const API_PREFIX: U8[] = "/api/" //< the JSON API's prefix
 
 const BEARER: U8[] = "Bearer " //< the prefix before the token in the `Authorization` header
 
-fn queue_json(c: conn.Conn$@, status: I32, val: json.Value, keep: Bool, allow: U8[] = "") //<
+fn queue_json(connection: conn.Conn$@, status: I32, val: json.Value, keep: Bool, allow: U8[] = "") //<
     //< Builds one JSON value and queues it as the response; `allow` is a 405's `Allow`
     defer $body: = Str_builder()
     val.dump(body@)
-    conn.queue_response(c, status, "application/json", body.slice(), keep, allow)
+    conn.queue_response(connection, status, "application/json", body.slice(), keep, allow)
 
 fn queue_json_error( //< queues an error answer in JSON
-    c: conn.Conn$@,
+    connection: conn.Conn$@,
     status: I32,
     allow: U8[] = "", //< a 405's `Allow`
     keep: Bool = false, //< whether the request was read whole and its client keeps the connection
 )
     reason: = http.reason_phrase(status).unwrap_or("")
-    $b: = Json_builder(c.arena)
+    $b: = Json_builder(connection.arena)
     val: = b.obj().set("error", b.str_val(reason)).set("status", b.int_val(status)).build()
     // The connection stays open after a refusal only as `queue_error` on the static side decides.
-    queue_json(c, status, val, keep && conn.keeps_after(status), allow)
+    queue_json(connection, status, val, keep && conn.keeps_after(status), allow)
 
-fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
+fn queue_api_status(connection: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
     //< `GET /api/status`: returns that it is running, and how much it has handled
-    $b: = Json_builder(c.arena)
+    $b: = Json_builder(connection.arena)
     // Caution: **Say whether it is for local use.** Otherwise the page shows the local tools even
     // where there are no file endpoints: buttons that do nothing. Without the token this is a 401,
     // so nothing leaks.
@@ -64,7 +64,7 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx@, keep: Bool) //<
     // a request adds would tell how many of a path's steps stand, which a 404 keeps back.
     if ctx.is_local()
         val = val.set("fs_lookups", b.int_val(fs.lookups()))
-    queue_json(c, 200, val.build(), keep)
+    queue_json(connection, 200, val.build(), keep)
 
 fn path_or_refuse( //< the path that `?path=` names under the root, the root joined in, or none
     //< None means a 400 or a 403 is queued. An empty path is the root itself. A write refuses a
@@ -72,25 +72,25 @@ fn path_or_refuse( //< the path that `?path=` names under the root, the root joi
     //< `kssrv/docs/DESIGN-server.md`).
     //< Caution: **Check the value after the decode, but keep a leading `/`.** Only a URL's path
     //< opens with one. So here `/etc/passwd` is an absolute path, refused, never under the root.
-    c: conn.Conn$@,
+    connection: conn.Conn$@,
     query: U8[],
     root: U8[],
     need_name: Bool,
     dots: fs.Dot_names,
     dot_is_root: Bool = false, //< whether `.` alone names the root, as for a listing
 ): U8[]?
-    params: = url.parse_query(query, c.arena) catch _e
-        queue_json_error(c, 400)
+    params: = url.parse_query(query, connection.arena) catch _e
+        queue_json_error(connection, 400)
         return .none
     $rel: = params.find("path").unwrap_or("")
     if dot_is_root && rel.equals(".")
         rel = ""
     if need_name && rel.len == 0
         // The root itself is not a file; this endpoint needs a name.
-        queue_json_error(c, 400)
+        queue_json_error(connection, 400)
         return .none
-    path: = fs.join_under(root, rel, dots, c.arena) catch _why
-        queue_json_error(c, 403)
+    path: = fs.join_under(root, rel, dots, connection.arena) catch _why
+        queue_json_error(connection, 403)
         return .none
     return .some(path)
 
@@ -108,32 +108,33 @@ fn url_rel(path: U8[]): U8[] //< a URL's path as a path under the root
 // with a 404. `GET /api/file?path=<p>` returns that file's bytes; `PUT /api/file?path=<p>` writes
 // the body.
 // ==========================================
-fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request@, root: U8[], keep: Bool)
+fn queue_api_file(connection: conn.Conn$@, target: conn.Target, req: http.Request@, root: U8[],
+    keep: Bool)
     // Caution: **A write never reaches a dot name.** A write to `.git/config` can set a command
     // that the next `git status` runs. A read of a dot name is let through.
     reads: = req.method.equals("GET")
     dots: fs.Dot_names = .allowed if reads else .refused(U8[][]::{})
-    path: U8[] = path_or_refuse(c, t.query, root, true, dots) catch
+    path: U8[] = path_or_refuse(connection, target.query, root, true, dots) catch
         return
     // Only GET and PUT come here (`ROUTES`).
     if reads
-        queue_get_file(c, path, keep)
+        queue_get_file(connection, path, keep)
         return
     // **Say that a folder stands there**: a page told only "not as expected" reads the file again,
     // finds none, and offers to write it there again, for ever.
     if fs.is_dir(path)
-        queue_conflict(c, "folder",
-            c.arena.text().s("A folder stands at \"").s(under_root(path, root))
+        queue_conflict(connection, "folder",
+            connection.arena.text().s("A folder stands at \"").s(under_root(path, root))
             .s("\". Save the file under another name.").take())
         return
     if expected: = req.headers.find("X-Kanso-If-Content")
-        status: = check_content(path, expected, c.arena)
+        status: = check_content(path, expected, connection.arena)
         if status != 200
-            queue_json_error(c, status)
+            queue_json_error(connection, status)
             return
-    queue_put_file(c, path, root, req.body, keep)
+    queue_put_file(connection, path, root, req.body, keep)
 
-fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
+fn queue_get_file(connection: conn.Conn$@, path: U8[], keep: Bool) //<
     //< Queues the file at `path` as the response, typed octet-stream
     //< **The type is not guessed from the content**, since a receiver trusts a guessed type.
     //< Reading it as UTF-8 is the caller's job; the server does not guess the encoding.
@@ -141,13 +142,13 @@ fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
     if found: = conn.regular_file_size(path)
         size = found
     else
-        queue_json_error(c, 404)
+        queue_json_error(connection, 404)
         return
     file: = io.open(path, "rb") catch _e
-        queue_json_error(c, 500)
+        queue_json_error(connection, 500)
         return
-    conn.queue_file(c, 200, "application/octet-stream", file, 0, size, keep,
-        http.headers(c.arena).build())
+    conn.queue_file(connection, 200, "application/octet-stream", file, 0, size, keep,
+        http.headers(connection.arena).build())
 
 priv fn check_content(path: U8[], expected: U8[], arena: Arena$@): I32 //<
     //< checks a conditional write's baseline
@@ -194,35 +195,35 @@ priv fn hex_of(digest: U8[sha256.DIGEST_SIZE], arena: Arena$@): U8[] //< a diges
     sha256.write_hex(digest, U8$[]::hex)
     return arena.dup_str(U8[]::hex)
 
-fn queue_put_file(c: conn.Conn$@, path: U8[], root: U8[], body: U8[], keep: Bool) //<
+fn queue_put_file(connection: conn.Conn$@, path: U8[], root: U8[], body: U8[], keep: Bool) //<
     //< Writes `body` to the file at `path` and queues a response saying how much was written
     //< Caution: **Answer 200 only once the body is on the disk** (`fs.replace_file`). An editor
     //< told "saved" drops its copy. So a save that a power cut then loses is lost for good. The
     //< file keeps its mode. The body's cap is in `kssrv/main.kspl` (a 413 never reaches here).
     // A write into a folder that is not there yet makes that one folder first, as a page's
     // images go into a folder named for their document. Its own folder must stand already.
-    if why: = folder_refusal(path, root, c.arena)
-        queue_conflict(c, "folders", why)
+    if why: = folder_refusal(path, root, connection.arena)
+        queue_conflict(connection, "folders", why)
         return
     if !make_folder_for(path)
-        queue_json_error(c, 500)
+        queue_json_error(connection, 500)
         return
     fs.replace_file(path, body, .kept) catch _e
         // No folder, or not writable: not a missing name, so not a 404.
-        queue_json_error(c, 500)
+        queue_json_error(connection, 500)
         return
-    $b: = Json_builder(c.arena)
+    $b: = Json_builder(connection.arena)
     val: = b.obj().set("wrote", b.int_val(body.len)).build()
-    queue_json(c, 200, val, keep)
+    queue_json(connection, 200, val, keep)
 
-priv fn queue_conflict(c: conn.Conn$@, cause: U8[], why: U8[]) //<
+priv fn queue_conflict(connection: conn.Conn$@, cause: U8[], why: U8[]) //<
     //< A 409 that is not a conditional write's mismatch: `cause` names the case, `error` says why
     //< **The page tells the cases apart by `cause`**, so it never says "changed on disk" for a
     //< file that cannot be written at all.
-    $b: = Json_builder(c.arena)
+    $b: = Json_builder(connection.arena)
     val: = b.obj().set("error", b.str_val(why)).set("cause", b.str_val(cause))
         .set("status", b.int_val(409)).build()
-    queue_json(c, 409, val, false)
+    queue_json(connection, 409, val, false)
 
 priv fn folder_refusal(path: U8[], root: U8[], arena: Arena$@): U8[]? //<
     //< Why the folders above `path` cannot take it, naming the folder at fault; none if they can
@@ -257,24 +258,24 @@ priv fn make_folder_for(path: U8[]): Bool //<
         return false
     return true
 
-fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
+fn queue_api_stat(connection: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< `GET /api/stat?path=<p>`: returns whether something changed
     //< Caution: **Do not return the content**, or it arrives by two paths (the file endpoint reads
     //< it). **Nothing is missed**: it returns "how things are now", not "how many times it
     //< changed", so it catches up however many changes happen in between.
-    target: U8[] = path_or_refuse(c, query, root, false, .allowed) catch
+    target: U8[] = path_or_refuse(connection, query, root, false, .allowed) catch
         return
     info: = fs.stat(target) catch _e
-        queue_json_error(c, 404)
+        queue_json_error(connection, 404)
         return
-    $b: = Json_builder(c.arena)
+    $b: = Json_builder(connection.arena)
     val: = b.obj().set("size", b.int_val(info.size))
         .set("changed_at", b.int_val(info.mtime)).build()
-    queue_json(c, 200, val, keep)
+    queue_json(connection, 200, val, keep)
 
 priv const MAX_LISTED: Sz = 2000 //< the most names one listing returns
 
-fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
+fn queue_api_list(connection: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< `GET /api/list?path=<folder>`: the names in one folder under the root, for a Save As dialog
     //< `{"folders":[…],"files":[…],"more":false}`, each list sorted. Empty or `.` is the root.
     //< Caution: **Names only, and only what the page could open anyway.** No content and no size.
@@ -283,18 +284,18 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< At most `MAX_LISTED` names come back; `more` says that others stand there.
     // **No link check here**: `path_or_refuse` refused any below the root, and a root can be one.
     folder: U8[] =
-        path_or_refuse(c, query, root, false, .refused(U8[][]::{}), true) catch
+        path_or_refuse(connection, query, root, false, .refused(U8[][]::{}), true) catch
             return
     if !fs.is_dir(folder)
-        queue_json_error(c, 404)
+        queue_json_error(connection, 404)
         return
-    names: = fs.read_dir(folder, c.arena) catch _e
-        queue_json_error(c, 404)
+    names: = fs.read_dir(folder, connection.arena) catch _e
+        queue_json_error(connection, 404)
         return
-    sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
-        return a.compare(b$);
-    }, c.arena)
-    $b: = Json_builder(c.arena)
+    sorted: = names.order_by(fn(left: U8[]@, right: U8[]@; ): I32 {
+        return left.compare(right$);
+    }, connection.arena)
+    $b: = Json_builder(connection.arena)
     $folders: = b.arr()
     $files: = b.arr()
     $listed: Sz = 0
@@ -303,7 +304,7 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
         // **A name the file endpoint would refuse is left out**, by the same check: a dot name, a
         // link, a `\` (only POSIX allows one), a short name's form and the rest.
         full: =
-            fs.join_under(folder, name, .refused(U8[][]::{}), c.arena) catch _why
+            fs.join_under(folder, name, .refused(U8[][]::{}), connection.arena) catch _why
                 continue
         is_folder: = fs.is_dir(full)
         if !is_folder && conn.regular_file_size(full).is_none()
@@ -318,7 +319,7 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
             files = files.push(b.str_val(name))
     val: = b.obj().set("folders", folders.build()).set("files", files.build())
         .set("more", b.bool_val(more)).build()
-    queue_json(c, 200, val, keep)
+    queue_json(connection, 200, val, keep)
 
 // ==========================================
 // The token
@@ -352,41 +353,42 @@ priv enum Reach //< in which mode an endpoint exists
         //< **Facing outward it does not**: with no token, anyone could read and write under the
         //< root.
 
-priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx@, r: Reach, keep: Bool): Bool //<
+priv fn reaches(connection: conn.Conn$@, ctx: conn.Ctx@, reach: Reach, keep: Bool): Bool //<
     //< Whether the endpoint exists in this mode
     //< Where it does not, the 404 is already queued.
-    here: = exists_here(ctx, r)
+    here: = exists_here(ctx, reach)
     if !here
-        queue_json_error(c, 404, "", keep)
+        queue_json_error(connection, 404, "", keep)
     return here
 
-priv fn exists_here(ctx: conn.Ctx@, r: Reach): Bool //< whether an endpoint so reached exists here
-    switch r
+priv fn exists_here(ctx: conn.Ctx@, reach: Reach): Bool //<
+    //< whether an endpoint so reached exists here
+    switch reach
     case .both
         return true
     case .local
         return ctx.is_local()
 
-priv fn queue_ok(c: conn.Conn$@, keep: Bool) //< returns only "it took effect"
+priv fn queue_ok(connection: conn.Conn$@, keep: Bool) //< returns only "it took effect"
     //< **A response with no content is JSON too**, so the page need not branch on the format.
-    $b: = Json_builder(c.arena)
-    queue_json(c, 200, b.obj().build(), keep)
+    $b: = Json_builder(connection.arena)
+    queue_json(connection, 200, b.obj().build(), keep)
 
-fn queue_api_here(c: conn.Conn$@) //<
+fn queue_api_here(connection: conn.Conn$@) //<
     //< `GET /api/here`: the page holds this connection open for as long as the page is open
     //< **Nothing is ever sent on it.** The connection itself is the message, and closing the tab
     //< closes it, so the server learns the moment the page goes, with no timer.
     //< Caution: **Do not answer and close.** Then the server would know only "someone asked a while
     //< ago", and how long ago is the guess this avoids.
-    conn.queue_stream_head(c)
-    c.holding = true
+    conn.queue_stream_head(connection)
+    connection.holding = true
 
-fn queue_api_stop(c: conn.Conn$@) //<
+fn queue_api_stop(connection: conn.Conn$@) //<
     //< `POST /api/stop`: answers, and the server stops once the answer has gone out
     //< **The answer comes first**, so the asker tells "it stopped" from "the connection broke". The
     //< accept loop does the stopping (`conn.stop_asked_by`).
-    conn.stop_asked_by = c.serial
-    queue_ok(c, false)
+    conn.stop_asked_by = connection.serial
+    queue_ok(connection, false)
 
 // ==========================================
 // A page's own functions: which files the person allowed, and the build
@@ -442,59 +444,61 @@ priv fn record(ctx: conn.Ctx@, path: U8[], content: U8[]?, arena: Arena$@): Bool
         return false
     return true
 
-fn queue_api_allow(c: conn.Conn$@, query: U8[], req: http.Request@, ctx: conn.Ctx@, keep: Bool) //<
-    //< `/api/allow?path=<file>`: whether the person allowed a functions file's bytes to be built
-    //< GET answers `{"allowed":…}` for the bytes the file holds now. POST allows the bytes that
-    //< `X-Kanso-If-Content` names, and refuses with 409 when the file holds others. DELETE takes
-    //< the allow back. With no builder it is a 404, as `/api/build` is.
-    //< Caution: **Only the person's own act on the page sends a POST.** The token keeps every
-    //< other program out; a document's content never reaches this endpoint.
+fn queue_api_allow(connection: conn.Conn$@, query: U8[], req: http.Request@, ctx: conn.Ctx@,
+    keep: Bool) //<
+        //< `/api/allow?path=<file>`: whether the person allowed a functions file's bytes to be built
+        //< GET answers `{"allowed":…}` for the bytes the file holds now. POST allows the bytes that
+        //< `X-Kanso-If-Content` names, and refuses with 409 when the file holds others. DELETE
+        //< takes the allow back. With no builder it is a 404, as `/api/build` is.
+        //< Caution: **Only the person's own act on the page sends a POST.** The token keeps every
+        //< other program out; a document's content never reaches this endpoint.
     if ctx.builder.len == 0
-        queue_json_error(c, 404)
+        queue_json_error(connection, 404)
         return
-    path: U8[] = path_or_refuse(c, query, ctx.root, true, .allowed) catch
+    path: U8[] = path_or_refuse(connection, query, ctx.root, true, .allowed) catch
         return
     if req.method.equals("DELETE")
-        if !record(ctx, path, .none, c.arena)
-            queue_json_error(c, 500)
+        if !record(ctx, path, .none, connection.arena)
+            queue_json_error(connection, 500)
             return
-        queue_allowed(c, false, keep)
+        queue_allowed(connection, false, keep)
         return
     if conn.regular_file_size(path).is_none()
-        queue_json_error(c, 404)
+        queue_json_error(connection, 404)
         return
-    content: U8[] = content_digest(path, c.arena) catch
-        queue_json_error(c, 500)
+    content: U8[] = content_digest(path, connection.arena) catch
+        queue_json_error(connection, 500)
         return
     if req.method.equals("GET")
-        queue_allowed(c, is_allowed(ctx, path, content, c.arena), keep)
+        queue_allowed(connection, is_allowed(ctx, path, content, connection.arena), keep)
         return
     expected: = req.headers.find("X-Kanso-If-Content").unwrap_or("")
     if !is_digest(expected)
-        queue_json_error(c, 400)
+        queue_json_error(connection, 400)
         return
     if !expected.equals(content)
-        queue_json_error(c, 409)
+        queue_json_error(connection, 409)
         return
-    if !record(ctx, path, .some(content), c.arena)
-        queue_json_error(c, 500)
+    if !record(ctx, path, .some(content), connection.arena)
+        queue_json_error(connection, 500)
         return
-    queue_allowed(c, true, keep)
+    queue_allowed(connection, true, keep)
 
-priv fn queue_allowed(c: conn.Conn$@, allowed: Bool, keep: Bool) //< `{"allowed":…}`
-    $b: = Json_builder(c.arena)
-    queue_json(c, 200, b.obj().set("allowed", b.bool_val(allowed)).build(), keep)
+priv fn queue_allowed(connection: conn.Conn$@, allowed: Bool, keep: Bool) //< `{"allowed":…}`
+    $b: = Json_builder(connection.arena)
+    queue_json(connection, 200,
+        b.obj().set("allowed", b.bool_val(allowed)).build(), keep)
 
-priv fn queue_refusal(c: conn.Conn$@, status: I32, why: U8[]) //<
+priv fn queue_refusal(connection: conn.Conn$@, status: I32, why: U8[]) //<
     //< A refusal whose JSON `error` says why in words the page shows as they are
-    $b: = Json_builder(c.arena)
+    $b: = Json_builder(connection.arena)
     val: = b.obj().set("error", b.str_val(why)).set("status", b.int_val(status)).build()
-    queue_json(c, status, val, false)
+    queue_json(connection, status, val, false)
 
 priv const BUILD_MS: I32 = 60000 //< how long one build may take
 priv const MAX_BUILT: Sz = 16 * 1024 * 1024 //< the most bytes of wasm, or of a message, kept
 
-fn queue_api_build(c: conn.Conn$@, query: U8[], ctx: conn.Ctx@, keep: Bool) //<
+fn queue_api_build(connection: conn.Conn$@, query: U8[], ctx: conn.Ctx@, keep: Bool) //<
     //< `POST /api/build?path=<file>`: the wasm of a person's own functions in that file
     //< `--builder` builds it (`kssrv/main.kspl`); the answer is the wasm, or a 422 whose JSON
     //< `error` is the builder's message. With no builder it is a 404, as with no such endpoint.
@@ -502,41 +506,41 @@ fn queue_api_build(c: conn.Conn$@, query: U8[], ctx: conn.Ctx@, keep: Bool) //<
     //< **The server waits for the build**, since it holds no request open while a child runs.
     //< Only this page waits; `BUILD_MS` bounds it.
     if ctx.builder.len == 0
-        queue_json_error(c, 404)
+        queue_json_error(connection, 404)
         return
-    path: U8[] = path_or_refuse(c, query, ctx.root, true, .allowed) catch
+    path: U8[] = path_or_refuse(connection, query, ctx.root, true, .allowed) catch
         return
     if conn.regular_file_size(path).is_none()
-        queue_json_error(c, 404)
+        queue_json_error(connection, 404)
         return
-    content: U8[] = content_digest(path, c.arena) catch
-        queue_json_error(c, 500)
+    content: U8[] = content_digest(path, connection.arena) catch
+        queue_json_error(connection, 500)
         return
-    if !is_allowed(ctx, path, content, c.arena)
-        queue_refusal(c, 403, "this file's functions are not allowed to run")
+    if !is_allowed(ctx, path, content, connection.arena)
+        queue_refusal(connection, 403, "this file's functions are not allowed to run")
         return
     // **Messages name the file as the page does**, by its path from the root.
-    shown: = url.parse_query(query, c.arena) catch
-        queue_json_error(c, 400)
+    shown: = url.parse_query(query, connection.arena) catch
+        queue_json_error(connection, 400)
         return
     // Caution: **The builder gets the digest too**, and builds only bytes that match it. A file
     // changed between this check and the builder's read is then refused, not built.
     got: =
         subproc.run_capture(U8[][]::{ ctx.builder, path, shown.find("path").unwrap_or(""), content },
-        "", BUILD_MS, MAX_BUILT, c.arena) catch
-            queue_json_error(c, 500)
+        "", BUILD_MS, MAX_BUILT, connection.arena) catch
+            queue_json_error(connection, 500)
             return
     // Caution: **A module cut at the cap is no module**: sent with 200, the page would fail to
     // load it with no reason given.
     if got.exited_with(0) && !got.output_cut
-        conn.queue_response(c, 200, "application/wasm", got.stdout_data, keep)
+        conn.queue_response(connection, 200, "application/wasm", got.stdout_data, keep)
         return
     $why: = "the build took longer than 60 s"
     if !got.exited_with(0) && got.exit_code.is_some()
-        why = got.text(c.arena)
+        why = got.text(connection.arena)
     else if got.output_cut
         why = "the built module is larger than 16 MiB"
-    queue_refusal(c, 422, why)
+    queue_refusal(connection, 422, why)
 
 // ==========================================
 // The dispatch under `/api/`, checked before static serving (a file named `api` under the root
@@ -574,8 +578,8 @@ priv const ROUTES: Route[8] = ::{ //<
     Route::{ .path = "/api/status", .reach = .both, .methods = "GET", .api = .status },
 }
 
-priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that method
-    $rest: = r.methods
+priv fn takes(route: Route, method: U8[]): Bool //< whether the route takes that method
+    $rest: = route.methods
     for rest.len > 0
         cut: = rest.find_char(',').unwrap_or(rest.len)
         if rest.sub(0, cut).trim_spaces().equals(method)
@@ -590,38 +594,39 @@ fn takes_method(path: U8[], method: U8[], ctx: conn.Ctx@): Bool //<
             return exists_here(ctx, r.reach) && takes(r, method)
     return false
 
-fn queue_api(c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@, keep: Bool)
+fn queue_api(connection: conn.Conn$@, target: conn.Target, req: http.Request$@, ctx: conn.Ctx$@,
+    keep: Bool)
     // The connection pump authorizes the head before reading its body.
     for r in ROUTES
-        if !t.path.equals(r.path)
+        if !target.path.equals(r.path)
             continue
-        if !reaches(c, ctx, r.reach, keep)
+        if !reaches(connection, ctx, r.reach, keep)
             return
         if !takes(r, req.method)
-            queue_json_error(c, 405, r.methods, keep)
+            queue_json_error(connection, 405, r.methods, keep)
             return
-        r.api.queue(c, t, req, ctx, keep)
+        r.api.queue(connection, target, req, ctx, keep)
         return
-    queue_json_error(c, 404, "", keep)
+    queue_json_error(connection, 404, "", keep)
 
 impl Api
-    priv fn queue(r: Self, c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@,
-        keep: Bool) //<
+    priv fn queue(r: Self, connection: conn.Conn$@, target: conn.Target, req: http.Request$@,
+        ctx: conn.Ctx$@, keep: Bool) //<
             //< Hands one request to this endpoint, once `queue_api`'s guards have passed
         switch r
         case .file
-            queue_api_file(c, t, req, ctx.root, keep)
+            queue_api_file(connection, target, req, ctx.root, keep)
         case .stat
-            queue_api_stat(c, t.query, ctx.root, keep)
+            queue_api_stat(connection, target.query, ctx.root, keep)
         case .list
-            queue_api_list(c, t.query, ctx.root, keep)
+            queue_api_list(connection, target.query, ctx.root, keep)
         case .here
-            queue_api_here(c)
+            queue_api_here(connection)
         case .stop
-            queue_api_stop(c)
+            queue_api_stop(connection)
         case .allow
-            queue_api_allow(c, t.query, req, ctx, keep)
+            queue_api_allow(connection, target.query, req, ctx, keep)
         case .build
-            queue_api_build(c, t.query, ctx, keep)
+            queue_api_build(connection, target.query, ctx, keep)
         case .status
-            queue_api_status(c, ctx, keep)
+            queue_api_status(connection, ctx, keep)

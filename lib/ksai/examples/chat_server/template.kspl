@@ -103,8 +103,8 @@ impl Prompt
         r.ids.push(id)
         return r
 
-    fn json(r: Self$@, v: json.Value): Self$@ //< appends a value as the template's `tojson`
-        tojson(v, r.text)
+    fn json(r: Self$@, value: json.Value): Self$@ //< appends a value as the template's `tojson`
+        tojson(value, r.text)
         return r
 
     fn flush(r: Self$@) //< encodes the waiting text
@@ -113,13 +113,13 @@ impl Prompt
         r.ids.push_all(r.tok.encode(r.text.slice(), r.arena).slice())
         r.text.clear()
 
-    priv fn assistant(r: Self$@, m: Message@, after_query: Bool, last: Bool, marks: Marks) //<
+    priv fn assistant(r: Self$@, message: Message@, after_query: Bool, last: Bool, marks: Marks) //<
         //< An assistant message: its thinking where the template keeps it, its text, its calls
         //< Thinking is kept only after the last question, and only where it is the last message
         //< or holds text. A `</think>` in the content splits the thinking from it.
-        $content: = m.content.unwrap_or("")
+        $content: = message.content.unwrap_or("")
         $reasoning: U8[] = ""
-        if given: = m.reasoning
+        if given: = message.reasoning
             reasoning = given
         else if content.find_str(THINK_END_TEXT).is_some()
             before: = rstrip_nl(before_first(content, THINK_END_TEXT))
@@ -131,8 +131,8 @@ impl Prompt
                 .mark(marks.think_close).s("\n\n").s(lstrip_nl(content))
         else
             r.s(content)
-        for k in Range.asc(m.calls.len)
-            c: = m.calls.get(k)
+        for k in Range.asc(message.calls.len)
+            c: = message.calls.get(k)
             if k > 0 || content.len > 0
                 r.s("\n")
             r.mark(marks.call_open).s("\n{\"name\": \"").s(c.name).s("\", \"arguments\": ")
@@ -143,11 +143,11 @@ impl Prompt
             r.s("}\n").mark(marks.call_close)
         r.mark(marks.im_end).s("\n")
 
-fn tojson(v: json.Value, out: Str_builder$@) //< a value as Python's `json.dumps` writes it
+fn tojson(value: json.Value, out: Str_builder$@) //< a value as Python's `json.dumps` writes it
     //< That is the template's `tojson`: a space after each `,` and `:` between items, and
     //< non-ASCII text as it is. **Members keep the request's order**, as `std/json` reads it.
     defer $flat: = Str_builder()
-    v.dump(flat@)
+    value.dump(flat@)
     $in_text: = false
     $escaped: = false
     for c in flat.slice()
@@ -168,29 +168,29 @@ fn tojson(v: json.Value, out: Str_builder$@) //< a value as Python's `json.dumps
 // Python's string methods the template calls, on newlines alone
 // ==========================================
 
-fn lstrip_nl(s: U8[]): U8[] //< `s.lstrip('\n')`
+fn lstrip_nl(text: U8[]): U8[] //< `text.lstrip('\n')`
     $i: Sz = 0
-    for i < s.len && s[i] == '\n'
+    for i < text.len && text[i] == '\n'
         i += 1
-    return s.sub_from(i)
+    return text.sub_from(i)
 
-fn rstrip_nl(s: U8[]): U8[] //< `s.rstrip('\n')`
-    $n: = s.len
-    for n > 0 && s[n - 1] == '\n'
+fn rstrip_nl(text: U8[]): U8[] //< `text.rstrip('\n')`
+    $n: = text.len
+    for n > 0 && text[n - 1] == '\n'
         n -= 1
-    return s.sub(0, n)
+    return text.sub(0, n)
 
-fn after_last(s: U8[], part: U8[]): U8[] //< `s.split(part)|last`: the text after its last one
-    $rest: = s
+fn after_last(text: U8[], part: U8[]): U8[] //< `text.split(part)|last`: the text after its last one
+    $rest: = text
     for
         at: = rest.find_str(part) catch
             return rest
         rest = rest.sub_from(at + part.len)
 
-fn before_first(s: U8[], part: U8[]): U8[] //< `s.split(part)|first`
-    at: = s.find_str(part) catch
-        return s
-    return s.sub(0, at)
+fn before_first(text: U8[], part: U8[]): U8[] //< `text.split(part)|first`
+    at: = text.find_str(part) catch
+        return text
+    return text.sub(0, at)
 
 priv fn last_query(msgs: List<|Message|>@): Sz //< the template's `ns.last_query_index`
     //< The last user message that is not a tool's result wrapped in `<tool_response>`; where there

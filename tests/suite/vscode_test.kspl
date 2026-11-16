@@ -60,9 +60,9 @@ priv fn strip_line_comments(text: U8[], arena: Arena$@): U8$[] //<
         b.s(raw.sub(0, cut)).c('\n')
     return arena.dup_str(b.slice())
 
-priv fn is_obj(v: json.Value): Bool //< whether it is an object
+priv fn is_obj(value: json.Value): Bool //< whether it is an object
     //< `get` returns `null_val` for a missing key too, so this tells "could not be read" apart.
-    switch v
+    switch value
     case .obj_val
         return true
     default {}
@@ -100,7 +100,7 @@ priv fn parse_make_cmd(cmd: U8[], arena: Arena$@): Make_cmd
     return Make_cmd::{ .found = target.len > 0, .target = target, .vars = vars }
 
 priv fn workspace_rel(text: U8[], from: Sz): U8[] //<
-    //< Extracts `${workspaceFolder}/<relative path>` (ending at a space or a `"`).
+    //< Extracts `${workspaceFolder}/<relative path>` (ending at a space or a `"`)
     marker: = "${workspaceFolder}/"
     switch text.sub_from(from).find_str(marker)
     case .none
@@ -121,9 +121,10 @@ priv fn labels_of(tasks: json.Value, arena: Arena$@): List<|U8[]|>
         out.push(t.get("label").as_str().unwrap_or(""))
     return out
 
-priv fn arg_text(a: json.Value): U8[] //< one argument's text, written bare or quoted (`value`)
-    return (a.as_str().unwrap_or("") if !is_obj(a)
-        else a.get("value").as_str().unwrap_or(""))
+priv fn arg_text(argument: json.Value): U8[] //<
+    //< one argument's text, written bare or quoted (`value`)
+    return (argument.as_str().unwrap_or("") if !is_obj(argument)
+        else argument.get("value").as_str().unwrap_or(""))
 
 priv fn command_line(task: json.Value, arena: Arena$@): U8[] //< `command` and its `args`, by spaces
     //< A task may name make alone and its target among `args` (run with no shell between).
@@ -248,13 +249,13 @@ priv fn check_release_assets(root: U8[], arena: Arena$@) //<
 
 priv const BUILD_LABEL: U8[] = "kanso-build-current-file" //< the task F5 builds with
 
-priv fn side_of(v: json.Value, key: U8[]): json.Value //<
-    //< a platform's branch (`windows`), or v itself
+priv fn side_of(value: json.Value, key: U8[]): json.Value //<
+    //< a platform's branch (`windows`), or `value` itself
     //< Empty is the default; a key with no branch of its own falls back to the default, as VS Code
     //< reads it.
-    if key.len == 0 || !is_obj(v.get(key))
-        return v
-    return v.get(key)
+    if key.len == 0 || !is_obj(value.get(key))
+        return value
+    return value.get(key)
 
 priv fn check_build_task(tasks: json.Value, launch: json.Value, arena: Arena$@) //<
     //< The build task is `ksplc build`, writing what launch.json starts, on each platform

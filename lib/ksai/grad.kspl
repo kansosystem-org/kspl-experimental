@@ -12,16 +12,16 @@ priv struct Reduce_stats //<
     sum_exp: F64 //< Σ exp(x_i - max_v)
 
 impl<|T|> Tensor<|T|>
-    priv fn softmax_reduce(r: Self$@, offset: Sz, n: Sz): Reduce_stats //<
-        //< Returns the max of the last-dimension slice [offset, offset+n) and the sum of exp(x-max)
+    priv fn softmax_reduce(r: Self$@, offset: Sz, count: Sz): Reduce_stats //<
+        //< The max of the last-dimension slice [offset, offset+count), and the sum of exp(x-max)
         //< Softmax and the cross-entropy family share it.
         $max_v: = (r.data + offset)$
-        for $i: Sz = 1; i < n; i += 1
+        for $i: Sz = 1; i < count; i += 1
             v: = (r.data + offset + i)$
             if v > max_v
                 max_v = v
         $sum_exp: = 0.0
-        for i in Range.asc(n)
+        for i in Range.asc(count)
             sum_exp += math.exp(F64::(r.data + offset + i)$ - max_v)
         return Reduce_stats::{ .max_v = max_v, .sum_exp = sum_exp }
     // --- The backward pass of the matrix product Y = X @ W -------
@@ -34,22 +34,22 @@ impl<|T|> Tensor<|T|>
     // `cblas_sgemm` read past `w.data`.
     pub fn grad_matmul_input_into( //< the gradient for a matrix product's input, into `out`
         r: Self$@,
-        w: Tensor<|T|>, //< the weights the forward pass used, [k,n]
+        weights: Tensor<|T|>, //< the weights the forward pass used, [k,n]
         out: Tensor<|T|>, //< where it is written, [m,k]; the caller prepares it and can reuse it
     )
-        assert(r.shape.len == 2 && w.shape.len == 2, "grad_matmul_input requires 2D tensors")
+        assert(r.shape.len == 2 && weights.shape.len == 2, "grad_matmul_input requires 2D tensors")
         n: = r.shape[1]
-        k: = w.shape[0]
-        assert(w.shape[1] == n, "grad_matmul_input inner dimension mismatch")
+        k: = weights.shape[0]
+        assert(weights.shape[1] == n, "grad_matmul_input inner dimension mismatch")
         m: = r.shape[0]
         // `out` can be reused from another step: a smaller one would be written past its end.
         assert(out.holds_matrix(m, k), "grad_matmul_input: out is not [m, k]")
-        tensor.transb_kernel<|T|>(out.data, r.data, w.data, m, n, k)
-    fn grad_matmul_input(r: Self$@, w: Tensor<|T|>): Tensor<|T|> //<
+        tensor.transb_kernel<|T|>(out.data, r.data, weights.data, m, n, k)
+    fn grad_matmul_input(r: Self$@, weights: Tensor<|T|>): Tensor<|T|> //<
         //< The "allocate and return" version (a thin wrapper over `_into`), on `r.arena`
-        $out_shape: Sz[2] = ::{ r.shape[0], w.shape[0] }
+        $out_shape: Sz[2] = ::{ r.shape[0], weights.shape[0] }
         dx: = Tensor<|T|>(Sz$[]::out_shape, r.arena)
-        r.grad_matmul_input_into(w, dx)
+        r.grad_matmul_input_into(weights, dx)
         return dx
     // dW = X^T @ dY   (self=X:[m,k], dy=dY:[m,n] → out:[k,n])
     // Validated like `grad_matmul_input_into`: under `cfg(blas)`, a `dy.shape[0]` that does not

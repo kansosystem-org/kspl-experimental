@@ -43,9 +43,9 @@ priv const STACK_MARGIN: Sz = 64 * 1024 //<
     //< default on macOS). So a walk also asks where its stack ends ("A deep walk asks where its
     //< stack ends" in `std/docs/DESIGN-system.md`).
 
-priv fn is_word_byte(c: U8): Bool //< whether the byte is a word character (`\w` and `\b`)
+priv fn is_word_byte(byte: U8): Bool //< whether the byte is a word character (`\w` and `\b`)
     //< A letter, a digit or `_` (`is_alnum` counts `_`).
-    return c.is_alnum()
+    return byte.is_alnum()
 
 priv fn is_word_edge(text: U8[], ti: Sz): Bool //< whether position ti is a word boundary
     //< **It has no width.** Positions outside either end count as "not a word character".
@@ -53,17 +53,17 @@ priv fn is_word_edge(text: U8[], ti: Sz): Bool //< whether position ti is a word
     after: = ti < text.len && is_word_byte((text.ptr + ti)$)
     return before != after
 
-priv fn is_class_escape(c: U8): Bool //<
+priv fn is_class_escape(byte: U8): Bool //<
     //< Whether it is `\d` / `\w` / `\s` or one of their negated forms
-    return c == 'd' || c == 'D' || c == 'w' || c == 'W' || c == 's' || c == 'S'
+    return byte == 'd' || byte == 'D' || byte == 'w' || byte == 'W' || byte == 's' || byte == 'S'
 
-priv fn class_from_escape(c: U8): Rx_node$@ //<
+priv fn class_from_escape(byte: U8): Rx_node$@ //<
     //< Expands `\d`/`\w`/`\s` and their negated forms into a character class
     n: = new_class_node()
-    $lower: = c
-    n.neg = c == 'D' || c == 'W' || c == 'S'
+    $lower: = byte
+    n.neg = byte == 'D' || byte == 'W' || byte == 'S'
     if n.neg
-        lower = c + ('a' - 'A')
+        lower = byte + ('a' - 'A')
     // **From the same predicates the matcher uses**, so `\w` and `\b` cannot disagree.
     for i in Range.asc(BYTE_COUNT)
         b: = U8::i
@@ -71,14 +71,14 @@ priv fn class_from_escape(c: U8): Rx_node$@ //<
             (b.is_digit() if lower == 'd' else is_word_byte(b) if lower == 'w' else b.is_space())
     return n
 
-priv fn add_class_escape(n: Rx_node$@, c: U8) //<
+priv fn add_class_escape(node: Rx_node$@, byte: U8) //<
     //< Adds a `\d` or similar inside `[...]` to the class being built
-    //< **A negated form adds the complement**; it does not negate the whole class. Touching `n.neg`
-    //< would invert `[^\D]`.
-    sub: = class_from_escape(c)
+    //< **A negated form adds the complement**; it does not negate the whole class. Touching
+    //< `node.neg` would invert `[^\D]`.
+    sub: = class_from_escape(byte)
     for i in Range.asc(BYTE_COUNT)
         if sub.set[i] != sub.neg
-            n.set[i] = true
+            node.set[i] = true
     free_rx_node(sub)
 
 // ==================== Compiling (a pattern string -> an Rx_node tree) ====================
@@ -93,11 +93,11 @@ priv struct Compiler //<
     stack: Stack_limit //< where the group nesting stops short of the stack's end, beside `depth`
     err: Regex_error?
     groups: Sz //<
-        //< The number of capturing groups assigned so far.
+        //< The number of capturing groups assigned so far
         //< Caution: **Number groups in the order their opening parentheses are read**, as other
         //< implementations do; in closing order, nested numbers swap.
 
-priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool): Rx_node$@ //<
+priv fn quantify_group(group: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool): Rx_node$@ //<
     //< Attaches a quantifier to a group
     //< **`?` is not a repetition**: an empty alternative expresses it (`{0,1}` gives the same
     //< tree). An empty alternative placed after gives the longest match; placed before, the
@@ -107,7 +107,7 @@ priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool)
         // `c` would fill the group with an empty string. Other implementations answer "it did
         // not take part". So it is wrapped **from outside** in a non-capturing group.
         $inner: = List<|Rx_node$@|>(null)
-        inner.push(g)
+        inner.push(group)
         $alts: = List<|List<|Rx_node$@|>|>(null)
         if lazy
             alts.push(List<|Rx_node$@|>(null))
@@ -117,18 +117,18 @@ priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool)
             alts.push(List<|Rx_node$@|>(null))
         return new_group_node(alts, -1)
     n: = Rx_kind.group_repeat.new_node()
-    n.sub = g
+    n.sub = group
     n.lazy = lazy
     n.min_count = min_count
     n.max_count = max_count
     return n
 
 impl Compiler
-    fn fail(r: Self$@, e: Regex_error) //< remembers only the first error found
+    fn fail(r: Self$@, error: Regex_error) //< remembers only the first error found
         //< Later errors follow from the first one.
         switch r.err
         case .none
-            r.err = .some(e)
+            r.err = .some(error)
         default {}
 
     fn failed(r: Self@): Bool //<
@@ -390,14 +390,14 @@ impl Compiler
 // same state and byte go on alike.** So only the preferred one is kept, and a byte costs at most
 // one visit per state. Caution: **Do not match by trying one way and stepping back.** That is
 // exponential in the text for `(a+)+$` or `(a|a)*b`, the shape that hangs a program.
-priv fn atom_matches(atom: Rx_node@, c: U8): Bool
+priv fn atom_matches(atom: Rx_node@, byte: U8): Bool
     switch atom.kind
     case .lit
-        return c == atom.ch
+        return byte == atom.ch
     case .any
-        return c != '\n'
+        return byte != '\n'
     case .class
-        hit: = atom.set[c]
+        hit: = atom.set[byte]
         return !hit if atom.neg else hit
     default
         return false // not reached (a byte step holds only lit/any/class)
@@ -421,19 +421,19 @@ priv struct Threads //< the ways alive at one byte, in priority order, each with
     slots: Sz$@ //< per state, the way's slots (`Vm.width` of them)
 
 impl Threads
-    fn has(r: Self@, s: Sz): Bool
-        at: = (r.place + s)$
-        return at < r.len && (r.order + at)$ == s
+    fn has(r: Self@, state: Sz): Bool
+        at: = (r.place + state)$
+        return at < r.len && (r.order + at)$ == state
 
-    fn put(r: Self$@, s: Sz)
-        (r.place + s)$ = r.len
-        (r.order + r.len)$ = s
+    fn put(r: Self$@, state: Sz)
+        (r.place + state)$ = r.len
+        (r.order + r.len)$ = state
         r.len += 1
 
 priv struct Frame //< one entry of the walk through steps that read no byte
     restore: Bool //<
         //< true: put slot `pc` back to `v`; false: go on at step `pc` with `k` rounds open
-    pc: Sz
+    pc: Sz //< a step number, or a slot number when `restore` is set
     k: Sz
     v: Sz
 
@@ -477,12 +477,12 @@ impl Vm: Manual_free //< it owns its block and frees it in `free()`
         dealloc(Void$@::r.block)
 
 impl Vm
-    fn push(r: Self$@, f: Frame)
-        (r.walk + r.walk_len)$ = f
+    fn push(r: Self$@, frame: Frame)
+        (r.walk + r.walk_len)$ = frame
         r.walk_len += 1
 
-    fn add(r: Self$@, prog: List<|Inst|>$@, to: Threads$@, pc0: Sz, text: U8[], p: Sz) //<
-        //< Adds the way at step pc0, with the slots in `r.slots`, and every way it reaches at p
+    fn add(r: Self$@, prog: List<|Inst|>$@, to: Threads$@, pc0: Sz, text: U8[], at: Sz) //<
+        //< Adds the way at step pc0, with the slots in `r.slots`, and every way it reaches at `at`
         //< Through the steps that read no byte, by a list rather than recursion. A state already
         //< there is passed by: one of higher priority reached it first.
         $f: = Frame::{ .restore = false, .pc = pc0, .k = 0, .v = 0 }
@@ -490,13 +490,13 @@ impl Vm
             if f.restore
                 (r.slots + f.pc)$ = f.v
             else
-                r.follow(prog, to, f.pc, f.k, text, p)
+                r.follow(prog, to, f.pc, f.k, text, at)
             if r.walk_len == 0
                 return
             r.walk_len -= 1
             f = (r.walk + r.walk_len)$
 
-    fn follow(r: Self$@, prog: List<|Inst|>$@, to: Threads$@, pc0: Sz, k0: Sz, text: U8[], p: Sz) //<
+    fn follow(r: Self$@, prog: List<|Inst|>$@, to: Threads$@, pc0: Sz, k0: Sz, text: U8[], at: Sz) //<
         //< Follows one way from step pc0 to a byte step, the end, or a state already put
         //< Each other way a split offers, and each slot to put back, goes on the walk for `add`.
         $pc: = pc0
@@ -511,7 +511,7 @@ impl Vm
             if step.op == .byte || step.op == .done
                 copy_slots(to.slots + s * r.width, r.slots, r.width)
                 return
-            if step.op == .check && !holds(step.node.kind, text, p)
+            if step.op == .check && !holds(step.node.kind, text, at)
                 return
             switch step.op
             case .jump
@@ -524,7 +524,7 @@ impl Vm
                     r
                         .push(Frame::{ .restore = true, .pc = step.a, .k = 0,
                         .v = (r.slots + step.a)$ })
-                    (r.slots + step.a)$ = p
+                    (r.slots + step.a)$ = at
                 pc += 1
             case .round_in
                 k += 1
@@ -590,18 +590,18 @@ impl Match
         //< indices. Caution: **A group the pattern lacks stops the program**, 0 included: the
         //< whole match is `start` and `end`.
         r: Self@,
-        n: Sz, //< which group, counting from 1 in the order of the `(`
+        index: Sz, //< which group, counting from 1 in the order of the `(`
         text: U8[], //< the same text passed to `find`; any other text gives garbage
         file: U8[] = caller_file, //< where it was called, for the stop
         line: Sz = caller_line, //< where it was called, for the stop
     ): U8[]?
-        if n < 1 || n > r.caps.count
+        if index < 1 || index > r.caps.count
             $m: = Panic_msg()
-            m.s("Match.group: the pattern has no group ").n(n).s(" (it has ").n(r.caps.count)
-                .s(", counted from 1)")
+            m.s("Match.group: the pattern has no group ").n(index).s(" (it has ")
+                .n(r.caps.count).s(", counted from 1)")
             panic(m.slice(), file, line)
-        lo: = r.caps.start[n - 1]
-        hi: = r.caps.end[n - 1]
+        lo: = r.caps.start[index - 1]
+        hi: = r.caps.end[index - 1]
         if lo < 0 || hi < lo || hi > text.len
             return .none
         return .some(U8[]::{ .ptr = text.ptr + lo, .len = hi - lo })
@@ -613,9 +613,9 @@ pub struct Regex //< one compiled pattern, matched against any number of texts
         //< Package-wide, so `std/tests` can hold a search to its bound.
     priv pc_of: List<|Sz|> //< per state, its step
     priv groups: Sz //<
-        //< The number of capturing groups, **fixed at compile time**, not counted per find.
+        //< The number of capturing groups, **fixed at compile time**, not counted per find
     priv anchored: Bool //<
-        //< Whether every alternative starts with `^`, **fixed at compile time**.
+        //< Whether every alternative starts with `^`, **fixed at compile time**
     priv first: Bool[BYTE_COUNT] //< the bytes a match can begin with
     priv may_be_empty: Bool //< whether a match can be empty, so no start can be skipped
 
@@ -778,7 +778,7 @@ impl Regex
         defer $vm: = new_vm(r.states, 0)
         return r.search(text, 0, vm@)
 
-impl Regex: Manual_free //< it owns its resources and frees them in `free()`.
+impl Regex: Manual_free //< it owns its resources and frees them in `free()`
     pub fn free(r: Self$@) //< frees the compiled tree and its program
         r.prog.free() // the steps only point into the tree, which goes next, then the handle
         r.pc_of.free()

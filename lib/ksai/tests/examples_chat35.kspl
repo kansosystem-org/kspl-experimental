@@ -26,16 +26,17 @@ embed "ksai/tests/qwen_data/template35_cases.json" as cases_text
 
 priv const MODEL_FILE: U8[] = "tiny_qwen35.gguf" //< the tiny model's file under the work folder
 
-priv fn rendered(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@!U8[] //<
+priv fn rendered(body: U8[], engine: Engine$@, arena: Arena$@): List<|I32|>$@!U8[] //<
     //< The prompt a request body renders to, thinking on unless the request turns it off
     c: = request.read_chat(body, arena) catch why
         panic(arena.text().s("the request is refused: ").s(why).take())
     $conv: = c.conv
     conv.thinking = c.thinking.unwrap_or(true)
-    return template35.render(conv@, e.tok, e.marks, arena)!
+    return template35.render(conv@, engine.tok, engine.marks, arena)!
 
-priv fn prompt_of(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@ //< a prompt that renders
-    return rendered(body, e, arena) catch why
+priv fn prompt_of(body: U8[], engine: Engine$@, arena: Arena$@): List<|I32|>$@ //<
+    //< a prompt that renders
+    return rendered(body, engine, arena) catch why
         panic(arena.text().s("the conversation is refused: ").s(why).take())
 
 fn test_chat35_template_tokens(arena: Arena$@) //<
@@ -72,8 +73,9 @@ fn test_chat35_template_refusals(arena: Arena$@) //<
         "each refusal names what the template refuses")
     verdict.pass("a late system message, no question, and arguments that are no JSON")
 
-priv fn refusal(r: List<|I32|>$@!U8[]): U8[] //< the message a refused render gives; empty if none
-    _ids: = r catch why
+priv fn refusal(rendered: List<|I32|>$@!U8[]): U8[] //<
+    //< the message a refused render gives; empty if none
+    _ids: = rendered catch why
         return why
     return ""
 
@@ -160,22 +162,22 @@ priv const THIRD_REQUEST: U8[] =
         days?\"},{\"role\":\"assistant\",\"content\":\"Five\",\"reasoning_content\":\"look\"}]}" //<
             //< the follow-up with an answer after it: it holds the follow-up's prompt whole
 
-priv fn kept_matches_fresh(e: Engine$@, body: U8[], arena: Arena$@): Sz //<
-    //< Feeds a prompt to `e` and to a fresh engine; stops unless the scores match bit for bit
-    //< Returns how many tokens `e` kept.
-    prompt: = prompt_of(body, e, arena)
-    kept: = chat.fed(e, prompt.slice())
+priv fn kept_matches_fresh(engine: Engine$@, body: U8[], arena: Arena$@): Sz //<
+    //< Feeds a prompt to `engine` and to a fresh engine; stops unless the scores match bit for bit
+    //< Returns how many tokens `engine` kept.
+    prompt: = prompt_of(body, engine, arena)
+    kept: = chat.fed(engine, prompt.slice())
     $fresh: = chat.engine_over(model_bytes, arena)
     _none: = chat.fed(fresh@, prompt.slice())
-    a: = chat.last_scores(e, arena)
+    a: = chat.last_scores(engine, arena)
     b: = chat.last_scores(fresh@, arena)
     assert(chat.same_scores(a@, b@),
         arena.text().s("after keeping \{kept\} tokens the scores are not a fresh run's").take())
     return kept
 
-priv fn turn_of(prompt: List<|I32|>@, e: Engine@): Sz //< where the prompt's last turn opens
+priv fn turn_of(prompt: List<|I32|>@, engine: Engine@): Sz //< where the prompt's last turn opens
     $at: = prompt.len - 1
-    for at > 0 && prompt.get(at) != e.marks.im_start
+    for at > 0 && prompt.get(at) != engine.marks.im_start
         at -= 1
     return at
 

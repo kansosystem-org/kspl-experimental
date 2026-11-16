@@ -29,11 +29,11 @@ pub struct First_error //< the first error among a function's arguments, from th
     pub error: Calc_error
 
 impl First_error
-    pub fn take(f: Self$@, e: Calc_error) //< keeps `e` unless an earlier error was kept
-        if f.broken
+    pub fn take(r: Self$@, error: Calc_error) //< keeps `error` unless an earlier error was kept
+        if r.broken
             return
-        f.broken = true
-        f.error = e
+        r.broken = true
+        r.error = error
 
 // ==========================================
 // The arguments as a formula wrote them
@@ -78,134 +78,134 @@ pub struct Raw_args //< a function's arguments, calculated, read in order by the
         //< field is empty, so a person's table that does not set it still builds.
 
 impl Raw_args
-    pub fn number(a: Self$@): F64!Calc_error //< a number; an empty cell is 0
-        given: = a.next()!
+    pub fn number(r: Self$@): F64!Calc_error //< a number; an empty cell is 0
+        given: = r.next()!
         v: = operand(given)
         if v.kind == .error
-            throw a.refuse(given, .wrong_kind, .wants_number)
+            throw r.refuse(given, .wrong_kind, .wants_number)
         return v.number
 
-    pub fn whole(a: Self$@): I64!Calc_error //< a whole number up to 2^53 either way
-        n: = a.number()!
+    pub fn whole(r: Self$@): I64!Calc_error //< a whole number up to 2^53 either way
+        n: = r.number()!
         if n != n || n > 9007199254740992.0 || n < -9007199254740992.0 || F64::(I64::n) != n
-            throw a.refuse(empty(), .not_finite, .wants_whole)
+            throw r.refuse(empty(), .not_finite, .wants_whole)
         return I64::n
 
-    pub fn truth(a: Self$@): Bool!Calc_error //< `true` or `false`; an empty cell is `false`
-        given: = a.next()!
+    pub fn truth(r: Self$@): Bool!Calc_error //< `true` or `false`; an empty cell is `false`
+        given: = r.next()!
         v: = truth(given)
         if v.kind == .error
-            throw a.refuse(given, .wrong_kind, .wants_truth)
+            throw r.refuse(given, .wrong_kind, .wants_truth)
         return v.boolean
 
-    pub fn text(a: Self$@): U8[]!Calc_error //< text; an empty cell is empty text
-        v: = a.next()!
+    pub fn text(r: Self$@): U8[]!Calc_error //< text; an empty cell is empty text
+        v: = r.next()!
         switch v.kind
         case .text
             return v.text
         case .empty
             return ""
         default
-            throw a.refuse(v, .wrong_kind, .wants_text)
+            throw r.refuse(v, .wrong_kind, .wants_text)
 
-    pub fn value(a: Self$@): Value!Calc_error //< any value
-        v: = a.next()!
+    pub fn value(r: Self$@): Value!Calc_error //< any value
+        v: = r.next()!
         if v.kind == .error
-            throw a.refuse(v, .syntax, .plain)
+            throw r.refuse(v, .syntax, .plain)
         return v
 
-    fn named(a: Self@, v: Value, name: U8[], why: Why): Value //<
+    fn named(r: Self@, value: Value, name: U8[], why: Why): Value //<
         //< The function `name`'s result; an error gets what made it, the first from the left
         //< That is the argument refused, or the argument that held the error; else the function
         //< itself, as `why`.
-        if v.kind != .error || v.why != .plain
-            return v
-        r: = a.refused
-        if r.kind == .error && r.error == v.error
-            switch r.why
+        if value.kind != .error || value.why != .plain
+            return value
+        refused: = r.refused
+        if refused.kind == .error && refused.error == value.error
+            switch refused.why
             case .wants_number, .wants_whole, .wants_truth, .wants_text
-                return Value.because(r.error, r.why, name, r.at())
+                return Value.because(refused.error, refused.why, name, refused.at())
             case .plain {}
             default
-                return r
-        for one in a.args
-            if one.value.kind == .error && one.value.error == v.error &&
+                return refused
+        for one in r.args
+            if one.value.kind == .error && one.value.error == value.error &&
                 one.value.why != .plain
                 return one.value
-            for c in a.cells_of(one)
-                if c.kind == .error && c.error == v.error
+            for c in r.cells_of(one)
+                if c.kind == .error && c.error == value.error
                     return c
-        return Value.because(v.error, why, name, -1)
+        return Value.because(value.error, why, name, -1)
 
-    priv fn refuse(a: Self$@, given: Value, e: Calc_error, why: Why): Calc_error //<
-        //< Keeps the first argument refused: its own error where it holds one, else `e` and `why`
+    priv fn refuse(r: Self$@, given: Value, error: Calc_error, why: Why): Calc_error //<
+        //< Keeps the first argument refused: its own error where it holds one, else `error` and `why`
         //< about the argument read last. It gives the error the parameter throws.
-        v: = given if given.kind == .error else Value.because(e, why, "", a.used)
-        if a.refused.kind != .error
-            a.refused = v
+        v: = given if given.kind == .error else Value.because(error, why, "", r.used)
+        if r.refused.kind != .error
+            r.refused = v
         return v.error
 
-    pub fn rest(a: Self$@): Value[] //<
+    pub fn rest(r: Self$@): Value[] //<
         //< One argument or more: a reference alone gives its numbers, dates and errors, and leaves
         //< out empty cells, text and `true`/`false`; any other argument is a number or a date
         //< A date stays a date, so `max(A1, today())` compares days. `sum` and `average` refuse
         //< a date themselves, with their own reason.
-        $xs: = List<|Value|>(a.memory)
-        if a.used == a.args.len
-            a.misread = true
-        for a.used < a.args.len
-            one: = a.args[a.used]
-            a.used += 1
+        $xs: = List<|Value|>(r.memory)
+        if r.used == r.args.len
+            r.misread = true
+        for r.used < r.args.len
+            one: = r.args[r.used]
+            r.used += 1
             if !one.is_cells
                 v: = one.value if one.value.kind == .date else operand(one.value)
                 if v.kind == .error
-                    _e: = a.refuse(one.value, .wrong_kind, .wants_number)
+                    _e: = r.refuse(one.value, .wrong_kind, .wants_number)
                 xs.push(v)
                 continue
-            for v in a.cells_of(one)
+            for v in r.cells_of(one)
                 if v.kind == .number || v.kind == .date || v.kind == .error
                     xs.push(v)
         return xs.slice()
 
-    fn cells_of(a: Self@, one: Raw_arg): Value[] //<
+    fn cells_of(r: Self@, one: Raw_arg): Value[] //<
         //< a reference alone's cells, row by row; else none
-        return a.take(a.ctx, one.piece) if one.is_cells && a.take != null else one.cells
+        return r.take(r.ctx, one.piece) if one.is_cells && r.take != null else one.cells
 
-    fn taken(a: Self@): Raw_arg[] //<
+    fn taken(r: Self@): Raw_arg[] //<
         //< Every argument with its cells, as a call to a person's function carries them
-        $all: = List<|Raw_arg|>(a.memory)
-        for one in a.args
+        $all: = List<|Raw_arg|>(r.memory)
+        for one in r.args
             $copy: = one
             if one.is_cells
-                copy.cells = a.cells_of(one)
+                copy.cells = r.cells_of(one)
             all.push(copy)
         return all.slice()
 
-    pub fn more(a: Self@): Bool //< whether another argument follows
-        return a.used < a.args.len
+    pub fn more(r: Self@): Bool //< whether another argument follows
+        return r.used < r.args.len
 
-    pub fn calculating(a: Self@): Bool //< false in a part read but not calculated
-        return a.live
+    pub fn calculating(r: Self@): Bool //< false in a part read but not calculated
+        return r.live
 
-    pub fn arena(a: Self@): Arena$@ //< where the results of this calculation live
-        return a.memory
+    pub fn arena(r: Self@): Arena$@ //< where the results of this calculation live
+        return r.memory
 
-    priv fn next(a: Self$@): Value!Calc_error //<
+    priv fn next(r: Self$@): Value!Calc_error //<
         //< The next argument as one value. A range is one only inside a condition, read row by row,
         //< as anywhere else a formula reads one; a cell not calculated is empty.
-        if a.used == a.args.len
-            a.misread = true
+        if r.used == r.args.len
+            r.misread = true
             throw .syntax
-        one: = a.args[a.used]
-        a.used += 1
+        one: = r.args[r.used]
+        r.used += 1
         if !one.is_cells
             return one.value
         if one.range
-            if a.row == null
-                a.misread = true
+            if r.row == null
+                r.misread = true
                 throw .syntax
-            return a.row(a.ctx, one.piece)
-        if !a.live
+            return r.row(r.ctx, one.piece)
+        if !r.live
             return empty()
-        cells: = a.cells_of(one)
+        cells: = r.cells_of(one)
         return empty() if cells.len == 0 else cells[0]

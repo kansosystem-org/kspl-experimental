@@ -68,10 +68,10 @@ pub struct Rule_prof //< what one rule cost, counted rather than timed
         //< It never answered within its allowance of writes (`MEMO_TRIAL_WRITES`). It is reported
         //< beside the counts so that a wrong allowance shows up instead of quietly slowing the
         //< parse.
-    pub memo_hits: I64 //< how many of those the memo answered, saving a re-parse.
+    pub memo_hits: I64 //< how many of those the memo answered, saving a re-parse
         //< Successes and failures alike. If it stays 0, the rule visits each position once and
         //< packrat saves nothing; that is the evidence that adding lookahead would not pay off.
-    pub parsed_ok: I64 //< how many times it actually parsed and matched.
+    pub parsed_ok: I64 //< how many times it actually parsed and matched
         //< Small compared with the failures (the subtraction above), it marks a rule that guesses
         //< and misses. Fixing the grammar pays off only where missing is expensive (a rule that
         //< reads a whole other rule as a preamble).
@@ -81,11 +81,11 @@ pub typedef Space_skipper = fn(ctx: Target$@): Void //< a grammar's own way of s
 pub struct Target //< a parse in progress: the source, how far it has read, and what it reads with
     pub source: U8[] //< the text being parsed; a node's `text` is a view into it
     pub pos: Sz //< how far it has read, in bytes from the start of the source
-    pub fail: Fail_track$@ //< how far the parse got, and what could have been written there.
+    pub fail: Fail_track$@ //< how far the parse got, and what could have been written there
         //< Caution: **Do not put the fields back here** (the reason is at `Fail_track`).
     is_syntax_mode: Bool //< inside an ordinary rule, where whitespace is skipped between parts
     pub is_suppressed: Bool //< matching only to test: no node is built, no expectation recorded
-    pub is_lenient: Bool //< whether the branches that absorb a broken run are enabled.
+    pub is_lenient: Bool //< whether the branches that absorb a broken run are enabled
         //< Those branches are `Rule.recover`. **A whole run is either lenient or not.** It never
         //< switches partway. Every run starts with the memo empty (`begin` in `memo.kspl`). So the
         //< memo's key need not include it.
@@ -103,31 +103,31 @@ pub struct Target //< a parse in progress: the source, how far it has read, and 
         //< those counts, in the order the rules were first reached
 
     pub space_skipper: Space_skipper //< the whitespace skipper, if the grammar provides one
-    space_cache_pos: Sz //< the position the last skip started from.
+    space_cache_pos: Sz //< the position the last skip started from
         //< A one-entry cache. After backtracking, each element of a choice or sequence skips again
         //< from the same start. This cache jumps to the recorded end instead. The source,
         //< space_skipper and rule_space do not change during a scan.
     space_cache_end: Sz //< where that skip ended, so the same start is not scanned twice
     space_cache_valid: Bool //< whether the two fields above still match the current position
 
-    checks_first_byte: Bool //< whether a rule that cannot begin with the next byte is skipped.
+    checks_first_byte: Bool //< whether a rule that cannot begin with the next byte is skipped
         //< On by default; turned off only to compare against a parse that enters every rule. Either
         //< way the tree is the same, and so is a syntax error (parse_rule). The profile counts only
         //< the rules entered, and both runs where a syntax error makes it parse twice.
-    ran_twice: Bool //< whether the last parse_rule ran again without skipping.
+    ran_twice: Bool //< whether the last parse_rule ran again without skipping
         //< Only a syntax error does. On input that parses, it says a rule was skipped where it
         //< could have matched. The answer is still right, from the second run, at twice the cost.
     priv filters_now: Bool //< whether the run in progress skips by the first byte
 
-    pub depth: Sz //< how deep the walk of the rule tree is right now.
+    pub depth: Sz //< how deep the walk of the rule tree is right now
         //< Rule.parse's recursion depth, counted at the single entry point every sequence, choice,
         //< quantifier and reference recurses through. A safety valve against pathological nesting.
     priv stack: Stack_limit //<
         //< where the walk stops short of the stack's end, beside `depth`'s count
-    pub depth_exceeded: Bool //< whether a walk was cut off as too deep, so `pos` is not valid.
+    pub depth_exceeded: Bool //< whether a walk was cut off as too deep, so `pos` is not valid
         //< The reader uses it only to decide **whether the position can be used**; the cut-off
         //< itself is thrown as a `fatal`, with its position in `depth_exceeded_pos`.
-    pub depth_exceeded_pos: Sz //< where the input was at the moment the walk became too deep.
+    pub depth_exceeded_pos: Sz //< where the input was at the moment the walk became too deep
         //< Caution: **Record it at once.** Backtracking rewinds `pos` at each level, so by the time
         //< the fatal reaches parse_rule, `pos` is back at the start of the input. `max_fail_pos`
         //< cannot replace it: it is the furthest place expected text did not match, and a depth

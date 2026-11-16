@@ -27,12 +27,12 @@ priv $used: U64 = 0
 priv const MIX: U64 = 0x100000001B3U64 //< the multiplier
     //< **It can wrap on overflow**; it is used only for mixing.
 
-priv fn use_bytes(s: U8[])
-    for b in s
+priv fn use_bytes(bytes: U8[])
+    for b in bytes
         used = (used ^ U64::b) * MIX
 
-priv fn use_len(n: Sz)
-    used = (used ^ U64::n) * MIX
+priv fn use_len(len: Sz)
+    used = (used ^ U64::len) * MIX
 
 priv const SPLIT_AT: U8 = 0U8 //<
     //< The byte that separates the regular expression's pattern from the text it is matched against
@@ -54,22 +54,22 @@ priv fn read_json(src: U8[], arena: Arena$@): I32 //<
     json_round_trip(doc.val, 2, arena)
     return 0
 
-priv fn json_round_trip(v: json.Value, indent: Sz, arena: Arena$@) //<
+priv fn json_round_trip(value: json.Value, indent: Sz, arena: Arena$@) //<
     //< Checks that the value, written out and read back, is equal, and is then written the same
     //< `equals` holds a decimal to the same F64, bit for bit: the writer's shortest form must read
     //< back as the number it was.
     defer $once: = Str_builder()
-    v.dump(once@, indent)
+    value.dump(once@, indent)
     back: = json.parse(once.slice(), arena) catch
         panic("json: what dump wrote does not parse back")
-    assert(back.val.equals(v), "json: the value read back is not the one written")
+    assert(back.val.equals(value), "json: the value read back is not the one written")
     defer $twice: = Str_builder()
     back.val.dump(twice@, indent)
     assert(twice.slice().equals(once.slice()), "json: the value read back is written otherwise")
 
-priv fn walk_json(v: json.Value, arena: Arena$@) //< it walks the elements of the arrays
+priv fn walk_json(value: json.Value, arena: Arena$@) //< it walks the elements of the arrays
     //< `dump` already walks inside objects, so only the array path is taken here.
-    $items: = v.arr_list(arena)
+    $items: = value.arr_list(arena)
     for it in items.slice()
         use_bytes(it.as_str().unwrap_or(""))
         walk_json(it, arena)
@@ -93,17 +93,17 @@ priv fn read_url(src: U8[], arena: Arena$@): I32 //<
     query_round_trip(head, arena)
     return 0
 
-priv fn query_round_trip(q: url.Query, arena: Arena$@) //<
+priv fn query_round_trip(query: url.Query, arena: Arena$@) //<
     //< Encodes every pair back into a query and checks that it parses to the same pairs, in order
     again: = arena.text()
     $sep: U8[] = ""
-    for p in q.each()
+    for p in query.each()
         again.s(sep).s(url.encode(p.name, arena)).c('=').s(url.encode(p.value, arena))
         sep = "&"
     back: = url.parse_query(again.take(), arena) catch
         panic("url: an encoded query does not parse")
     $rest: = back.each()
-    for p in q.each()
+    for p in query.each()
         switch rest.next()
         case .some(b)
             assert(b.name.equals(p.name) && b.value.equals(p.value),
@@ -112,11 +112,11 @@ priv fn query_round_trip(q: url.Query, arena: Arena$@) //<
             panic("url: an encoded query parses back to fewer pairs")
     assert(rest.next().is_none(), "url: an encoded query parses back to more pairs")
 
-priv fn use_query(q: url.Query, arena: Arena$@) //<
+priv fn use_query(query: url.Query, arena: Arena$@) //<
     //< It walks the pairs and encodes the values back into text
     //< Caution: **Go as far as the round trip**: reading alone never runs the digits the encoder
     //< writes.
-    for p in q.each()
+    for p in query.each()
         use_bytes(p.name)
         use_bytes(p.value)
         use_bytes(url.encode(p.value, arena))
@@ -376,18 +376,18 @@ priv fn cli_new(arena: Arena$@): Cli
     return Cli::{ .verbose = false, .dry = false, .count = 0, .name = "",
         .defines = List<|U8[]|>.create(arena), .trailing = List<|U8[]|>.create(arena) }
 
-priv fn cli_parser(c: Cli$@, arena: Arena$@): argparse.Parser$@ //<
+priv fn cli_parser(cli: Cli$@, arena: Arena$@): argparse.Parser$@ //<
     //< A parser with each kind of item: flags, values, a repeated one, commands and positionals
     p: = argparse.Parser.create("prog", "a parser under test", arena)
     p.positional("[file ...]")
-    p.flag("--verbose", c.verbose@, "say more")
-    p.flag("--dry-run", c.dry@, "change nothing")
-    p.int_opt("--count", c.count@, "how many")
-    p.str_opt("--name", c.name@, "what to call it")
-    p.str_list_opt("--define", c.defines, "a name to define; repeats")
+    p.flag("--verbose", cli.verbose@, "say more")
+    p.flag("--dry-run", cli.dry@, "change nothing")
+    p.int_opt("--count", cli.count@, "how many")
+    p.str_opt("--name", cli.name@, "what to call it")
+    p.str_list_opt("--define", cli.defines, "a name to define; repeats")
     p.command_flag("--version", "print the version")
     p.subcommand("fmt", "format the files")
-    p.subcommand_trailing("run", "run a script with its own arguments", c.trailing)
+    p.subcommand_trailing("run", "run a script with its own arguments", cli.trailing)
     return p
 
 priv const CLI_NAMES: U8[][5] = ::{ "--verbose", "--dry-run", "--count", "--name", "--define" }
@@ -421,31 +421,31 @@ priv fn read_argv(src: U8[], arena: Arena$@): I32 //<
     assert(same, "argparse: what it read, written back, reads as another")
     return 0
 
-priv fn argv_again(p: argparse.Parser$@, c: Cli$@, arena: Arena$@): List<|U8[]|>$@ //<
+priv fn argv_again(parser: argparse.Parser$@, cli: Cli$@, arena: Arena$@): List<|U8[]|>$@ //<
     //< What the parser read, written as a command line: the items, the command, `--`, the rest
     out: = List<|U8[]|>.create(arena)
-    if p.saw("--verbose")
+    if parser.saw("--verbose")
         out.push("--verbose")
-    if p.saw("--dry-run")
+    if parser.saw("--dry-run")
         out.push("--dry-run")
-    if p.saw("--count")
-        out.push(arena.text().s("--count=\{c.count\}").take())
-    if p.saw("--name")
-        out.push(arena.text().s("--name=").s(c.name).take())
-    for d in c.defines.slice()
+    if parser.saw("--count")
+        out.push(arena.text().s("--count=\{cli.count\}").take())
+    if parser.saw("--name")
+        out.push(arena.text().s("--name=").s(cli.name).take())
+    for d in cli.defines.slice()
         out.push(arena.text().s("--define=").s(d).take())
-    if cmd: = p.command
+    if cmd: = parser.command
         out.push(cmd)
     out.push("--")
-    out.push_all(p.rest.slice())
-    out.push_all(c.trailing.slice())
+    out.push_all(parser.rest.slice())
+    out.push_all(cli.trailing.slice())
     return out
 
-priv fn same_list(a: List<|U8[]|>@, b: List<|U8[]|>@): Bool
-    if a.len != b.len
+priv fn same_list(left: List<|U8[]|>@, right: List<|U8[]|>@): Bool
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if !a.get(i).equals(b.get(i))
+    for i in Range.asc(left.len)
+        if !left.get(i).equals(right.get(i))
             return false
     return true
 

@@ -304,7 +304,7 @@ function ksmdRange(ks) {
     const wrap = wrapOf(block);
     if (row < 0) return wrap.names[column] !== "";
     const v = wrap.values[row] && wrap.values[row][column];
-    return !!v && v[0] !== 0;
+    return !!v && v[0] !== ks.CELL.EMPTY;
   }
 
   // Where Ctrl and an arrow key go from a cell, as in a spreadsheet: from a value with a value

@@ -240,7 +240,7 @@ function ksmdCommands(ks) {
   }));
   ks.handle("table", synced(() => {
     const r = ks.act("ksmd_web_insert_table", 3, 2);
-    if (r && r.ok) ks.table.editFirst(r.from + (r.blocks[0] && r.blocks[0].k === "t" ? 0 : 1));
+    if (r && r.ok) ks.table.editFirst(r.from + (r.blocks[0] && r.blocks[0].k === ks.BLOCK.TABLE ? 0 : 1));
     return r;
   }));
 

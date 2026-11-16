@@ -37,7 +37,7 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       check(await offered() === "hex_to_bin,hex_to_dec" && await box() === "=hex_",
         "Ctrl+Space opens it again after Esc, and keeps the cell open", await offered());
       check((await js("document.querySelector('.fx-chosen').textContent")) ===
-        "hex_to_bin(digits, [width])", "the chosen entry shows how it is written");
+        "hex_to_bin(number, [width])", "the chosen entry shows how it is written");
       await type("to_d");
       await settle();
       check(await offered() === "hex_to_dec", "typing narrows the list", await offered());
@@ -52,7 +52,7 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
         "Tab writes the chosen name and its bracket in place of what was typed, and shuts the list",
         await box());
       const t = await tip();
-      check(!!t && t[0] === "hex_to_dec(digits, [width])" && t[1] === "digits",
+      check(!!t && t[0] === "hex_to_dec(number, [width])" && t[1] === "number",
         "inside the brackets a tip shows the arguments, the one being typed in bold", JSON.stringify(t));
       await type("\"FF\", ");
       await settle();
@@ -262,7 +262,7 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await type("hex_to_d");
       await settle();
       const about = await js("document.querySelector('.fx-about').textContent");
-      check(about.includes("hex_to_dec(digits, [width])") && about.includes("the hexadecimal digits") &&
+      check(about.includes("hex_to_dec(number, [width])") && about.includes("the hexadecimal digits") &&
         about.includes("=hex_to_dec(\"100000\") shows 1048576") && about.includes("=0x100000"),
       "the chosen function shows how it is written, its arguments, an example and the literal it does not read",
       about);
@@ -511,7 +511,7 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await load(codes);
       await start(0, 2, "=sum_if(B, like(");
       const t = await tip();
-      check(!!t && t[0] === "like(t, pattern)" && t[1] === "t",
+      check(!!t && t[0] === "like(text, pattern)" && t[1] === "text",
         "the tip of like shows its arguments, the text in bold", JSON.stringify(t));
       await type("A, \"inv-*\"))");
       await press("Enter");

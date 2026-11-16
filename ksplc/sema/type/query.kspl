@@ -66,7 +66,7 @@ impl sema_type_env.Env
         default
             return stripped
 
-    fn same_shape_ignoring_const(r: Self$@, a: I32, b: I32): Bool //<
+    fn same_shape_ignoring_const(r: Self$@, left: I32, right: I32): Bool //<
         //< Whether they are the same shape ignoring the immutability qualifier
         //< **Ask "same type if immutability is ignored" through this** (the ternary's unification,
         //< the implicit conversion to immutable).
@@ -74,8 +74,8 @@ impl sema_type_env.Env
         //< level it names. Resolving inwards makes `B[]` (`typedef B = U8`) and `U8[]` one type.
         //< Sema then accepts it, and the C for genc's `Const_B_Slice` / `kspl_U8_Slice` fails to
         //< compile.
-        return r.strip_const_deep(r.get_clean_real_type(a)) == r
-            .strip_const_deep(r.get_clean_real_type(b))
+        return r.strip_const_deep(r.get_clean_real_type(left)) == r
+            .strip_const_deep(r.get_clean_real_type(right))
 
     fn strip_const_deep(r: Self$@, id: I32): I32 //<
         //< It returns the type with the immutability qualifiers stripped at every nested level
@@ -159,7 +159,7 @@ impl sema_type_env.Env
             // differs".
             return r.get_clean_real_type(ab) == r.get_clean_real_type(eb)
 
-    priv fn same_signature(r: Self$@, a: Fn_sig@, b: Fn_sig@): Bool //<
+    priv fn same_signature(r: Self$@, left: Fn_sig@, right: Fn_sig@): Bool //<
         //< Whether two function types are one, an alias seen through as at a pointer's level
         //< **Each part is matched both ways.** A function value is called with what either type
         //< says. So a parameter or the result must not weaken or strengthen immutability either
@@ -167,15 +167,17 @@ impl sema_type_env.Env
         //< An alias reaches here inside a parameter (`fn(r: Ints@)` beside `fn(r: Box<|I64|>@)`),
         //< which the two types' ids keep apart. See "A typedef is only another name" in
         //< docs/SPEC-programming-language.md.
-        if a.params.len != b.params.len
+        if left.params.len != right.params.len
             return false
-        for i in Range.asc(a.params.len)
-            if !r.same_part(a.params.get(i), b.params.get(i))
+        for i in Range.asc(left.params.len)
+            if !r.same_part(left.params.get(i), right.params.get(i))
                 return false
-        return r.same_part(a.ret_id, b.ret_id)
+        return r.same_part(left.ret_id, right.ret_id)
 
-    priv fn same_part(r: Self$@, a: I32, b: I32): Bool //< one part of two signatures, both ways
-        return a == b || (r.is_const_compatible(a, b) && r.is_const_compatible(b, a))
+    priv fn same_part(r: Self$@, left: I32, right: I32): Bool //<
+        //< one part of two signatures, both ways
+        return left == right ||
+            (r.is_const_compatible(left, right) && r.is_const_compatible(right, left))
 
     priv fn generic_arg_weakens(r: Self$@, act: I32, exp: I32, depth: I32, limit: I32): Bool //<
         //< Whether `act` and `exp` differ **only where the declaration named mutability**, weaker

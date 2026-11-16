@@ -19,7 +19,7 @@ priv const MAX_MANGLE_DEPTH: Sz = 1000 //<
     //< io.err() and sys.exit(1).
 
 impl Env
-    fn mangle_type_id_to(r: Self$@, type_id: I32, w: Writer): Writer //<
+    fn mangle_type_id_to(r: Self$@, type_id: I32, out: Writer): Writer //<
         //< Writes type_id's mangled name, the type's name in the generated C and LLVM IR
         //< **Once the names are settled (`c_names_final`), each type's is spelled once** and kept
         //< on its entry (`Entry.c_name`). Spelling walks the name a character at a time, and code
@@ -28,24 +28,24 @@ impl Env
         //< drifts from this one on an instance whose immutability is dropped, and the C declares
         //< one name and uses another.
         if !r.c_names_final || type_id <= 0 || type_id >= r.id_to_type.len
-            return r.mangle_type_id_to_impl(type_id, w, 0)
+            return r.mangle_type_id_to_impl(type_id, out, 0)
         entry: = r.id_to_type.get(type_id)
         if entry.c_name.len == 0
             defer $spelled: = Str_builder()
             r.mangle_type_id_to_impl(type_id, spelled, 0)
             entry.c_name = base_core.arena.dup_str(spelled.slice())
-        return w.s(entry.c_name)
+        return out.s(entry.c_name)
 
-    priv fn mangle_type_id_to_impl(r: Self$@, type_id: I32, w: Writer, depth: Sz): Writer
+    priv fn mangle_type_id_to_impl(r: Self$@, type_id: I32, out: Writer, depth: Sz): Writer
         if depth >= MAX_MANGLE_DEPTH
             io.err()
                 .s("\nfatal: type expression nesting too deep. The chain of pointer, array or slice \
                     types may be unbounded.\n")
             sys.exit(1)
         if type_id <= 0
-            return w.s(base_core.UNKNOWN_TYPE_NAME)
+            return out.s(base_core.UNKNOWN_TYPE_NAME)
         info: = r.get_info(type_id)
-        $res: = w
+        $res: = out
 
         $base_id: I32 = 0
         $suffix: U8[] = ""
@@ -88,11 +88,11 @@ impl Env
         base_str: = r.get_str(type_id)
         return base_str.mangle_c_type_name_to(res)
 
-    fn mangled_into(r: Self$@, type_id: I32, b: Str_builder$@): U8$[] //<
-        //< type_id's mangled name, written afresh into b: valid until b is used again
-        b.clear()
-        r.mangle_type_id_to(type_id, b)
-        return b.slice()
+    fn mangled_into(r: Self$@, type_id: I32, out: Str_builder$@): U8$[] //<
+        //< type_id's mangled name, written afresh into `out`: valid until `out` is used again
+        out.clear()
+        r.mangle_type_id_to(type_id, out)
+        return out.slice()
 
     fn c_repr_type_id(r: Self$@, type_id: I32): I32 //<
         //< The type id of what shares the C representation
@@ -109,21 +109,21 @@ impl Env
             return r.type_to_id.get(key.slice()).unwrap_or(type_id)
         return type_id
 
-    fn type_args_to(r: Self$@, args: I32[], w: Writer): Writer //<
+    fn type_args_to(r: Self$@, args: I32[], out: Writer): Writer //<
         //< Writes a list of type arguments (`I32, U8[]`), each by its canonical string
         //< **The separator is `type_arg_sep`**, as every list of resolved type arguments has it.
-        $res: = w
+        $res: = out
         for i in Range.asc(args.len)
             if i > 0
                 res = res.s(base_ast.TYPE_ARG_SEP)
             res = res.s(r.get_str(args[i]))
         return res
 
-    fn instance_key_to(r: Self$@, inst: Instance, w: Writer): Writer //<
+    fn instance_key_to(r: Self$@, inst: Instance, out: Writer): Writer //<
         //< Writes the instance's registration key, `template<|args|>` (`std.ds.List<|I32|>`)
         //< It is how a person would write the instance (display_type_to in `display.kspl` shows
         //< it in the surface notation), and the instantiation cache's key.
-        return r.type_args_to(inst.args, w.s(inst.template).s("<|")).s("|>")
+        return r.type_args_to(inst.args, out.s(inst.template).s("<|")).s("|>")
 
     fn instance_key(r: Self$@, type_id: I32): U8[] //<
         //< type_id's registration key on the arena, or "" where it is no instance
@@ -133,7 +133,7 @@ impl Env
         r.instance_key_to(inst, key)
         return base_core.arena.dup_str(key.slice())
 
-    fn instance_c_name_to(r: Self$@, inst: Instance, w: Writer): Writer //<
+    fn instance_c_name_to(r: Self$@, inst: Instance, out: Writer): Writer //<
         //< Writes the instance's mangled name, the one it has in the type table and in C
         //< Caution: **Name an instance through here only.** A second spelling of the rule makes
         //< two names for one instance, and C fails with `redefinition` or `unknown type name`.
@@ -149,9 +149,9 @@ impl Env
                     args.s(base_ast.TYPE_ARG_SEP)
                 r.c_arg_text_to(inst.args[i], args@, 0)
             args.slice().drop_c_type_module_to(full.s("_"))
-        return full.slice().mangle_c_type_name_to(w)
+        return full.slice().mangle_c_type_name_to(out)
 
-    priv fn c_arg_text_to(r: Self$@, type_id: I32, w: Str_builder$@, depth: Sz) //<
+    priv fn c_arg_text_to(r: Self$@, type_id: I32, out: Str_builder$@, depth: Sz) //<
         //< Writes one type argument's text for an instance's C name: its canonical string, except
         //< that an immutable instance is written `Const_` and then the instance's name
         //< Why: rule 4 of "Immutability marks in a type, and the API that asks" in
@@ -166,29 +166,29 @@ impl Env
         switch r.get_info(type_id)
         case .const_of(b)
             if r.instance_of(b).is_some()
-                w.s("Const_").s(r.get_str(b))
+                out.s("Const_").s(r.get_str(b))
                 return
-            r.c_arg_base_to(b, w, depth)
-            w.s(base_core.IMMUT_MARK)
+            r.c_arg_base_to(b, out, depth)
+            out.s(base_core.IMMUT_MARK)
         case .pointer(b)
-            r.c_arg_base_to(b, w, depth)
-            w.c('@')
+            r.c_arg_base_to(b, out, depth)
+            out.c('@')
         case .array(b, size)
-            r.c_arg_base_to(b, w, depth)
+            r.c_arg_base_to(b, out, depth)
             if size >= 0
-                w.s("[\{size\}]")
+                out.s("[\{size\}]")
             else
-                w.s("[_]")
+                out.s("[_]")
         default
-            w.s(r.get_str(type_id))
+            out.s(r.get_str(type_id))
 
-    priv fn c_arg_base_to(r: Self$@, base_id: I32, w: Str_builder$@, depth: Sz) //<
+    priv fn c_arg_base_to(r: Self$@, base_id: I32, out: Str_builder$@, depth: Sz) //<
         //< The base a postfix applies to, a function type bracketed as `write_suffix_base` does
         switch r.get_info(base_id)
         case .fn_type
-            w.c('(').s(r.get_str(base_id)).c(')')
+            out.c('(').s(r.get_str(base_id)).c(')')
         default
-            r.c_arg_text_to(base_id, w, depth + 1)
+            r.c_arg_text_to(base_id, out, depth + 1)
 
 struct Mangle_seen //< the record for emitting a composite type "once per mangled name"
     //< Caution: **Do not write how duplicates are skipped anywhere but here.** Two generators walk
@@ -212,7 +212,7 @@ impl Mangle_seen
             .seen = base_core.arena.create(Map<|U8[], I32|>(null)), .buf = Str_builder() }
 
     fn admit(r: Self$@, type_id: I32): Bool //<
-        //< A mangled name seen for the first time is noted and true; the second time, false.
+        //< A mangled name seen for the first time is noted and true; the second time, false
         //< Caution: **Call it "after" the caller's filtering.** Filling a slot with a type that is
         //< not emitted makes the type of the same name that **should be emitted** go missing.
         //< Noting a length-less array first in `gen/c/root.kspl` made

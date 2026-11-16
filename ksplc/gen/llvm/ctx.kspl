@@ -93,7 +93,7 @@ struct Genllvm_ctx
         //< redefinition.
 
 impl Genllvm_ctx
-    fn new(out: Writer, sema: Sema_ctx$@, source_map: Map<|U8[], U8$[]|>$@): Genllvm_ctx$@
+    fn new(out: Writer, ctx: Sema_ctx$@, source_map: Map<|U8[], U8$[]|>$@): Genllvm_ctx$@
         scratch: = Str_builder()
         local_var_ids: = base_core.arena.create(Map<|Sz, I32|>(base_core.arena))
         str_pool_list: = List<|U8[]|>.create(base_core.arena)
@@ -106,7 +106,7 @@ impl Genllvm_ctx
             .create(Map<|Sz, Map<|U8[], I32|>$@|>(base_core.arena))
         extern_declared: = base_core.arena.create(Map<|U8[], I32|>(base_core.arena))
         return base_core.arena
-            .create(Genllvm_ctx::{ .out = out, .sema = sema, .env = sema.env,
+            .create(Genllvm_ctx::{ .out = out, .sema = ctx, .env = ctx.env,
             .source_map = source_map, .scratch = scratch, .reg_counter = 1, .label_counter = 1,
             .local_var_ids = local_var_ids, .var_counter = 1,
             .str_pool = Str_pool::{ .list = str_pool_list, .map = str_pool_map },
@@ -246,12 +246,12 @@ impl Genllvm_ctx
         for name in base_core.config.sanitize.split(',', base_core.arena)
             r.s("sanitize_").s(name).c(' ')
 
-    fn emit_llvm_str_body(r: Self$@, s: U8[]) //<
-        //< It emits the body of a string literal s in LLVM's c"..." escape form
+    fn emit_llvm_str_body(r: Self$@, text: U8[]) //<
+        //< It emits the body of the string literal `text` in LLVM's c"..." escape form
         //< The quotes and the trailing \00 are not included. String constants and inline asm
         //< templates share it, so the escape rules exist once. The bytes are the ones the literal
         //< stands for (append_literal_bytes in base/literal.kspl, which genc uses too).
-        s.append_literal_bytes(r, emit_llvm_str_byte)
+        text.append_literal_bytes(r, emit_llvm_str_byte)
 
     priv fn emit_buf(r: Self$@): Str_builder$@? //<
         //< The current output buffer (alloca / body)
@@ -289,11 +289,11 @@ impl Genllvm_ctx: Writer
             r.out = r.out.flush()
         return r
 
-priv fn emit_llvm_str_byte(out: Writer, b: U8) //< a byte inside LLVM's c"...", escaped as needed
-    if b == '\n' || b == '\r' || b == '\t' || b == '"' || b == '\\' || b == 0
-        out.s("\\\{b:02X\}")
+priv fn emit_llvm_str_byte(out: Writer, byte: U8) //< a byte inside LLVM's c"...", escaped as needed
+    if byte == '\n' || byte == '\r' || byte == '\t' || byte == '"' || byte == '\\' || byte == 0
+        out.s("\\\{byte:02X\}")
     else
-        out.c(b)
+        out.c(byte)
 
 priv fn local_slot_key(decl: Ast_node$@): Void$@ //<
     //< What a local's slot ID is keyed on: its symbol, which survives a node's address changing
@@ -319,13 +319,13 @@ fn format_f32_hex_literal(text: U8[]): U8$[] //<
     as_f32: = F32::parsed
     return format_f64_hex(as_f32)
 
-fn format_f64_hex(v: F64): U8$[] //<
+fn format_f64_hex(value: F64): U8$[] //<
     //< It writes a value as the hex bit pattern of a double, the form LLVM takes for any float
     //< An `F32` passes widened: LLVM writes a float constant as the double holding the same value.
     // Caution: **Do not reinterpret a type through a pointer.** A `(U64$@::widened@)$` breaks
     // strict aliasing: at higher optimization the store into widened is removed and the bits change
     // (gcc -O2 flags it with -Wstrict-aliasing). The bytes are copied instead.
-    widened: F64 = v
+    widened: F64 = value
     $bits: U64 = 0U64
     mem.copy(Void$@::bits@, Void$@::widened@, sizeof(U64))
 

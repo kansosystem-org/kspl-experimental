@@ -39,7 +39,7 @@ function ksmdNotes(ks) {
     }
     const s = window.getSelection();
     const at = s.rangeCount > 0 ? ks.view.spotAt(s.anchorNode, s.anchorOffset) : ks.sel && ks.sel.a;
-    const block = at && at[0] === 0 ? at[1] : -1;
+    const block = at && at[0] === ks.SPOT.TEXT ? at[1] : -1;
     const el = ks.view.blocks()[block];
     if (!el || !/^H[1-6]$|^P$/.test(el.tagName)) return null;
     return { block, now: el.dataset.note || "" };

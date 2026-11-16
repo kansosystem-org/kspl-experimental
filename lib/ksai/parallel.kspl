@@ -20,13 +20,13 @@ typedef Span_fn = fn(job: Void$@, first: Sz, last: Sz) //< computes one job's ou
     //< It writes only those outputs. The job's other fields are read, never written, while it runs.
 
 #cfg(!freestanding)
-const WORK_PER_THREAD: Sz = 1 << 18 //< the multiply-adds that pay for one more thread.
+const WORK_PER_THREAD: Sz = 1 << 18 //< the multiply-adds that pay for one more thread
     //< That is a tenth of a millisecond or so, against a few microseconds to wake a thread.
 #cfg(!freestanding)
-const CHUNKS_PER_THREAD: Sz = 4 //< how many pieces each thread's share is cut into.
+const CHUNKS_PER_THREAD: Sz = 4 //< how many pieces each thread's share is cut into
     //< Threads take pieces as they finish, so one slow thread holds up the end by one piece only.
 #cfg(!freestanding)
-const SPIN: Sz = 1 << 17 //< how many times a thread looks for the next round before it sleeps.
+const SPIN: Sz = 1 << 17 //< how many times a thread looks for the next round before it sleeps
     //< That is a tenth of a millisecond or so. A model asks for one product after another, a few
     //< microseconds apart, and waking a sleeping thread takes tens of microseconds; a thread that
     //< gets no work for longer sleeps, so an idle program takes no CPU.
@@ -36,15 +36,16 @@ const SPIN: Sz = 1 << 17 //< how many times a thread looks for the next round be
 // ==========================================
 
 #cfg(freestanding)
-fn threads_for(m: Sz, k: Sz, n: Sz): Sz //< always 1: a freestanding build starts no thread
-    return 1 if m + k + n >= 0 else 1
+fn threads_for(rows: Sz, inner: Sz, cols: Sz): Sz //<
+    //< always 1: a freestanding build starts no thread
+    return 1 if rows + inner + cols >= 0 else 1
 
 #cfg(freestanding)
-fn split(f: Span_fn, job: Void$@, count: Sz, align: Sz, threads: Sz): Sz //<
+fn split(work: Span_fn, job: Void$@, count: Sz, align: Sz, threads: Sz): Sz //<
     //< Runs every output on the caller's thread, and returns 1
     //< `align` and `threads` cannot change anything with one thread.
     if count > 0 && align > 0 && threads > 0
-        f(job, 0, count)
+        work(job, 0, count)
     return 1
 
 // ==========================================
@@ -64,11 +65,11 @@ priv $the_pool: Pool$@ = null //< written once, before `pool_gate` turns 2
 pub fn set_threads( //< the most threads one product may use; the default, 0, is every CPU
     //< A program that already keeps every CPU busy with threads of its own sets 1. Its products
     //< then stay on the thread that calls them, and threads do not outnumber CPUs.
-    n: Sz, //< 0 for every CPU, or a count; more than the CPUs gives the CPU count
+    count: Sz, //< 0 for every CPU, or a count; more than the CPUs gives the CPU count
 )
-    if n < 0
+    if count < 0
         panic("ksai: set_threads takes 0 or more")
-    thread_cap.store(n)
+    thread_cap.store(count)
 
 #cfg(!freestanding)
 priv fn most_threads(): Sz //< the cap `set_threads` set, but never more than the CPU count
@@ -80,11 +81,12 @@ priv fn most_threads(): Sz //< the cap `set_threads` set, but never more than th
     return cpus if cap == 0 || cap > cpus else cap
 
 #cfg(!freestanding)
-fn threads_for(m: Sz, k: Sz, n: Sz): Sz //< how many threads `m × k × n` multiply-adds pay for
+fn threads_for(rows: Sz, inner: Sz, cols: Sz): Sz //<
+    //< how many threads `rows × inner × cols` multiply-adds pay for
     //< A count too large for `Sz` pays for every thread.
-    mk: = m.checked_mul(k) catch
+    mk: = rows.checked_mul(inner) catch
         return most_threads()
-    work: = mk.checked_mul(n) catch
+    work: = mk.checked_mul(cols) catch
         return most_threads()
     return math.max(Sz::1, math.min(most_threads(), work / WORK_PER_THREAD))
 
@@ -117,13 +119,13 @@ priv struct Pool_seat //< one worker's view: the pool and its number in it
     thread: Thread //< kept so the handle stays reachable; the thread runs to the program's end
 
 #cfg(!freestanding)
-priv fn take_pieces(p: Pool$@, f: Span_fn, job: Void$@, count: Sz, grain: Sz) //<
+priv fn take_pieces(pool: Pool$@, work: Span_fn, job: Void$@, count: Sz, grain: Sz) //<
     //< Computes pieces until none is left; every thread of a round runs this
     for
-        first: = p.next.fetch_add(1) * grain
+        first: = pool.next.fetch_add(1) * grain
         if first >= count
             return
-        f(job, first, math.min(first + grain, count))
+        work(job, first, math.min(first + grain, count))
 
 #cfg(!freestanding)
 extern fn ksai_pool_worker(seat: Pool_seat$@): Void$@ //<
@@ -171,18 +173,19 @@ priv fn start_pool(): Pool$@? //< the pool, with no worker yet; `grow` starts th
     return .some(p)
 
 #cfg(!freestanding)
-priv fn grow(p: Pool$@, want: Sz) //< starts workers until the pool has `want` of them
+priv fn grow(pool: Pool$@, want: Sz) //< starts workers until the pool has `want` of them
     //< **The pool grows to what a split asks for**, so a cap raised by `set_threads` later still
     //< takes effect. It never shrinks: a worker a round does not ask for waits.
     //< Only the caller holding `busy` calls it. So no round runs, and `workers` has one writer.
-    for p.workers < want && !p.stuck
+    for pool.workers < want && !pool.stuck
         seat: = mem
-            .new(Pool_seat::{ .pool = p, .index = p.workers, .seen = p.posted.load() })
+            .new(Pool_seat::{ .pool = pool, .index = pool.workers,
+            .seen = pool.posted.load() })
         seat.thread = Thread.spawn<|Pool_seat|>(ksai_pool_worker, seat) catch
             mem.dealloc(Void$@::seat)
-            p.stuck = true
+            pool.stuck = true
             return
-        p.workers += 1
+        pool.workers += 1
 
 #cfg(!freestanding)
 priv fn pool(): Pool$@? //<
@@ -198,16 +201,16 @@ priv fn pool(): Pool$@? //<
     return .some(the_pool)
 
 #cfg(!freestanding)
-priv fn alone(f: Span_fn, job: Void$@, count: Sz): Sz //< every output on the caller's thread
-    f(job, 0, count)
+priv fn alone(work: Span_fn, job: Void$@, count: Sz): Sz //< every output on the caller's thread
+    work(job, 0, count)
     return 1
 
 #cfg(!freestanding)
 fn split( //< computes outputs [0, count) of a job, on up to `threads` threads; returns how many
     //< The caller's thread is one of them. A second caller while the pool is busy computes alone.
-    //< Either way each output is computed once, by `f`, so the result is the same.
-    f: Span_fn, //< what computes a run of outputs
-    job: Void$@, //< passed to `f` as it stands
+    //< Either way each output is computed once, by `work`, so the result is the same.
+    work: Span_fn, //< what computes a run of outputs
+    job: Void$@, //< passed to `work` as it stands
     count: Sz, //< how many outputs
     align: Sz, //< a piece starts on a multiple of this, so a kernel's vector width stays whole
     threads: Sz, //< the most threads; `threads_for` gives the count a product's size pays for
@@ -218,21 +221,21 @@ fn split( //< computes outputs [0, count) of a job, on up to `threads` threads; 
     grain = (grain + align - 1) / align * align
     want: = math.min(threads, (count + grain - 1) / grain)
     if want <= 1
-        return alone(f, job, count)
+        return alone(work, job, count)
     p: = pool() catch
-        return alone(f, job, count)
+        return alone(work, job, count)
     if !p.busy.compare_and_swap(0, 1)
-        return alone(f, job, count)
+        return alone(work, job, count)
     // At least one worker, so a split can be checked on a machine with one CPU.
     grow(p, math.min(want, math.max(most_threads(), 2)) - 1)
     if p.workers == 0
         p.busy.store(0)
-        return alone(f, job, count)
+        return alone(work, job, count)
     helpers: = math.min(want - 1, p.workers)
     p.next.store(0)
     p.left.store(helpers)
     s: = p.round.lock()
-    s.f = f
+    s.f = work
     s.job = job
     s.count = count
     s.grain = grain
@@ -241,7 +244,7 @@ fn split( //< computes outputs [0, count) of a job, on up to `threads` threads; 
     p.posted.store(s.number)
     p.wake.broadcast(p.round@)
     p.round.unlock()
-    take_pieces(p, f, job, count, grain)
+    take_pieces(p, work, job, count, grain)
     $spins: Sz = 0
     for p.left.load() > 0 && spins < SPIN
         spins += 1

@@ -123,14 +123,14 @@ priv fn skip_link_target(text: U8[], at: Sz): Sz //< the position past a whole `
         c += 1
     return c + 1 if c < text.len else c
 
-fn is_marked(text: U8[], h: Hit, arena: Arena$@): Bool //<
+fn is_marked(text: U8[], hit: Hit, arena: Arena$@): Bool //<
     //< Whether the citation's number is written as one: `§N` after it, or `N in` before it
     //< A plain number read after the name may be prose (`its stages count from 1`), so only these
     //< two forms say a document's sections are numbered.
-    if read_section_before(text, h.at, arena).len > 0
+    if read_section_before(text, hit.at, arena).len > 0
         return true
-    stop: = h.end + 80 if h.end + 80 < text.len else text.len
-    return text.sub(h.end, stop - h.end).find_str("§").is_some()
+    stop: = hit.end + 80 if hit.end + 80 < text.len else text.len
+    return text.sub(hit.end, stop - hit.end).find_str("§").is_some()
 
 fn find_sections(text: U8[], dirs: U8[][], bares: U8[][], arena: Arena$@): List<|Hit|>
     $out: = List<|Hit|>(arena)
@@ -320,17 +320,17 @@ priv fn read_quoted(text: U8[], at: Sz, arena: Arena$@): U8[] //< reads a `"…"
         j += htext.cp_len(text[j])
     return ""
 
-priv fn joiner_before(text: U8[], k: Sz, j: U8[]): Sz //<
-    //< Whether the joiner `j` comes before the citation
+priv fn joiner_before(text: U8[], at: Sz, joiner: U8[]): Sz //<
+    //< Whether the joiner `joiner` comes before the citation
     //< Where it does, the position the name ends at; -1 where it does not. **A wrap stands in for
     //< the joiner's trailing space** (`… in` at a line's end), so a crossed wrap matches one space
     //< shorter.
-    if k >= j.len && text.sub(k - j.len, j.len).equals(j)
-        return k - j.len
-    w: = skip_wrap_back(text, k)
-    if w == k
+    if at >= joiner.len && text.sub(at - joiner.len, joiner.len).equals(joiner)
+        return at - joiner.len
+    w: = skip_wrap_back(text, at)
+    if w == at
         return -1
-    head: = j.sub(0, j.len - 1)
+    head: = joiner.sub(0, joiner.len - 1)
     if w < head.len || !text.sub(w - head.len, head.len).equals(head)
         return -1
     return w - head.len

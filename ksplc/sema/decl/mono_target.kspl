@@ -10,7 +10,7 @@ import "ksplc/sema/session/ctx" { Sema_ctx }
 import "std/chars"
 import "std/ds"
 
-fn impl_target_rejects(r: Sema_ctx$@, impl_node: Ast_node$@, target_name: U8[], args: I32[],
+fn impl_target_rejects(ctx: Sema_ctx$@, impl_node: Ast_node$@, target_name: U8[], args: I32[],
     mask: I32): Bool //<
         //< Whether the type arguments on the impl's target fail to match the instance's arguments
         //< **Two checks per position.** (1) **The name**: the impl's own type parameter (the `T` of
@@ -24,26 +24,26 @@ fn impl_target_rejects(r: Sema_ctx$@, impl_node: Ast_node$@, target_name: U8[], 
         return false
     gen_params: = impl_node.find_child(.k_type_gen_params)
     // A concrete type's name is seen from the impl's file; normalize it there to an FQN.
-    prev_file: = r.file_name
-    r.set_current_file(impl_node.loc.file())
-    defer r.set_current_file(prev_file)
+    prev_file: = ctx.file_name
+    ctx.set_current_file(impl_node.loc.file())
+    defer ctx.set_current_file(prev_file)
     for i in Range.asc(n)
         written: = t_args.nth_type_arg(i)
-        actual: = r.env.get_str(args[i])
+        actual: = ctx.env.get_str(args[i])
         wants_mut: = written.starts_with("$")
         if wants_mut && actual.ends_with(base_core.IMMUT_MARK)
             return true
         core: = written.sub_from(1) if wants_mut else written
         if names_impl_gen_param(gen_params, core)
             continue
-        if !concrete_arg_matches(r, core, actual, variance_names_mut(mask, i) && !wants_mut)
+        if !concrete_arg_matches(ctx, core, actual, variance_names_mut(mask, i) && !wants_mut)
             return true
     return false
 
-priv fn concrete_arg_matches(r: Sema_ctx$@, core: U8[], actual: U8[], weakens: Bool): Bool //<
+priv fn concrete_arg_matches(ctx: Sema_ctx$@, core: U8[], actual: U8[], weakens: Bool): Bool //<
     //< Whether a concrete type written at a position is the same type as the instance's argument
     //< weakens: a position asking for immutable accepts a mutable instance too (one level).
-    defer $canon: = r.canonicalize_one_type_arg(core)
+    defer $canon: = ctx.canonicalize_one_type_arg(core)
     w: = canon.slice()
     if w.equals(actual)
         return true

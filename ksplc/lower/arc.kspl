@@ -80,20 +80,20 @@ fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_n
     stmt: = Ast_node(.k_stmt_expr, "expr", loc).add_child(call)
     return .some(stmt)
 
-priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) //<
+priv fn expand_place_index_ops(lctx: Lowering_ctx$@, node: Ast_node$@, depth: Sz) //<
     //< It expands each place-returning subscript `l[i]` in a place expression's copy to `l.at(i)$`
     //< A place-returning subscript is one through std/lang's Index_place.
     //< **The ARC decision happens before lower_default, so a cloned subscript is not expanded
     //< yet.** genc emits `[` only for a built-in slice or array, so an unexpanded receiver is an
     //< `emit_postfix_array` ICE (reading, writing or `for x in` over a `List<|Rc<|T|>|>`).
-    if n == null || depth >= MAX_ARC_PLACE_DEPTH
+    if node == null || depth >= MAX_ARC_PLACE_DEPTH
         return
-    if n.kind_id == .k_expr_postfix && lctx.sema.env.is_place_index_node(n)
+    if node.kind_id == .k_expr_postfix && lctx.sema.env.is_place_index_node(node)
         defer $ops: = Operand_order()
-        n.order_index_operands(lctx, ops@)
-        n.lower_postfix_index_operator(lctx, ops@)
+        node.order_index_operands(lctx, ops@)
+        node.lower_postfix_index_operator(lctx, ops@)
         return
-    for child in n.children
+    for child in node.children
         expand_place_index_ops(lctx, child, depth + 1)
 
 // It adds to out the statements for the retain/release on recv (a value of type type_id).
@@ -172,7 +172,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
 
 priv fn build_arc_helper_signature(lctx: Lowering_ctx$@, helper_name: U8[], ptr_id: I32,
     loc: base_ast.Loc): Arc_helper_parts //<
-        //< It builds the helper's signature `fn <name>(p: T@)`, returning the param node too.
+        //< It builds the helper's signature `fn <name>(p: T@)`, returning the param node too
     param: = Ast_node.build_synth_param(ARC_HELPER_PARAM_NAME,
         lctx.sema.env.get_str(ptr_id), ptr_id, loc)
     params: = Ast_node(.k_param_list, "params", loc).add_child(param)
@@ -183,7 +183,7 @@ priv fn build_arc_helper_signature(lctx: Lowering_ctx$@, helper_name: U8[], ptr_
 
 priv fn emit_arc_owned_positions(lctx: Lowering_ctx$@, parts: Arc_helper_parts, real_id: I32,
     method_name: U8[], out: List<|Ast_node$@|>$@, depth: Sz) //<
-        //< The helper's body: it recurses into each owning position of the type, reached through p.
+        //< The helper's body: it recurses into each owning position of the type, reached through p
     loc: = parts.helper_fn.loc
     switch lctx.sema.env.get_info(real_id)
     case .struct_type(def)
@@ -206,12 +206,12 @@ priv fn emit_arc_owned_positions(lctx: Lowering_ctx$@, parts: Arc_helper_parts, 
             emit_managed_op(lctx, elem, elem_id, method_name, out, depth + 1)
     default {}
 
-priv fn build_arc_elem_deref(lctx: Lowering_ctx$@, ptr_expr: Ast_node$@, k: I32, elem_id: I32,
+priv fn build_arc_elem_deref(lctx: Lowering_ctx$@, ptr_expr: Ast_node$@, index: I32, elem_id: I32,
     loc: base_ast.Loc): Ast_node$@ //<
-        //< It builds `(<ptr> + k)$` (the k-th element from the element pointer).
+        //< It builds `(<ptr> + index)$` (the k-th element from the element pointer)
     size_id: = I32::sema_type_env.Builtin_type_id.size_type
     // The literal needs a type: Sema never sees it, and with type_id 0 genllvm emits invalid IR.
-    idx_lit: = Ast_node.build_int_literal(k, loc).with_type(size_id)
+    idx_lit: = Ast_node.build_int_literal(index, loc).with_type(size_id)
     sum: = Ast_node(.k_expr, "+", loc).with_type(lctx.sema.env.make_ptr(elem_id))
         .add_child(ptr_expr).add_child(Ast_node(.k_literal, "+", loc)).add_child(idx_lit)
     return Ast_node(.k_expr_postfix, "$", loc).with_type(elem_id).add_child(sum)
@@ -219,7 +219,7 @@ priv fn build_arc_elem_deref(lctx: Lowering_ctx$@, ptr_expr: Ast_node$@, k: I32,
 
 priv fn build_arc_helper_call(lctx: Lowering_ctx$@, helper: Ast_node$@, recv: Ast_node$@,
     type_id: I32): Ast_node$@ //<
-        //< It builds the helper call `<helper>(<recv>@)` as one statement.
+        //< It builds the helper call `<helper>(<recv>@)` as one statement
     loc: = recv.loc
     void_id: = I32::sema_type_env.Builtin_type_id.void_type
     addr_of: = Ast_node(.k_expr_postfix, "@", loc)

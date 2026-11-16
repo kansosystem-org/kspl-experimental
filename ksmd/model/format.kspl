@@ -40,11 +40,12 @@ struct Number_format
 fn no_format(): Number_format //< a column that shows its numbers as calculated
     return Number_format::{ .kind = .none, .places = 0, .code = "" }
 
-fn same_format(a: Number_format, b: Number_format): Bool
-    return a.kind == b.kind && a.places == b.places && a.code.equals(b.code)
+fn same_format(left: Number_format, right: Number_format): Bool
+    return left.kind == right.kind && left.places == right.places &&
+        left.code.equals(right.code)
 
-fn shows_numbers(f: Number_format): Bool //< whether a format changes how numbers show
-    return f.kind != .none && f.kind != .slash_date && f.kind != .general
+fn shows_numbers(format: Number_format): Bool //< whether a format changes how numbers show
+    return format.kind != .none && format.kind != .slash_date && format.kind != .general
 
 fn format_of(text: U8[]): Number_format? //<
     //< The format an entry of `formats` names, or no format for an empty entry; none if invalid
@@ -80,8 +81,9 @@ fn currency_of(code: U8[]): Number_format? //<
     places: Sz = 0 if code.equals("JPY") || code.equals("KRW") else 2
     return .some(Number_format::{ .kind = .currency, .places = places, .code = code })
 
-fn write_format(f: Number_format, out: Str_builder$@) //< the entry `formats` holds; none is empty
-    switch f.kind
+fn write_format(format: Number_format, out: Str_builder$@) //<
+    //< the entry `formats` holds; none is empty
+    switch format.kind
     case .none
         return
     case .slash_date
@@ -97,49 +99,51 @@ fn write_format(f: Number_format, out: Str_builder$@) //< the entry `formats` ho
     case .percent
         out.s("percent")
     case .currency
-        out.s("currency:").s(f.code)
-    out.c(':').c('0' + U8::f.places)
+        out.s("currency:").s(format.code)
+    out.c(':').c('0' + U8::format.places)
 
-fn show(n: F64, f: Number_format, out: Str_builder$@) //< writes a finite number as `f` shows it
+fn show(number: F64, format: Number_format, out: Str_builder$@) //<
+    //< writes a finite number as `format` shows it
     //< A number that rounds to zero shows no minus sign: `-0.00` would read as a value below zero.
-    $d: = digits_of(-n if n < 0.0 else n)
-    if f.kind == .percent
+    $d: = digits_of(-number if number < 0.0 else number)
+    if format.kind == .percent
         d.point += 2
-    cut(d@, d.point + f.places)
-    if n < 0.0 && d.count > 0
+    cut(d@, d.point + format.places)
+    if number < 0.0 && d.count > 0
         out.c('-')
-    if f.kind == .currency
-        write_symbol(f.code, out)
-    grouped: = f.kind != .number
+    if format.kind == .currency
+        write_symbol(format.code, out)
+    grouped: = format.kind != .number
     if d.point <= 0
         out.c('0')
     for i in Range.asc(d.point)
         if grouped && i > 0 && (d.point - i) % 3 == 0
             out.c(',')
         out.c(d.at(i))
-    if f.places > 0
+    if format.places > 0
         out.c('.')
-    for j in Range.asc(f.places)
+    for j in Range.asc(format.places)
         out.c(d.at(d.point + j))
-    if f.kind == .percent
+    if format.kind == .percent
         out.c('%')
 
 const SHOWN_DIGITS: Sz = 15 //< the most significant digits a number shows without a format
     //< Spreadsheets show 15, so the F64 just above 0.3 that `0.1 + 0.2` gives shows as 0.3.
 
-fn show_plain(n: F64, out: Str_builder$@) //< writes a finite number as it shows without a format
+fn show_plain(number: F64, out: Str_builder$@) //<
+    //< writes a finite number as it shows without a format
     //< Its digits are rounded to `SHOWN_DIGITS`, then written as JavaScript writes a number:
     //< `100000000000000000000`, `0.000001`, `1e+21` and `1e-7`, and never `.0` after a whole
     //< number. **The page writes every number through this** (`ksmd/port/web/view.kspl`), so a
     //< cell and `text(A1, "")` show the same digits.
-    $d: = digits_of(-n if n < 0.0 else n)
+    $d: = digits_of(-number if number < 0.0 else number)
     cut(d@, SHOWN_DIGITS)
     for d.count > 0 && d.digits[d.count - 1] == '0'
         d.count -= 1
     if d.count == 0
         out.c('0')
         return
-    if n < 0.0
+    if number < 0.0
         out.c('-')
     if d.point >= d.count && d.point <= 21
         for i in Range.asc(d.point)
@@ -164,45 +168,45 @@ fn show_plain(n: F64, out: Str_builder$@) //< writes a finite number as it shows
         exponent: = d.point - 1
         out.s("e+" if exponent > 0 else "e-").s("\{exponent if exponent > 0 else -exponent\}")
 
-fn round_digits(n: F64, digits: Sz): F64? //<
+fn round_digits(number: F64, digits: Sz): F64? //<
     //< A finite number rounded to `digits` significant digits as `show` rounds; none if too large
-    return round_at_digits_of(n, n, digits)
+    return round_at_digits_of(number, number, digits)
 
-fn round_at_digits_of(n: F64, of: F64, digits: Sz): F64? //<
-    //< `n` rounded at the decimal place of the `digits`-th significant digit of `of`, as `show`
+fn round_at_digits_of(number: F64, of: F64, digits: Sz): F64? //<
+    //< `number` rounded at the decimal place of the `digits`-th significant digit of `of`, as `show`
     //< rounds; none if too large
     //< So a result is rounded at its operands' digits: `mod` rounds its remainder at the place of
     //< the larger operand's 15th digit, where its subtraction's error lies.
     d: = digits_of(-of if of < 0.0 else of)
-    return round_places(n, digits - d.point)
+    return round_places(number, digits - d.point)
 
-fn shows_same(a: F64, b: F64): Bool //<
+fn shows_same(left: F64, right: F64): Bool //<
     //< Whether two finite numbers agree in the `SHOWN_DIGITS` digits they show
     //< So `0.1 + 0.2` and `0.3`, which show alike, are the same; a comparison and a lookup's key
     //< use this. Two numbers that agree there are at most 1e-13 apart relative to the larger, so
     //< the digits are rounded only for those.
-    if a == b
+    if left == right
         return true
-    if math.abs(a - b) > math.max(math.abs(a), math.abs(b)) * 1.0e-13
+    if math.abs(left - right) > math.max(math.abs(left), math.abs(right)) * 1.0e-13
         return false
-    x: = round_digits(a, SHOWN_DIGITS) catch
+    x: = round_digits(left, SHOWN_DIGITS) catch
         return false
-    y: = round_digits(b, SHOWN_DIGITS) catch
+    y: = round_digits(right, SHOWN_DIGITS) catch
         return false
     return x == y
 
-fn round_places(n: F64, places: Sz): F64? //<
+fn round_places(number: F64, places: Sz): F64? //<
     //< A finite number rounded to `places` decimal places as `show` rounds; none if too large
     //< A negative `places` rounds to tens, hundreds and on: `round_places(1250.0, -2)` is 1300.
-    $d: = digits_of(-n if n < 0.0 else n)
+    $d: = digits_of(-number if number < 0.0 else number)
     kept: = d.point + places
     if kept >= d.count
-        return .some(n)
+        return .some(number)
     cut(d@, kept)
     if d.count == 0
         return .some(0.0)
     defer $text: = Str_builder()
-    if n < 0.0
+    if number < 0.0
         text.c('-')
     text.s("0.")
     for i in Range.asc(d.count)
@@ -218,13 +222,14 @@ priv struct Digits //< a number's decimal digits: its value is 0.d1d2… times 1
     point: Sz
 
 impl Digits
-    priv fn at(d: Self@, i: Sz): U8 //< the digit at place `i` from the first, or `0` past them
-        return d.digits[i] if i >= 0 && i < d.count else '0'
+    priv fn at(r: Self@, i: Sz): U8 //< the digit at place `i` from the first, or `0` past them
+        return r.digits[i] if i >= 0 && i < r.count else '0'
 
-priv fn digits_of(m: F64): Digits //< the shortest digits that read back as `m`, which is 0 or more
+priv fn digits_of(number: F64): Digits //<
+    //< the shortest digits that read back as `number`, which is 0 or more
     $d: Digits = ::{}
     defer $text: = Str_builder()
-    text.s("\{m\}")
+    text.s("\{number\}")
     t: = text.slice()
     $seen_point: = false
     $i: Sz = 0
@@ -252,24 +257,25 @@ priv fn digits_of(m: F64): Digits //< the shortest digits that read back as `m`,
         d.count -= 1
     return d
 
-priv fn cut(d: Digits$@, kept: Sz) //< keeps the first `kept` digits; a half rounds away from zero
+priv fn cut(digits: Digits$@, kept: Sz) //<
+    //< keeps the first `kept` digits; a half rounds away from zero
     if kept < 0
-        d.count = 0
-    else if kept < d.count
-        up: = d.digits[kept] >= '5'
-        d.count = kept
+        digits.count = 0
+    else if kept < digits.count
+        up: = digits.digits[kept] >= '5'
+        digits.count = kept
         if up
-            carry(d)
+            carry(digits)
 
-priv fn carry(d: Digits$@) //< adds one to the last digit; nines carry, and may add a digit
-    for d.count > 0 && d.digits[d.count - 1] == '9'
-        d.count -= 1
-    if d.count == 0
-        d.digits[0] = '1'
-        d.count = 1
-        d.point += 1
+priv fn carry(digits: Digits$@) //< adds one to the last digit; nines carry, and may add a digit
+    for digits.count > 0 && digits.digits[digits.count - 1] == '9'
+        digits.count -= 1
+    if digits.count == 0
+        digits.digits[0] = '1'
+        digits.count = 1
+        digits.point += 1
         return
-    d.digits[d.count - 1] += 1U8
+    digits.digits[digits.count - 1] += 1U8
 
 priv fn is_code(text: U8[]): Bool //< three capital letters, as ISO 4217 writes a currency
     return text.len == 3 && text[0].is_upper() && text[1].is_upper() && text[2].is_upper()

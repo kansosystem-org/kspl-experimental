@@ -13,13 +13,13 @@ import "kspeg/rule" { Rule }
 import "std/ds"
 import "std/mem" { Arena }
 
-const MAX_EXPECTED_LABELS: Sz = 8 //< how many `expected` labels one position can carry.
+const MAX_EXPECTED_LABELS: Sz = 8 //< how many `expected` labels one position can carry
     //< Caution: Keep the number in this one place; with copies, raising one would write past the
     //< buffer another sized. **Raising it does not help**: what overflows is the operators that
     //< could continue an expression (after `x: = 1`, some thirty are recorded and `';'` comes
     //< last).
 
-const NO_SKIPPABLE: Sz = -1 //< the position that means "no skippable attempt is open".
+const NO_SKIPPABLE: Sz = -1 //< the position that means "no skippable attempt is open"
     //< Caution: **It must be a value that matches no position**: with 0, a failure at the start of
     //< the file would count as skippable.
 
@@ -28,9 +28,9 @@ pub struct Expected //< one thing that could have come where the parse stopped
     //< stands; a rule's name (`Identifier`) is not, and in the same quotes it reads as though
     //< typing `'Identifier'` would work. Only the code that records it knows which, so it is kept.
     pub text: U8[] //< the literal text, or a rule's name when `is_rule` is set
-    pub is_rule: Bool //< whether it is a rule's name rather than text a user types.
+    pub is_rule: Bool //< whether it is a rule's name rather than text a user types
         //< The report phrases the two differently.
-    pub is_optional: Bool //< whether nothing had to be written here, so it did not stop the parse.
+    pub is_optional: Bool //< whether nothing had to be written here, so it did not stop the parse
         //< An optional or a repetition that gave up before reading a character. **Ignoring this
         //< fills the list with ways to continue.** Forget a `;` after an expression, and every
         //< operator is listed at that position before `';'`. Yet only `';'` stopped the parse.
@@ -40,12 +40,12 @@ pub struct Fail_track //< one input's failure record: how far it got, and what c
     //< Caution: **Do not move the fields back into `Target`**: that makes the import cycle named at
     //< the top of this file. There is one per input (`Target` creates and holds it); a `Target`
     //< that only lends its grammar leaves its own unused.
-    pub max_fail_pos: Sz //< the furthest position where an expected spelling did not match.
+    pub max_fail_pos: Sz //< the furthest position where an expected spelling did not match
         //< **A failure cut off by depth is not recorded here** (`Target.depth_exceeded_pos` keeps
         //< it).
     pub expected_labels: Expected$@ //< what could have come at that position, up to the cap
     pub expected_label_count: Sz //< how many of those are in use
-    pub deepest_try: Sz //< how far the lexical token being read has got.
+    pub deepest_try: Sz //< how far the lexical token being read has got
         //< Caution: **Count only the failures inside the token** (where recording is suppressed).
         //< An ordinary rule failing inside it (an expression inside interpolation) records at its
         //< own position. Counted here too, it would list the token's name at that position as well.
@@ -89,17 +89,17 @@ impl Fail_track
     fn push_expected( //< records one thing that could have come at that position
         r: Self$@,
         pos: Sz, //< a position past `max_fail_pos` restarts the list
-        e: Expected,
+        expected: Expected,
     )
         if pos > r.max_fail_pos
             r.max_fail_pos = pos
-            $first: = e
+            $first: = expected
             first.is_optional = pos == r.skippable_start
             r.expected_labels$ = first
             r.expected_label_count = 1
         else if pos == r.max_fail_pos
             $found: = false
-            $add: = e
+            $add: = expected
             add.is_optional = pos == r.skippable_start
             for i in Range.asc(r.expected_label_count)
                 if (r.expected_labels + i).text.equals(add.text)

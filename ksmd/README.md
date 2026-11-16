@@ -51,6 +51,8 @@ With `ksplc` installed, run `make test` in this folder; from the repository root
 
 The same run then serves the page with `kssrv --local` on a scratch workspace, and checks each file step against the bytes on disk. From the root, the server is built and passed in. Here, pass `KSSRV=<path to kssrv>`, or that part reports itself skipped.
 
+`make test-ksmd-fuzz` from the root, or `make test-fuzz` here, feeds the reader broken documents on a fixed seed. Each one that reads is calculated and written back, and must read back the same. It wants a C compiler, and the address sanitizer's runtime where it holds one.
+
 `make measure-ksmd` from the root, or `make measure` here, times opening, editing and saving three documents, outside the browser and in the page. It checks nothing. "What a document costs" in the [design](docs/DESIGN-ksmd.md#what-a-document-costs) says what it shows.
 
 ## Folder map
@@ -145,8 +147,8 @@ flowchart BT
 | [port/wasm_build.kspl](port/wasm_build.kspl) | Runs `port/wasm.kspl` for `ksmd/Makefile` to build the page's wasm |
 | [port/own_build.kspl](port/own_build.kspl) | Builds a file of a person's own functions for the page, run by the local server (`--builder`); `port/own/serve.kspl` is the module's fixed part |
 | [port/table_writer.kspl](port/table_writer.kspl) | Writes `calc/functions_table.kspl`, or checks that it is current (`make ksmd-functions`, `make debug-ksmd`) |
-| [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `support.kspl` holds the helpers several files share. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure |
-| [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server (started by `kssrv.mjs`), and `measure.mjs` times it |
+| [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `support.kspl` holds the helpers several files share. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure. `fuzz_main.kspl` feeds broken documents to `read_prog.kspl`, from seeds such as `every_form.ksmd` |
+| [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server (started by `kssrv.mjs`), and `measure.mjs` times it. `hostile.mjs` opens a document crafted to run script |
 
 ## Further reading
 

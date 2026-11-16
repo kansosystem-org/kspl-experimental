@@ -58,49 +58,50 @@ priv const FEATURE_COUNT: Sz = 5 //< the count of features (valid, distance, lef
 priv const SILU_FLOOR: F64 = -60.0 //< the input below which SiLU is taken as 0
     //< For large negative z, exp(-z) overflows, so the result is set to 0 there.
 
-priv fn silu(z: F64): F64
-    if z < SILU_FLOOR
+priv fn silu(value: F64): F64
+    if value < SILU_FLOOR
         return 0.0
-    return z / (1.0 + math.exp(-z))
+    return value / (1.0 + math.exp(-value))
 
-priv fn features(b: Blob, dist_mm: I64, line: I64, out: List<|F64|>$@) //<
+priv fn features(blob: Blob, dist_mm: I64, line: I64, out: List<|F64|>$@) //<
     //< Makes the features from an observation
     //< The only constant is `far_mm`, and the blob holds that.
     valid: = dist_mm > 0I64
     raw: = F64::dist_mm
-    clamped: = math.min(raw, b.far_mm)
+    clamped: = math.min(raw, blob.far_mm)
     out.push(1.0 if valid else 0.0)
-    out.push((clamped / b.far_mm) if valid else 0.0)
+    out.push((clamped / blob.far_mm) if valid else 0.0)
     out.push(1.0 if (line & 4I64) != 0I64 else 0.0)
     out.push(1.0 if (line & 2I64) != 0I64 else 0.0)
     out.push(1.0 if (line & 1I64) != 0I64 else 0.0)
 
-priv fn affine(x: List<|F64|>@, w: Tensor<|F32|>, bias: Tensor<|F32|>, out: List<|F64|>$@) //<
-    //< Multiplies x by a row-major [rows, cols] matrix from the left and adds the bias
-    rows: = w.shape[0]
-    cols: = w.shape[1]
+priv fn affine(inputs: List<|F64|>@, weights: Tensor<|F32|>, bias: Tensor<|F32|>,
+    out: List<|F64|>$@) //<
+        //< Multiplies `inputs` by a row-major [rows, cols] matrix from the left and adds the bias
+    rows: = weights.shape[0]
+    cols: = weights.shape[1]
     for j in Range.asc(cols)
         $acc: F64 = bias[j]
         for i in Range.asc(rows)
-            acc += x.get(i) * F64::w[i * cols + j]
+            acc += inputs.get(i) * F64::weights[i * cols + j]
         out.push(acc)
 
-fn drive(b: Blob, dist_mm: I64, line: I64, scratch: Arena$@): Drive //<
+fn drive(blob: Blob, dist_mm: I64, line: I64, scratch: Arena$@): Drive //<
     //< Gives the manoeuvre for an observation from the blob alone
     //< `scratch` is a working arena that is rewound.
     mark: = scratch.save()
     $x: = List<|F64|>(scratch)
-    features(b, dist_mm, line, x@)
+    features(blob, dist_mm, line, x@)
     $hidden: = List<|F64|>(scratch)
-    affine(x@, b.w1, b.b1, hidden@)
+    affine(x@, blob.w1, blob.b1, hidden@)
     $act: = List<|F64|>(scratch)
     for i in Range.asc(hidden.len)
         act.push(silu(hidden.get(i)))
     $logits: = List<|F64|>(scratch)
-    affine(act@, b.w2, b.b2, logits@)
+    affine(act@, blob.w2, blob.b2, logits@)
     best: = argmax(logits@)
     row: = best * 3
-    man: = b.man
+    man: = blob.man
     d: = Drive::{ .lon = I32::man[row], .lat = I32::man[row + 1], .rot = I32::man[row + 2],
         .margin = top_margin(logits@, best) }
     scratch.restore(mark)

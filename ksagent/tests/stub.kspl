@@ -61,29 +61,29 @@ fn start_dripping(replies: U8[][], edit_path: U8[], edit_body: U8[], drip_ms: I3
     s.worker = thread.Thread.spawn<|Stub|>(serve, s) catch panic("the stand-in's thread starts")
     return s
 
-fn finish(s: Stub$@) //< waits for the stand-in to stop, then closes its socket
-    s.worker.free()
-    s.listener.free()
+fn finish(stub: Stub$@) //< waits for the stand-in to stop, then closes its socket
+    stub.worker.free()
+    stub.listener.free()
 
-fn done_asking(s: Stub$@) //< stops it waiting, as the asker has returned, then finishes it
+fn done_asking(stub: Stub$@) //< stops it waiting, as the asker has returned, then finishes it
     //< **For an asker that returns only after its last request is answered**, as `agent.run` does.
     //< A request it made is then accepted already, or waiting to be.
-    s.asked.store(1)
-    finish(s)
+    stub.asked.store(1)
+    finish(stub)
 
-fn release(s: Stub$@) //< lets go the memory of the bodies it kept
-    s.own.free()
+fn release(stub: Stub$@) //< lets go the memory of the bodies it kept
+    stub.own.free()
 
-extern fn serve(s: Stub$@): Void$@ //<
+extern fn serve(stub: Stub$@): Void$@ //<
     //< answers each request with its reply, until the replies run out
-    for i in Range.asc(s.replies.len)
-        conn: = accept_within(s) catch
+    for i in Range.asc(stub.replies.len)
+        conn: = accept_within(stub) catch
             return null
-        body: = read_body(conn, s.own)
-        if i == 0 && s.edit_path.len > 0
-            fs.replace_file(s.edit_path, s.edit_body, .kept) catch {}
-        s.bodies.push(body)
-        s.sent.store(drip(conn, s.replies[i], s.drip_ms))
+        body: = read_body(conn, stub.own)
+        if i == 0 && stub.edit_path.len > 0
+            fs.replace_file(stub.edit_path, stub.edit_body, .kept) catch {}
+        stub.bodies.push(body)
+        stub.sent.store(drip(conn, stub.replies[i], stub.drip_ms))
         conn.free()
     return null
 
@@ -104,13 +104,13 @@ priv fn drip(conn: net.Tcp_stream@, reply: U8[], drip_ms: I32): Sz //<
 
 priv const DRIP_PIECE: Sz = 48 //< the bytes of one piece a dripping stand-in writes
 
-priv fn accept_within(s: Stub$@): net.Tcp_stream$@? //<
+priv fn accept_within(stub: Stub$@): net.Tcp_stream$@? //<
     //< The next connection, or none when none comes within `WAIT_US` or the asker has returned
     //< **A connection already made is taken first**, so one the asker made is never dropped.
     deadline: = sys.mono_us() + WAIT_US
     for sys.mono_us() < deadline
-        conn: = s.listener.accept() catch
-            if s.asked.load() != 0
+        conn: = stub.listener.accept() catch
+            if stub.asked.load() != 0
                 return .none
             sys.sleep_ms(2)
             continue
@@ -189,13 +189,13 @@ fn sse_raw(events: U8[][], after: U8[], arena: Arena$@): U8[] //<
     http.format_last_chunk(out@)
     return arena.dup_str(out.slice())
 
-fn delta(d: U8[], finish: U8[], arena: Arena$@): U8[] //<
+fn delta(content: U8[], finish: U8[], arena: Arena$@): U8[] //<
     //< One piece of a stream: a delta's JSON text, and a finish reason or none where empty
     reason: =
         ("null" if finish.len == 0
         else arena.text().c('"').s(finish).c('"').take())
     return arena.text().s("{\"object\": \"chat.completion.chunk\", \"choices\": [{\"index\": 0, ")
-        .s("\"delta\": ").s(d).s(", \"finish_reason\": ").s(reason).s("}]}").take()
+        .s("\"delta\": ").s(content).s(", \"finish_reason\": ").s(reason).s("}]}").take()
 
 fn streamed_call(thinking: U8[], name: U8[], args: U8[], arena: Arena$@): U8[] //<
     //< A streamed reply: its thinking, then one call whose arguments come 5 bytes at a time
@@ -236,8 +236,8 @@ priv fn pieces(text: U8[], arena: Arena$@): List<|U8[]|> //<
         at = end
     return out
 
-fn one_call(c: U8[], arena: Arena$@): U8[] //< a reply that asks for one tool call
-    return calls_reply(U8[][]::{ c }, arena)
+fn one_call(tool_call: U8[], arena: Arena$@): U8[] //< a reply that asks for one tool call
+    return calls_reply(U8[][]::{ tool_call }, arena)
 
 fn not_found(arena: Arena$@): U8[] //< a reply that lists the root, then finds nothing
     //< **The listing comes first**: a not-found answer before any reading tool is sent back.
@@ -286,9 +286,9 @@ fn source(path: U8[], from: I32, to: I32, quote: U8[], arena: Arena$@): U8[] //<
         .set("to_line", b.int_val(to)).set("quote", b.str_val(quote)).build()
     return dumped(v, arena)
 
-priv fn dumped(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text
+priv fn dumped(value: json.Value, arena: Arena$@): U8[] //< a value as JSON text
     defer $out: = Str_builder()
-    v.dump(out@)
+    value.dump(out@)
     return arena.dup_str(out.slice())
 
 // ==========================================

@@ -86,12 +86,12 @@ impl Ast_node
             e = e.last_child() if op.equals("::") else e.get_postfix_receiver()
         return e
 
-    priv fn owner_root(r: Self$@, c: sema_flow_track.Df_ctx$@): Ast_node$@? //<
+    priv fn owner_root(r: Self$@, df: sema_flow_track.Df_ctx$@): Ast_node$@? //<
         //< The local a receiver chain starts at, if it starts at one
         //< **A call handing on its receiver's own type is passed through** (`b.s("a").s("b")`, a
         //< builder's chain), and so is a `#gives_view` call (`arena.text().take()`): what it
         //< returns lies in the same owner. A field, a global or another call ends the walk.
-        env: = c.sema.env
+        env: = df.sema.env
         $e: = r.strip_view_wrappers()
         for e != null
             m: = e.called_method().unwrap_or(null)
@@ -106,11 +106,11 @@ impl Ast_node
             if !same && !m.has_attribute(GIVES_VIEW)
                 return .none
             e = recv.strip_view_wrappers()
-        if e == null || !e.is_path_or_ident() || !e.def_node.is_tracked_local(c)
+        if e == null || !e.is_path_or_ident() || !e.def_node.is_tracked_local(df)
             return .none
         return .some(e.def_node)
 
-    priv fn view_owner(r: Self$@, c: sema_flow_track.Df_ctx$@): Ast_node$@? //<
+    priv fn view_owner(r: Self$@, df: sema_flow_track.Df_ctx$@): Ast_node$@? //<
         //< The local whose memory the value r points into, where r is a view
         //< That is a `#gives_view` call (`xs.slice()`), an element's address through a
         //< `#gives_view` subscript (`xs[i]@`), or a copy of a view (`q: = p`).
@@ -119,39 +119,39 @@ impl Ast_node
             return .none
         if e.is_path_or_ident()
             d: = e.def_node
-            return .some(d) if d != null && c.views.is_view(d) else .none
+            return .some(d) if d != null && df.views.is_view(d) else .none
         if m: = e.called_method()
-            return e.call_receiver().owner_root(c) if m.has_attribute(GIVES_VIEW) else .none
+            return e.call_receiver().owner_root(df) if m.has_attribute(GIVES_VIEW) else .none
         // `xs[i]@` (strip_view_wrappers took the `@` off): a subscript alone is a copy.
         if r.kind_id == .k_expr_postfix && r.postfix_op_text().equals("@") &&
             e.is_trait_index_access() && e.def_node.has_attribute(GIVES_VIEW)
-            return e.get_postfix_receiver().owner_root(c)
+            return e.get_postfix_receiver().owner_root(df)
         return .none
 
-    fn df_view_decl(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+    fn df_view_decl(r: Self$@, df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< A declaration: its local starts afresh, as a view where its value is one
-        book: = c.views
+        book: = df.views
         if !book.active
             return
-        book.bind_view(c, state, r, r, r.get_var_decl_expr())
+        book.bind_view(df, state, r, r, r.get_var_decl_expr())
 
-    fn df_view_assign(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
-        def: Ast_node$@) //<
+    fn df_view_assign(r: Self$@, df: sema_flow_track.Df_ctx$@,
+        state: sema_flow_track.Df_state$@, def: Ast_node$@) //<
             //< `def = value` on a bare name, once the value is walked
             //< A counted local's old value is released here, so the views into it end. A
             //< parameter's has another owner, the caller.
-        book: = c.views
+        book: = df.views
         if !book.active
             return
-        if def.kind_id != .k_fn_param && c.sema.env.is_arc_type(def.type_id) &&
+        if def.kind_id != .k_fn_param && df.sema.env.is_arc_type(def.type_id) &&
             !book.shares(def)
             book.end_views(state, def, r, "")
-        book.bind_view(c, state, r, def, r.get_assign_right())
+        book.bind_view(df, state, r, def, r.get_assign_right())
 
-    fn df_view_call(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+    fn df_view_call(r: Self$@, df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< A call, once its arguments are walked: `#ends_views` or a `free()` ends its receiver's
         //< views, and a counted local's copy is noted
-        book: = c.views
+        book: = df.views
         if !book.active
             return
         m: = r.called_method().unwrap_or(null)
@@ -159,44 +159,44 @@ impl Ast_node
             return
         recv: = r.call_receiver()
         // A call returning a counted local's own type can hand out another owner.
-        if c.sema.env.is_arc_type(r.type_id)
+        if df.sema.env.is_arc_type(r.type_id)
             root: = recv.strip_view_wrappers()
-            if root != null && root.is_path_or_ident() && root.def_node.is_tracked_local(c)
+            if root != null && root.is_path_or_ident() && root.def_node.is_tracked_local(df)
                 book.note_shared(root.def_node)
         if !m.has_attribute(ENDS_VIEWS) &&
-            r.get_postfix_receiver().get_free_call_receiver(c.sema).is_none()
+            r.get_postfix_receiver().get_free_call_receiver(df.sema).is_none()
             return
-        if owner: = recv.owner_root(c)
+        if owner: = recv.owner_root(df)
             name: = r.get_postfix_receiver().get_postfix_member().text
             book.end_views(state, owner, r,
                 base_core.arena.text().s("'\{name\}'").take())
 
-    fn df_view_index_set(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    fn df_view_index_set(r: Self$@, df: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@) //<
             //< `m[k] = v` through a `set` marked `#ends_views`, once every part is walked
-        book: = c.views
+        book: = df.views
         if !book.active
             return
         left: = r.get_assign_left()
         if left == null || !left.is_trait_index_access() ||
             !left.def_node.has_attribute(ENDS_VIEWS)
             return
-        if owner: = left.get_postfix_receiver().owner_root(c)
+        if owner: = left.get_postfix_receiver().owner_root(df)
             book.end_views(state, owner, r,
                 base_core.arena.text().s("the write into '\{local_name(owner)\}[…]'").take())
 
-    fn df_view_expr(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+    fn df_view_expr(r: Self$@, df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< A binary operation: in a comparison, a bare name reads the pointer, not the memory
         //< So `a.alloc(16) == first` after `a.restore(mark)` is no finding.
         op: = r.safe_get_child(1)
         if r.children.len != 3 || op == null || !is_comparison(op.text)
-            r.df_default_traverse(c, state)
+            r.df_default_traverse(df, state)
             return
-        book: = c.views
+        book: = df.views
         for child in r.children
             saved: = book.comparing
             book.comparing = child.is_path_or_ident()
-            child.analyze_df_node(c, state)
+            child.analyze_df_node(df, state)
             book.comparing = saved
 
 impl View_book
@@ -248,8 +248,8 @@ impl View_book
                 return
         r.ends.push(end)
 
-    priv fn bind_view(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
-        site: Ast_node$@, view: Ast_node$@, value: Ast_node$@) //<
+    priv fn bind_view(r: Self$@, df: sema_flow_track.Df_ctx$@,
+        state: sema_flow_track.Df_state$@, site: Ast_node$@, view: Ast_node$@, value: Ast_node$@) //<
             //< `view` now holds `value`; where that is a view, `site` starts one
         for m in r.marks
             if m.view == view
@@ -257,7 +257,7 @@ impl View_book
         state.stale.remove(view)
         if value == null
             return
-        owner: = value.view_owner(c).unwrap_or(null)
+        owner: = value.view_owner(df).unwrap_or(null)
         if owner == null || owner == view
             return
         r.note_mark(site, view, owner)

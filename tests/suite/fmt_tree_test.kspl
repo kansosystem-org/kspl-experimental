@@ -31,21 +31,21 @@ priv fn fmt_job(rel: U8[], style: U8[], arena: Arena$@): subproc.Job //<
     argv.push(rel)
     return subproc.Job::{ .argv = argv.slice(), .cwd = harness.root() }
 
-priv fn first_difference(a: U8[], b: U8[]): Sz //<
+priv fn first_difference(left: U8[], right: U8[]): Sz //<
     //< The first line (1-based) where two texts differ, or 0 where they are the same
     $line: Sz = 1
-    for i in Range.asc(math.min(a.len, b.len))
-        if a[i] != b[i]
+    for i in Range.asc(math.min(left.len, right.len))
+        if left[i] != right[i]
             return line
-        if a[i] == '\n'
+        if left[i] == '\n'
             line += 1
-    return 0 if a.len == b.len else line
+    return 0 if left.len == right.len else line
 
-priv fn line_of(text: U8[], n: Sz, arena: Arena$@): U8[] //<
-    //< line `n` (1-based), empty past the end
+priv fn line_of(text: U8[], number: Sz, arena: Arena$@): U8[] //<
+    //< line `number` (1-based), empty past the end
     $k: Sz = 1
     for line in text.lines(arena)
-        if k == n
+        if k == number
             return line
         k += 1
     return ""
@@ -119,12 +119,13 @@ priv const NARROW_LIMITS: Sz[_] = ::{ 40, 50, 60 } //<
     //< `import`'s list, a `for` heading. **Each source takes one of them in turn** (the `k`th the
     //< `k % 3`th), so the tree is formatted narrow once, not three times.
 
-priv fn narrow_style(k: Sz, arena: Arena$@): U8[] //< the `--style` the `k`th source is formatted at
-    return arena.text().s("ColumnLimit: \{NARROW_LIMITS[k % NARROW_LIMITS.len]\}").take()
+priv fn narrow_style(index: Sz, arena: Arena$@): U8[] //<
+    //< the `--style` the `index`th source is formatted at
+    return arena.text().s("ColumnLimit: \{NARROW_LIMITS[index % NARROW_LIMITS.len]\}").take()
 
-priv fn narrow_name(rels: List<|U8[]|>@, k: Sz, arena: Arena$@): U8[] //<
-    //< How a finding names the `k`th source: its path and the style it was formatted at
-    return arena.text().s(rels.get(k)).s(" at `").s(narrow_style(k, arena)).s("`").take()
+priv fn narrow_name(rels: List<|U8[]|>@, index: Sz, arena: Arena$@): U8[] //<
+    //< How a finding names the `index`th source: its path and the style it was formatted at
+    return arena.text().s(rels.get(index)).s(" at `").s(narrow_style(index, arena)).s("`").take()
 
 priv const NARROW_CHECK: U8[] = "a source formatted at a narrow width reads back, and stays put"
 

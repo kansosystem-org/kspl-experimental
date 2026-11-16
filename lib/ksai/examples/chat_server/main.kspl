@@ -38,8 +38,8 @@ priv struct Options //< the command line, read and checked
     max_tokens: I64
     context: I64
 
-priv fn read_args(o: Options$@, arena: Arena$@): Bool //<
-    //< Reads the command line into `o`; false once a refusal is printed
+priv fn read_args(options: Options$@, arena: Arena$@): Bool //<
+    //< Reads the command line into `options`; false once a refusal is printed
     $port: I64 = 8081I64
     $max_tokens: I64 = 1024I64
     $context: I64 = DEFAULT_CONTEXT
@@ -60,7 +60,7 @@ priv fn read_args(o: Options$@, arena: Arena$@): Bool //<
         io.err().s("\{NAME\}: --port must be from 0 to 65535, --max-tokens at least 1, and ")
             .s("--context at least 2\n")
         return false
-    o$ = Options::{ .model = cli.rest[0], .port = port, .max_tokens = max_tokens,
+    options$ = Options::{ .model = cli.rest[0], .port = port, .max_tokens = max_tokens,
         .context = context }
     return true
 
@@ -68,11 +68,11 @@ priv fn model_id(path: U8[]): U8[] //< the model's name: its file's name, less `
     name: = sys.get_file_name(path)
     return name.strip_suffix(".gguf")
 
-priv fn load_tokenizer(g: Gguf@, arena: Arena$@): tokenizer.Tokenizer$@? //<
+priv fn load_tokenizer(gguf: Gguf@, arena: Arena$@): tokenizer.Tokenizer$@? //<
     //< The file's vocabulary as a tokenizer, or none once the refusal is printed
     //< **Only GPT-2's byte-level BPE with Qwen's splitting is read**, as Qwen's files hold.
-    kind: = g.text("tokenizer.ggml.model") catch ""
-    pre: = g.text("tokenizer.ggml.pre") catch ""
+    kind: = gguf.text("tokenizer.ggml.model") catch ""
+    pre: = gguf.text("tokenizer.ggml.pre") catch ""
     $rule: Split_rule? = .none
     if kind.equals("gpt2")
         rule = Split_rule.named(pre)
@@ -81,13 +81,13 @@ priv fn load_tokenizer(g: Gguf@, arena: Arena$@): tokenizer.Tokenizer$@? //<
             .s("\"; this server reads \"gpt2\" split as \"qwen2\" or \"qwen35\", as Qwen's ")
             .s("files hold\n")
         return .none
-    $tokens: = g.texts("tokenizer.ggml.tokens", arena) catch e
+    $tokens: = gguf.texts("tokenizer.ggml.tokens", arena) catch e
         io.err().s("\{NAME\}: ").s(e.describe(arena)).s("\n")
         return .none
-    $merges: = g.texts("tokenizer.ggml.merges", arena) catch e
+    $merges: = gguf.texts("tokenizer.ggml.merges", arena) catch e
         io.err().s("\{NAME\}: ").s(e.describe(arena)).s("\n")
         return .none
-    $types: = g.ints("tokenizer.ggml.token_type", arena) catch e
+    $types: = gguf.ints("tokenizer.ggml.token_type", arena) catch e
         io.err().s("\{NAME\}: ").s(e.describe(arena)).s("\n")
         return .none
     tok: = arena.create(tokenizer.Tokenizer(arena))

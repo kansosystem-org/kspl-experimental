@@ -23,9 +23,10 @@ import "std/verdict"
 import "tests/support/harness"
 import "tests/support/lsp_tree_uses"
 
-priv fn prepare_in_tree(c: jsonrpc_client.Client$@, rel: U8[], decl: U8[], arena: Arena$@): Prepared //<
-    //< prepareCallHierarchy at `decl`'s name in the repository's file `rel`, opened as on disk
-    return prepare_fn(c, rel, harness.read_under_root(rel), decl, arena)
+priv fn prepare_in_tree(client: jsonrpc_client.Client$@, rel: U8[], decl: U8[], arena: Arena$@):
+    Prepared //<
+        //< prepareCallHierarchy at `decl`'s name in the repository's file `rel`, opened as on disk
+    return prepare_fn(client, rel, harness.read_under_root(rel), decl, arena)
 
 priv const BROKEN_WS_FILE: U8[] = "std/log.kspl" //<
     //< The starting point of a workspace walk that **reaches the files built not to compile**
@@ -35,33 +36,33 @@ priv const BROKEN_WS_FILE: U8[] = "std/log.kspl" //<
     //< green after walking straight past what it exists to test.
 priv const BROKEN_WS_DECL: U8[] = "    pub fn at"
 
-priv fn check_workspace_survives_unbuildable(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+priv fn check_workspace_survives_unbuildable(client: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< A workspace query over a tree that holds files built not to compile
     //< Caution: **The point is that it answers at all.** A worker killed by a too-deep tree answers
     //< "no callers", which reads exactly like a true empty answer.
-    prep: = prepare_in_tree(c, BROKEN_WS_FILE, BROKEN_WS_DECL, arena)
+    prep: = prepare_in_tree(client, BROKEN_WS_FILE, BROKEN_WS_DECL, arena)
     verdict.check("prepareCallHierarchy lands on the name the unbuildable files also carry",
-        prep.found, lsp_client.why(c, prep.raw, arena))
+        prep.found, lsp_client.why(client, prep.raw, arena))
     if !prep.found
         return
-    got: = incoming(c, prep.item, arena)
+    got: = incoming(client, prep.item, arena)
     names: = from_names(got.calls@, arena)
     // **Say which way it failed**: a timeout and an empty answer are fixed in different places.
     named: = arena.text().s("an answer naming \{got.calls.len\}: ")
         .s(lsp_client.join(names@, arena)).take()
     how: = "no answer before the deadline" if got.timed_out else named
     verdict.check("a workspace holding a file that cannot be built still answers",
-        !got.timed_out && got.calls.len > 0, lsp_client.why(c, how, arena))
+        !got.timed_out && got.calls.len > 0, lsp_client.why(client, how, arena))
     // Caution: **Name a caller.** A non-empty answer alone goes green on a half-analysed
     // workspace's wrong callers.
     // `table_drop` in kssrv/conn.kspl writes its line through `log.at`, in another package than
     // the declaration, so naming it also shows the walk left std.
     verdict.check("and the callers named are the real ones", names.contains("table_drop"),
-        lsp_client.why(c, how, arena))
+        lsp_client.why(client, how, arena))
 
-priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Value, arena: Arena$@) //<
-    //< A caller is always inside a file that refers to ht16k33.
-    got: = incoming(c, item, arena)
+priv fn check_ht16k33_callers(client: jsonrpc_client.Client$@, item: json.Value, arena: Arena$@) //<
+    //< A caller is always inside a file that refers to ht16k33
+    got: = incoming(client, item, arena)
     calls: = got.calls
     $strays: = List<|U8[]|>(arena)
     $marked: = List<|U8[]|>(arena)
@@ -79,10 +80,10 @@ priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Value, aren
     // **Always add the count and the supervisor's message**: empty may mean "not found" or "the
     // wait ran out". This query is an order of magnitude heavier than the others.
     reason: = "the wait ran out" if got.timed_out else "it came back empty"
-    d6a: = lsp_client.why(c,
+    d6a: = lsp_client.why(client,
         arena.text().s("count=\{calls.len\} (").s(reason).s(")").take(), arena)
     verdict.check("ht16k33.init's callers come back", calls.len > 0, d6a)
-    d6: = lsp_client.why(c, lsp_client.join(strays@, arena), arena)
+    d6: = lsp_client.why(client, lsp_client.join(strays@, arena), arena)
     verdict.check("no unrelated file mixes into ht16k33.init's callers", strays.len == 0, d6)
     d7: = lsp_client.join(marked@, arena)
     verdict.check("a caller that really calls carries no fn pointer mark", marked.len == 0, d7)
@@ -110,18 +111,19 @@ priv fn check_caller_order(calls: List<|json.Value|>@, arena: Arena$@) //<
     verdict.check("the callers line up in order of file and position", out_of_order.len == 0,
         lsp_client.join(out_of_order@, arena))
 
-priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+priv fn check_fn_pointer(client: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< callers via a function pointer
     //< ksos's task entry points and `Link`'s implementations are **passed as function pointers with
     //< no call**.
     p: =
-        prepare_in_tree(c, "lib/ksos/demo/rp2040/rp2040_board_probe.kspl", "fn probe_task(", arena)
-    d8: = lsp_client.why(c, p.raw, arena)
+        prepare_in_tree(client, "lib/ksos/demo/rp2040/rp2040_board_probe.kspl", "fn probe_task(",
+        arena)
+    d8: = lsp_client.why(client, p.raw, arena)
     verdict.check("a function only handed as a function pointer can be a starting point too",
         p.found, d8)
     if !p.found
         return
-    calls: = incoming(c, p.item, arena).calls
+    calls: = incoming(client, p.item, arena).calls
     $names: = from_names(calls@, arena)
     d9: = lsp_client.join(names@, arena)
     ok9: = names.contains("ksos_main")
@@ -233,10 +235,11 @@ priv fn query_once(exe: U8[], root: U8[], arena: Arena$@): Silence //<
     return Silence::{ .started = true, .worst_us = worst_us, .marks = seen,
         .answered = answers(out.slice(), QUERY_ID, arena) }
 
-priv fn worked(s: Silence@): Bool //< whether the worker sent marks while working, and answered
+priv fn worked(silence: Silence@): Bool //<
+    //< whether the worker sent marks while working, and answered
     //< **A worker that dies at once is never silent for long.** So a silence counts only beside
     //< the marks it sent while working and the answer it ended with.
-    return s.started && s.marks > 0 && s.answered
+    return silence.started && silence.marks > 0 && silence.answered
 
 priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
     name: = "a workspace query does not stay silent longer than the supervisor's window"

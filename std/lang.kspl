@@ -135,21 +135,21 @@ impl Panic_msg
     pub fn new(): Panic_msg //< an empty buffer
         return Panic_msg::{ .buf = ::{}, .len = 0 }
 
-    priv fn put(r: Self$@, c: U8)
+    priv fn put(r: Self$@, byte: U8)
         if r.len < PANIC_MSG_CAP
-            r.buf[r.len] = c
+            r.buf[r.len] = byte
             r.len += 1
 
-    pub fn s(r: Self$@, t: U8[]): Self$@ //< writes text; anything that does not fit is dropped
-        for i in Range.asc(t.len)
-            r.put(t[i])
+    pub fn s(r: Self$@, text: U8[]): Self$@ //< writes text; anything that does not fit is dropped
+        for i in Range.asc(text.len)
+            r.put(text[i])
         return r
 
-    pub fn n(r: Self$@, v: I64): Self$@ //< writes a number as decimal, including the minimum
+    pub fn n(r: Self$@, value: I64): Self$@ //< writes a number as decimal, including the minimum
         //< Caution: **Calculate the absolute value as unsigned.** Negating the minimum signed value
-        //< overflows, as in `Range.new`. `U64::0 - U64::v` gives its magnitude.
-        $mag: U64 = U64::0 - U64::v if v < 0 else U64::v
-        if v < 0
+        //< overflows, as in `Range.new`. `U64::0 - U64::value` gives its magnitude.
+        $mag: U64 = U64::0 - U64::value if value < 0 else U64::value
+        if value < 0
             r.put('-')
         if mag == 0U64
             r.put('0')
@@ -191,14 +191,14 @@ impl Trace_text
         r.len += 1
         return r
 
-    fn s(r: Self$@, t: U8[]): Self$@ //< writes text
-        for ch in t
+    fn s(r: Self$@, text: U8[]): Self$@ //< writes text
+        for ch in text
             r.c(ch)
         return r
 
-    fn n(r: Self$@, v: I64): Self$@ //< writes a number as decimal
+    fn n(r: Self$@, value: I64): Self$@ //< writes a number as decimal
         $m: = Panic_msg()
-        return r.s(m.n(v).slice())
+        return r.s(m.n(value).slice())
 
     fn flush(r: Self$@) //< flushes buffered text to standard error
         err: = libc.get_stderr()
@@ -207,21 +207,22 @@ impl Trace_text
         r.len = 0
 
 #cfg(!freestanding)
-priv fn c_text(p: U8@): U8[] //<
+priv fn c_text(pointer: U8@): U8[] //<
     //< a C string without its terminating NUL, or an empty slice for a null pointer
-    if p == null
+    if pointer == null
         return ""
     $n: Sz = 0
-    for (p + n)$ != 0
+    for (pointer + n)$ != 0
         n += 1
-    return U8[]::{ .ptr = p, .len = n }
+    return U8[]::{ .ptr = pointer, .len = n }
 
 #cfg(!freestanding)
-priv fn has_at(s: U8[], part: U8[], at: Sz): Bool //< whether `s` contains `part` at offset `at`
-    if at + part.len > s.len
+priv fn has_at(text: U8[], part: U8[], at: Sz): Bool //<
+    //< whether `text` contains `part` at offset `at`
+    if at + part.len > text.len
         return false
     for i in Range.asc(part.len)
-        if s[at + i] != part[i]
+        if text[at + i] != part[i]
             return false
     return true
 
@@ -381,10 +382,10 @@ impl Range
     ): Range
         return Range(0, stop, 1)
 
-    pub fn desc( //< `n - 1` down to 0
-        n: Sz, //< one greater than the first value
+    pub fn desc( //< `count - 1` down to 0
+        count: Sz, //< one greater than the first value
     ): Range
-        return Range(n - 1, -1, -1)
+        return Range(count - 1, -1, -1)
 
 // ============================ The operator traits ============================
 // The compiler matches `std.lang.<name>` exactly in `has_implemented_operator_trait` in
@@ -549,25 +550,25 @@ pub trait Writer //< a destination characters can be written to
 
 pub trait Formattable //< what `\{x\}` in a string calls
     //< `ksplc/parse/desugar.kspl` does the desugaring.
-    fn fmt(r: Self, w: Writer): Writer //< writes the value into the destination
+    fn fmt(r: Self, out: Writer): Writer //< writes the value into the destination
 
 pub fn put<|W: Writer, T: Formattable|>( //< writes one value, keeping the destination's own type
     //< Caution: **Keep the destination's concrete type.** Accepting `Writer` would also make the
     //< return type `Writer`.
     //< Interpolating into a `Str_builder` would then hide its `.slice()` method.
     //< This function ignores the return value from `Formattable.fmt`.
-    w: W, //< the destination, returned as its own type, not as a `Writer`
-    v: T, //< the value to write
+    out: W, //< the destination, returned as its own type, not as a `Writer`
+    value: T, //< the value to write
 ): W //< the same destination, for chaining
-    v.fmt(w)
-    return w
+    value.fmt(out)
+    return out
 
 pub trait Callable1<|A, Ret|> //< a callable value that takes one argument, with its captures
     //< Caution: **Declare the receiver as `Self`.** An implementation can take `Self@`; a generated
     //< adapter converts between them. See "Why a trait's receiver is fixed to a bare `Self`" in
     //< `docs/DESIGN-programming-language.md`. An implementing value uses the trait representation
     //< `{obj, vtable}`. It cannot cross the C boundary or escape through `return`.
-    pub fn call(r: Self, a: A): Ret //< calls it
+    pub fn call(r: Self, argument: A): Ret //< calls it
 
 pub trait Callable2<|A, B, Ret|> //< a callable value that takes two arguments, with its captures
-    pub fn call(r: Self, a: A, b: B): Ret //< calls it
+    pub fn call(r: Self, first: A, second: B): Ret //< calls it

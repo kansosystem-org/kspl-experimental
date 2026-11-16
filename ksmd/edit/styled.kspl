@@ -24,12 +24,13 @@ struct Seg //< a piece of text with one set of marks, or a hard break
 fn plain(): Marks //< no mark
     return Marks::{ .emphasis = false, .strong = false, .code = false, .link = "", .color = "" }
 
-fn same(a: Marks, b: Marks): Bool
-    return a.emphasis == b.emphasis && a.strong == b.strong && a.code == b.code &&
-        a.link.equals(b.link) && a.color.equals_ignore_case(b.color)
+fn same(left: Marks, right: Marks): Bool
+    return left.emphasis == right.emphasis && left.strong == right.strong &&
+        left.code == right.code && left.link.equals(right.link) &&
+        left.color.equals_ignore_case(right.color)
 
-fn is_plain(m: Marks): Bool //< no mark at all, so the text is written without delimiters
-    return same(m, plain())
+fn is_plain(marks: Marks): Bool //< no mark at all, so the text is written without delimiters
+    return same(marks, plain())
 
 fn text_seg(text: U8[], marks: Marks): Seg
     return Seg::{ .text = text, .marks = marks, .hard = false }
@@ -151,28 +152,28 @@ enum Mark //< a mark a command turns on or off
     code
     link
 
-priv fn mark_of(m: Marks, which: Mark): Bool
+priv fn mark_of(marks: Marks, which: Mark): Bool
     switch which
     case .emphasis
-        return m.emphasis
+        return marks.emphasis
     case .strong
-        return m.strong
+        return marks.strong
     case .code
-        return m.code
+        return marks.code
     case .link
-        return m.link.len > 0
+        return marks.link.len > 0
 
-priv fn with_mark($m: Marks, which: Mark, on: Bool, link: U8[]): Marks
+priv fn with_mark($marks: Marks, which: Mark, on: Bool, link: U8[]): Marks
     switch which
     case .emphasis
-        m.emphasis = on
+        marks.emphasis = on
     case .strong
-        m.strong = on
+        marks.strong = on
     case .code
-        m.code = on
+        marks.code = on
     case .link
-        m.link = link if on else ""
-    return m
+        marks.link = link if on else ""
+    return marks
 
 fn normalized(segs: List<|Seg|>@, arena: Arena$@): List<|Seg|> //<
     //< The segments as the writer saves them and the reader reads them back
@@ -207,13 +208,13 @@ fn normalized(segs: List<|Seg|>@, arena: Arena$@): List<|Seg|> //<
         trimmed.push(s)
     return trimmed
 
-fn equal(a: List<|Seg|>@, b: List<|Seg|>@): Bool //<
+fn equal(left: List<|Seg|>@, right: List<|Seg|>@): Bool //<
     //< the same text with the same marks, piece by piece
-    if a.len != b.len
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if a[i].hard != b[i].hard || !a[i].text.equals(b[i].text) ||
-            !same(a[i].marks, b[i].marks)
+    for i in Range.asc(left.len)
+        if left[i].hard != right[i].hard || !left[i].text.equals(right[i].text) ||
+            !same(left[i].marks, right[i].marks)
             return false
     return true
 
@@ -263,47 +264,48 @@ priv struct Open //< the marks open while nodes are built, outermost first
     depth: Sz
 
 impl Open
-    priv fn reach(o: Self$@, m: Marks, doc: Document$@, arena: Arena$@) //<
-        //< Closes the marks `m` lacks, with every mark opened inside them, then opens the rest
+    priv fn reach(r: Self$@, marks: Marks, doc: Document$@, arena: Arena$@) //<
+        //< Closes the marks `marks` lacks, with every mark opened inside them, then opens the rest
         $keep: Sz = 0
-        for keep < o.depth && o.holds(keep, m)
+        for keep < r.depth && r.holds(keep, marks)
             keep += 1
-        o.close_to(keep, doc)
-        if (m.link.len > 0 || m.color.len > 0) && !o.has(.link_start)
-            o.push(.link_start, arena.dup_str(m.link), arena.dup_str(m.color), doc)
-        if m.strong && !o.has(.strong_start)
-            o.push(.strong_start, "", "", doc)
-        if m.emphasis && !o.has(.emphasis_start)
-            o.push(.emphasis_start, "", "", doc)
+        r.close_to(keep, doc)
+        if (marks.link.len > 0 || marks.color.len > 0) && !r.has(.link_start)
+            r.push(.link_start, arena.dup_str(marks.link), arena.dup_str(marks.color), doc)
+        if marks.strong && !r.has(.strong_start)
+            r.push(.strong_start, "", "", doc)
+        if marks.emphasis && !r.has(.emphasis_start)
+            r.push(.emphasis_start, "", "", doc)
 
-    priv fn holds(o: Self@, i: Sz, m: Marks): Bool //< whether open mark `i` is one of `m`
-        switch o.kinds[i]
+    priv fn holds(r: Self@, i: Sz, marks: Marks): Bool //< whether open mark `i` is one of `marks`
+        switch r.kinds[i]
         case .link_start
-            return m.link.equals(o.links[i]) && m.color.equals_ignore_case(o.colors[i])
+            return marks.link.equals(r.links[i]) &&
+                marks.color.equals_ignore_case(r.colors[i])
         case .strong_start
-            return m.strong
+            return marks.strong
         default
-            return m.emphasis
+            return marks.emphasis
 
-    priv fn has(o: Self@, kind: Inline_kind): Bool
-        for i in Range.asc(o.depth)
-            if o.kinds[i] == kind
+    priv fn has(r: Self@, kind: Inline_kind): Bool
+        for i in Range.asc(r.depth)
+            if r.kinds[i] == kind
                 return true
         return false
 
-    priv fn push(o: Self$@, kind: Inline_kind, link: U8[], color: U8[], doc: Document$@)
-        o.kinds[o.depth] = kind
-        o.links[o.depth] = link
-        o.colors[o.depth] = color
-        o.depth += 1
+    priv fn push(r: Self$@, kind: Inline_kind, link: U8[], color: U8[], doc: Document$@)
+        r.kinds[r.depth] = kind
+        r.links[r.depth] = link
+        r.colors[r.depth] = color
+        r.depth += 1
         doc.inlines
             .push(Inline::{ .kind = kind, .text = link, .offset = 0, .color = color })
 
-    priv fn close_to(o: Self$@, depth: Sz, doc: Document$@) //< closes marks down to `depth` open
-        for o.depth > depth
-            o.depth -= 1
+    priv fn close_to(r: Self$@, depth: Sz, doc: Document$@) //< closes marks down to `depth` open
+        for r.depth > depth
+            r.depth -= 1
             doc.inlines
-                .push(Inline::{ .kind = end_of(o.kinds[o.depth]), .text = "", .offset = 0,
+                .push(Inline::{ .kind = end_of(r.kinds[r.depth]), .text = "", .offset = 0,
                 .color = "" })
 
 priv fn end_of(kind: Inline_kind): Inline_kind

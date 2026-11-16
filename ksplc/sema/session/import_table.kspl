@@ -19,12 +19,12 @@ import "ksplc/sema/type/scope" as sema_type_scope
 import "std/chars" // testing and slicing single characters
 import "std/ds" { List, Map }
 
-priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
+priv fn decl_name_of(decl: Ast_node$@): U8[] //< the name of a declaration node
     //< A kind with no name (an impl, an extern block and so on) returns empty.
-    switch r.kind_id
+    switch decl.kind_id
     case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_fn_proto, .k_decl_const,
         .k_decl_typedef, .k_decl_var
-        return r.get_decl_id_text()
+        return decl.get_decl_id_text()
     default
         return ""
 
@@ -43,7 +43,7 @@ fn import_key_name(key: U8[]): U8[] //< the name half of an import table key (`f
         return key.sub_from(sep + 2)
     return key
 
-fn register_implicit_lang_imports(r: Ast_node@, c: Sema_ctx$@) //<
+fn register_implicit_lang_imports(root: Ast_node@, ctx: Sema_ctx$@) //<
     //< Adds std/lang's public names to every file as "a selective import nobody wrote"
     //< The import alias (`lang`) too. **Call it right after Pass 0**: Pass 1 resolves the declared
     //< type nodes, where `Option` or `Range` would be undefined.
@@ -56,7 +56,7 @@ fn register_implicit_lang_imports(r: Ast_node@, c: Sema_ctx$@) //<
     defer $decls: = List<|Ast_node$@|>(null)
 
     lang_name: = base_locate.LANG_FILE_PATH
-    for top_node in r.children
+    for top_node in root.children
         child: = top_node.unwrap_top_level()
         file: = child.loc.file()
         if file.len == 0
@@ -73,7 +73,7 @@ fn register_implicit_lang_imports(r: Ast_node@, c: Sema_ctx$@) //<
                 if d.get_visibility() == sema_type_scope.Visibility.public
                     lang_names.push(base_core.arena.dup_str(name))
                 continue
-            declared.set(base_core.arena.dup_str(c.import_key(file, name)), true)
+            declared.set(base_core.arena.dup_str(ctx.import_key(file, name)), true)
 
     lang_alias: = base_locate.LANG_FILE_PATH.default_import_alias()
     for file in files
@@ -82,11 +82,11 @@ fn register_implicit_lang_imports(r: Ast_node@, c: Sema_ctx$@) //<
         // An alias, like a name, yields to that file's own declaration. In a file that declares
         // `fn lang()`, reading the `lang` before a dot as the alias would silently change what is
         // called.
-        if !declared.get(c.import_key(file, lang_alias)).unwrap_or(false)
-            c.add_implicit_file_alias(file, lang_alias, lang_name)
+        if !declared.get(ctx.import_key(file, lang_alias)).unwrap_or(false)
+            ctx.add_implicit_file_alias(file, lang_alias, lang_name)
         for name in lang_names
-            taken: = declared.get(c.import_key(file, name)).unwrap_or(false)
-            c.add_implicit_import_symbol(file, name, lang_name, taken)
+            taken: = declared.get(ctx.import_key(file, name)).unwrap_or(false)
+            ctx.add_implicit_import_symbol(file, name, lang_name, taken)
 
 impl Alias_info
     fn new(target_path: U8$[], decl_node: Ast_node$@): Alias_info$@
@@ -290,7 +290,7 @@ impl Sema_ctx
 
     priv fn add_import_symbol(r: Self$@, file: U8[], name: U8[], target_path: U8[],
         decl_node: Ast_node$@) //<
-            //< Registers one selector of `import "path" { A, B };`.
+            //< Registers one selector of `import "path" { A, B };`
             //< A name already used in the file is an ordinary redefinition error (no
             //< first-wins or last-wins).
         if r.symtab.has_in_current_scope(name)
@@ -307,13 +307,13 @@ impl Sema_ctx
         r.drop_import_reach()
 
 impl Ast_node
-    fn collect_import_decl(r: Ast_node$@, c: Sema_ctx$@)
+    fn collect_import_decl(r: Ast_node$@, ctx: Sema_ctx$@)
         // **A path that is not a plain string is rejected here.** The grammar lets an interpolated
         // (`import "std/\{x\}";`) or raw string through; if accepted, it is an ICE or silently
         // reads a different file.
         path_opt: = r.get_import_path_text()
         if path_opt.is_none()
-            c.err(r,
+            ctx.err(r,
                 "an import path must be a plain string literal in one pair of '\"', without \
                     '\\{...\\}' interpolation.")
             return
@@ -325,8 +325,8 @@ impl Ast_node
         // docs/DESIGN-principles.md).
         lang_path: = base_locate.LANG_FILE_PATH
         if clean_path.equals(lang_path)
-            c.clear_scratch().s("'\{lang_path\}' is imported into every file. Remove this line.")
-            c.err(r, c.scratch.slice())
+            ctx.clear_scratch().s("'\{lang_path\}' is imported into every file. Remove this line.")
+            ctx.err(r, ctx.scratch.slice())
             return
 
         // Registers the symbols in braces in no namespace. **The alias is added only with a `+`**
@@ -337,7 +337,7 @@ impl Ast_node
         selector_list: = r.get_decl_import_selector_list()
         plus: = r.has_import_plus()
         if selector_list != null && !plus && r.get_import_alias().len > 0
-            c.err(r,
+            ctx.err(r,
                 "'as' names the file. A selector list with 'as' needs '+': 'import \"p\" as m + { A \
                     }'. To import only the selected names, remove 'as'.")
             return
@@ -350,9 +350,9 @@ impl Ast_node
                 name_node: = selector.get_selector_name()
                 if name_node == null
                     continue
-                c.add_import_symbol(file_name, name_node.text, target_path, selector)
+                ctx.add_import_symbol(file_name, name_node.text, target_path, selector)
         if selector_list != null && !plus
-            c.add_withheld_alias(file_name, clean_path.default_import_alias(), clean_path)
+            ctx.add_withheld_alias(file_name, clean_path.default_import_alias(), clean_path)
             return
 
         // The whole file's alias.
@@ -361,25 +361,25 @@ impl Ast_node
         $alias_name: = r.get_import_alias()
         if alias_name.len == 0
             alias_name = clean_path.default_import_alias()
-        taken: = c.peek_file_alias(file_name, alias_name)
+        taken: = ctx.peek_file_alias(file_name, alias_name)
         if taken != null && !taken.target_path.equals(target_path)
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("import alias '\{alias_name\}' already points at '\{taken.target_path\}'. Rename \
                     one alias with 'as'.")
-            c.err(r, c.scratch.slice())
+            ctx.err(r, ctx.scratch.slice())
             return
-        c.add_file_alias(file_name, alias_name, target_path, r)
+        ctx.add_file_alias(file_name, alias_name, target_path, r)
 
-    fn mark_written_imports(r: Self$@, c: Sema_ctx$@) //<
+    fn mark_written_imports(r: Self$@, ctx: Sema_ctx$@) //<
         //< Records the identifiers written in the tree as uses of that file's imports
         //< **Call it before a generic's template body is discarded** (see run in
         //< sema/body/infer.kspl). Afterwards, an import used only from a template body looks
         //< unused.
         //< Caution: Do not descend into an import declaration itself. Its selectors and alias are
         //< identifiers too, and every import would mark itself used, silencing I0401.
-        r.mark_written_under(c, false, r.is_generic_template())
+        r.mark_written_under(ctx, false, r.is_generic_template())
 
-    priv fn mark_written_under(r: Self$@, c: Sema_ctx$@, heads_member: Bool, generic_body: Bool) //<
+    priv fn mark_written_under(r: Self$@, ctx: Sema_ctx$@, heads_member: Bool, generic_body: Bool) //<
         //< One node of mark_written_imports; heads_member: whether a `.member` follows r
         //< Caution: **Count a file alias only where a member follows it** (the head of `io.out` or
         //< of `ds.List`). An alias appears nowhere else, so a field (`p.strnum`) or a function
@@ -394,10 +394,10 @@ impl Ast_node
                 (callee.kind_id == .k_method_access || callee.postfix_op_text().equals("."))
                 member: = callee.get_postfix_member()
                 if member != null
-                    key: = c.import_key(r.loc.file(), member.text)
-                    c.aliases.written_methods.set(base_core.arena.dup_str(key), true)
+                    key: = ctx.import_key(r.loc.file(), member.text)
+                    ctx.aliases.written_methods.set(base_core.arena.dup_str(key), true)
         if r.kind_id == .k_identifier
-            c.mark_import_written(r.loc.file(), r.text, heads_member)
+            ctx.mark_import_written(r.loc.file(), r.text, heads_member)
             return
         if r.kind_id == .k_expr_path || r.kind_id == .k_type_path || r.kind_id == .k_generic_path
             $idents: Sz = 0
@@ -407,10 +407,10 @@ impl Ast_node
             $seen: Sz = 0
             for item in r.children
                 if item.kind_id != .k_identifier
-                    item.mark_written_under(c, false, in_generic)
+                    item.mark_written_under(ctx, false, in_generic)
                 else
                     if seen == 0
-                        item.mark_written_under(c, heads_member || idents > 1, in_generic)
+                        item.mark_written_under(ctx, heads_member || idents > 1, in_generic)
                     seen += 1
             return
         $receiver: Ast_node$@ = null
@@ -425,4 +425,4 @@ impl Ast_node
                 member = r.get_postfix_member()
         for item in r.children
             if item != member
-                item.mark_written_under(c, receiver != null && item == receiver, in_generic)
+                item.mark_written_under(ctx, receiver != null && item == receiver, in_generic)

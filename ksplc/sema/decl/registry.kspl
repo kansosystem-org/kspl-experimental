@@ -28,7 +28,7 @@ enum Reg_type_res //< the result of trying to register a type
     invalid
 
 impl Ast_node
-    fn register_type_sym(r: Ast_node$@, c: Sema_ctx$@, top_vis: sema_type_scope.Visibility,
+    fn register_type_sym(r: Ast_node$@, ctx: Sema_ctx$@, top_vis: sema_type_scope.Visibility,
         sym_kind_normal: sema_type_scope.Sym_kind, sym_kind_gen: sema_type_scope.Sym_kind):
         Reg_type_res
         name_node: = r.find_child(.k_identifier)
@@ -37,11 +37,11 @@ impl Ast_node
 
         name: = name_node.text
         name_node.def_node = r
-        fqn: = c.make_fqn(name)
+        fqn: = ctx.make_fqn(name)
         has_gen: = (r.find_child(.k_type_gen_params) != null)
 
         if has_gen
-            sema_decl_declare.register_template(c, fqn, r)
+            sema_decl_declare.register_template(ctx, fqn, r)
 
         $sym_kind: = sym_kind_normal
         if has_gen
@@ -49,36 +49,37 @@ impl Ast_node
 
         sym: = Sema_symbol(sym_kind, name, r)
         sym.vis = top_vis
-        sym.type_id = c.env.get_or_add(fqn)
+        sym.type_id = ctx.env.get_or_add(fqn)
         r.type_id = sym.type_id
         sym.apply_attributes()
-        c.declare_symbol_with_fqn(name, fqn, sym)
+        ctx.declare_symbol_with_fqn(name, fqn, sym)
 
         if has_gen
             return .invalid
         return .ok(name, fqn, sym.type_id)
 
-    priv fn get_registry_target(r: Ast_node$@, c: Sema_ctx$@): Reg_type_res
+    priv fn get_registry_target(r: Ast_node$@, ctx: Sema_ctx$@): Reg_type_res
         if r.find_child(.k_type_gen_params) != null
             return .invalid
         name_node: = r.find_child(.k_identifier)
         if name_node == null
             return .invalid
         name: = name_node.text
-        fqn: = c.make_fqn(name)
+        fqn: = ctx.make_fqn(name)
         return .ok(name, fqn, 0)
 
-    fn build_trait_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
-        switch r.get_registry_target(c)
+    fn build_trait_registry(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
+        switch r.get_registry_target(ctx)
         case .ok(target_name, target_fqn, _id)
-            trait_def: sema_type_def.Trait_def$@ = c.env.get_trait_def(target_fqn) catch
-                return
+            trait_def: sema_type_def.Trait_def$@ =
+                ctx.env.get_trait_def(target_fqn) catch
+                    return
 
             trait_vis: = r.get_visibility()
             // **Put the name back in a `defer`**, as `build_struct_registry` does.
-            outer_impl: = c.fn_ctx.impl_name
-            defer c.fn_ctx.impl_name = outer_impl
-            c.fn_ctx.impl_name = target_fqn
+            outer_impl: = ctx.fn_ctx.impl_name
+            defer ctx.fn_ctx.impl_name = outer_impl
+            ctx.fn_ctx.impl_name = target_fqn
 
             for m_node in r.children
                 // Caution: **Register a method with a default body the same way.** It is a
@@ -87,31 +88,31 @@ impl Ast_node
                     m_name_node: = m_node.find_child(.k_identifier)
                     if m_name_node != null
                         m_name: = m_name_node.text
-                        c.check_snake_case(m_name, m_node, "Method")
+                        ctx.check_snake_case(m_name, m_node, "Method")
 
-                        m_sym: = c.add_trait_method(m_node, m_name, trait_def, trait_vis)!
+                        m_sym: = ctx.add_trait_method(m_node, m_name, trait_def, trait_vis)!
 
                         local_full_name: = join_dotted_name(target_name, m_name)
                         fqn_full_name: = join_dotted_name(target_fqn, m_name)
-                        c.declare_symbol_with_fqn(local_full_name, fqn_full_name, m_sym)
+                        ctx.declare_symbol_with_fqn(local_full_name, fqn_full_name, m_sym)
         default {}
 
-    fn build_type_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
+    fn build_type_registry(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error //<
         //< Dispatches on the declaration's kind to fill it in
         //< Caution: **Code that needs a declaration filled in calls this**, so no caller misses a
         //< kind.
         switch r.kind_id
         case .k_decl_struct
-            r.build_struct_registry(c)!
+            r.build_struct_registry(ctx)!
         case .k_decl_enum
-            r.build_enum_registry(c)!
+            r.build_enum_registry(ctx)!
         default {}
 
-    fn build_struct_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
-        switch r.get_registry_target(c)
+    fn build_struct_registry(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
+        switch r.get_registry_target(ctx)
         case .ok(_name, target_fqn, _id)
             struct_def: sema_type_def.Struct_def$@ =
-                c.env.get_struct_def(target_fqn) catch
+                ctx.env.get_struct_def(target_fqn) catch
                     return
             // Caution: **Clear it before resolving the fields.** A field's type can request the
             // layout (`f: U8[sizeof(S)]`), and clearing it later fills the declaration in twice.
@@ -121,17 +122,17 @@ impl Ast_node
             // Caution: **Record "filling in" only here.** collect's Pass 3 calls this directly;
             // recorded by the caller instead, a `sizeof` cycle is missed
             // (Resolving_state.registries in sema/session/state.kspl).
-            c.resolving.registries.push(c.env.get_or_add(target_fqn))
-            defer c.resolving.registries.truncate(c.resolving.registries.len - 1)
+            ctx.resolving.registries.push(ctx.env.get_or_add(target_fqn))
+            defer ctx.resolving.registries.truncate(ctx.resolving.registries.len - 1)
             // **Put the name back in a `defer`**: a `!` below leaves before the line after it.
-            outer_impl: = c.fn_ctx.impl_name
-            defer c.fn_ctx.impl_name = outer_impl
-            c.fn_ctx.impl_name = target_fqn
-            r.fill_struct_fields(c, struct_def)!
+            outer_impl: = ctx.fn_ctx.impl_name
+            defer ctx.fn_ctx.impl_name = outer_impl
+            ctx.fn_ctx.impl_name = target_fqn
+            r.fill_struct_fields(ctx, struct_def)!
         default {}
 
-    fn fill_struct_fields(r: Ast_node$@, c: Sema_ctx$@, struct_def: sema_type_def.Struct_def$@):
-        Void!Sema_error //<
+    fn fill_struct_fields(r: Ast_node$@, ctx: Sema_ctx$@,
+        struct_def: sema_type_def.Struct_def$@): Void!Sema_error //<
             //< Resolves a struct declaration's (self's) fields to struct_def
             //< build_struct_registry and a generic struct's instantiation (instantiate_struct in
             //< mono.kspl) both fill through here. So an instance is checked as a plain struct is.
@@ -152,18 +153,18 @@ impl Ast_node
 
             if f_name.len == 0 || f_type_node == null
                 continue
-            c.check_snake_case(f_name, c_node, "Field")
-            f_type_id: = f_type_node.resolve_type(c)!
+            ctx.check_snake_case(f_name, c_node, "Field")
+            f_type_id: = f_type_node.resolve_type(ctx)!
             f_eff_vis: = sema_decl_access.narrower_vis(struct_vis, f_vis)
-            c.check_type_vis_leak(f_type_node, f_eff_vis, "field type", "field")
-            real_f_type: = c.env.get_real_type(f_type_id)
+            ctx.check_type_vis_leak(f_type_node, f_eff_vis, "field type", "field")
+            real_f_type: = ctx.env.get_real_type(f_type_id)
             if sema_type_env.is_void(real_f_type)
-                c.err(f_type_node, "struct fields cannot be of type 'Void'")
+                ctx.err(f_type_node, "struct fields cannot be of type 'Void'")
 
-            switch c.env.get_info(real_f_type)
+            switch ctx.env.get_info(real_f_type)
             case .array(_b, s)
                 if s == -1
-                    c.err(f_type_node, "array size cannot be inferred for struct fields.")
+                    ctx.err(f_type_node, "array size cannot be inferred for struct fields.")
             default {}
 
             // An array field's elements are made mutable: **the binding holding it**
@@ -171,23 +172,23 @@ impl Ast_node
             // `docs/SPEC-programming-language.md`).
             // Caution: Write it back to the type node too; genc emits the type name from
             // there.
-            eff_f_type: = c.binding_value_type(f_type_id, true)
+            eff_f_type: = ctx.binding_value_type(f_type_id, true)
             f_type_node.type_id = eff_f_type
 
             field_def: = sema_type_def.Struct_field(f_name, eff_f_type, f_vis, c_node)
 
             is_dup: = seen_fields.get(f_name).unwrap_or(false)
             if is_dup
-                c.clear_scratch().s("field '\{f_name\}' is already defined in this struct")
-                c.err(f_id_node, c.scratch.slice())
-            else if !c.check_c_keyword_collision_field(f_name, f_id_node, seen_fields@)
+                ctx.clear_scratch().s("field '\{f_name\}' is already defined in this struct")
+                ctx.err(f_id_node, ctx.scratch.slice())
+            else if !ctx.check_c_keyword_collision_field(f_name, f_id_node, seen_fields@)
                 seen_fields.set(f_name, true)
                 struct_def.fields_list.push(field_def)
 
-    priv fn scan_payload_fields(r: Ast_node@, c: Sema_ctx$@,
+    priv fn scan_payload_fields(r: Ast_node@, ctx: Sema_ctx$@,
         variant_def: sema_type_def.Enum_variant$@, enum_vis: sema_type_scope.Visibility):
         Void!Sema_error //<
-            //< Resolves an enum variant's (self's) payload fields, registering them in variant_def.
+            //< Resolves an enum variant's (self's) payload fields, registering them in variant_def
             //< enum_vis is the enum's own visibility: a payload field has none of its own (public
             //< below).
         for f_list in r.children
@@ -198,18 +199,18 @@ impl Ast_node
                     continue
                 f_name_node: = f_node.get_enum_field_name_node()
                 f_name: = f_name_node.text if f_name_node != null else ""
-                c.check_snake_case(f_name, f_node, "Field")
+                ctx.check_snake_case(f_name, f_node, "Field")
                 // genc avoids a payload's field names too (the same treatment as a struct's
                 // fields).
                 f_type_node: = f_node.get_enum_field_type_node()
-                resolved_id: = f_type_node.resolve_type(c)! if f_type_node != null else 0
+                resolved_id: = f_type_node.resolve_type(ctx)! if f_type_node != null else 0
                 // The same leak as a struct's pub field: `switch e case .some(x)` binds it from
                 // outside.
-                c.check_type_vis_leak(f_type_node, enum_vis, "payload type", "variant")
+                ctx.check_type_vis_leak(f_type_node, enum_vis, "payload type", "variant")
                 // An array's elements are made mutable, as a struct field's are
                 // (fill_struct_fields). The binding holding the enum decides writing. A `const`
                 // member would make C refuse to assign a whole value of the enum.
-                f_type_id: = c.binding_value_type(resolved_id, true)
+                f_type_id: = ctx.binding_value_type(resolved_id, true)
                 if f_type_node != null
                     f_type_node.type_id = f_type_id
                 f_node.type_id = f_type_id
@@ -218,31 +219,31 @@ impl Ast_node
                     f_name_node.type_id = f_type_id
                 // **A `Void` field holds nothing**, so the variant does not carry it: `Result`'s
                 // `ok(value: T)` under `Void!E` is built and matched with no value (`.ok()`).
-                if c.env.get_clean_real_type(f_type_id) == I32::sema_type_env.Builtin_type_id
+                if ctx.env.get_clean_real_type(f_type_id) == I32::sema_type_env.Builtin_type_id
                     .void_type
                     continue
                 field_def: = sema_type_def.Struct_field(f_name, f_type_id, .public, f_node)
                 variant_def.payload_fields.push(field_def)
 
-    fn build_enum_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
-        switch r.get_registry_target(c)
+    fn build_enum_registry(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
+        switch r.get_registry_target(ctx)
         case .ok(_name, target_fqn, _id)
-            enum_def: sema_type_def.Enum_def$@ = c.env.get_enum_def(target_fqn) catch
+            enum_def: sema_type_def.Enum_def$@ = ctx.env.get_enum_def(target_fqn) catch
                 return
             // For the same reason as at the matching point in build_struct_registry.
             if enum_def.pending_decl == null
                 return // already filled in
             enum_def.pending_decl = null
-            type_id: = c.env.get_or_add(target_fqn)
-            c.resolving.registries.push(type_id)
-            defer c.resolving.registries.truncate(c.resolving.registries.len - 1)
-            outer_impl: = c.fn_ctx.impl_name
-            defer c.fn_ctx.impl_name = outer_impl
-            c.fn_ctx.impl_name = target_fqn
-            r.fill_enum_variants(c, enum_def, type_id, true)!
+            type_id: = ctx.env.get_or_add(target_fqn)
+            ctx.resolving.registries.push(type_id)
+            defer ctx.resolving.registries.truncate(ctx.resolving.registries.len - 1)
+            outer_impl: = ctx.fn_ctx.impl_name
+            defer ctx.fn_ctx.impl_name = outer_impl
+            ctx.fn_ctx.impl_name = target_fqn
+            r.fill_enum_variants(ctx, enum_def, type_id, true)!
         default {}
 
-    fn fill_enum_variants(r: Ast_node$@, c: Sema_ctx$@, enum_def: sema_type_def.Enum_def$@,
+    fn fill_enum_variants(r: Ast_node$@, ctx: Sema_ctx$@, enum_def: sema_type_def.Enum_def$@,
         type_id: I32, declare_syms: Bool): Void!Sema_error //<
             //< Resolves an enum declaration's (self's) base type and variants into enum_def
             //< The counterpart of fill_struct_fields. `declare_syms` adds each variant to the name
@@ -251,12 +252,12 @@ impl Ast_node
         $base_type_id: = I32::sema_type_env.Builtin_type_id.i32_type
         base_type_node: = r.get_decl_type_node()
         if base_type_node != null
-            base_type_id = base_type_node.resolve_type(c)!
+            base_type_id = base_type_node.resolve_type(ctx)!
         enum_def.base_type_id = base_type_id
         $current_tag: I64 = 0
         enum_name: = r.get_decl_id_text()
         enum_vis: = r.get_visibility()
-        enum_fqn: = c.make_fqn(enum_name) if declare_syms else ""
+        enum_fqn: = ctx.make_fqn(enum_name) if declare_syms else ""
 
         // A local map, for the same reason as fill_struct_fields's.
         defer $seen_variants: = Map<|U8[], Bool|>(null)
@@ -271,30 +272,30 @@ impl Ast_node
             v_name: = v_id_node.text
             v_id_node.def_node = v_node
             v_node.type_id = type_id
-            c.check_snake_case(v_name, v_id_node, "Enum variant")
+            ctx.check_snake_case(v_name, v_id_node, "Enum variant")
 
             variant_def: = sema_type_def.Enum_variant(v_name, current_tag, v_node)
             tag_node: = v_node.get_enum_variant_tag()
             $foldable: = tag_node != null
-            if bare: = r.bare_sibling_variant(c, tag_node)
-                c.clear_scratch()
+            if bare: = r.bare_sibling_variant(ctx, tag_node)
+                ctx.clear_scratch()
                     .s("'\{bare.text\}' is a variant of '\{enum_name\}'. Name the variant through \
                         its enum here too ('\{enum_name\}.\{bare.text\}')")
-                c.err(bare, c.scratch.slice())
+                ctx.err(bare, ctx.scratch.slice())
                 foldable = false
             if foldable
-                if tag: = c.fold_enum_tag(tag_node, base_type_id)
+                if tag: = ctx.fold_enum_tag(tag_node, base_type_id)
                     variant_def.tag_value = tag
             else
-                c.check_enum_tag_range(v_id_node, current_tag, base_type_id)
+                ctx.check_enum_tag_range(v_id_node, current_tag, base_type_id)
             earlier: = seen_tags.get(variant_def.tag_value).unwrap_or("")
             if earlier.len > 0
                 if !earlier.equals(v_name)
-                    c.clear_scratch()
+                    ctx.clear_scratch()
                         .s("variant '\{v_name\}' has the tag \{variant_def.tag_value\}. Variant \
                             '\{earlier\}' already has that tag. A 'switch' could not distinguish \
                             them. Give each variant a tag of its own")
-                    c.err(v_id_node, c.scratch.slice())
+                    ctx.err(v_id_node, ctx.scratch.slice())
             else
                 seen_tags.set(variant_def.tag_value, v_name)
             current_tag = variant_def.tag_value + 1
@@ -305,18 +306,19 @@ impl Ast_node
                 v_sym: = Sema_symbol(v_kind, arena_full_name, v_node)
                 v_sym.type_id = type_id
                 v_sym.vis = enum_vis
-                c.declare_symbol_with_fqn(arena_full_name, join_dotted_name(enum_fqn, v_name), v_sym)
+                ctx.declare_symbol_with_fqn(arena_full_name, join_dotted_name(enum_fqn, v_name),
+                    v_sym)
 
-            v_node.scan_payload_fields(c, variant_def, enum_vis)!
+            v_node.scan_payload_fields(ctx, variant_def, enum_vis)!
             is_dup: = seen_variants.get(v_name).unwrap_or(false)
             if is_dup
-                c.clear_scratch().s("variant '\{v_name\}' is already defined in this enum")
-                c.err(v_id_node, c.scratch.slice())
+                ctx.clear_scratch().s("variant '\{v_name\}' is already defined in this enum")
+                ctx.err(v_id_node, ctx.scratch.slice())
             else
                 seen_variants.set(v_name, true)
                 enum_def.variants_list.push(variant_def)
 
-    priv fn bare_sibling_variant(r: Ast_node$@, c: Sema_ctx$@, tag: Ast_node$@): Ast_node$@? //<
+    priv fn bare_sibling_variant(r: Ast_node$@, ctx: Sema_ctx$@, tag: Ast_node$@): Ast_node$@? //<
         //< A bare name in a tag expression that names a variant of this enum (self)
         //< **A tag names a sibling as `E.a`, as every other place does.** There is one spelling for
         //< a variant, and no scope where the enum's names stand bare beside the file's. A bare name
@@ -324,7 +326,7 @@ impl Ast_node
         if tag == null
             return .none
         if tag.is_path_or_ident() && tag.text.find_char('.').is_none()
-            known: = c.symtab.resolve(tag.text).unwrap_or(null)
+            known: = ctx.symtab.resolve(tag.text).unwrap_or(null)
             if known != null
                 return .none
             for v_node in r.children
@@ -340,7 +342,7 @@ impl Ast_node
         for child in tag.children
             if child == member
                 continue
-            if found: = r.bare_sibling_variant(c, child)
+            if found: = r.bare_sibling_variant(ctx, child)
                 return .some(found)
         return .none
 
@@ -355,20 +357,20 @@ impl Sema_ctx
             return .none
         return .some(v)
 
-    priv fn check_enum_tag_range(r: Self$@, node: Ast_node$@, v: I64, base_id: I32): Bool //<
+    priv fn check_enum_tag_range(r: Self$@, node: Ast_node$@, value: I64, base_id: I32): Bool //<
         //< Whether the tag fits the enum's base type; where not, it reports and answers false
         //< The counter after the last written tag is checked as well: `b` after `a = 255` in a
         //< `U8`.
         bounds: = r.env.int_bounds(base_id)
         lo: = bounds.lo
         hi: = bounds.hi
-        if v >= lo && v <= hi
+        if value >= lo && value <= hi
             return true
         shown: = r.env.display(base_id)
         // **A tag is kept as I64**, so a `U64` enum stops at I64's highest value. A tag past it
         // folds to a negative I64, as a negative one does. Neither U64's range nor a wider type
         // would be true, so the message states the limit alone.
-        if r.env.is_unsigned(base_id) && r.env.get_portable_bit_size(base_id) >= 64 && v < 0
+        if r.env.is_unsigned(base_id) && r.env.get_portable_bit_size(base_id) >= 64 && value < 0
             r.clear_scratch()
                 .s("enum tag does not fit the enum's base type '\{shown\}'. Tags are kept as 'I64' \
                     values, so an enum on '\{shown\}' holds tags from 0 to \{hi\}. Write a tag in \
@@ -376,7 +378,7 @@ impl Sema_ctx
             r.err(node, r.scratch.slice())
             return false
         r.clear_scratch()
-            .s("enum tag \{v\} does not fit the enum's base type '\{shown\}' (\{lo\} to \{hi\}). \
-                Write a tag in range, or give the enum a wider base type ('enum E: I64')")
+            .s("enum tag \{value\} does not fit the enum's base type '\{shown\}' (\{lo\} to \
+                \{hi\}). Write a tag in range, or give the enum a wider base type ('enum E: I64')")
         r.err(node, r.scratch.slice())
         return false

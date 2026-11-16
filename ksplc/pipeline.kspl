@@ -79,7 +79,7 @@ priv fn print_left_out(block: U8[], phase: U8[], us: I64) //< the line that stan
 
 fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head: Arena_headroom,
     peak_heap: Sz) //<
-        //< It prints `--stats`' report once, on standard error; only this function lays it out.
+        //< It prints `--stats`' report once, on standard error; only this function lays it out
         //< **Put the summary (`[Overall]`) at the end**: a terminal shows the last screen;
         //< `make perf-log` uses `cat`.
         //< Caution: **Do not change the names `Compile time` / `AST Node bytes` / `AST Kids bytes`
@@ -187,7 +187,7 @@ enum Compile_error
     codegen //<
         //< code generation failed, as on an unreadable embed; the diagnostic is already printed
     fmt_failed //<
-        //< `ksplc fmt` failed on some files (diagnostics printed); the rest are formatted first.
+        //< `ksplc fmt` failed on some files (diagnostics printed); the rest are formatted first
 
 struct Staged_outputs //< the files a compile writes, under temporary names until all are whole
     //< **A failed or killed compile leaves the older outputs as they were**, so `make` never takes
@@ -373,53 +373,53 @@ impl Compiler
         entry: = base_package.name_entry(main_file)
         init_src: = r.source_map.get(entry).unwrap_or("")
 
-        ctx: = Sema_ctx(init_src, entry, env, global_scope, r.source_map)
-        sema: = base_core.arena.create(ctx)
+        ctx: = base_core.arena
+            .create(Sema_ctx(init_src, entry, env, global_scope, r.source_map))
         // The only way decl calls into body (infer_expr_fn in sema/session/ctx.kspl).
         // Caution: Insert it before sema_decl_collect.run, whose constant folding is its first
         // user.
-        sema.infer_expr_fn = sema_body_expr.infer_expr_of
+        ctx.infer_expr_fn = sema_body_expr.infer_expr_of
         base_core.config.is_lint = is_lint
-        sema.suppress_errors = suppress_errors || r.has_load_error
-        sema.bodies = bodies
-        r.sema = sema
+        ctx.suppress_errors = suppress_errors || r.has_load_error
+        ctx.bodies = bodies
+        r.sema = ctx
 
         t3: = sys.mono_us()
         sema_session_prof.prof.init()
-        sema_decl_collect.run(r.root_file, sema, r.base_parser)!
+        sema_decl_collect.run(r.root_file, ctx, r.base_parser)!
         t_collect: = sys.mono_us()
         sema_session_prof.prof.collect_us = t_collect - t3
         // Caution: **After Pass 0 of the collecting, not before it** (the reason is at
         // `report_all`).
         // **Only where diagnostics are shown.** It reads the text and changes nothing else. So a
         // suppressed run (the editor's workspace view) would compute them only to drop them.
-        if !sema.suppress_errors
-            source_checks.report_all(r.loaded_files, r.source_map, r.root_file, sema)
+        if !ctx.suppress_errors
+            source_checks.report_all(r.loaded_files, r.source_map, r.root_file, ctx)
         r.is_valid = true
-        sema_body_infer.run(r.root_file, sema) catch
+        sema_body_infer.run(r.root_file, ctx) catch
             r.is_valid = false
         t_infer: = sys.mono_us()
         sema_session_prof.prof.infer_us = t_infer - t_collect
         // The postponed generic constraints: infer flushes them per body, but **what the last body
         // pushed** is flushed here. Without it a violation passes silently (the reason is at
         // Pending_constraint in sema/session/state.kspl).
-        sema.drain_pending_constraints()
+        ctx.drain_pending_constraints()
         t_constraints: = sys.mono_us()
         sema_session_prof.prof.constraints_us = t_constraints - t_infer
         // It checks once, after every file is loaded (main may be in another file).
-        sema.check_one_main()
-        sema.check_main_signature()
-        sema.check_library_shape(r.root_file)
-        sema.check_closed_package(r.root_file)
-        sema.check_c_symbols_agree()
-        sema.check_type_layouts(r.root_file)
-        sema.refuse_one_thread_globals(r.root_file)
-        sema.refuse_one_thread_spawns()
+        ctx.check_one_main()
+        ctx.check_main_signature()
+        ctx.check_library_shape(r.root_file)
+        ctx.check_closed_package(r.root_file)
+        ctx.check_c_symbols_agree()
+        ctx.check_type_layouts(r.root_file)
+        ctx.refuse_one_thread_globals(r.root_file)
+        ctx.refuse_one_thread_spawns()
         t4: = sys.mono_us()
         sema_session_prof.prof.layouts_us = t4 - t_constraints
         base_stats.stages.sema = base_stats.end_stage(t3, t4)
 
-        r.is_valid = r.is_valid && !sema.has_error()
+        r.is_valid = r.is_valid && !ctx.has_error()
         if !r.is_valid
             throw .analysis_failed
 

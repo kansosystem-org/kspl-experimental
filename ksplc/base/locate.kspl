@@ -146,11 +146,11 @@ fn append_exe_path(out: Str_builder$@): Bool //<
     write_slashed(U8[]::{ .ptr = buf[0]@, .len = n }, out)
     return true
 
-fn write_slashed(path: U8[], w: Writer): Writer //< writes path with every `\` as `/`
+fn write_slashed(path: U8[], out: Writer): Writer //< writes path with every `\` as `/`
     //< Each separator `sys.is_path_sep` names becomes `/`, on every OS.
     for c in path
-        w.c('/' if sys.is_path_sep(c) else c)
-    return w
+        out.c('/' if sys.is_path_sep(c) else c)
+    return out
 
 priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty where unknown
     defer $exe: = Str_builder()
@@ -225,12 +225,12 @@ fn declare_package(name: U8[], root: U8[]) //<
         .create(Package_folder::{ .name = base_core.perm_arena.dup_str(name),
         .root = base_core.perm_arena.dup_str(root), .next = declared_roots })
 
-priv fn recorded_root($p: Package_folder$@, name: U8[]): U8[]? //<
+priv fn recorded_root($folder: Package_folder$@, name: U8[]): U8[]? //<
     //< The folder recorded for that name; empty is the current folder, none is not recorded
-    for p != null && name.len > 0
-        if p.name.equals(name)
-            return .some(p.root)
-        p = p.next
+    for folder != null && name.len > 0
+        if folder.name.equals(name)
+            return .some(folder.root)
+        folder = folder.next
     return .none
 
 fn recorded_name_to(logical: U8[], out: Str_builder$@) //<
@@ -450,12 +450,12 @@ impl U8[]
             return path.sub_from(1)
         return path
 
-fn is_same_file(a: U8[], b: U8[]): Bool //< whether they point at the same file
+fn is_same_file(left: U8[], right: U8[]): Bool //< whether they point at the same file
     //< **Equal names are not required**: a diagnostic says `std/tests/net_test`, the LSP
     //< `file:///c:/…/net_test.kspl`. With the scheme and extension dropped, one must end the other
     //< at a boundary.
-    a2: = a.strip_file_uri().strip_kspl_ext()
-    b2: = b.strip_file_uri().strip_kspl_ext()
+    a2: = left.strip_file_uri().strip_kspl_ext()
+    b2: = right.strip_file_uri().strip_kspl_ext()
     return a2.equals(b2) || ends_with_at_boundary(a2, b2) || ends_with_at_boundary(b2, a2)
 
 struct Uri_style //< how one client writes a document URI, read from one it sent

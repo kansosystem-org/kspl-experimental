@@ -171,9 +171,9 @@ priv fn all_on(edits: List<|json.Value|>@, text: U8[], arena: Arena$@): Bool //<
     return true
 
 priv const LIB_GONE: U8[] = "fn other(): I32\n    return 2\n" //< `LIB_OLD` without `helper`
-priv fn marks_of(c: jsonrpc_client.Client$@, rel: U8[], arena: Arena$@): I32 //<
+priv fn marks_of(client: jsonrpc_client.Client$@, rel: U8[], arena: Arena$@): I32 //<
     //< How many diagnostics the next publish for `rel` holds; -1 where none came
-    if got: = lsp_client.published(c, rel, 12, lsp_client.READ_MS, arena)
+    if got: = lsp_client.published(client, rel, 12, lsp_client.READ_MS, arena)
         return I32::got.get("diagnostics").arr_list(arena).len
     return -1
 
@@ -274,20 +274,22 @@ priv const BURST_CHANGES: Sz = 8 //< the changes sent in one write, before the h
 priv const BURST_LAST: U8[] = "fn last_one(): I32\n    return 1\n" //< the last text; no error
 priv const BURST_ID: I32 = 9100 //< the hover's id, above any the client gives itself here
 
-priv fn burst_text(k: Sz, arena: Arena$@): U8[] //<
-    //< The text the burst's change `k` sends; each but the last holds one error
-    if k + 1 == BURST_CHANGES
+priv fn burst_text(index: Sz, arena: Arena$@): U8[] //<
+    //< The text the burst's change `index` sends; each but the last holds one error
+    if index + 1 == BURST_CHANGES
         return BURST_LAST
-    return arena.text().s("fn step(): I32\n    return missing_\{k\}\n").take()
+    return arena.text().s("fn step(): I32\n    return missing_\{index\}\n").take()
 
-priv fn change_body(k: Sz, arena: Arena$@): U8[] //< the didChange that sends `burst_text(k)`
+priv fn change_body(index: Sz, arena: Arena$@): U8[] //<
+    //< the didChange that sends `burst_text(index)`
     $b: = Json_builder(arena)
     params: = b.obj()
         .set("textDocument",
-        b.obj().set("uri", b.str_val(BURST_REL)).set("version", b.int_val(I64::k + 2I64)).build())
+        b.obj().set("uri", b.str_val(BURST_REL))
+        .set("version", b.int_val(I64::index + 2I64)).build())
         .set("contentChanges",
         b.arr()
-        .push(b.obj().set("text", b.str_val(burst_text(k, arena))).build()).build()).build()
+        .push(b.obj().set("text", b.str_val(burst_text(index, arena))).build()).build()).build()
     return jsonrpc.encode("textDocument/didChange", params, -1, arena)
 
 priv fn check_burst(exe: U8[], arena: Arena$@) //<

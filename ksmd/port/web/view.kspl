@@ -1,14 +1,14 @@
 //< What the page shows of a document, written as JSON for the page's script to build HTML from
-//< A block is an object with a kind letter `k`: `p`, `h`, `c`, `l`, `q` quote, `d` divider, `e`
-//< blank line, `t`, `g` chart, `i` and `n` include. A list item has its depth `d`, `o` 1 when
-//< numbered, and `x` 1 or 2 for an open or a ticked box. Text is a list of segments
-//< `{"t":…,"m":…,"l":…}`: `m` adds 1 for emphasis, 2 strong, 4 code; `l` is a link's destination; a
-//< hard break is `{"br":1}`. A cell is `[kind]` or `[kind, value]`: 0 empty, 1 number, 2 text, 3 an
-//< error's mark, 4 a truth value, 5 a date; a number adds its shown text (`cell`). A spot is
-//< `[place, block, item, offset]`: place 0 text, 1 a block's gap, 2 an item's. An include and an
-//< image add where their path leads (`to`) and any problem (`why`), and an include its file's
-//< blocks (`inside`).
-//< Caution: **Change this and `ksmd/port/web/view.js` together**; the script reads these shapes.
+//< A block is an object with a kind letter `k` (`kind_letter`). A list item has its depth `d`, `o`
+//< 1 when numbered, and `x` 1 or 2 for an open or a ticked box. Text is a list of segments
+//< `{"t":…,"m":…,"l":…}`: `m` adds 1 for emphasis, 2 strong, 4 code; `l` is a link's destination;
+//< a hard break is `{"br":1}`. A cell is `[kind]` or `[kind, value]` (`CELL_EMPTY` and the rest
+//< below, and `cell`). A spot is `[place, block, item, offset]` (`SPOT_TEXT` and the rest). An
+//< include and an image add where their path leads (`to`) and any problem (`why`), and an include
+//< its file's blocks (`inside`).
+//< Caution: **Change this and the scripts that read it together**: `core.js` names the kinds and
+//< letters, `view.js` reads the blocks, `table.js` a table's keys (`table`), and `chart.js`,
+//< `diagram.js` and `drawings.js` the rest.
 import "ksmd/base/dates" { write_date, write_date_with }
 import "ksmd/base/keyed" { Keyed }
 import "ksmd/calc/calc" { Own_functions, Results }
@@ -32,6 +32,18 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
+// A cell's kind and a spot's place, the first item of each. `ks.CELL` and `ks.SPOT` in `core.js`
+// name the same numbers.
+priv const CELL_EMPTY: Sz = 0 //< a cell's kind: no value
+priv const CELL_NUMBER: Sz = 1 //< a number, then its shown text and its text without a format
+priv const CELL_TEXT: Sz = 2 //< text
+priv const CELL_ERROR: Sz = 3 //< an error, by its mark
+priv const CELL_BOOL: Sz = 4 //< a truth value, `"true"` or `"false"`
+priv const CELL_DATE: Sz = 5 //< a date, as `"2026-10-23"`, then as its format shows it
+priv const SPOT_TEXT: Sz = 0 //< a spot's place: in the text
+priv const SPOT_BLOCK_GAP: Sz = 1 //< in the gap before a block
+priv const SPOT_ITEM_GAP: Sz = 2 //< in the gap before a list's item
+
 struct Inside //< what includes and images show: the view assembled from the files fetched
     a: Assembly
     top: List<|Sz|> //< the entry of each block of the open document
@@ -42,18 +54,18 @@ struct Inside //< what includes and images show: the view assembled from the fil
     arena: Arena$@
 
 impl Inside
-    fn new(a: Assembly, waiting: Keyed<|Bool|>, today: U8[], own: Own_functions@, arena: Arena$@):
-        Inside //<
+    fn new(assembly: Assembly, waiting: Keyed<|Bool|>, today: U8[], own: Own_functions@,
+        arena: Arena$@): Inside //<
             //< The open document is the view's first source
         $top: = List<|Sz|>(arena)
-        for e in Range.asc(a.entries.len)
-            if a.entries.get(e).instance == 0
+        for e in Range.asc(assembly.entries.len)
+            if assembly.entries.get(e).instance == 0
                 top.push(e)
         $values: = List<|Results?|>(arena)
-        for _ in Range.asc(a.sources.len)
+        for _ in Range.asc(assembly.sources.len)
             values.push(.none)
-        return Inside::{ .a = a, .top = top, .values = values, .waiting = waiting, .today = today,
-            .own = own, .arena = arena }
+        return Inside::{ .a = assembly, .top = top, .values = values, .waiting = waiting,
+            .today = today, .own = own, .arena = arena }
 
     priv fn values_of(r: Self$@, source: Sz): Results
         if found: = r.values.get(source)
@@ -110,13 +122,17 @@ fn selection(ed: Editor@, out: Str_builder$@) //< `{"a":spot,"f":spot,"g":style}
     style(ed.gap, out)
     out.c('}')
 
-priv fn spot(p: Spot, out: Str_builder$@)
-    place: = 0 if p.place == .text else 1 if p.place == .block_gap else 2
-    out.s("[\{place\},\{p.block\},\{p.item\},\{p.offset\}]")
+priv fn spot(at: Spot, out: Str_builder$@)
+    place: =
+        (SPOT_TEXT if at.place == .text else SPOT_BLOCK_GAP if at.place == .block_gap
+        else SPOT_ITEM_GAP)
+    out.s("[\{place\},\{at.block\},\{at.item\},\{at.offset\}]")
 
-priv fn style(s: Style, out: Str_builder$@) //< `{"k":kind,"n":level,"d":depth,"o":0 or 1}`
-    out.s("{\"k\":\"").s(kind_letter(s.kind)).s("\",\"n\":\{s.level\},\"d\":\{s.depth\},\"o\":")
-    out.s("1}" if s.ordered else "0}")
+priv fn style(block_style: Style, out: Str_builder$@) //<
+    //< `{"k":kind,"n":level,"d":depth,"o":0 or 1}`
+    out.s("{\"k\":\"").s(kind_letter(block_style.kind))
+        .s("\",\"n\":\{block_style.level\},\"d\":\{block_style.depth\},\"o\":")
+    out.s("1}" if block_style.ordered else "0}")
 
 priv fn kind_letter(kind: Block_kind): U8[]
     switch kind
@@ -149,18 +165,18 @@ priv fn kind_letter(kind: Block_kind): U8[]
     case .diagram
         return "x"
 
-priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scratch: Arena$@,
+priv fn block(doc: Document@, index: Sz, values: Results@, out: Str_builder$@, scratch: Arena$@,
     inside: Inside$@, entry: Sz, own: Own_functions@) //<
         //< One block; `entry` is its entry in `inside`'s view, or `NONE`; `own` the page's own
         //< functions, or null
-    x: = doc.blocks.get(b)
+    x: = doc.blocks.get(index)
     out.s("{\"k\":\"").s(kind_letter(x.kind)).c('"')
     if x.invisible
         out.s(",\"iv\":1")
     switch x.kind
     case .paragraph, .heading, .code, .list, .quote
         $units: = List<|Unit|>(scratch)
-        gather(doc, b, b + 1, units@, scratch)
+        gather(doc, index, index + 1, units@, scratch)
         if x.kind == .heading
             out.s(",\"n\":\{x.level\}")
         if x.align != .none
@@ -299,171 +315,224 @@ priv fn segs(list: List<|Seg|>@, out: Str_builder$@)
         out.c('}')
     out.c(']')
 
-priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@, mine: Own_functions@,
-    memory: Arena$@) //<
-        //< `"name"`, the columns' widths in tenths of a character `"w"`, the rows' heights `"h"`, the
-        //< columns' filters `"fl"`, the column names, the identities of the rows (`"ri"`) and
-        //< columns (`"ci"`), the groups of rows (`"g"`) and of columns (`"cg"`), and each data
-        //< row's values. `"own"` names the page's own functions each cell's formula calls, and
-        //< `"err"` says why each error stands. `"nt"` names the typed text that looks like a number
-        //< in a column of numbers.
-    t: = doc.tables[u]@
-    out.s(",\"u\":\{u\},\"name\":")
+priv fn table(doc: Document@, table: Sz, values: Results@, out: Str_builder$@,
+    mine: Own_functions@, memory: Arena$@) //<
+        //< A table's keys after its kind: its place `"u"`, `"name"` and caption `"cap"`, then the
+        //< keys the functions it calls write, in this order
+        //< In each key, a row or column is a place from 0, and row -1 is the names. `"ri"` and
+        //< `"ci"` are the identities of the rows and columns, which a range of chosen cells keeps
+        //< to. `mine` is the page's own functions, or null; `memory` holds what `own_calls` finds.
+    t: = doc.tables[table]@
+    out.s(",\"u\":\{table\},\"name\":")
     text(t.name, out)
     out.s(",\"cap\":")
     text(t.caption, out)
-    // The places of the columns whose repeated values show once, from the left.
+    merged_columns(t, out)
+    widths(t, out)
+    heights(t, out)
+    filters(t, out)
+    column_names(t, out)
+    looks(t, out)
+    notes(t, out)
+    own_calls(t, mine, out, memory)
+    errors(doc, table, values, out)
+    number_texts(t, table, values, out)
+    links(t, out)
+    out.s(",\"ri\":[")
+    ids(t.rows@, out)
+    out.s("],\"ci\":[")
+    ids(t.columns@, out)
+    out.c(']')
+    choices(t, out)
+    row_colors(t, out)
+    rules(t, out)
+    groups(t, out)
+    rows(t, table, values, out)
+
+priv fn merged_columns(table: Table@, out: Str_builder$@) //<
+    //< `"mg"`: the places of the columns whose repeated values show once, from the left
     out.s(",\"mg\":[")
     $merged_any: = false
-    for c in Range.asc(t.columns.len)
-        for id in t.merged
-            if id == t.columns[c]
+    for c in Range.asc(table.columns.len)
+        for id in table.merged
+            if id == table.columns[c]
                 if merged_any
                     out.c(',')
                 merged_any = true
                 out.s("\{c\}")
     out.c(']')
+
+priv fn widths(table: Table@, out: Str_builder$@) //<
+    //< `"w"`: each column's width in tenths of a character, 0 for none; empty where none is set
     out.s(",\"w\":[")
-    for i in Range.asc(t.widths.len)
+    for i in Range.asc(table.widths.len)
         if i > 0
             out.c(',')
-        out.s("\{t.widths[i]\}")
-    // Each data row's height in points, 0 for none.
-    out.s("],\"h\":[")
+        out.s("\{table.widths[i]\}")
+    out.c(']')
+
+priv fn heights(table: Table@, out: Str_builder$@) //<
+    //< `"h"`: each data row's height in points, 0 for none
+    out.s(",\"h\":[")
     defer tall: = Arena(16 * 1024)
     $by_id: = List<|Sz|>(tall)
-    for _ in Range.asc(t.next_id)
+    for _ in Range.asc(table.next_id)
         by_id.push(0)
-    for h in t.heights
+    for h in table.heights
         by_id[h.row] = h.points
-    for r in Range.asc(t.rows.len)
+    for r in Range.asc(table.rows.len)
         if r > 0
             out.c(',')
-        out.s("\{by_id[t.rows[r]]\}")
-    // Each column's filter entry (`ksmd/model/filter.kspl`), empty for none.
-    out.s("],\"fl\":[")
-    for c in Range.asc(t.columns.len)
+        out.s("\{by_id[table.rows[r]]\}")
+    out.c(']')
+
+priv fn filters(table: Table@, out: Str_builder$@) //<
+    //< `"fl"`: each column's filter entry (`ksmd/model/filter.kspl`), empty for none
+    out.s(",\"fl\":[")
+    for c in Range.asc(table.columns.len)
         if c > 0
             out.c(',')
         $entry: U8[] = ""
-        for f in t.filters
-            entry = f.entry if f.column == t.columns[c] else entry
+        for f in table.filters
+            entry = f.entry if f.column == table.columns[c] else entry
         text(entry, out)
-    out.s("],\"names\":[")
-    for c in Range.asc(t.columns.len)
+    out.c(']')
+
+priv fn column_names(table: Table@, out: Str_builder$@) //< `"names"`: each column's name
+    out.s(",\"names\":[")
+    for c in Range.asc(table.columns.len)
         if c > 0
             out.c(',')
-        text(t.cells[c].text, out)
-    out.s("],\"looks\":[")
+        text(table.cells[c].text, out)
+    out.c(']')
+
+priv fn looks(table: Table@, out: Str_builder$@) //<
+    //< `"looks"`: each cell with a look of its own, as [row, column, colour, fill, size in half
+    //< points, alignment, wrap 1 or 0]
+    out.s(",\"looks\":[")
     $any: = false
-    for i in Range.asc(t.cells.len)
-        l: = t.cells[i].look
+    for i in Range.asc(table.cells.len)
+        l: = table.cells[i].look
         if is_plain(l)
             continue
         if any
             out.c(',')
         any = true
-        // [row, column, colour, fill, size in half points, alignment, wrap 1 or 0]; row -1 is
-        // the names.
-        out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
+        out.s("[\{i / table.columns.len - 1\},\{i % table.columns.len\},")
         text(l.color, out)
         out.c(',')
         text(l.fill, out)
         out.s(",\{l.size\},")
         text(l.align.name(), out)
         out.s(",1]" if l.wrap else ",0]")
-    // Each note as [row, column, text].
-    out.s("],\"notes\":[")
+    out.c(']')
+
+priv fn notes(table: Table@, out: Str_builder$@) //< `"notes"`: each note as [row, column, text]
+    out.s(",\"notes\":[")
     $noted: = false
-    for i in Range.asc(t.cells.len)
-        if t.cells[i].note.len == 0
+    for i in Range.asc(table.cells.len)
+        if table.cells[i].note.len == 0
             continue
         if noted
             out.c(',')
         noted = true
-        out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
-        text(t.cells[i].note, out)
+        out.s("[\{i / table.columns.len - 1\},\{i % table.columns.len\},")
+        text(table.cells[i].note, out)
         out.c(']')
-    // Each cell whose formula calls the page's own functions, as [row, column, their names].
-    out.s("],\"own\":[")
+    out.c(']')
+
+priv fn own_calls(table: Table@, mine: Own_functions@, out: Str_builder$@, memory: Arena$@) //<
+    //< `"own"`: each cell whose formula calls the page's own functions, as [row, column, their
+    //< names]; empty where `mine` is null
+    out.s(",\"own\":[")
     $marked: = false
-    for i in Range.asc(t.cells.len)
+    for i in Range.asc(table.cells.len)
         if mine == null
             break
-        names: = mine.called(t, t.cells[i], memory)
+        names: = mine.called(table, table.cells[i], memory)
         if names.len == 0
             continue
         if marked
             out.c(',')
         marked = true
-        out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},[")
+        out.s("[\{i / table.columns.len - 1\},\{i % table.columns.len\},[")
         for k in Range.asc(names.len)
             if k > 0
                 out.c(',')
             text(names[k], out)
         out.s("]]")
-    // Each error as [row, column, why]. The sentence is made here, for a table shown, and never
-    // while calculating (`write_reason`).
-    out.s("],\"err\":[")
+    out.c(']')
+
+priv fn errors(doc: Document@, table: Sz, values: Results@, out: Str_builder$@) //<
+    //< `"err"`: each error as [row, column, why]
+    //< The sentence is made here, for a table shown, and never while calculating (`write_reason`).
+    t: = doc.tables[table]@
+    out.s(",\"err\":[")
     defer $why: = Str_builder()
     $failed: = false
     for r in Range.asc(t.rows.len)
         for c in Range.asc(t.columns.len)
-            v: = values.at(u, r, c)
+            v: = values.at(table, r, c)
             if v.kind != .error
                 continue
             if failed
                 out.c(',')
             failed = true
             why.clear()
-            write_reason(v, u, doc, values, why@)
+            write_reason(v, table, doc, values, why@)
             out.s("[\{r\},\{c\},")
             text(why.slice(), out)
             out.c(']')
-    // Each cell of typed text that looks like a number, in a column of numbers, as [row, column]
-    // (`number_as_text` in `ksmd/edit/typed.kspl`). A total leaves it out, so the page marks it.
-    out.s("],\"nt\":[")
+    out.c(']')
+
+priv fn number_texts(grid: Table@, table: Sz, values: Results@, out: Str_builder$@) //<
+    //< `"nt"`: each cell of typed text that looks like a number, in a column of numbers, as [row,
+    //< column]
+    //< See `number_as_text` in `ksmd/edit/typed.kspl`. A total leaves it out, so the page marks it.
+    out.s(",\"nt\":[")
     $texted: = false
-    for c in Range.asc(t.columns.len)
+    for c in Range.asc(grid.columns.len)
         $column: = -1
-        for r in Range.asc(t.rows.len)
-            if !number_as_text(t, r, c)
+        for r in Range.asc(grid.rows.len)
+            if !number_as_text(grid, r, c)
                 continue
             if column < 0
-                column = 1 if numbers_column(t, u, values, c) else 0
+                column = 1 if numbers_column(grid, table, values, c) else 0
             if column == 0
                 break
             if texted
                 out.c(',')
             texted = true
             out.s("[\{r\},\{c\}]")
-    // Each link as [row, column, destination].
-    out.s("],\"links\":[")
+    out.c(']')
+
+priv fn links(table: Table@, out: Str_builder$@) //<
+    //< `"links"`: each link as [row, column, destination]
+    out.s(",\"links\":[")
     $linked: = false
-    for i in Range.asc(t.cells.len)
-        if t.cells[i].link.len == 0
+    for i in Range.asc(table.cells.len)
+        if table.cells[i].link.len == 0
             continue
         if linked
             out.c(',')
         linked = true
-        out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
-        text(t.cells[i].link, out)
+        out.s("[\{i / table.columns.len - 1\},\{i % table.columns.len\},")
+        text(table.cells[i].link, out)
         out.c(']')
-    // The identities of the rows and columns, which a range of chosen cells keeps to.
-    out.s("],\"ri\":[")
-    ids(t.rows@, out)
-    out.s("],\"ci\":[")
-    ids(t.columns@, out)
-    // Each column's choices, a list of [text, colour, fill], empty for a column that takes any
-    // value; a choice without colours has empty ones.
-    out.s("],\"ch\":[")
+    out.c(']')
+
+priv fn choices(table: Table@, out: Str_builder$@) //<
+    //< `"ch"`: each column's choices, a list of [text, colour, fill], empty for a column that takes
+    //< any value
+    //< A choice without colours has empty ones.
+    out.s(",\"ch\":[")
     defer tints: = Arena(1024)
-    for c in Range.asc(t.columns.len)
+    for c in Range.asc(table.columns.len)
         if c > 0
             out.c(',')
         out.c('[')
-        if t.choices.len > 0
-            entry: = t.choices[c]
+        if table.choices.len > 0
+            entry: = table.choices[c]
             $start: Sz = 0
             for i in Range.asc(entry.len + 1)
                 if entry.len > 0 && (i == entry.len || entry[i] == '|')
@@ -480,19 +549,23 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@, mine:
                     out.c(']')
                     start = i + 1
         out.c(']')
-    // The place of the column whose choices colour whole rows, or -1.
-    out.s("],\"rc\":")
+    out.c(']')
+
+priv fn row_colors(table: Table@, out: Str_builder$@) //<
+    //< `"rc"`: the place of the column whose choices colour whole rows, or -1
     $rc: Sz = -1
-    for c in Range.asc(t.columns.len)
-        if t.columns[c] == t.row_colors
+    for c in Range.asc(table.columns.len)
+        if table.columns[c] == table.row_colors
             rc = c
-    out.s("\{rc\}")
-    // Each column's colour rule as [condition, value, colour, fill], or null for none.
+    out.s(",\"rc\":\{rc\}")
+
+priv fn rules(table: Table@, out: Str_builder$@) //<
+    //< `"ru"`: each column's colour rule as [condition, value, colour, fill], or null for none
     out.s(",\"ru\":[")
-    for c in Range.asc(t.columns.len)
+    for c in Range.asc(table.columns.len)
         if c > 0
             out.c(',')
-        r: = t.rules[c] if t.rules.len > 0 else no_rule()
+        r: = table.rules[c] if table.rules.len > 0 else no_rule()
         if r.kind == .none
             out.s("null")
             continue
@@ -505,39 +578,46 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@, mine:
         out.c(',')
         text(r.fill, out)
         out.c(']')
-    // Each group as [first row, last row, 1 if hidden, how many groups hold it].
-    out.s("],\"g\":[")
+    out.c(']')
+
+priv fn groups(table: Table@, out: Str_builder$@) //<
+    //< `"g"` and `"cg"`: the groups of rows, then of columns, each as [first, last, 1 if hidden,
+    //< how many groups hold it]
     defer scratch: = Arena(1024)
     $deep: = List<|Sz|>(scratch)
-    depths(t.groups@, deep@)
-    for i in Range.asc(t.groups.len)
-        g: = t.groups[i]
+    out.s(",\"g\":[")
+    depths(table.groups@, deep@)
+    for i in Range.asc(table.groups.len)
+        g: = table.groups[i]
         if i > 0
             out.c(',')
         out.s("[\{g.first\},\{g.last\},\{1 if g.closed else 0\},\{deep[i]\}]")
-    // The groups of columns in the same form.
     out.s("],\"cg\":[")
     deep.clear()
-    depths(t.column_groups@, deep@)
-    for i in Range.asc(t.column_groups.len)
-        g: = t.column_groups[i]
+    depths(table.column_groups@, deep@)
+    for i in Range.asc(table.column_groups.len)
+        g: = table.column_groups[i]
         if i > 0
             out.c(',')
         out.s("[\{g.first\},\{g.last\},\{1 if g.closed else 0\},\{deep[i]\}]")
-    out.s("],\"rows\":[")
-    for r in Range.asc(t.rows.len)
+    out.c(']')
+
+priv fn rows(grid: Table@, table: Sz, values: Results@, out: Str_builder$@) //<
+    //< `"rows"`: each data row's values, each cell as `cell` writes it
+    //< A cell's own format stands over its column's.
+    out.s(",\"rows\":[")
+    for r in Range.asc(grid.rows.len)
         if r > 0
             out.c(',')
         out.c('[')
-        for c in Range.asc(t.columns.len)
+        for c in Range.asc(grid.columns.len)
             if c > 0
                 out.c(',')
-            // A cell's own format stands over its column's.
-            own: = t.cells[t.at(r, c)].look.format
-            column: = t.formats[c] if t.formats.len > 0 else no_format()
-            cell(values.at(u, r, c), own if own.kind != .none else column, out)
+            own: = grid.cells[grid.at(r, c)].look.format
+            column: = grid.formats[c] if grid.formats.len > 0 else no_format()
+            cell(values.at(table, r, c), own if own.kind != .none else column, out)
         out.c(']')
-    out.s("]")
+    out.c(']')
 
 priv fn drawings(list: List<|Drawing|>@, out: Str_builder$@) //<
     //< `"dr"`: each shape drawn over an image or a chart, as [shape, x1, y1, x2, y2, colour, text,
@@ -558,40 +638,40 @@ priv fn drawings(list: List<|Drawing|>@, out: Str_builder$@) //<
         out.c(']')
     out.c(']')
 
-priv fn chart(doc: Document@, c: Chart@, values: Results@, out: Str_builder$@) //<
+priv fn chart(doc: Document@, drawn: Chart@, values: Results@, out: Str_builder$@) //<
     //< `"kind"`, `"title"`, the table's place `"u"` and columns' names `"cols"`, the rows that can
     //< be series (`"sr"`, by `series_rows`), the labels column's place `"l"` and the drawn columns'
     //< `"v"`, then each row's label (`"lab"`) and each drawn column's numbers (`"ser"`, null for a
     //< cell that holds none). `"why"` says what is missing where the chart cannot be drawn.
-    out.s(",\"kind\":\"").s("bar" if c.kind == .bar else "line").s("\",\"title\":")
-    text(c.title, out)
+    out.s(",\"kind\":\"").s("bar" if drawn.kind == .bar else "line").s("\",\"title\":")
+    text(drawn.title, out)
     bound: =
-        c.table != UNBOUND && c.table < doc.tables.len &&
-        doc.tables[c.table].name.len > 0
+        drawn.table != UNBOUND && drawn.table < doc.tables.len &&
+        doc.tables[drawn.table].name.len > 0
     defer $why: = Str_builder()
     if !bound
-        why.s("No table named \"").s(c.name).s("\" stands in this file.")
+        why.s("No table named \"").s(drawn.name).s("\" stands in this file.")
         out.s(",\"why\":")
         text(why.slice(), out)
         return
-    t: = doc.tables[c.table]@
-    out.s(",\"u\":\{c.table\},\"cols\":[")
+    t: = doc.tables[drawn.table]@
+    out.s(",\"u\":\{drawn.table\},\"cols\":[")
     for k in Range.asc(t.columns.len)
         if k > 0
             out.c(',')
         text(t.cells[k].text, out)
     out.c(']')
     series_rows(t, out)
-    labels: = column_at(t, c.labels)
-    if c.by_rows
-        rows_chart(c, t, labels, values, out)
+    labels: = column_at(t, drawn.labels)
+    if drawn.by_rows
+        rows_chart(drawn, t, labels, values, out)
         return
-    $missing: U8[] = c.label_name if labels == UNBOUND else ""
+    $missing: U8[] = drawn.label_name if labels == UNBOUND else ""
     out.s(",\"l\":\{labels\},\"v\":[")
-    for j in Range.asc(c.series.len)
-        at: = column_at(t, c.series[j])
+    for j in Range.asc(drawn.series.len)
+        at: = column_at(t, drawn.series[j])
         if at == UNBOUND && missing.len == 0
-            missing = c.series_names[j]
+            missing = drawn.series_names[j]
         if j > 0
             out.c(',')
         out.s("\{at\}")
@@ -605,10 +685,10 @@ priv fn chart(doc: Document@, c: Chart@, values: Results@, out: Str_builder$@) /
     for r in Range.asc(t.rows.len)
         if r > 0
             out.c(',')
-        label(values.at(c.table, r, labels), out)
+        label(values.at(drawn.table, r, labels), out)
     out.s("],\"ser\":[")
-    for j in Range.asc(c.series.len)
-        at: = column_at(t, c.series[j])
+    for j in Range.asc(drawn.series.len)
+        at: = column_at(t, drawn.series[j])
         if j > 0
             out.c(',')
         out.s("{\"n\":")
@@ -617,7 +697,7 @@ priv fn chart(doc: Document@, c: Chart@, values: Results@, out: Str_builder$@) /
         for r in Range.asc(t.rows.len)
             if r > 0
                 out.c(',')
-            v: = values.at(c.table, r, at)
+            v: = values.at(drawn.table, r, at)
             if v.kind == .number
                 out.s("\{v.number\}")
             else
@@ -625,13 +705,13 @@ priv fn chart(doc: Document@, c: Chart@, values: Results@, out: Str_builder$@) /
         out.s("]}")
     out.c(']')
 
-priv fn series_rows(t: Table@, out: Str_builder$@) //<
+priv fn series_rows(table: Table@, out: Str_builder$@) //<
     //< `"sr"`: for each column, the rows whose text there can name a series of a chart by rows
     //< The editor takes a row whose cell holds text in the source, not a value calculated there.
     //< The saved chart finds a row again by that name, so the name must split as one, and the
     //< first row of the name is the one found.
     out.s(",\"sr\":[")
-    for k in Range.asc(t.columns.len)
+    for k in Range.asc(table.columns.len)
         if k > 0
             out.c(',')
         out.c('[')
@@ -639,8 +719,8 @@ priv fn series_rows(t: Table@, out: Str_builder$@) //<
         $names: = List<|U8[]|>(scratch)
         $seen: = Keyed<|Bool|>(scratch)
         $first: = true
-        for r in Range.asc(t.rows.len)
-            cell: = t.cells[t.at(r, k)]
+        for r in Range.asc(table.rows.len)
+            cell: = table.cells[table.at(r, k)]
             if cell.kind != .text || seen.get(cell.text).is_some()
                 continue
             seen.set(cell.text, true)
@@ -654,24 +734,27 @@ priv fn series_rows(t: Table@, out: Str_builder$@) //<
         out.c(']')
     out.c(']')
 
-priv fn rows_chart(c: Chart@, t: Table@, labels: Sz, values: Results@, out: Str_builder$@) //<
+priv fn rows_chart(chart: Chart@, table: Table@, labels: Sz, values: Results@, out: Str_builder$@) //<
     //< The rest of a chart by rows: `"r":1`, the first and last columns' places `"f"` and `"e"`,
     //< the drawn rows' places `"v"`, then the columns' names as the points' labels (`"lab"`) and
     //< each row's numbers across them (`"ser"`)
-    a: = column_at(t, c.from)
-    b: = column_at(t, c.to)
+    a: = column_at(table, chart.from)
+    b: = column_at(table, chart.to)
     out.s(",\"r\":1,\"l\":\{labels\},\"f\":\{a\},\"e\":\{b\},\"v\":[")
     defer $why: = Str_builder()
     if labels == UNBOUND
-        why.s("No column named \"").s(c.label_name).s("\" stands in table \"").s(t.name).s("\".")
+        why.s("No column named \"").s(chart.label_name).s("\" stands in table \"").s(table.name)
+            .s("\".")
     else if a == UNBOUND || b == UNBOUND
-        missing: = c.from_name if a == UNBOUND else c.to_name
-        why.s("No column named \"").s(missing).s("\" stands in table \"").s(t.name).s("\".")
-    for j in Range.asc(c.series_names.len)
-        at: = UNBOUND if labels == UNBOUND else row_named(t, labels, c.series_names[j])
+        missing: = chart.from_name if a == UNBOUND else chart.to_name
+        why.s("No column named \"").s(missing).s("\" stands in table \"").s(table.name).s("\".")
+    for j in Range.asc(chart.series_names.len)
+        at: =
+            (UNBOUND if labels == UNBOUND
+            else row_named(table, labels, chart.series_names[j]))
         if at == UNBOUND && why.slice().len == 0
-            why.s("No row named \"").s(c.series_names[j]).s("\" stands in column \"")
-                .s(c.label_name).s("\".")
+            why.s("No row named \"").s(chart.series_names[j]).s("\" stands in column \"")
+                .s(chart.label_name).s("\".")
         if j > 0
             out.c(',')
         out.s("\{at\}")
@@ -686,19 +769,19 @@ priv fn rows_chart(c: Chart@, t: Table@, labels: Sz, values: Results@, out: Str_
     for k in Range(low, high + 1, 1)
         if k > low
             out.c(',')
-        text(t.cells[k].text, out)
+        text(table.cells[k].text, out)
     out.s("],\"ser\":[")
-    for j in Range.asc(c.series_names.len)
-        r: = row_named(t, labels, c.series_names[j])
+    for j in Range.asc(chart.series_names.len)
+        r: = row_named(table, labels, chart.series_names[j])
         if j > 0
             out.c(',')
         out.s("{\"n\":")
-        text(c.series_names[j], out)
+        text(chart.series_names[j], out)
         out.s(",\"v\":[")
         for k in Range(low, high + 1, 1)
             if k > low
                 out.c(',')
-            v: = values.at(c.table, r, k)
+            v: = values.at(chart.table, r, k)
             if v.kind == .number
                 out.s("\{v.number\}")
             else
@@ -706,20 +789,20 @@ priv fn rows_chart(c: Chart@, t: Table@, labels: Sz, values: Results@, out: Str_
         out.s("]}")
     out.c(']')
 
-priv fn label(v: Value, out: Str_builder$@) //< a value as a chart's label shows it
-    switch v.kind
+priv fn label(value: Value, out: Str_builder$@) //< a value as a chart's label shows it
+    switch value.kind
     case .number
-        out.s("\"\{v.number\}\"")
+        out.s("\"\{value.number\}\"")
     case .text
-        text(v.text, out)
+        text(value.text, out)
     case .date
         out.c('"')
-        write_date(I64::v.number, out)
+        write_date(I64::value.number, out)
         out.c('"')
     case .boolean
-        out.s("\"true\"" if v.boolean else "\"false\"")
+        out.s("\"true\"" if value.boolean else "\"false\"")
     case .error
-        text(v.error.mark(), out)
+        text(value.error.mark(), out)
     case .empty
         out.s("\"\"")
 
@@ -729,50 +812,50 @@ priv fn ids(list: List<|Sz|>@, out: Str_builder$@) //< numbers separated by comm
             out.c(',')
         out.s("\{list[i]\}")
 
-priv fn cell(v: Value, f: Number_format, out: Str_builder$@) //<
+priv fn cell(value: Value, format: Number_format, out: Str_builder$@) //<
     //< `[kind, value]`; a number adds the text it shows, then its text without a format if it has
     //< one (`[1,1234.5,"1,234.50","1234.5"]`), and a date is `[5, "2026-10-23"]`
     //< **The page writes no number itself**, so a cell and `text(A1, "")` show the same digits.
-    switch v.kind
+    switch value.kind
     case .empty
-        out.s("[0]")
+        out.s("[\{CELL_EMPTY\}]")
     case .number
-        out.s("[1,\{v.number\},\"")
-        if shows_numbers(f)
-            show(v.number, f, out)
+        out.s("[\{CELL_NUMBER\},\{value.number\},\"")
+        if shows_numbers(format)
+            show(value.number, format, out)
             out.s("\",\"")
-        show_plain(v.number, out)
+        show_plain(value.number, out)
         out.s("\"]")
     case .text
-        out.s("[2,")
-        text(v.text, out)
+        out.s("[\{CELL_TEXT\},")
+        text(value.text, out)
         out.c(']')
     case .date
-        out.s("[5,\"")
-        write_date(I64::v.number, out)
-        if f.kind == .slash_date
+        out.s("[\{CELL_DATE\},\"")
+        write_date(I64::value.number, out)
+        if format.kind == .slash_date
             out.s("\",\"")
-            write_date_with(I64::v.number, '/', out)
+            write_date_with(I64::value.number, '/', out)
         out.s("\"]")
     case .boolean
-        out.s("[4,\"true\"]" if v.boolean else "[4,\"false\"]")
+        out.s("[\{CELL_BOOL\},").s("\"true\"]" if value.boolean else "\"false\"]")
 
     case .error
-        out.s("[3,")
-        text(v.error.mark(), out)
+        out.s("[\{CELL_ERROR\},")
+        text(value.error.mark(), out)
         out.c(']')
 
-priv fn text(s: U8[], out: Str_builder$@) //< a JSON string
-    out.c('"').escape_and_append(s).c('"')
+priv fn text(value: U8[], out: Str_builder$@) //< a JSON string
+    out.c('"').escape_and_append(value).c('"')
 
-priv fn diagram(d: Diagram@, out: Str_builder$@) //<
+priv fn diagram(drawn: Diagram@, out: Str_builder$@) //<
     //< `"size":[w,h]`, `"cap"`, each shape as `[id,kind,x,y,w,h,text,mono,color,fill]` in `"fig"`,
     //< and each arrow or line as `[kind,from,to,text,color,[x,y,…]]` in `"ln"`, its ends by place
-    out.s(",\"size\":[\{d.width\},\{d.height\}],\"cap\":")
-    text(d.caption, out)
+    out.s(",\"size\":[\{drawn.width\},\{drawn.height\}],\"cap\":")
+    text(drawn.caption, out)
     out.s(",\"fig\":[")
-    for i in Range.asc(d.figures.len)
-        f: = d.figures[i]@
+    for i in Range.asc(drawn.figures.len)
+        f: = drawn.figures[i]@
         if i > 0
             out.c(',')
         out.c('[')
@@ -785,8 +868,8 @@ priv fn diagram(d: Diagram@, out: Str_builder$@) //<
         text(f.fill, out)
         out.c(']')
     out.s("],\"ln\":[")
-    for i in Range.asc(d.links.len)
-        k: = d.links[i]@
+    for i in Range.asc(drawn.links.len)
+        k: = drawn.links[i]@
         if i > 0
             out.c(',')
         out.s("[\"").s(k.kind.variant_name()).s("\",\{k.from\},\{k.to\},")

@@ -113,13 +113,13 @@ impl Sema_ctx
                         name it 'test_…'. Otherwise call it, or remove it")
                 r.warn(site if site != null else sym.node, r.scratch.slice())
 
-    priv fn report_test_not_run(r: Self$@, d: Ast_node$@) //< reports [W0214]
-        site: = d.find_child(.k_identifier)
+    priv fn report_test_not_run(r: Self$@, node: Ast_node$@) //< reports [W0214]
+        site: = node.find_child(.k_identifier)
         r.clear_scratch()
-            .s("[W0214] '\{d.get_decl_id_text()\}' is named like a test, but no suite in this \
+            .s("[W0214] '\{node.get_decl_id_text()\}' is named like a test, but no suite in this \
                 program runs it. A suite runs the tests of its own file and of the files that file \
                 imports. Import this file from the file that holds the suite")
-        r.warn(site if site != null else d, r.scratch.slice())
+        r.warn(site if site != null else node, r.scratch.slice())
 
     priv fn is_suite_impl(r: Self$@, impl_node: Ast_node$@): Bool //<
         //< Whether it is an `impl X: suite.Suite`
@@ -283,11 +283,11 @@ impl Sema_ctx
         src.s("    r.").s(AFTER_NAME).s("(\"").s(name).s("\");\n")
         return true
 
-    priv fn check_test_param(r: Self$@, p: Ast_node$@, p_name: U8[], test: U8[],
+    priv fn check_test_param(r: Self$@, node: Ast_node$@, p_name: U8[], test: U8[],
         fields: List<|sema_type_def.Struct_field$@|>@, suite: U8[]): Bool //<
             //< Whether the suite has a field named as the parameter, of the same type
         $p_id: I32 = 0
-        t_node: = p.get_decl_type_node()
+        t_node: = node.get_decl_type_node()
         if t_node != null
             p_id = t_node.resolve_type(r) catch 0
         for f in fields
@@ -300,14 +300,14 @@ impl Sema_ctx
                     '\{p_name\}' of the suite '\{suite\}' is '\{r.env.display(f.type_id)\}'. A \
                     suite hands each test its field of the same name, so the two types must be the \
                     same")
-            r.err(p, r.scratch.slice())
+            r.err(node, r.scratch.slice())
             return false
         r.clear_scratch()
             .s("test '\{test\}' takes '\{p_name\}', but the suite '\{suite\}' has no field \
                 '\{p_name\}'. A suite hands each test its field of the same name. Add the field to \
                 the suite, or take the value another way")
-        r.err(p, r.scratch.slice())
+        r.err(node, r.scratch.slice())
         return false
 
-priv fn key_of_test(d: Ast_node$@): U8[] //< the key a test is found by: its file and its name
-    return base_core.arena.text().s(d.loc.file()).s("::").s(d.get_decl_id_text()).take()
+priv fn key_of_test(node: Ast_node$@): U8[] //< the key a test is found by: its file and its name
+    return base_core.arena.text().s(node.loc.file()).s("::").s(node.get_decl_id_text()).take()

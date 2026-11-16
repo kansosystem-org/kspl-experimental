@@ -281,7 +281,7 @@ table cell  `Option<\|T\|>`
 * **An elision**: `...` or `…` outside a comment, where the writer left part out.
 * **A first line naming the file it needs beside it**: `// app.kspl (the KSPL customer; greet_api.kspl is beside it)`. A block with this line that compiles alone fails.
 
-**A tour's blocks are steps of one program.** `make test-docs` joins them in order, compiles and runs the result, which must print what the program prints.
+**A tutorial's blocks are steps of one program.** `make test-docs` joins them in order, compiles and runs the result, which must print what the program prints.
 
 There is a gap. A fragment that does not compile is taken as leaning on the prose, so a refusal in it goes unseen without a mark. A form that escapes the check is still a violation.
 

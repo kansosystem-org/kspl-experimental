@@ -26,9 +26,15 @@ fn init(): Void!mmio.Driver_error //<
         pwm.config_slice(pwm.slice_of(a), board.MOTOR_PWM_DIV_INT, 0, board.MOTOR_PWM_TOP)
     stop()
 
-fn set_wheel(w: Sz, speed: I32) //< turns wheel w at speed `speed` (-100 to 100)
+struct Duty //< the duties on one motor's two pins [%]
+    a: U32 //< pin A's, for turning forward
+    b: U32 //< pin B's, for turning back
+
+fn duty(wheel: Sz, speed: I32): Duty //< the duties that turn wheel `wheel` at speed `speed`
+    //< It has no hardware access, so `lib/ksos/tests/stops_test.kspl` checks it on the host.
     //< board.WHEEL_POLARITY absorbs each wheel's actual direction of rotation.
-    s: = speed * board.WHEEL_POLARITY[w]
+    //< Caution: **Speed 0 must give 0 on both pins.** `stop`, and so the panic hook, relies on it.
+    s: = speed * board.WHEEL_POLARITY[wheel]
     capped: = SPEED_MAX if s > SPEED_MAX else (-SPEED_MAX if s < -SPEED_MAX else s)
     // **Raise it to the duty at which the wheel starts turning** (the reason is at
     // `board.WHEEL_MIN_PERCENT`). 0 stays 0.
@@ -37,15 +43,15 @@ fn set_wheel(w: Sz, speed: I32) //< turns wheel w at speed `speed` (-100 to 100)
         clamped = board.WHEEL_MIN_PERCENT
     else if capped < 0 && capped > 0 - board.WHEEL_MIN_PERCENT
         clamped = 0 - board.WHEEL_MIN_PERCENT
-    a: = board.MOTOR_PIN_A[w]
-    b: = board.MOTOR_PIN_B[w]
-    top: = board.MOTOR_PWM_TOP
     if clamped >= 0
-        pwm.set_percent(a, U32::clamped, top)
-        pwm.set_percent(b, 0, top)
-    else
-        pwm.set_percent(a, 0, top)
-        pwm.set_percent(b, U32::(-clamped), top)
+        return ::{ .a = U32::clamped, .b = 0 }
+    return ::{ .a = 0, .b = U32::(-clamped) }
+
+fn set_wheel(wheel: Sz, speed: I32) //< turns wheel `wheel` at speed `speed` (-100 to 100)
+    d: = duty(wheel, speed)
+    top: = board.MOTOR_PWM_TOP
+    pwm.set_percent(board.MOTOR_PIN_A[wheel], d.a, top)
+    pwm.set_percent(board.MOTOR_PIN_B[wheel], d.b, top)
 
 // Whether the previous command left it stopped.
 // Caution: **`stop` must update this too**, or the kick is missed after a stop.

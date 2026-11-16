@@ -13,13 +13,17 @@ import "std/prng"
 import "std/str" { Str_builder }
 import "std/strfmt"
 
+// The matrix-product kernels keep BLAS's GEMM letters (`a`, `b`, `c` for the matrices, `m`, `k`,
+// `n` for their sizes), as `Matmul_job`'s fields and `C = A·B` do. [H0501] would ask for words.
+##lint(H0501 = off)
+
 pub enum Tensor_error //< why an operation could not run on the shapes it was given
     //< A shape mismatch can come from run-time data (a bad shape in weights read from a
     //< safetensors file). So it propagates as an error union (?E) for the caller to handle.
     rank_mismatch //< the number of dimensions is not what the operation expects
     shape_mismatch //< a dimension's size does not match, such as the inner-product dimension
     out_of_bounds //< a row number outside the tensor; a bad element index stops the program
-pub const MAX_TENSOR_ELEMS: Sz = 2147483647 //< the most elements one tensor can hold.
+pub const MAX_TENSOR_ELEMS: Sz = 2147483647 //< the most elements one tensor can hold
     //< The cap `new` enforces: the largest I32, so a dimension reaches BLAS's I32 arguments whole.
     //< A real model needs more than 10^8: Qwen2.5-0.5B's embedding is 151936 x 896. The bytes
     //< are checked apart (`checked_mul`), so a 32-bit Sz still cannot overflow. It is pub so
@@ -135,12 +139,13 @@ impl<|T|> Tensor<|T|>
         k: = r.shape[1]
         if k != rhs.shape[0] || k <= 0 || r.shape[0] < 0 || rhs.shape[1] < 0
             throw .shape_mismatch
-    fn holds_matrix(r: Self@, m: Sz, n: Sz): Bool //< whether it has exactly `m * n` elements
-        //< Caution: **Divide rather than multiply.** Where `Sz` is 32 bits, `m * n` can wrap to a
-        //< smaller size, and a kernel writing `[m, n]` would write past the end.
-        if m < 0 || n < 0
+    fn holds_matrix(r: Self@, rows: Sz, cols: Sz): Bool //<
+        //< whether it has exactly `rows * cols` elements
+        //< Caution: **Divide rather than multiply.** Where `Sz` is 32 bits, `rows * cols` can wrap
+        //< to a smaller size, and a kernel writing `[rows, cols]` would write past the end.
+        if rows < 0 || cols < 0
             return false
-        return r.size == 0 if n == 0 else r.size % n == 0 && r.size / n == m
+        return r.size == 0 if cols == 0 else r.size % cols == 0 && r.size / cols == rows
     pub fn matmul_into( //< the matrix product, written into a tensor the caller owns
         //< It is for a hot loop that would otherwise allocate once per step.
         r: Self$@,
@@ -443,16 +448,17 @@ priv const DOT_LANES: Sz = 8 //< the partial sums of a dot product, kept side by
     //< One running sum waits on its last addition at every step; eight independent ones fill a
     //< vector register, and the order stays fixed, so the bits do not depend on the machine.
 
-fn dot_lanes<|T|>(a: T@, b: T@, n: Sz): T //< the dot product of `n` numbers, in 8 lanes
+fn dot_lanes<|T|>(left: T@, right: T@, count: Sz): T //<
+    //< the dot product of `count` numbers, in 8 lanes
     //< Number `i` goes to lane `i % 8`; the lanes are added in order at the end.
     $acc: T[DOT_LANES] = ::{}
     p: T$@ = acc@
-    whole: = n / DOT_LANES * DOT_LANES
+    whole: = count / DOT_LANES * DOT_LANES
     for $g: Sz = 0; g < whole; g += DOT_LANES
         for k in Range.asc(DOT_LANES)
-            (p + k)$ = (p + k)$ + (a + g + k)$ * (b + g + k)$
-    for i in Range(whole, n, 1)
-        (p + i - whole)$ = (p + i - whole)$ + (a + i)$ * (b + i)$
+            (p + k)$ = (p + k)$ + (left + g + k)$ * (right + g + k)$
+    for i in Range(whole, count, 1)
+        (p + i - whole)$ = (p + i - whole)$ + (left + i)$ * (right + i)$
     $s: T = 0.0
     for k in Range.asc(DOT_LANES)
         s = s + (p + k)$
@@ -466,13 +472,14 @@ fn dot_lanes<|T|>(a: T@, b: T@, n: Sz): T //< the dot product of `n` numbers, in
 priv const EXP_LOW: F32 = -87.0 //< below it the result would leave F32's normal range
 priv const EXP_HIGH: F32 = 88.0 //< above it the result would overflow to infinity
 
-fn exp_f32(x: F32): F32 //< e to the `x`, within 2 units in the last place for -87 ≤ x ≤ 88
-    //< **ggml's `ggml_v_expf`, which llama.cpp's SiLU and softmax use.** `x = n ln 2 + b`, with
+fn exp_f32(value: F32): F32 //<
+    //< e to the `value`, within 2 units in the last place for -87 ≤ `value` ≤ 88
+    //< **ggml's `ggml_v_expf`, which llama.cpp's SiLU and softmax use.** `value = n ln 2 + b`, with
     //< `n` a whole number and |b| ≤ ln 2 / 2; `e^b - 1` is a polynomial in `b`, and `2^n` is
     //< made from `n`'s bits. Each product and sum stays its own statement, so no C compiler fuses
     //< two roundings into one and the bits are the same on every machine. Outside [-87, 88] it
     //< gives the value at the edge: about 1.6e-38 below, 1.7e38 above.
-    $v: = x
+    $v: = value
     if v < EXP_LOW
         v = EXP_LOW
     if v > EXP_HIGH

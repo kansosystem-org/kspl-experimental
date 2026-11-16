@@ -30,6 +30,20 @@ function ksmdStart(root, bar, status, wasmBytes) {
     const ks = { root, bar, w, enc, composing: null, stopped: false, sel: null, cell: null,
       changed: [], rendered: [] };
 
+    // The numbers and letters the editor's JSON uses, by name. Caution: **Change these and the
+    // editor together**: `ksmd/port/web/view.kspl` writes the kinds, places and letters
+    // (`CELL_EMPTY` and the rest, and `kind_letter`), and `bridge_tables.kspl` reads the codes.
+    // A cell's kind, the first item of a cell's value: `[kind]` or `[kind, value, …]`.
+    ks.CELL = Object.freeze({ EMPTY: 0, NUMBER: 1, TEXT: 2, ERROR: 3, BOOL: 4, DATE: 5 });
+    // A spot's place, its first item: in text, in the gap before a block, or in a list's gap.
+    ks.SPOT = Object.freeze({ TEXT: 0, BLOCK_GAP: 1, ITEM_GAP: 2 });
+    // A block's kind letter `k`; a gap's style takes the same letters.
+    ks.BLOCK = Object.freeze({ PARAGRAPH: "p", HEADING: "h", CODE: "c", LIST: "l", QUOTE: "q", DIVIDER: "d",
+      BLANK: "e", TABLE: "t", CHART: "g", IMAGE: "i", INCLUDE: "n", FUNCTIONS: "f", SETTINGS: "s",
+      DIAGRAM: "x" });
+    // What `ksmd_web_table_edit` does to a table's rows or columns.
+    ks.TABLE_EDIT = Object.freeze({ INSERT_ROWS: 0, REMOVE_ROWS: 1, INSERT_COLUMNS: 2, REMOVE_COLUMNS: 3 });
+
     // Whether the page runs on a Mac, an iPhone or an iPad. There Ctrl+Option and Cmd+Option are
     // shortcuts, never AltGr, though Firefox can report Option as AltGraph (`input.js`, `zoom.js`).
     ks.mac = /Mac|iPhone|iPad/.test(navigator.platform);

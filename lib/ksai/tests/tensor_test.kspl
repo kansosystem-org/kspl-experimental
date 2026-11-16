@@ -116,11 +116,11 @@ fn test_tensor_operators(arena: Arena$@)
     fill_first(sum, F32::7.0)
     assert(sum[0] == F32::7.0, "writing 't[i]' through a by-value parameter did not reach it")
     verdict.pass("`a + b` / `a - b` / `a * b` / `t[i]` all work via real operator syntax.")
-priv fn fill_first(t: Tensor<|F32|>, val: F32) //<
+priv fn fill_first(values: Tensor<|F32|>, val: F32) //<
     //< Writes into an element of a `Tensor` received by value
     //< **No `$` is written on the receiver.** It is the same way ksai's `matmul_into` /
     //< `grad_matmul_input_into` receive a destination.
-    t[0] = val
+    values[0] = val
 // ==========================================
 // A shape mismatch is thrown as a recoverable `Tensor_error`, not a panic, and the caller
 // continues with a catch.
@@ -164,15 +164,16 @@ fn test_tensor_error_recoverable(arena: Arena$@)
     verdict
         .pass("Shape mismatches propagate as Tensor_error and are handled without crashing the \
             process.")
-priv fn refuses_rope(t: Tensor<|F32|>, head_dim: Sz): Bool //< whether RoPE refuses that width
-    $x: = t
+priv fn refuses_rope(values: Tensor<|F32|>, head_dim: Sz): Bool //< whether RoPE refuses that width
+    $x: = values
     _r: = x.apply_rope_neox(0, head_dim, head_dim, 10000.0) catch
         return true
     return false
 
-priv fn refuses_view(t: Tensor<|F32|>, first: Sz, num_rows: Sz): Bool //< whether view_rows refuses
-    $x: = t
-    _v: = x.view_rows(first, num_rows, t.arena) catch
+priv fn refuses_view(values: Tensor<|F32|>, first: Sz, num_rows: Sz): Bool //<
+    //< whether view_rows refuses
+    $x: = values
+    _v: = x.view_rows(first, num_rows, values.arena) catch
         return true
     return false
 

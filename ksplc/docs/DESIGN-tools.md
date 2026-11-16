@@ -191,7 +191,7 @@ Caution: **A namespace alias or a type name is not a postfix node** (normalizati
 
 **For a bare name, do not list everything in a namespace.** KSPL calls an imported name through its namespace, so only the three sources in the table can be listed unqualified. After a namespace too, list only what can be called from outside.
 
-**A candidate carries what its declaration says of itself.** Each item's `documentation` is the declaration's description, read by the hover's own reader (`lsp/nav.declared_doc` → `base/ast_doc.kspl`) and sent as Markdown. The list is where a caller looks first; a description shown only on hover arrives after the choice. Every path in the table carries the declaration it came from.
+**A candidate carries what its declaration says of itself.** Each item's `documentation` is the declaration's description, read by the hover's own reader (`lsp/nav.linked_doc` → `base/ast_doc.kspl`) and sent as Markdown. The list is where a caller looks first; a description shown only on hover arrives after the choice. Every path in the table carries the declaration it came from.
 
 **`detail` carries the shape: a function's signature, a field's type**, which a caller needs before choosing. What a signature holds (its parameters, a variadic's `...`, each default, the return) is decided once, in `write_sig` in `base/ast_spell.kspl`. The list and the hover both write through it. A default shows as written (`step: I32 = 1`); dropped, a reader takes the parameter for one every call must pass.
 

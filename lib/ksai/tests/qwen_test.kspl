@@ -26,8 +26,8 @@ priv const TOL: F64 = 0.0001 //< the largest gap allowed from the F64 reference
     //< blocks gives a few millionths of the scores here; a gap of another order means another
     //< computation, not rounding.
 
-fn said_qwen(e: Qwen_error, arena: Arena$@): U8[] //< an error as `<variant> <what it names>`
-    switch e
+fn said_qwen(error: Qwen_error, arena: Arena$@): U8[] //< an error as `<variant> <what it names>`
+    switch error
     case .gguf(inner)
         return arena.text().s("gguf ").s(said(inner, arena)).take()
     case .not_qwen(arch)
@@ -39,8 +39,8 @@ fn said_qwen(e: Qwen_error, arena: Arena$@): U8[] //< an error as `<variant> <wh
     case .unread(name)
         return arena.text().s("unread ").s(name).take()
 
-priv fn loaded(g: Gguf@, arena: Arena$@): Qwen //< a tiny model, its cache empty
-    return Qwen.load(g, CONTEXT, arena) catch e
+priv fn loaded(gguf: Gguf@, arena: Arena$@): Qwen //< a tiny model, its cache empty
+    return Qwen.load(gguf, CONTEXT, arena) catch e
         panic(arena.text().s("qwen: the tiny model is refused: ").s(said_qwen(e, arena)).take())
 
 priv fn copied(scores: Tensor<|F32|>, arena: Arena$@): List<|F32|> //< the scores, kept
@@ -49,11 +49,12 @@ priv fn copied(scores: Tensor<|F32|>, arena: Arena$@): List<|F32|> //< the score
         out.push((scores.data + i)$)
     return out
 
-priv fn same_bits(a: List<|F32|>@, b: List<|F32|>@): Bool //< whether two score lists are equal
-    if a.len != b.len
+priv fn same_bits(left: List<|F32|>@, right: List<|F32|>@): Bool //<
+    //< whether two score lists are equal
+    if left.len != right.len
         return false
-    for i in Range.asc(a.len)
-        if a.get(i) != b.get(i)
+    for i in Range.asc(left.len)
+        if left.get(i) != right.get(i)
             return false
     return true
 
@@ -69,11 +70,11 @@ fn test_qwen35_matches_reference(arena: Arena$@) //<
     g: = Gguf.parse(model35_file, arena) catch panic("qwen: the tiny Qwen3.5 model is refused")
     verdict.pass(matches_reference(g@, "Qwen3.5", arena))
 
-priv fn matches_reference(g: Gguf@, family: U8[], arena: Arena$@): U8[] //<
+priv fn matches_reference(gguf: Gguf@, family: U8[], arena: Arena$@): U8[] //<
     //< Checks one tiny model against its reference; says what was checked
-    $tokens: = g.ints("ksai.check.tokens", arena) catch panic("qwen: the check tokens")
-    want: = g.floats("ksai.check.scores", arena) catch panic("qwen: the reference scores")
-    $m: = loaded(g, arena)
+    $tokens: = gguf.ints("ksai.check.tokens", arena) catch panic("qwen: the check tokens")
+    want: = gguf.floats("ksai.check.scores", arena) catch panic("qwen: the reference scores")
+    $m: = loaded(gguf, arena)
     vocab: = m.cfg.vocab
     assert(want.len == tokens.len * vocab, "qwen: a reference row per token")
     defer step: = Arena(1024 * 1024)
@@ -90,10 +91,10 @@ priv fn matches_reference(g: Gguf@, family: U8[], arena: Arena$@): U8[] //<
     assert(gap <= TOL,
         arena.text().s("qwen: the \{family\} scores are \{gap\} from the reference").take())
     // The whole prompt in one call, and in two pieces, give the last scores bit for bit.
-    $whole: = loaded(g, arena)
+    $whole: = loaded(gguf, arena)
     one: = copied(whole.forward(tokens.slice(), 0, step), arena)
     step.reset()
-    $pieces: = loaded(g, arena)
+    $pieces: = loaded(gguf, arena)
     _first: = pieces.forward(tokens.sub(0, 5), 0, step)
     two: = copied(pieces.forward(tokens.sub_from(5), 5, step), arena)
     assert(same_bits(last@, one@) && same_bits(last@, two@),
@@ -218,9 +219,9 @@ impl Gguf_parts
         put32(r.keys@, kind)
         r.n_keys += 1U64
 
-    priv fn count(r: Self$@, name: U8[], v: Sz) //< a key holding a U32
+    priv fn count(r: Self$@, name: U8[], value: Sz) //< a key holding a U32
         r.key(name, 4U32)
-        put32(r.keys@, U32::v)
+        put32(r.keys@, U32::value)
 
     priv fn tensor(r: Self$@, name: U8[], cols: Sz, rows: Sz) //< an F32 tensor of zeros
         //< One row of `cols` numbers where `rows` is 0, as ggml writes a vector.

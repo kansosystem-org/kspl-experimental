@@ -27,7 +27,7 @@ priv const RENAME_FILE: U8[] = "lib/ksos/drivers/ht16k33.kspl" //<
     //< complaint against other products). Only identifier nodes match.
 priv const RENAME_OLD: U8[] = "draw"
 
-priv fn refs_at(c: jsonrpc_client.Client$@, with_decl: Bool, arena: Arena$@):
+priv fn refs_at(client: jsonrpc_client.Client$@, with_decl: Bool, arena: Arena$@):
     List<|json.Value|> //<
         //< Asks for the places that use the name at that position
     $b: = Json_builder(arena)
@@ -43,13 +43,13 @@ priv fn refs_at(c: jsonrpc_client.Client$@, with_decl: Bool, arena: Arena$@):
         .set("uri", b.str_val(lsp_client.uri_of(harness.root(), RENAME_FILE, arena))).build()
     ctx: = b.obj().set("includeDeclaration", b.bool_val(with_decl)).build()
     params: = b.obj().set("textDocument", doc).set("position", pos).set("context", ctx).build()
-    msg: = lsp_client.answer(c, "textDocument/references", params, HEAVY_MS, arena)
+    msg: = lsp_client.answer(client, "textDocument/references", params, HEAVY_MS, arena)
     return msg.get("result").arr_list(arena)
 
-fn check_references(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+fn check_references(client: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< References point at the same places as renaming
-    $with_decl: = refs_at(c, true, arena)
-    d1: = lsp_client.why(c, arena.text().s("\{with_decl.len\} found").take(), arena)
+    $with_decl: = refs_at(client, true, arena)
+    d1: = lsp_client.why(client, arena.text().s("\{with_decl.len\} found").take(), arena)
     verdict.check("references come back from two or more files",
         spread(with_decl@, arena).len >= 2, d1)
 
@@ -81,8 +81,8 @@ fn check_references(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 
     // **It must be possible to leave the declaration out**, or "I only want to see the uses" cannot
     // be answered (a request raised against other language servers).
-    without: = refs_at(c, false, arena)
-    d2: = lsp_client.why(c,
+    without: = refs_at(client, false, arena)
+    d2: = lsp_client.why(client,
         arena.text().s("with \{with_decl.len\} / without \{without.len\}").take(), arena)
     verdict.check("making includeDeclaration false drops the declaration alone",
         with_decl.len > 0 && without.len == with_decl.len - 1, d2)
@@ -100,18 +100,18 @@ priv fn spread(list: List<|json.Value|>@, arena: Arena$@): List<|U8[]|> //<
             out.push(rel)
     return out
 
-priv fn ahead(a: json.Value, b: json.Value): Bool //<
-    //< Whether `a` comes before `b` (in path, line, column order)
-    order: = a.get("uri").as_str().unwrap_or("")
-        .compare(b.get("uri").as_str().unwrap_or(""))
+priv fn ahead(left: json.Value, right: json.Value): Bool //<
+    //< Whether `left` comes before `right` (in path, line, column order)
+    order: = left.get("uri").as_str().unwrap_or("")
+        .compare(right.get("uri").as_str().unwrap_or(""))
     if order != 0
         return order < 0
-    a_line: = a.get("range").get("start").get("line").as_int().unwrap_or(0)
-    b_line: = b.get("range").get("start").get("line").as_int().unwrap_or(0)
+    a_line: = left.get("range").get("start").get("line").as_int().unwrap_or(0)
+    b_line: = right.get("range").get("start").get("line").as_int().unwrap_or(0)
     if a_line != b_line
         return a_line < b_line
-    return a.get("range").get("start").get("character").as_int().unwrap_or(0) <= b.get("range")
-        .get("start").get("character").as_int().unwrap_or(0)
+    return left.get("range").get("start").get("character").as_int().unwrap_or(0) <= right
+        .get("range").get("start").get("character").as_int().unwrap_or(0)
 
 priv fn name_pos(rel: U8[], lead: U8[], name: U8[], arena: Arena$@): Lsp_pos? //<
     //< The position of name in the line starting with lead, as an LSP position (both from 0)
@@ -131,13 +131,13 @@ struct Lsp_pos
     line: Sz
     character: Sz
 
-priv fn draw_pos(b: Json_builder$@, arena: Arena$@): json.Value? //<
+priv fn draw_pos(builder: Json_builder$@, arena: Arena$@): json.Value? //<
     //< The position the renaming and the references both ask at
     //< **One place** — computed separately, one of the two could keep pointing at the old place.
     switch name_pos(RENAME_FILE, "fn draw(", RENAME_OLD, arena)
     case .some(p)
-        return .some(b.obj().set("line", b.int_val(p.line))
-            .set("character", b.int_val(p.character)).build())
+        return .some(builder.obj().set("line", builder.int_val(p.line))
+            .set("character", builder.int_val(p.character)).build())
     case .none {}
     return .none
 
@@ -149,7 +149,7 @@ priv fn span_at(uri: U8[], line: Sz, from: Sz, to: Sz, arena: Arena$@): U8[]
         i += 1
     return ""
 
-fn check_rename(c: jsonrpc_client.Client$@, arena: Arena$@)
+fn check_rename(client: jsonrpc_client.Client$@, arena: Arena$@)
     $b: = Json_builder(arena)
     $pos: = json.Value.null_val
     switch draw_pos(b@, arena)
@@ -163,9 +163,9 @@ fn check_rename(c: jsonrpc_client.Client$@, arena: Arena$@)
         .set("uri", b.str_val(lsp_client.uri_of(harness.root(), RENAME_FILE, arena))).build()
     params: = b.obj().set("textDocument", doc).set("position", pos)
         .set("newName", b.str_val("paint")).build()
-    msg: = c.request("textDocument/rename", params, HEAVY_MS, arena) catch
+    msg: = client.request("textDocument/rename", params, HEAVY_MS, arena) catch
         verdict.check("a rename comes back", false,
-            lsp_client.why(c, "could not wait it out", arena))
+            lsp_client.why(client, "could not wait it out", arena))
         return
     changes: = msg.val.get("result").get("changes")
     $files: = List<|U8[]|>(arena)
@@ -189,7 +189,7 @@ fn check_rename(c: jsonrpc_client.Client$@, arena: Arena$@)
             if !got.equals(RENAME_OLD)
                 off
                     .push(arena.text().s(rel).s(":\{line + 1\} pointed at ").s(got).take())
-    d1: = lsp_client.why(c,
+    d1: = lsp_client.why(client,
         arena.text().s("files \{files.len\} / spots \{spots\}").take(), arena)
     verdict.check("a rename reaches files that are not open too (two or more)", files.len >= 2, d1)
     d2: = lsp_client.join(off@, arena)

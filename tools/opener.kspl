@@ -133,13 +133,13 @@ fn where_from(argv0: U8[], app: aim.App, arena: Arena$@): Where //<
 priv fn named(app: aim.App, tail: U8[], arena: Arena$@): U8[] //< a file name in `tmp/`
     return arena.text().s(app.files).s(tail).take()
 
-fn full(p: U8[], arena: Arena$@): U8[] //<
+fn full(path: U8[], arena: Arena$@): U8[] //<
     //< Turns a relative path into an absolute one, from the working directory
     //< **Compare the note by absolute paths**: `.` and `/home/me/devel` stored as given would start
     //< two servers for one folder.
     //< Caution: **Do not join a `.` unchanged** (`fs.join` makes `/home/me/devel/.`, yet another
     //< string).
-    dir: = aim.trim_end_sep(p)
+    dir: = aim.trim_end_sep(path)
     if sys.is_absolute(dir)
         return dir
     $buf: U8[4096] = ::{}
@@ -212,19 +212,19 @@ priv fn stop_server(at: I32, token: U8[]): Bool //<
         sys.sleep_ms(100)
     return false
 
-fn tending_options(p: argparse.Parser$@, stop_said: U8[]$@) //<
+fn tending_options(parser: argparse.Parser$@, stop_said: U8[]$@) //<
     //< Declares `--list`, `--stop=<folder>` and `--stop-all`, which tend the servers left running
-    p.command_flag("--list", "put out each running server's URL and the folder it serves")
-    p.str_opt("--stop", stop_said, "stop the server serving that folder")
-    p.command_flag("--stop-all", "stop every running server")
+    parser.command_flag("--list", "put out each running server's URL and the folder it serves")
+    parser.str_opt("--stop", stop_said, "stop the server serving that folder")
+    parser.command_flag("--stop-all", "stop every running server")
 
-fn tending(p: argparse.Parser$@): Bool //< whether this run tends the servers, opening nothing
-    return p.command.is_some() || p.saw("--stop")
+fn tending(parser: argparse.Parser$@): Bool //< whether this run tends the servers, opening nothing
+    return parser.command.is_some() || parser.saw("--stop")
 
 fn tend_alone( //< tends the servers as `tending_options` asked, or refuses what stands beside them
     //< **Listing and stopping take nothing else**: a document or an option beside them would do
     //< nothing, and its writer would believe it had. Returns the exit code.
-    p: argparse.Parser$@,
+    parser: argparse.Parser$@,
     where: Where,
     stop_said: U8[], //< the folder `--stop` names, as typed; empty for none
     arena: Arena$@,
@@ -236,17 +236,18 @@ fn tend_alone( //< tends the servers as `tending_options` asked, or refuses what
         io.err().s("\{sys.program_name()\}: name the folder to stop without '..': \{stop_said\}\n")
         return 1
     names: = List<|U8[]|>.create(arena)
-    p.append_names(names)
+    parser.append_names(names)
     $other: =
-        p.rest.len != 0 || p.command.is_some() && p.saw("--stop") || p.saw_empty("--stop")
+        parser.rest.len != 0 || parser.command.is_some() && parser.saw("--stop") ||
+        parser.saw_empty("--stop")
     for name in names
         if !name.equals("--list") && !name.equals("--stop") && !name.equals("--stop-all")
-            other = other || p.saw(name)
+            other = other || parser.saw(name)
     if other
         io.err()
             .s("\{sys.program_name()\}: --list, --stop=<folder> and --stop-all each stand alone\n")
         return 1
-    return tend(where, stop_root, p.command.unwrap_or("").equals("--stop-all"))
+    return tend(where, stop_root, parser.command.unwrap_or("").equals("--stop-all"))
 
 priv fn tend(where: Where, stop_root: U8[], stop_all: Bool): I32 //<
     //< Lists the servers in the note that still answer, or stops the ones asked for
@@ -526,8 +527,8 @@ fn open_or_start( //< finds the server for `root` in the note, or starts one and
                 \{where.state\}\n")
         return Opened::{ .url = url, .log = log, .child = .some(child) }
     defer $note: = Str_builder()
-    live: = fn(u: U8[]; ): Bool
-        return url_answers(u)
+    live: = fn(address: U8[]; ): Bool
+        return url_answers(address)
     aim.write_owned(where.state, aim.state_text(url, root, had_body, live, note@)) catch
         io.err().s("\{sys.program_name()\}: cannot write the note: \{where.state\}\n")
     return Opened::{ .url = url, .log = log, .child = .some(child) }

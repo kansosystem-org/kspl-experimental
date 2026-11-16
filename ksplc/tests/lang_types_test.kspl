@@ -113,8 +113,8 @@ fn test_slice_descriptor_literals(arena: Arena$@)
 // ==========================================
 priv typedef Meters = I32
 
-priv fn meters_plus_one(p: Meters@): I32
-    return p$ + 1
+priv fn meters_plus_one(meters: Meters@): I32
+    return meters$ + 1
 
 // ==========================================
 // An enum's variant name.
@@ -131,11 +131,11 @@ priv enum Vn_custom
     two
 
 impl Vn_custom: Formattable
-    fn fmt(_r: Self, w: Writer): Writer
-        return w.s("<custom>")
+    fn fmt(_r: Self, out: Writer): Writer
+        return out.s("<custom>")
 
-priv fn same<|T|>(v: T): T //< v itself
-    return v
+priv fn same<|T|>(value: T): T //< `value` itself
+    return value
 
 fn test_enum_variant_name()
     verdict.start("[enum] the synthesis of a variant name, and interpolation test...")
@@ -200,14 +200,14 @@ priv struct Alias_box<|T|>
 priv typedef Named_box = Alias_box<|I32|>
 priv typedef Named_error = I32
 
-priv fn base_box_result(v: Alias_box<|I32|>): Alias_box<|I32|>!I32
-    return v
+priv fn base_box_result(box: Alias_box<|I32|>): Alias_box<|I32|>!I32
+    return box
 
-priv fn named_box_result(v: Named_box): Named_box!Named_error
-    return base_box_result(v)!
+priv fn named_box_result(box: Named_box): Named_box!Named_error
+    return base_box_result(box)!
 
-priv fn read_named_result(v: Named_box!Named_error): I32
-    box: = v catch
+priv fn read_named_result(result: Named_box!Named_error): I32
+    box: = result catch
         return -1
     return box.val
 
@@ -428,19 +428,19 @@ priv $up_global: Up_sq = ::{ .n = 3 }
 priv fn up_from_global(): Up_shape
     return up_global
 
-priv fn up_from_ptr(p: Up_sq$@): Up_shape
-    return p
+priv fn up_from_ptr(square: Up_sq$@): Up_shape
+    return square
 
-priv fn up_from_pointee(p: Up_sq$@): Up_shape
-    return p$
+priv fn up_from_pointee(square: Up_sq$@): Up_shape
+    return square$
 
 priv struct Up_holder //< holds a conforming value by value, reached through a pointer below
     sq: Up_sq
 
 // A field behind a pointer lives where the pointer points, not in this frame. So it can be
 // returned upcast (is_frame_storage in sema/body/stmt_escape.kspl).
-priv fn up_from_pointee_field(h: Up_holder$@): Up_shape
-    return h.sq
+priv fn up_from_pointee_field(holder: Up_holder$@): Up_shape
+    return holder.sq
 
 fn test_trait_upcast_lifetimes()
     verdict.start("[trait] the three shapes a value can be returned in test...")
@@ -511,8 +511,8 @@ priv enum Wrap_err
 
 priv $wrap_global: Up_sq = ::{ .n = 6 }
 
-priv fn wrap_from_ptr(p: Up_sq$@): Up_shape!Wrap_err
-    return p
+priv fn wrap_from_ptr(square: Up_sq$@): Up_shape!Wrap_err
+    return square
 
 priv fn wrap_from_global(): Up_shape!Wrap_err
     return wrap_global
@@ -520,8 +520,8 @@ priv fn wrap_from_global(): Up_shape!Wrap_err
 priv fn wrap_throws(): Up_shape!Wrap_err
     throw .bad
 
-priv fn wrap_void_ptr(p: I32$@): Void$@!Wrap_err
-    return p
+priv fn wrap_void_ptr(pointer: I32$@): Void$@!Wrap_err
+    return pointer
 
 fn test_result_wraps_coerced_value()
     verdict.start("[result] a return value needing a conversion inside a Result test...")
@@ -610,13 +610,13 @@ priv enum Held_err
 priv struct Held //< a Result kept in a field, read later
     outcome: I32!Held_err
 
-priv fn held_half(n: I32): I32!Held_err
-    if n % 2 != 0
-        return .err(.lost(n))
-    return .ok(n / 2)
+priv fn held_half(value: I32): I32!Held_err
+    if value % 2 != 0
+        return .err(.lost(value))
+    return .ok(value / 2)
 
-priv fn held_code(r: I32!Held_err): I32 //< the error's code, or -1 on success
-    switch r
+priv fn held_code(result: I32!Held_err): I32 //< the error's code, or -1 on success
+    switch result
     case .ok
         return -1
     case .err(e)
@@ -624,10 +624,10 @@ priv fn held_code(r: I32!Held_err): I32 //< the error's code, or -1 on success
         case .lost(c)
             return c
 
-priv fn held_nested(n: I32): (I32!Held_err)!Held_err
-    if n < 0
+priv fn held_nested(value: I32): (I32!Held_err)!Held_err
+    if value < 0
         throw .lost(0)
-    return held_half(n)
+    return held_half(value)
 
 fn test_result_is_a_value()
     verdict.start("[T!E] a Result as an ordinary value test...")
@@ -684,16 +684,16 @@ priv struct Hold<|T|> //<
     //< the 0th type argument, V the 1st (bind_path in `ksplc/sema/body/generic_infer.kspl`).
     v: T
 
-priv fn two_bare<|S, T|>(_a: S, _b: T): Sz
+priv fn two_bare<|S, T|>(_first: S, _second: T): Sz
     return 1
 
-priv fn bare_then_nested<|S, T|>(_a: S, _p: Hold<|T|>): Sz
+priv fn bare_then_nested<|S, T|>(_value: S, _held: Hold<|T|>): Sz
     return 2
 
-priv fn nested_then_bare<|T, S|>(_p: Hold<|T|>, _a: S): Sz
+priv fn nested_then_bare<|T, S|>(_held: Hold<|T|>, _value: S): Sz
     return 3
 
-priv fn nested_in_trait<|S, T|>(_a: S, _p: Callable1<|T, Bool|>): Sz
+priv fn nested_in_trait<|S, T|>(_value: S, _func: Callable1<|T, Bool|>): Sz
     return 4
 
 priv fn first_of<|T|>(xs: T[]): T //< `T[]` is `Slice<|T|>`: the element binds, not the slice
@@ -702,20 +702,21 @@ priv fn first_of<|T|>(xs: T[]): T //< `T[]` is `Slice<|T|>`: the element binds, 
 priv fn first_held<|T|>(xs: Hold<|T|>[]): T //< the variable one list further down
     return xs[0].v
 
-priv fn put_first<|T|>(xs: T$[], v: T) //< a writable slice binds its element too
-    xs[0] = v
+priv fn put_first<|T|>(xs: T$[], value: T) //< a writable slice binds its element too
+    xs[0] = value
 
-priv fn apply_to<|T, U|>(f: fn(x: T): U, v: T): U //< `U` stands only in a function type's result
-    return f(v)
+priv fn apply_to<|T, U|>(func: fn(x: T): U, value: T): U //<
+    //< `U` stands only in a function type's result
+    return func(value)
 
 priv fn widen_i32(x: I32): I64
     return I64::x * 2
 
-priv fn through<|T|>(p: T@): T //< a pointer's target binds
-    return p$
+priv fn through<|T|>(pointer: T@): T //< a pointer's target binds
+    return pointer$
 
-priv fn second_of<|T|>(a: T[2]): T //< a fixed array's element binds, not the whole array
-    return a[1]
+priv fn second_of<|T|>(pair: T[2]): T //< a fixed array's element binds, not the whole array
+    return pair[1]
 
 fn test_generic_args_infer_from_composites()
     verdict.start("[Types] inferring a type argument from inside a composite type test...")
@@ -767,20 +768,20 @@ fn test_a_copy_binds_the_writable_type()
 // and `generic_type_args_not_inferred` in `tests/negative/generic.kspl`).
 // ==========================================
 
-priv fn total_of<|const N: Sz|>(v: I32[N]): Sz //< `N` bounds the loop and sizes a type
+priv fn total_of<|const N: Sz|>(values: I32[N]): Sz //< `N` bounds the loop and sizes a type
     $t: Sz = 0
     for i in Range.asc(N)
-        t += Sz::v[i]
+        t += Sz::values[i]
     return t * 100 + sizeof(I32[N])
 
-priv fn grid_shape<|const R: Sz, const C: Sz|>(_g: I32[C][R]): Sz //< each level binds its own
+priv fn grid_shape<|const R: Sz, const C: Sz|>(_grid: I32[C][R]): Sz //< each level binds its own
     return R * 10 + C
 
-priv fn held_len<|const N: Sz|>(h: Hold<|I32[N]|>@): Sz //< inside a generic's argument too
-    return N + Sz::h.v[0]
+priv fn held_len<|const N: Sz|>(held: Hold<|I32[N]|>@): Sz //< inside a generic's argument too
+    return N + Sz::held.v[0]
 
-priv fn forwarded<|const M: Sz|>(a: I32[M]): Sz //< an instance's array passes its length on
-    return total_of(a)
+priv fn forwarded<|const M: Sz|>(values: I32[M]): Sz //< an instance's array passes its length on
+    return total_of(values)
 
 fn test_const_args_infer_from_array_lengths()
     verdict.start("[Types] inferring a const parameter from an array's length test...")
@@ -800,22 +801,23 @@ priv struct Cbuf<|const N: Sz|> //< a generic with a value argument to read a `c
 priv struct Cflag<|const ON: Bool|> //< the same, with a value that is no number
     x: I32
 
-priv fn cbuf_cap<|const N: Sz|>(_b: Cbuf<|N|>@): Sz //< behind a pointer
+priv fn cbuf_cap<|const N: Sz|>(_buf: Cbuf<|N|>@): Sz //< behind a pointer
     return N
 
-priv fn held_cap<|const N: Sz|>(_h: Hold<|Cbuf<|N|>|>@): Sz //< inside another generic's argument
+priv fn held_cap<|const N: Sz|>(_held: Hold<|Cbuf<|N|>|>@): Sz //< inside another generic's argument
     return N
 
-priv fn row_shape<|const N: Sz, const K: Sz|>(_r: Cbuf<|N|>[K]): Sz //< an array of them
+priv fn row_shape<|const N: Sz, const K: Sz|>(_rows: Cbuf<|N|>[K]): Sz //< an array of them
     return N * 10 + K
 
-priv fn cbuf_and_array<|const N: Sz|>(_b: Cbuf<|N|>@, v: I32[N]): Sz //< two sources that agree
-    return N + Sz::v[0]
+priv fn cbuf_and_array<|const N: Sz|>(_buf: Cbuf<|N|>@, values: I32[N]): Sz //<
+    //< two sources that agree
+    return N + Sz::values[0]
 
-priv fn flag_of<|const B: Bool|>(_f: Cflag<|B|>@): Bool
+priv fn flag_of<|const B: Bool|>(_flag: Cflag<|B|>@): Bool
     return B
 
-priv fn ring_cap<|const N: Sz|>(_r: ring.Ring<|N|>@): Sz //< another file's, through its import
+priv fn ring_cap<|const N: Sz|>(_ring: ring.Ring<|N|>@): Sz //< another file's, through its import
     return N
 
 fn test_const_args_infer_from_value_args()
@@ -843,14 +845,14 @@ fn test_const_args_infer_from_value_args()
 // always one of the two.
 // ==========================================
 
-priv fn add_u8_i16(a: U8, b: I16): I16
-    return a + b
+priv fn add_u8_i16(left: U8, right: I16): I16
+    return left + right
 
-priv fn add_i16_u8(a: I16, b: U8): I16
-    return a + b
+priv fn add_i16_u8(left: I16, right: U8): I16
+    return left + right
 
-priv fn mix_widths(a: U16, b: I32, n: Sz, w: I64, u: U32): I64
-    return w + n * b + u + a
+priv fn mix_widths(small: U16, medium: I32, count: Sz, wide: I64, unsigned: U32): I64
+    return wide + count * medium + unsigned + small
 
 fn test_numeric_operands_promote_to_the_holder()
     verdict.start("[Types] mixed numeric operands compute in the side holding the other test...")
@@ -880,11 +882,11 @@ priv struct Typed_box<|T|>
     v: T
 
 impl<|T|> Typed_box<|T|>
-    priv fn make(v: T): Typed_box<|T|>
-        return ::{ .v = v }
+    priv fn make(value: T): Typed_box<|T|>
+        return ::{ .v = value }
 
-priv fn larger<|T|>(a: T, b: T): T
-    return a if a > b else b
+priv fn larger<|T|>(left: T, right: T): T
+    return left if left > right else right
 
 fn test_written_type_args_type_the_arguments()
     verdict.start("[Types] type arguments written at a call type its arguments test...")

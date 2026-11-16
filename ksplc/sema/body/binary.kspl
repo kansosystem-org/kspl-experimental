@@ -76,7 +76,7 @@ priv fn check_const_divisor(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_
             ctx.err(right_node, "division or modulo by zero")
 
 fn divisor_is_static(ctx: Sema_ctx$@, right_node: Ast_node$@): Bool //<
-    //< Whether the divisor is known at translation time and is not 0.
+    //< Whether the divisor is known at translation time and is not 0
     //< **Only when this is true can the code generator omit the run-time check.**
     //< When it is true, the generator must not insert one. The generated C's top-level initializer
     //< must be a C constant expression, and a call turns it into
@@ -139,11 +139,12 @@ fn shift_amount_is_static(ctx: Sema_ctx$@, left_type_id: I32, right_node: Ast_no
         return false
     return shift_amount_in_range(ctx, shift_val, left_type_id)
 
-priv fn is_bare_bitwise(n: Ast_node$@): Bool //<
+priv fn is_bare_bitwise(node: Ast_node$@): Bool //<
     //< Whether it is an unparenthesized `&` / `|` / `^` binary expression
-    if n == null || n.kind_id != .k_expr || n.children.len != 3 || n.was_parenthesized()
+    if node == null || node.kind_id != .k_expr || node.children.len != 3 ||
+        node.was_parenthesized()
         return false
-    op: = n.get_binary_op()
+    op: = node.get_binary_op()
     if op == null
         return false
     return op.text.equals("&") || op.text.equals("|") || op.text.equals("^")
@@ -163,7 +164,7 @@ priv fn reject_float_remainder(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, 
 
 priv fn is_bool_arith_operand(ctx: Sema_ctx@, left_id: I32, right_id: I32, op_text: U8[],
     is_shift: Bool): Bool //<
-        //< Whether arithmetic or a shift is about to be applied to a `Bool` operand.
+        //< Whether arithmetic or a shift is about to be applied to a `Bool` operand
         //< Caution: **List the operators explicitly.** Written as "not a comparison, logical or
         //< bitwise operator", it catches a new operator the day a compound assignment reaches here.
     is_arith: =
@@ -619,48 +620,49 @@ fn refuses_compound_operands(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[],
     ctx.err(node, ctx.scratch.slice())
     return true
 
-priv fn refuses_compound_numbers(ctx: Sema_ctx$@, o: Operands, op_text: U8[]): Bool //<
+priv fn refuses_compound_numbers(ctx: Sema_ctx$@, operands: Operands, op_text: U8[]): Bool //<
     //< Promotes `a op= b`'s two numbers as `a op b`, and refuses a result the place cannot hold
     //< The place is never converted: where `a op b` would compute wider than `a`, storing it back
     //< narrows, which `a = a op b` refuses too.
-    calc_type: = o.left_id if o.op.is_shift_op() else operand_type(ctx, o)
+    calc_type: =
+        operands.left_id if operands.op.is_shift_op() else operand_type(ctx, operands)
     if sema_type_env.is_unknown(calc_type)
-        report_no_common_type(ctx, o)
+        report_no_common_type(ctx, operands)
         return true
-    if ctx.env.get_real_type(calc_type) != ctx.env.get_real_type(o.left_id)
-        shown: = ctx.env.display(o.left_id)
+    if ctx.env.get_real_type(calc_type) != ctx.env.get_real_type(operands.left_id)
+        shown: = ctx.env.display(operands.left_id)
         calc_shown: = ctx.env.display(calc_type)
         ctx.clear_scratch()
             .s("implicit conversion between '\{calc_shown\}' and '\{shown\}' is forbidden to \
-                prevent data loss. '\{op_text\}' computes in '\{calc_shown\}', as 'a = a \{o.op\} \
-                b' does, and stores into '\{shown\}'. Use an explicit '::' cast")
-        ctx.err(o.right, ctx.scratch.slice())
+                prevent data loss. '\{op_text\}' computes in '\{calc_shown\}', as 'a = a \
+                \{operands.op\} b' does, and stores into '\{shown\}'. Use an explicit '::' cast")
+        ctx.err(operands.right, ctx.scratch.slice())
         return true
-    sema_body_literal.check_operand_literal_bounds(ctx, o.right, calc_type)
-    promote_operands(ctx, o)
+    sema_body_literal.check_operand_literal_bounds(ctx, operands.right, calc_type)
+    promote_operands(ctx, operands)
     return false
 
-priv fn lint_bool_literal_operand(ctx: Sema_ctx$@, o: Operands) //<
+priv fn lint_bool_literal_operand(ctx: Sema_ctx$@, operands: Operands) //<
     //< [I0302] a `Bool` compared with a literal, and [I0303] a logical operation on one
     if !base_core.config.run_lint_checks ||
-        (o.left.kind_id != .k_bool && o.right.kind_id != .k_bool)
+        (operands.left.kind_id != .k_bool && operands.right.kind_id != .k_bool)
         return
     bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
-    if o.op.is_equality_op() && o.left_id == bool_id && o.right_id == bool_id
-        ctx.information(o.node,
+    if operands.op.is_equality_op() && operands.left_id == bool_id && operands.right_id == bool_id
+        ctx.information(operands.node,
             "[I0302] Unnecessary boolean comparison. Use the boolean value directly or negate it \
                 with '!'.")
-    if o.op.equals("&&") || o.op.equals("||")
-        ctx.information(o.node, "[I0303] Redundant logical operation with a boolean literal.")
+    if operands.op.equals("&&") || operands.op.equals("||")
+        ctx.information(operands.node, "[I0303] Redundant logical operation with a boolean literal.")
 
-priv fn lint_xor_as_power(ctx: Sema_ctx$@, o: Operands) //<
+priv fn lint_xor_as_power(ctx: Sema_ctx$@, operands: Operands) //<
     //< [W0215] `^` between two written decimal numbers, the left one 2 or 10
     //< Elsewhere `2 ^ 8` and `10 ^ 3` are powers, so the writer likely meant 256 or 1000; `^` is
     //< exclusive or. A number in hexadecimal, a name or a variable says exclusive or was meant.
     if !base_core.config.run_lint_checks || ctx.is_instantiating()
         return
-    left: = written_decimal(ctx, o.left)
-    right: = written_decimal(ctx, o.right)
+    left: = written_decimal(ctx, operands.left)
+    right: = written_decimal(ctx, operands.right)
     if left.is_none() || right.is_none()
         return
     base: = left.unwrap_or(0)
@@ -670,71 +672,71 @@ priv fn lint_xor_as_power(ctx: Sema_ctx$@, o: Operands) //<
         .s("[W0215] '^' is exclusive or, not a power: here it gives \{base ^ right.unwrap_or(0)\}. \
             For a power, write its value, or '1 << n' for 2 to the n. For exclusive or, write a \
             number in hexadecimal.")
-    ctx.warn(o.node, ctx.scratch.slice())
+    ctx.warn(operands.node, ctx.scratch.slice())
 
-priv fn written_decimal(ctx: Sema_ctx$@, n: Ast_node$@): I64? //<
+priv fn written_decimal(ctx: Sema_ctx$@, node: Ast_node$@): I64? //<
     //< The value of a number written in decimal (`10`, `2U8`, `-3`), none for another shape
-    $at: = n.without_parens()
+    $at: = node.without_parens()
     if at != null && at.kind_id == .k_expr_unary && at.get_unary_op().text.equals("-")
         at = at.get_unary_target().without_parens()
     if at == null || at.kind_id != .k_integer || at.text.starts_with("0x") ||
         at.text.starts_with("0X") || at.text.starts_with("0b") || at.text.starts_with("0B")
         return .none
-    return ctx.try_eval_constexpr_wide(n)
+    return ctx.try_eval_constexpr_wide(node)
 
-priv fn promote_operands(ctx: Sema_ctx$@, o: Operands): I32 //<
+priv fn promote_operands(ctx: Sema_ctx$@, operands: Operands): I32 //<
     //< The type two numbers are computed in, each operand converted to it
     //< Unknown after reporting that they have no common type.
-    is_shift: = o.op.is_shift_op()
-    calc_type: = o.left_id if is_shift else operand_type(ctx, o)
+    is_shift: = operands.op.is_shift_op()
+    calc_type: = operands.left_id if is_shift else operand_type(ctx, operands)
     if sema_type_env.is_unknown(calc_type)
-        report_no_common_type(ctx, o)
+        report_no_common_type(ctx, operands)
         return calc_type
 
     // A literal with no fixed type directly under a unary minus is given the promoted type itself.
     // Caution: **Do not wrap it in a cast**: that negates at I32, then widens a truncated value
     // (settle_negated_literal in sema/body/literal.kspl). Shifts are left out: the amount's type
     // is independent, and a negative amount is rejected separately.
-    $left_src: = o.left_id
-    $right_src: = o.right_id
+    $left_src: = operands.left_id
+    $right_src: = operands.right_id
     if !is_shift
-        if sema_body_literal.settle_negated_literal(ctx, o.left, calc_type) ||
-            sema_body_literal.settle_untyped_literal(ctx, o.left, calc_type)
+        if sema_body_literal.settle_negated_literal(ctx, operands.left, calc_type) ||
+            sema_body_literal.settle_untyped_literal(ctx, operands.left, calc_type)
             left_src = calc_type
-        if sema_body_literal.settle_negated_literal(ctx, o.right, calc_type) ||
-            sema_body_literal.settle_untyped_literal(ctx, o.right, calc_type)
+        if sema_body_literal.settle_negated_literal(ctx, operands.right, calc_type) ||
+            sema_body_literal.settle_untyped_literal(ctx, operands.right, calc_type)
             right_src = calc_type
 
     calc_real: = ctx.env.get_real_type(calc_type)
     if ctx.env.get_real_type(left_src) != calc_real
-        o.left.wrap_implicit_cast(ctx, left_src, calc_type)
+        operands.left.wrap_implicit_cast(ctx, left_src, calc_type)
     // A shift amount keeps its own type, because the run-time check reads it whole. Narrowed to the
     // left side's width first, `1 << m` with `m: U64 = 2^32` would shift by 0 unstopped.
     if ctx.env.get_real_type(right_src) != calc_real && !is_shift
-        o.right.wrap_implicit_cast(ctx, right_src, calc_type)
+        operands.right.wrap_implicit_cast(ctx, right_src, calc_type)
     return calc_type
 
-priv fn refuses_fixed_comparison(ctx: Sema_ctx$@, o: Operands, calc_id: I32): Bool //<
+priv fn refuses_fixed_comparison(ctx: Sema_ctx$@, operands: Operands, calc_id: I32): Bool //<
     //< Refuses an integer compared with a constant outside every value its own type holds
     //< **The answer is fixed at translation**, so the comparison does nothing (Principle 5).
     //< `x == -1` with `x: U8` computes at `I32` and is never true. The literal range check takes a
     //< constant outside the type the comparison computes in (`u == -1` with `u: U32`). This
     //< function reports one outside the other side's own type only.
-    if !ctx.env.is_integer(o.left_id) || !ctx.env.is_integer(o.right_id)
+    if !ctx.env.is_integer(operands.left_id) || !ctx.env.is_integer(operands.right_id)
         return false
-    left_k: = ctx.try_eval_constexpr_wide(o.left)
-    right_k: = ctx.try_eval_constexpr_wide(o.right)
+    left_k: = ctx.try_eval_constexpr_wide(operands.left)
+    right_k: = ctx.try_eval_constexpr_wide(operands.right)
     if left_k.is_some() == right_k.is_some()
         return false
     var_on_left: = right_k.is_some()
     k: = right_k.unwrap_or(0) if var_on_left else left_k.unwrap_or(0)
-    var_id: = o.left_id if var_on_left else o.right_id
+    var_id: = operands.left_id if var_on_left else operands.right_id
     calc: = ctx.env.int_bounds(calc_id)
     own: = ctx.env.int_bounds(var_id)
     if k < calc.lo || k > calc.hi || (k >= own.lo && k <= own.hi)
         return false
     // Read as `x op k`: a constant above the range is greater than every value, below it less.
-    op: = sema_body_fixed_answer.turned(o.op, var_on_left)
+    op: = sema_body_fixed_answer.turned(operands.op, var_on_left)
     above: = k > own.hi
     always: =
         (op.equals("!=") || ((op.equals("<") || op.equals("<=")) && above) ||
@@ -745,7 +747,7 @@ priv fn refuses_fixed_comparison(ctx: Sema_ctx$@, o: Operands, calc_id: I32): Bo
         .s("this comparison is always \{verdict\}: a '\{shown\}' holds \{own.lo\} to \{own.hi\}, \
             and \{k\} is outside that. Compare with a value the type can hold, or cast to the \
             reading meant first")
-    ctx.err(o.node, ctx.scratch.slice())
+    ctx.err(operands.node, ctx.scratch.slice())
     return true
 
 priv fn pointer_difference_type(ctx: Sema_ctx$@, node: Ast_node$@, left_type_id: I32,
@@ -812,35 +814,38 @@ priv fn write_fn_name(ctx: Sema_ctx$@, name_node: Ast_node$@) //<
     name_node.get_full_path_str_to(ctx.scratch)
     ctx.scratch.s("'")
 
-priv fn operand_type(ctx: Sema_ctx$@, o: Operands): I32 //<
+priv fn operand_type(ctx: Sema_ctx$@, operands: Operands): I32 //<
     //< The type a numeric binary operation computes in, or unknown where none is implicit
     //< An integer literal with no suffix takes the other side's integer type, as it takes an
     //< expected type. So `u < 1` with `u: U32` computes at `U32`, and `u < -1` is out of range.
-    promoted: = ctx.env.get_promoted_numeric_type(o.left_id, o.right_id)
+    promoted: = ctx.env.get_promoted_numeric_type(operands.left_id, operands.right_id)
     if !sema_type_env.is_unknown(promoted)
         return promoted
-    if ctx.env.is_integer(o.left_id) && sema_body_literal.is_untyped_int_literal(o.right)
-        return o.left_id
-    if ctx.env.is_integer(o.right_id) && sema_body_literal.is_untyped_int_literal(o.left)
-        return o.right_id
+    if ctx.env.is_integer(operands.left_id) &&
+        sema_body_literal.is_untyped_int_literal(operands.right)
+        return operands.left_id
+    if ctx.env.is_integer(operands.right_id) &&
+        sema_body_literal.is_untyped_int_literal(operands.left)
+        return operands.right_id
     return I32::sema_type_env.Builtin_type_id.unknown
 
-priv fn report_no_common_type(ctx: Sema_ctx$@, o: Operands) //<
+priv fn report_no_common_type(ctx: Sema_ctx$@, operands: Operands) //<
     //< Rejects two numeric operands neither of which holds every value of the other
     //< An integer literal against a float is named as such: the fix is writing it as a float.
-    op_text: = o.op
-    l_shown: = ctx.env.display(o.left_id)
-    r_shown: = ctx.env.display(o.right_id)
+    op_text: = operands.op
+    l_shown: = ctx.env.display(operands.left_id)
+    r_shown: = ctx.env.display(operands.right_id)
     ctx.clear_scratch()
         .s("implicit conversion between '\{l_shown\}' and '\{r_shown\}' is forbidden ")
         .s("to prevent data loss. Neither holds every value of the other, so '\{op_text\}' has no \
             type ").s("to compute in. Use an explicit '::' cast")
     has_lit: =
-        sema_body_literal.is_untyped_int_literal(o.right) ||
-        sema_body_literal.is_untyped_int_literal(o.left)
-    if has_lit && (ctx.env.is_float(o.left_id) || ctx.env.is_float(o.right_id))
+        sema_body_literal.is_untyped_int_literal(operands.right) ||
+        sema_body_literal.is_untyped_int_literal(operands.left)
+    if has_lit &&
+        (ctx.env.is_float(operands.left_id) || ctx.env.is_float(operands.right_id))
         ctx.scratch.s(", or write the integer literal as a float ('2.0', not '2')")
-    ctx.err(o.node, ctx.scratch.slice())
+    ctx.err(operands.node, ctx.scratch.slice())
 
 priv fn refuses_step_from_null(ctx: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@): Bool //<
     //< Refuses `U8@::null + 4096` outside `#raw_address`, as a cast of the integer is refused
@@ -856,9 +861,9 @@ priv fn refuses_step_from_null(ctx: Sema_ctx$@, node: Ast_node$@, left: Ast_node
             '#raw_address' and cast the number ('U8@::4096'). Write 'null' for no address")
     return true
 
-priv fn is_written_null(n: Ast_node$@): Bool //<
-    //< Whether n is `null`, in round brackets or cast to a pointer (`U8@::null`)
-    $at: = n
+priv fn is_written_null(node: Ast_node$@): Bool //<
+    //< Whether `node` is `null`, in round brackets or cast to a pointer (`U8@::null`)
+    $at: = node
     for at != null
         if at.kind_id == .k_null
             return true
@@ -884,7 +889,7 @@ priv fn pointer_arith_ok(ctx: Sema_ctx@, op_text: U8[], left_id: I32, right_id: 
 
 priv fn report_bad_pointer_arith(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], left_id: I32,
     right_id: I32) //<
-        //< Rejects a disallowed form and lists the three allowed forms.
+        //< Rejects a disallowed form and lists the three allowed forms
     l_shown: = ctx.env.display(left_id)
     r_shown: = ctx.env.display(right_id)
     ctx.clear_scratch().s("operator '\{op_text\}' cannot be applied to '\{l_shown\}' and ")

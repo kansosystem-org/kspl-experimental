@@ -16,11 +16,12 @@ import "std/chars" // the one-character tests and cuts
 import "std/ds" { List, Map }
 
 impl Genllvm_ctx
-    fn get_or_build_trait_method_idx(r: Self$@, d: sema_type_def.Trait_def$@, name: U8[]): I32 //<
-        //< A trait method's vtable index by name, from a table built once per trait
-        //< A linear walk of methods_list per call site would be O(N*M). The table is built once per
-        //< trait and stored in cg.trait_method_idx_cache, so later calls are O(1).
-        cache_key: = Sz::d
+    fn get_or_build_trait_method_idx(r: Self$@, trait_def: sema_type_def.Trait_def$@, name: U8[]):
+        I32 //<
+            //< A trait method's vtable index by name, from a table built once per trait
+            //< A linear walk of methods_list per call site would be O(N*M). The table is built once
+            //< per trait and stored in cg.trait_method_idx_cache, so later calls are O(1).
+        cache_key: = Sz::trait_def
         $idx_map: = r.trait_method_idx_cache.get(cache_key).unwrap_or(null)
         if idx_map == null
             idx_map = base_core.arena.create(Map<|U8[], I32|>(base_core.arena))
@@ -28,7 +29,7 @@ impl Genllvm_ctx
             // type uses (`types.kspl`). A method with a body has none; counting it points a later
             // call one slot past the table's end.
             $slot: I32 = 0
-            for method in d.methods_list
+            for method in trait_def.methods_list
                 if !method.node.has_vtable_slot()
                     continue
                 idx_map.set(method.name, slot)
@@ -38,7 +39,7 @@ impl Genllvm_ctx
 
 priv fn emit_llvm_intrinsic_call(cg: Genllvm_ctx$@, intr: sema_body_call.Intrinsic,
     args_node: Ast_node$@): U8$[] //<
-        //< It turns compiler intrinsics, such as a volatile read or write, into LLVM instructions.
+        //< It turns compiler intrinsics, such as a volatile read or write, into LLVM instructions
     arg1: = args_node.get_arg_at(0).unwrap_or(null) if args_node != null else null
     if intr == .read_volatile
         $ptr_reg: = ""

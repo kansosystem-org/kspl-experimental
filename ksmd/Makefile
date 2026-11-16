@@ -5,6 +5,7 @@
 #   make web [KSSRV_PAGE=<folder>]    # the editing page, out/web/ksmd.html, and its wasm;
 #                                     # it takes kssrv's page folder, ../kssrv/page by default
 #   make test-browser                 # the page in a headless Chromium, driven by real input
+#   make test-fuzz                    # the reader fed broken documents, on a fixed seed
 #   make measure                      # the time to open, edit and save a typical and a large document
 # Caution: **Keep this file standing alone**: a copy of the folder, nothing more, is tested by it.
 # **Keep a recipe to ASCII, and quote every path**: MSYS2's shell rereads a line outside UTF-8, and
@@ -18,14 +19,34 @@ KSPLC ?= ksplc
 OUT ?= out
 # Where the page is written: one file, `ksmd.html`, with its style, its scripts and its wasm (as base64) inside.
 WEB ?= $(OUT)/web
+# Handed to the fuzz as they stand: `--trials=N`, `--seed=N`.
+FUZZ_ARGS ?=
+# 1 fails a reader built without the address sanitizer (Linux CI holds its runtime); else a SKIP.
+KANSO_REQUIRE_ASAN ?=
+# -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
+ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
 
-.PHONY: test functions web web-tools test-browser measure browser-path browser-verdict
+.PHONY: test test-fuzz functions web web-tools test-browser measure browser-path browser-verdict
 
 # **The function table is checked first**: a signature changed in `calc/functions.kspl` without
 # `make ksmd-functions` would otherwise show only as a formula reading its arguments wrongly.
 test:
 	"$(KSPLC)" run port/table_writer.kspl "$(KSPLC)" check "$(OUT)/functions"
 	"$(KSPLC)" run tests/main.kspl
+
+# The reader fed broken documents, on a fixed seed (`tests/fuzz_main.kspl`); `FUZZ_ARGS` hands it
+# `--trials=N` and `--seed=N` as they stand. Caution: **Make the folder first**: the sanitizer's log
+# is redirected into it before the build.
+fuzz_build = "$(KSPLC)" build $(1) tests/read_prog.kspl "$(OUT)/fuzz/read_prog.exe"
+test-fuzz:
+	@mkdir -p "$(OUT)/fuzz"
+	rm -rf "$(OUT)/fuzz/work"
+	@if $(call fuzz_build,$(ASAN_BUILD)) > "$(OUT)/fuzz/asan.log" 2>&1; then asan=--asan; \
+		echo "# the reader: with the address sanitizer"; \
+	else asan=; echo "# the reader: without the address sanitizer ($(OUT)/fuzz/asan.log says why)"; \
+		$(call fuzz_build,--cflags=-O0) || exit 1; fi; \
+	"$(KSPLC)" run tests/fuzz_main.kspl "$(OUT)/fuzz/read_prog.exe" "$(OUT)/fuzz/work" $$asan \
+		$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan) $(FUZZ_ARGS)
 
 # Writes `calc/functions_table.kspl` again from the signatures in `calc/functions.kspl`.
 functions:

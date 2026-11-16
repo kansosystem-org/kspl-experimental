@@ -30,51 +30,51 @@ priv enum Flow //< what the statements scanned so far leave on every path throug
     closed //< every path ended it, handed it on or left the function
 
 priv struct Scan //< what the scan of one value carries
-    c: Sema_ctx$@
+    ctx: Sema_ctx$@
     decl: Ast_node$@ //< the value's declaration
     name: U8[]
     block: Ast_node$@ //< the block that declares it
     ended_somewhere: Bool //< a path ended it, so the report at its end names the other paths
     reported: Bool //< one value is reported once
 
-fn lint_unfreed(c: Sema_ctx$@, node: Ast_node$@) //<
+fn lint_unfreed(ctx: Sema_ctx$@, node: Ast_node$@) //<
     //< Checks each value a block of the body creates; a closure's blocks are walked too
     if !base_core.config.run_lint_checks || node == null
         return
     if node.kind_id == .k_stmt_block
-        check_block(c, node)
+        check_block(ctx, node)
     for child in node.children
-        lint_unfreed(c, child)
+        lint_unfreed(ctx, child)
 
-priv fn check_block(c: Sema_ctx$@, block: Ast_node$@) //< checks each value one block creates
+priv fn check_block(ctx: Sema_ctx$@, block: Ast_node$@) //< checks each value one block creates
     for i in Range.asc(block.children.len)
         decl: = block.get_child(i)
-        owned: = creates_owner(c, decl)
+        owned: = creates_owner(ctx, decl)
         // **A pointer is read only up to the `defer` that frees it later in its block.** Whether
         // a pointer from a call owns what it points at, the call does not say (`arena.create`).
-        borrowed: = !owned && points_at_owner(c, decl)
+        borrowed: = !owned && points_at_owner(ctx, decl)
         if !owned && !borrowed
             continue
         name: = decl.get_var_decl_id().text
-        hint_prefix_form(c, block, i, name)
-        $w: = Scan::{ .c = c, .decl = decl, .name = name, .block = block, .ended_somewhere = false,
-            .reported = false }
+        hint_prefix_form(ctx, block, i, name)
+        $w: = Scan::{ .ctx = ctx, .decl = decl, .name = name, .block = block,
+            .ended_somewhere = false, .reported = false }
         if borrowed && w.later_defer().is_none()
             continue
         if w.seq(block, i + 1, false) == .open && !w.reported && owned
-            report_open_end(c, decl, name, w.ended_somewhere)
+            report_open_end(ctx, decl, name, w.ended_somewhere)
 
-priv fn points_at_owner(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
+priv fn points_at_owner(ctx: Sema_ctx$@, decl: Ast_node$@): Bool //<
     //< Whether decl declares a pointer to a value that `free()` releases (`Arena.new`'s result)
     if decl.kind_id != .k_decl_var || decl.text.equals("var_synth") || decl.is_defer_declared()
         return false
     t_id: = decl.type_id
     init: = decl.get_var_decl_expr()
-    return t_id != 0 && !c.is_type_argument(t_id) && !sema_type_env.is_unknown(t_id) &&
-        c.env.is_pointer(t_id) && c.env.has_release_contract(t_id) &&
+    return t_id != 0 && !ctx.is_type_argument(t_id) && !sema_type_env.is_unknown(t_id) &&
+        ctx.env.is_pointer(t_id) && ctx.env.has_release_contract(t_id) &&
         decl.get_var_decl_id() != null && init != null && init.kind_id != .k_empty
 
-priv fn creates_owner(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
+priv fn creates_owner(ctx: Sema_ctx$@, decl: Ast_node$@): Bool //<
     //< Whether decl declares a value this function makes and must free
     //< **A `defer` in front frees it already**, and a binding the compiler made (`var_synth`, the
     //< collection of a `for … in`) owns nothing of its own. An arena held by value stands over a
@@ -84,19 +84,19 @@ priv fn creates_owner(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
     if decl.kind_id != .k_decl_var || decl.text.equals("var_synth") || decl.is_defer_declared()
         return false
     t_id: = decl.type_id
-    if t_id == 0 || sema_type_env.is_unknown(t_id) || c.is_type_argument(t_id) ||
-        c.env.is_pointer(t_id) || !c.env.has_release_contract(t_id) || is_arena(c, t_id)
+    if t_id == 0 || sema_type_env.is_unknown(t_id) || ctx.is_type_argument(t_id) ||
+        ctx.env.is_pointer(t_id) || !ctx.env.has_release_contract(t_id) || is_arena(ctx, t_id)
         return false
     id: = decl.get_var_decl_id()
     init: = decl.get_var_decl_expr()
     if id == null || init == null || init.kind_id == .k_empty
         return false
     core: = maker(init)
-    keeps_arena: = holds_arena(c, t_id)
+    keeps_arena: = holds_arena(ctx, t_id)
     if core.kind_id == .k_struct_literal
         return !keeps_arena
     if core.kind_id != .k_expr_postfix || !core.postfix_op_text().equals("(") ||
-        reads_element(c, core, t_id)
+        reads_element(ctx, core, t_id)
         return false
     // **A value that keeps no arena is on the heap, whatever arena the call is passed.** Its
     // `free()` has no arena to hand its memory back to, so an arena the call takes cannot own it
@@ -106,7 +106,7 @@ priv fn creates_owner(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
     // **A value that keeps an arena is made here only where this call chose the heap**
     // (`List<|T|>(null)`). From any other call it can live in an arena the callee chose.
     $arena_arg: = Arena_arg.none
-    core.find_arena_arg(c, arena_arg@)
+    core.find_arena_arg(ctx, arena_arg@)
     return arena_arg == .null_given
 
 priv enum Arena_arg //< what arena the making call passes, if any
@@ -127,7 +127,7 @@ priv fn maker(init: Ast_node$@): Ast_node$@ //<
             return e
     return init
 
-priv fn reads_element(c: Sema_ctx$@, call: Ast_node$@, t_id: I32): Bool //<
+priv fn reads_element(ctx: Sema_ctx$@, call: Ast_node$@, t_id: I32): Bool //<
     //< Whether the call is a method of a container holding such values (`alts.get(i)`)
     //< It hands out a copy of an element, which the container still owns.
     access: = call.get_postfix_receiver()
@@ -136,35 +136,35 @@ priv fn reads_element(c: Sema_ctx$@, call: Ast_node$@, t_id: I32): Bool //<
     recv: = access.get_postfix_receiver()
     if recv == null || recv.type_id == 0
         return false
-    if inst: = c.env
-        .instance_of(c.env.get_clean_real_type(c.env.strip_ptr_full(recv.type_id)))
-        want: = c.env.get_clean_real_type(t_id)
+    if inst: = ctx.env
+        .instance_of(ctx.env.get_clean_real_type(ctx.env.strip_ptr_full(recv.type_id)))
+        want: = ctx.env.get_clean_real_type(t_id)
         for a in inst.args
-            if c.env.get_clean_real_type(a) == want
+            if ctx.env.get_clean_real_type(a) == want
                 return true
     return false
 
 priv const ARENA_FIELD_DEPTH: Sz = 4 //< how many levels of fields held by value are read
 
-priv fn holds_arena(c: Sema_ctx$@, t_id: I32, depth: Sz = 0): Bool //<
+priv fn holds_arena(ctx: Sema_ctx$@, t_id: I32, depth: Sz = 0): Bool //<
     //< Whether the type keeps the arena it lives in, in a field (`List`'s `arena`, a `Doc`'s own)
     //< **A field held by value is read too** (a struct whose `List` field keeps the arena): its
     //< `free()` hands that field's memory back to the arena. A field behind a pointer is not.
     if depth >= ARENA_FIELD_DEPTH
         return false
-    switch c.env.get_info(c.env.get_clean_real_type(t_id))
+    switch ctx.env.get_info(ctx.env.get_clean_real_type(t_id))
     case .struct_type(def)
         for f in def.fields_list
-            if is_arena(c, f.type_id) ||
-                c.env.get_str(c.env.get_clean_real_type(f.type_id)).equals(OWN_ARENA_FQN)
+            if is_arena(ctx, f.type_id) ||
+                ctx.env.get_str(ctx.env.get_clean_real_type(f.type_id)).equals(OWN_ARENA_FQN)
                 return true
-            if !c.env.is_pointer(f.type_id) && holds_arena(c, f.type_id, depth + 1)
+            if !ctx.env.is_pointer(f.type_id) && holds_arena(ctx, f.type_id, depth + 1)
                 return true
     default {}
     return false
 
 impl Ast_node
-    priv fn find_arena_arg(r: Self$@, c: Sema_ctx$@, found: Arena_arg$@) //<
+    priv fn find_arena_arg(r: Self$@, ctx: Sema_ctx$@, found: Arena_arg$@) //<
         //< Notes the arenas the call chain passes, anywhere in it (`http.headers(arena).build()`)
         //< Another arena than the literal `null` wins: the value then lives in it.
         if r == null || r.kind_id == .k_expr_fn_lit
@@ -176,10 +176,10 @@ impl Ast_node
                 if arg.kind_id == .k_null
                     if found$ == .none
                         found$ = .null_given
-                else if is_arena(c, arg.type_id)
+                else if is_arena(ctx, arg.type_id)
                     found$ = .other
         for child in r.children
-            child.find_arena_arg(c, found)
+            child.find_arena_arg(ctx, found)
 
     priv fn refs_decl(r: Self$@, decl: Ast_node$@): Bool //< whether the subtree names the local
         if r == null
@@ -191,28 +191,28 @@ impl Ast_node
                 return true
         return false
 
-    priv fn frees_local(r: Self$@, c: Sema_ctx$@, decl: Ast_node$@): Bool //<
+    priv fn frees_local(r: Self$@, ctx: Sema_ctx$@, decl: Ast_node$@): Bool //<
         //< Whether the subtree holds `x.free()` on the local, through `Manual_free`
         if r == null
             return false
         // The call `x.free()` has two levels; the member access under the "(" is the one checked.
         if r.kind_id == .k_method_access
-            if receiver: = r.get_free_call_receiver(c)
+            if receiver: = r.get_free_call_receiver(ctx)
                 if receiver.is_path_or_ident() && receiver.def_node == decl
                     return true
         for child in r.children
-            if child.frees_local(c, decl)
+            if child.frees_local(ctx, decl)
                 return true
         return false
 
-    priv fn frees_only(r: Self$@, c: Sema_ctx$@, decl: Ast_node$@): Bool //<
+    priv fn frees_only(r: Self$@, ctx: Sema_ctx$@, decl: Ast_node$@): Bool //<
         //< Whether a `defer`'s body is the one statement `x.free()` on the local
         if block: = r.get_defer_block()
             return block.children.len == 1 && block.get_child(0).kind_id == .k_stmt_expr &&
-                block.frees_local(c, decl)
+                block.frees_local(ctx, decl)
         return false
 
-    priv fn hands_on(r: Self$@, c: Sema_ctx$@, decl: Ast_node$@, parent: Ast_node$@): Bool //<
+    priv fn hands_on(r: Self$@, ctx: Sema_ctx$@, decl: Ast_node$@, parent: Ast_node$@): Bool //<
         //< Whether the subtree frees the local or hands it on
         //< Handed on is passed by value, stored whole (into a variable, a field, a struct or an
         //< array), given away by `take()` or `keep()`, or freed by a function it is passed to. A
@@ -223,7 +223,7 @@ impl Ast_node
         if r.kind_id == .k_expr_fn_lit
             return r.refs_decl(decl)
         if r.kind_id == .k_method_access
-            if receiver: = r.get_free_call_receiver(c)
+            if receiver: = r.get_free_call_receiver(ctx)
                 if receiver.def_node == decl
                     return true
             member: = r.get_postfix_member()
@@ -233,16 +233,16 @@ impl Ast_node
                 recv.def_node == decl
                 return true
         if r.kind_id == .k_expr_postfix && r.postfix_op_text().equals("(") &&
-            r.frees_through_call(c, decl)
+            r.frees_through_call(ctx, decl)
             return true
         if r.is_path_or_ident() && r.def_node == decl && parent != null
             return parent.stores(r)
         for child in r.children
-            if child.hands_on(c, decl, r)
+            if child.hands_on(ctx, decl, r)
                 return true
         return false
 
-    priv fn frees_through_call(r: Self$@, c: Sema_ctx$@, decl: Ast_node$@): Bool //<
+    priv fn frees_through_call(r: Self$@, ctx: Sema_ctx$@, decl: Ast_node$@): Bool //<
         //< Whether the call hands the local to a function that always frees that parameter
         //< One level, as the use-after-free check reads it (`body_frees_param_directly`): a
         //< helper that checks a file's close and frees it ends the file.
@@ -259,7 +259,7 @@ impl Ast_node
         for p in base_ast_ext.Param_cursor(params, false)
             if arg: = sema_flow_release.call_arg_for_param(callee, args_node, idx, is_method)
                 if arg.names_decl(decl) &&
-                    fn_node.body_frees_param_directly(p.get_decl_id_text(), c, arg.type_id)
+                    fn_node.body_frees_param_directly(p.get_decl_id_text(), ctx, arg.type_id)
                     return true
             else
                 break
@@ -309,43 +309,44 @@ impl Ast_node
                 return .some(way)
         return .none
 
-fn is_arena(c: Sema_ctx$@, id: I32): Bool //<
+fn is_arena(ctx: Sema_ctx$@, id: I32): Bool //<
     //< whether the type is `std.mem.Arena` or a pointer to it
     if id == 0 || sema_type_env.is_unknown(id)
         return false
-    return c.env.get_str(c.env.get_clean_real_type(c.env.strip_ptr_full(id))).equals(ARENA_FQN)
+    return ctx.env.get_str(ctx.env.get_clean_real_type(ctx.env.strip_ptr_full(id)))
+        .equals(ARENA_FQN)
 
-priv fn hint_prefix_form(c: Sema_ctx$@, block: Ast_node$@, i: Sz, name: U8[]) //<
+priv fn hint_prefix_form(ctx: Sema_ctx$@, block: Ast_node$@, i: Sz, name: U8[]) //<
     //< [H0303] `defer x.free()` right after the declaration of `x`, which `defer` in front says
     //< **One way to write one cleanup** (Principle 6). Any other cleanup keeps the two lines.
     if i + 1 >= block.children.len
         return
     next: = block.get_child(i + 1)
     if next.kind_id != .k_stmt_defer || next.made_by_compiler() ||
-        !next.frees_only(c, block.get_child(i))
+        !next.frees_only(ctx, block.get_child(i))
         return
-    shown: = written_name(c, block.get_child(i), name)
-    c.clear_scratch()
+    shown: = written_name(ctx, block.get_child(i), name)
+    ctx.clear_scratch()
         .s("[H0303] 'defer \{name\}.free()' follows the declaration of '\{name\}'. Put 'defer' in \
             front of the declaration instead ('defer \{shown\}: = …'), and remove this line.")
-    c.hint(next, c.scratch.slice())
+    ctx.hint(next, ctx.scratch.slice())
 
-priv fn written_name(c: Sema_ctx$@, decl: Ast_node$@, name: U8[]): U8[] //<
+priv fn written_name(ctx: Sema_ctx$@, decl: Ast_node$@, name: U8[]): U8[] //<
     //< The name as `defer` in front of its declaration needs it, with a `$` where it must be mutable
     //< It is mutable where its declaration says so, or where the type's `free` writes its receiver
     //< (`Self$@`): without the `$`, the suggested line would not compile.
     kw: = decl.safe_get_child(1)
-    if (kw != null && kw.text.equals("var")) || free_writes_receiver(c, decl.type_id)
+    if (kw != null && kw.text.equals("var")) || free_writes_receiver(ctx, decl.type_id)
         return base_core.arena.text().s("$").s(name).take()
     return name
 
-priv fn free_writes_receiver(c: Sema_ctx@, type_id: I32): Bool //<
+priv fn free_writes_receiver(ctx: Sema_ctx@, type_id: I32): Bool //<
     //< Whether the type's `free` takes its receiver as a writable pointer (`Self$@`)
     //< A binding that holds a pointer (`Arena(…)`'s result) is passed as it is, so it never needs
     //< one.
-    if type_id == 0 || sema_type_env.is_unknown(type_id) || c.env.is_pointer(type_id)
+    if type_id == 0 || sema_type_env.is_unknown(type_id) || ctx.env.is_pointer(type_id)
         return false
-    entry: = c.env.id_to_type.get(c.env.receiver_base_id(type_id))
+    entry: = ctx.env.id_to_type.get(ctx.env.receiver_base_id(type_id))
     if entry == null
         return false
     free_sym: = entry.peek_method("free").unwrap_or(null)
@@ -359,117 +360,119 @@ priv fn free_writes_receiver(c: Sema_ctx@, type_id: I32): Bool //<
         return type_node != null && type_node.spells_writable_ptr()
     return false
 
-priv fn report_open_end(c: Sema_ctx$@, decl: Ast_node$@, name: U8[], ended_somewhere: Bool) //<
+priv fn report_open_end(ctx: Sema_ctx$@, decl: Ast_node$@, name: U8[], ended_somewhere: Bool) //<
     //< Reports [W0109] at the declaration of a value that reaches its block's end unfreed
-    shown: = written_name(c, decl, name)
-    c.clear_scratch()
+    shown: = written_name(ctx, decl, name)
+    ctx.clear_scratch()
     if ended_somewhere
-        c.scratch
+        ctx.scratch
             .s("[W0109] '\{name\}' is not freed on every path to the end of its block. Put 'defer' \
                 in front of its declaration ('defer \{shown\}: = …'), or free it on each path.")
     else
-        c.scratch
+        ctx.scratch
             .s("[W0109] '\{name\}' is never freed. Put 'defer' in front of its declaration ('defer \
                 \{shown\}: = …'), or hand it on.")
     at: = decl.get_var_decl_id()
-    c.warn(at if at != null else decl, c.scratch.slice())
+    ctx.warn(at if at != null else decl, ctx.scratch.slice())
 
 impl Scan
-    priv fn seq(w: Self$@, block: Ast_node$@, from: Sz, in_loop: Bool): Flow //<
+    priv fn seq(r: Self$@, block: Ast_node$@, from: Sz, in_loop: Bool): Flow //<
         //< What the statements of block from `from` on leave
         for j in Range(from, block.children.len, 1)
-            if w.stmt(block.get_child(j), in_loop) == .closed
+            if r.stmt(block.get_child(j), in_loop) == .closed
                 return .closed
         return .open
 
-    priv fn branch(w: Self$@, node: Ast_node$@, in_loop: Bool): Flow //<
+    priv fn branch(r: Self$@, node: Ast_node$@, in_loop: Bool): Flow //<
         //< What one branch leaves: a block's statements, or one statement (`else if`)
         if node == null
             return .open
         if node.kind_id == .k_stmt_block
-            return w.seq(node, 0, in_loop)
-        return w.stmt(node, in_loop)
+            return r.seq(node, 0, in_loop)
+        return r.stmt(node, in_loop)
 
-    priv fn stmt(w: Self$@, s: Ast_node$@, in_loop: Bool): Flow //< what one statement leaves
-        k: = s.kind_id
+    priv fn stmt(r: Self$@, node: Ast_node$@, in_loop: Bool): Flow //< what one statement leaves
+        k: = node.kind_id
         if k == .k_stmt_defer
-            return w.ended(.closed) if s.frees_local(w.c, w.decl) else .open
+            return r.ended(.closed) if node.frees_local(r.ctx, r.decl) else .open
         if k == .k_stmt_return || k == .k_stmt_throw
             // It hands the value on where the value itself goes out, not a part read from it.
-            e: = s.get_return_expr()
-            if e != null && (e.names_decl(w.decl) || e.hands_on(w.c, w.decl, s))
-                return w.ended(.closed)
-            w.leak(s)
+            e: = node.get_return_expr()
+            if e != null &&
+                (e.names_decl(r.decl) || e.hands_on(r.ctx, r.decl, node))
+                return r.ended(.closed)
+            r.leak(node)
             return .closed
         if k == .k_stmt_break || k == .k_stmt_continue
             if !in_loop
-                w.leak(s)
+                r.leak(node)
             return .closed
         if k == .k_stmt_if
-            if s.get_if_cond().hands_on(w.c, w.decl, null)
-                return w.ended(.closed)
-            then_flow: = w.branch(s.get_if_then_block(), in_loop)
-            else_flow: = w.branch(s.get_if_else_block(), in_loop)
+            if node.get_if_cond().hands_on(r.ctx, r.decl, null)
+                return r.ended(.closed)
+            then_flow: = r.branch(node.get_if_then_block(), in_loop)
+            else_flow: = r.branch(node.get_if_else_block(), in_loop)
             return .closed if then_flow == .closed && else_flow == .closed else .open
         if k == .k_stmt_switch
-            return w.switch_flow(s, in_loop)
+            return r.switch_flow(node, in_loop)
         if k == .k_stmt_for
-            return w.loop_flow(s)
+            return r.loop_flow(node)
         if k == .k_stmt_block
-            return w.seq(s, 0, in_loop)
+            return r.seq(node, 0, in_loop)
         if k == .k_stmt_labeled_block
-            return w.branch(s.get_labeled_block_inner(), true)
-        if s.hands_on(w.c, w.decl, null)
-            return w.ended(.closed)
-        if way: = s.way_out(in_loop)
-            w.leak(way)
+            return r.branch(node.get_labeled_block_inner(), true)
+        if node.hands_on(r.ctx, r.decl, null)
+            return r.ended(.closed)
+        if way: = node.way_out(in_loop)
+            r.leak(way)
         return .open
 
-    priv fn switch_flow(w: Self$@, s: Ast_node$@, in_loop: Bool): Flow //<
+    priv fn switch_flow(r: Self$@, node: Ast_node$@, in_loop: Bool): Flow //<
         //< A `switch` ends the value where every arm does; its subject can hand it on too
-        if s.get_switch_cond().hands_on(w.c, w.decl, null)
-            return w.ended(.closed)
+        if node.get_switch_cond().hands_on(r.ctx, r.decl, null)
+            return r.ended(.closed)
         $all: = true
         $arms: Sz = 0
-        for child in s.children
+        for child in node.children
             if child.kind_id == .k_stmt_block
                 arms += 1
-                if w.seq(child, 0, in_loop) == .open
+                if r.seq(child, 0, in_loop) == .open
                     all = false
         return .closed if all && arms > 0 else .open
 
-    priv fn loop_flow(w: Self$@, s: Ast_node$@): Flow //<
+    priv fn loop_flow(r: Self$@, node: Ast_node$@): Flow //<
         //< A loop runs its body any number of times, so only a way out of it is read for sure
         //< **A body that ends the value on some pass counts as ending it**, as a loop that frees
         //< and leaves is common, and the passes cannot be counted from the code.
-        body: = s.get_loop_block()
-        if body != null && w.seq(body, 0, true) == .closed
+        body: = node.get_loop_block()
+        if body != null && r.seq(body, 0, true) == .closed
             return .closed
-        if s.hands_on(w.c, w.decl, null)
-            return w.ended(.closed)
-        return .closed if s.is_endless_loop() else .open
+        if node.hands_on(r.ctx, r.decl, null)
+            return r.ended(.closed)
+        return .closed if node.is_endless_loop() else .open
 
-    priv fn ended(w: Self$@, f: Flow): Flow //< notes that a path ended the value, and passes f on
-        w.ended_somewhere = true
-        return f
+    priv fn ended(r: Self$@, flow: Flow): Flow //<
+        //< notes that a path ended the value, and passes `flow` on
+        r.ended_somewhere = true
+        return flow
 
-    priv fn leak(w: Self$@, way: Ast_node$@) //<
+    priv fn leak(r: Self$@, way: Ast_node$@) //<
         //< Reports [W0109] at a way out that leaves with the value still owned
         //< A `defer` later in the declaring block that frees it is named, with its line.
-        if w.reported
+        if r.reported
             return
         k: = way.kind_id
         // The function's last `return` is where a value nothing frees reaches its end.
-        if k == .k_stmt_return && way == w.block.last_child() && w.later_defer().is_none()
-            w.reported = true
-            report_open_end(w.c, w.decl, w.name, w.ended_somewhere)
+        if k == .k_stmt_return && way == r.block.last_child() && r.later_defer().is_none()
+            r.reported = true
+            report_open_end(r.ctx, r.decl, r.name, r.ended_somewhere)
             return
         if k == .k_stmt_return || k == .k_stmt_throw
             e: = way.get_return_expr()
             if e != null &&
-                (e.names_decl(w.decl) || e.hands_on(w.c, w.decl, way))
+                (e.names_decl(r.decl) || e.hands_on(r.ctx, r.decl, way))
                 return
-        w.reported = true
+        r.reported = true
         $what: U8[] = "!"
         if k == .k_stmt_return
             what = "return"
@@ -479,28 +482,28 @@ impl Scan
             what = "break"
         else if k == .k_stmt_continue
             what = "continue"
-        bound: = w.c.line_of(w.decl.loc)
-        w.c.clear_scratch().s("[W0109] '\{w.name\}' leaks if this '\{what\}' exits. ")
-        if later: = w.later_defer()
-            w.c.scratch
-                .s("Its 'defer \{w.name\}.free()' is registered only on line \
-                    \{w.c.line_of(later.loc)\}. ")
+        bound: = r.ctx.line_of(r.decl.loc)
+        r.ctx.clear_scratch().s("[W0109] '\{r.name\}' leaks if this '\{what\}' exits. ")
+        if later: = r.later_defer()
+            r.ctx.scratch
+                .s("Its 'defer \{r.name\}.free()' is registered only on line \
+                    \{r.ctx.line_of(later.loc)\}. ")
         else
-            w.c.scratch.s("Nothing frees it on this way out. ")
-        w.c.scratch
-            .s("Put 'defer' in front of its declaration on line \{bound\} ('defer \{w.shown()\}: = \
+            r.ctx.scratch.s("Nothing frees it on this way out. ")
+        r.ctx.scratch
+            .s("Put 'defer' in front of its declaration on line \{bound\} ('defer \{r.shown()\}: = \
                 …'), which frees it on every way out.")
-        w.c.warn(way, w.c.scratch.slice())
+        r.ctx.warn(way, r.ctx.scratch.slice())
 
-    priv fn shown(w: Self$@): U8[] //< the name as its declaration writes it
-        return written_name(w.c, w.decl, w.name)
+    priv fn shown(r: Self$@): U8[] //< the name as its declaration writes it
+        return written_name(r.ctx, r.decl, r.name)
 
-    priv fn later_defer(w: Self$@): Ast_node$@? //<
+    priv fn later_defer(r: Self$@): Ast_node$@? //<
         //< a `defer` later in the declaring block that frees it
         $after: = false
-        for s in w.block.children
-            if s == w.decl
+        for s in r.block.children
+            if s == r.decl
                 after = true
-            else if after && s.kind_id == .k_stmt_defer && s.frees_local(w.c, w.decl)
+            else if after && s.kind_id == .k_stmt_defer && s.frees_local(r.ctx, r.decl)
                 return .some(s)
         return .none

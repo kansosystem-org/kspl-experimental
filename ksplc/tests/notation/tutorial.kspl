@@ -1,4 +1,4 @@
-//< The one program the tour walks through, written by indentation
+//< The one program the tutorial walks through, written by indentation
 //< Each declaration below is one step of the walk, and its `//<` run is that step's prose. The
 //< order is the reader's, not the file's convenience, so the smallest things come first and `main`
 //< puts them together at the end.
@@ -19,14 +19,14 @@ priv fn greet(who: U8[]) //< Saying something, and what a function looks like
     //< no return type is written.
     io.out().s("hello, ").s(who).s(".\n")
 
-priv fn count_up(n: Sz): Sz //< A changing binding, and the four shapes of a loop
+priv fn count_up(limit: Sz): Sz //< A changing binding, and the four shapes of a loop
     //< **A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes
-    //< one of four shapes. `for x in …` walks what it is given; over `Range.asc(n)` it counts.
+    //< one of four shapes. `for x in …` walks what it is given; over `Range.asc(limit)` it counts.
     //< `for x > 0` goes round while its condition holds. `for a; b; c` serves an index the body
     //< moves itself. A bare `for` goes round until something stops it. `continue` takes the next
     //< turn; `else if` and `else` chain as they read.
     $total: Sz = 0
-    for i in Range.asc(n)
+    for i in Range.asc(limit)
         if i % 2 == 0
             total += i
         else if i == 3
@@ -61,7 +61,9 @@ trait Sized_thing //< What a type promises
 impl Point: Sized_thing //< Keeping the promise
     //< **The promise is kept in a block of its own**, named for the trait (`impl Point:
     //< Sized_thing`). Leave a signature out and the compiler refuses here, at the place that
-    //< claimed to keep it, rather than at the call.
+    //< claimed to keep it, rather than at the call. The trait writes `r: Self` and the block `r:
+    //< Self@`: an implementation chooses how it receives the value, as "Checking trait
+    //< conformance" in the language specification allows.
     fn area(r: Self@): I32
         return r.x * r.y
 
@@ -97,41 +99,47 @@ impl Shade //< Reading an enum with `switch`
         default
             return "light"
 
-priv fn twice_of<|T|>(v: T, add: fn(a: T, b: T): T): T //< A generic, and a function handed over
+priv fn twice_of<|T|>(value: T, add: fn(a: T, b: T): T): T //< A generic, and a function handed over
     //< **`<|T|>` is a type the caller chooses**, so one definition serves every type (a generic).
     //< The type is chosen at the call (`twice_of<|I32|>`). The second parameter is a function
     //< value: its type is its signature, so any function of that shape can be passed.
-    return add(v, v)
+    return add(value, value)
 
-priv fn add_i32(a: I32, b: I32): I32
-    return a + b
+priv fn add_i32(left: I32, right: I32): I32
+    return left + right
 
 priv enum Step_error //< An error is a value, and it is listed
     //< **What a function can fail with is an enum like any other.** A caller can `switch` on it, so
     //< there is no message text or error number to match on.
     too_far
 
-priv fn step(n: I32): I32!Step_error //< Failing, and a return type that says so
+priv fn step(value: I32): I32!Step_error //< Failing, and a return type that says so
     //< **`I32!Step_error` reads "an `I32`, or a `Step_error`".** `throw` hands the error back to
     //< the caller as the result; nothing unwinds the stack. The failure is in the signature, so a
     //< caller cannot ignore it by accident: nothing quietly returns 0 instead.
-    if n > 100
+    if value > 100
         throw .too_far
-    return n + 1
+    return value + 1
 
-priv fn step_twice(n: I32): I32!Step_error //< Passing a failure on with `!`
+priv fn step_twice(value: I32): I32!Step_error //< Passing a failure on with `!`
     //< **A `!` after a call says "if this failed, give up here and hand the failure to my
     //< caller".** It needs this function to be able to fail too, which its return type says. A `!`
     //< at a line's end does not carry the line on: the `return` below it is a statement of its own.
-    once: = step(n)!
+    once: = step(value)!
     return step(once)!
 
-priv fn pick_builder(ok: Bool): Str_builder!Step_error //< `defer`, in front of what it frees
+priv fn joined_len(words: U8[][]): Sz //< `defer`, in front of what it frees
     //< **`defer` in front of a declaration frees the value when the block ends**, however it ends.
-    //< That is its last line, or a `return` or a `!` that leaves early (`defer $b: = …` in `main`
-    //< below). Nothing frees itself, so every free stands on the page. A function that hands a
-    //< value to its caller, as this one does, declares it without `defer`. Another cleanup is a
-    //< `defer` statement on the next line, naming what it cleans up.
+    //< That is its last line, or a `return` or a `!` that leaves early. Nothing frees itself, so
+    //< every free stands on the page. A function that hands a value to its caller, as
+    //< `pick_builder` does, declares it without `defer`; the caller defers it (`defer $b: = …` in
+    //< `main`). Another cleanup is a `defer` statement, naming what it cleans up.
+    defer $b: = Str_builder()
+    for w in words
+        b.s(w)
+    return b.len
+
+priv fn pick_builder(ok: Bool): Str_builder!Step_error
     if !ok
         throw .too_far
     return Str_builder()
@@ -144,19 +152,22 @@ priv fn note(on: Bool) //< Leaving early
         return
     seen += 1
 
-priv fn tally(shades: Shade[]) //< Where the braces have to stay
-    //< **A block holding only a comment cannot be written by indentation.** A comment is not a
-    //< statement, so laid out by indentation the block would be empty. The braces are kept for that
-    //< arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line
-    //< below it. A `case` that uses nothing its variant carries names the variant alone.
+priv fn tally(shades: Shade[]): I32 //< Where the braces have to stay
+    //< **A function written inside a call's brackets keeps its braces when its body runs over
+    //< lines**, since a newline inside brackets ends nothing. So there each statement ends with
+    //< `;`, the last one too. An empty block keeps its braces as well (`case .mid {}`). A `case`
+    //< that uses nothing its variant carries names the variant alone.
     for shade in shades
         switch shade
         case .dark
             seen += 1
-        case .mid {
-            // A variant that is not counted. As a sample it holds no content.
-        } default
+        case .mid {}
+        default
             seen += 2
+    return twice_of<|I32|>(I32::seen, fn(left: I32, right: I32): I32 {
+        sum: = left + right;
+        return sum;
+    })
 
 priv $seen: Sz = 0 //< A global, and why there is one here
     //< **A top-level `$` is a global variable: mutable, and shared by the whole program.** It is
@@ -180,7 +191,8 @@ priv fn gather(arena: Arena$@): List<|U8[]|> //< Where memory comes from, and le
 fn main(): I32 //< Putting it together
     //< **`main` is where a program starts, and what it returns is the exit code.** `catch` handles
     //< the failure a call can return. With a value after it, that value is used instead; with a
-    //< block, the block runs and `fallback` gives the value. `\{…\}` puts a value into a string.
+    //< block, the block runs and `fallback` gives the value. `\{…\}` puts a value into the text a
+    //< writer prints (`io.out().s("n=\{n\}")`). It works only there, as a writer's argument.
     defer arena: = Arena(1024 * 1024)
     greet("Kanso")
     p: Point = ::{ .x = 3, .y = 4 }
@@ -190,33 +202,30 @@ fn main(): I32 //< Putting it together
     bad: = step(999) catch
         io.out().s("step refused.\n")
         fallback -1
-    // **A handler names the error.** The line is written past the width on purpose and still is not
-    // closed on `catch <name>`. Broken there, the handler lands at the block's own column and is
-    // read as its first statement ("The formatting settings (`--style`)" in `ksplc/docs/SPEC-
-    // tools.md`).
-    far: =
-        step(1000 + moved.x + moved.y + p.x + p.y + p.area() + moved.area() + p.moved(1).x) catch refusal_reason
-            switch refusal_reason
-            case .too_far
-                io.out().s("too far.\n")
-            fallback -2
+    // **A handler can name the error**, and `switch` on it.
+    far: = step(1000 + moved.x) catch refusal
+        switch refusal
+        case .too_far
+            io.out().s("too far.\n")
+        fallback -2
     defer $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
         fallback Str_builder()
     b.s("held")
     note(true)
     note(false)
-    tally(Shade[]::{ .dark, .mid(1) })
+    tallied: = tally(Shade[]::{ .dark, .mid(1) })
     words: = gather(arena)
     // **It carries a label.** A block with no heading cannot be told from a continuation of the
     // statement before it. So a block of its own is written only with a label in front.
-    while_locked:
-        io.out().s("a labelled block passes too.\n")
+    words_done:
+        io.out().s("a labelled block runs once.\n")
     defer io.out().s("defer comes out last.\n")
     io.out().s("area=\{p.area()\} moved=(\{moved.x\},\{moved.y\})\n")
     io.out().s("span=\{span.to - span.from\}\n")
     io.out().s("shade=\{Shade.mid(1).name()\}/\{Shade.dark.name()\}\n")
     io.out().s("step=\{ok\}/\{bad\}/\{far\} twice=\{twice_of<|I32|>(5, add_i32)\}\n")
     io.out().s("count=\{count_up(6)\} words=\{words.len\} seen=\{seen\} b=\{b.slice()\}\n")
+    io.out().s("tallied=\{tallied\} joined=\{joined_len(U8[][]::{ "ab", "c" })\}\n")
     io.out().s("twice=\{step_twice(1) catch -1\}/\{step_twice(999) catch -1\}\n")
     return 0

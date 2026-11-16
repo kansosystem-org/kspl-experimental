@@ -24,7 +24,7 @@ struct Rel //< one relationship of a part
     kind: U8[] //< the last segment of its type: `officeDocument`, `styles`, `worksheet` …
     target: U8[] //< the part it names, as a name inside the zip
 
-fn rels_of(z: Zip$@, part: U8[], arena: Arena$@): List<|Rel|>!U8[] //<
+fn rels_of(zip: Zip$@, part: U8[], arena: Arena$@): List<|Rel|>!U8[] //<
     //< The relationships of a part (`""` for the package itself); none when it has no rels part
     //< A relationship to something outside the file (`TargetMode="External"`) is left out.
     slash: = part.rfind_char('/')
@@ -32,9 +32,9 @@ fn rels_of(z: Zip$@, part: U8[], arena: Arena$@): List<|Rel|>!U8[] //<
     name: = part.sub_from(slash.unwrap_or(-1) + 1)
     rels_name: = arena.text().s(dir).s("_rels/").s(name).s(".rels").take()
     $out: = List<|Rel|>(arena)
-    if !z.has(rels_name, arena)
+    if !zip.has(rels_name, arena)
         return out
-    $x: = xml.reader(z.part(rels_name, arena)!, arena)!
+    $x: = xml.reader(zip.part(rels_name, arena)!, arena)!
     for
         ev: = x.next()!
         if ev == xml.Event.done
@@ -58,8 +58,8 @@ fn find(rels: List<|Rel|>@, kind: U8[]): U8[] //< the target of the first relati
             return rels.get(i).target
     return ""
 
-fn main_part(z: Zip$@, arena: Arena$@): U8[]!U8[] //< the part the package's own rels name first
-    rels: = rels_of(z, "", arena)!
+fn main_part(zip: Zip$@, arena: Arena$@): U8[]!U8[] //< the part the package's own rels name first
+    rels: = rels_of(zip, "", arena)!
     main: = find(rels@, "officeDocument")
     if main.len == 0
         throw "it names no main part, so it is not a Word or Excel file"

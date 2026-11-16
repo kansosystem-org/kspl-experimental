@@ -160,7 +160,7 @@ function ksmdContents(ks) {
     const block = h.parentElement === ks.root ? ks.view.blocks().indexOf(h) : -1;
     if (block >= 0) {
       ks.root.focus({ preventScroll: true });
-      ks.place([0, block, 0, 0]);
+      ks.place([ks.SPOT.TEXT, block, 0, 0]);
     }
     const to = block >= 0 ? ks.view.blocks()[block] : h;
     to.scrollIntoView({ block: "start" });

@@ -139,16 +139,16 @@ flowchart LR
 **No file for models is kept** (`llms.txt`, a convention for one file a model reads first). What one would hold already has a canonical source a model can read:
 
 * what KSPL leaves out (Appendix A of [`SPEC-programming-language.md`](SPEC-programming-language.md));
-* the tour ([`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md));
+* the tutorial ([`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md));
 * the grammar, the API pages, and each diagnostic's section (`ksplc explain <code>`).
 
-**What is given up**: one file to give a model that cannot read the repository. Such a model is given the specification and the tour instead.
+**What is given up**: one file to give a model that cannot read the repository. Such a model is given the specification and the tutorial instead.
 
-### The tour is a program, one declaration per step
+### The tutorial is a program, one declaration per step
 
-**The tour is one program, and each step is one of its declarations with its `//<` comment, in an order chosen for teaching.** How the page is written and checked is the head of [`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md).
+**The tutorial is one program, and each step is one of its declarations with its `//<` comment, in an order chosen for teaching.** How the page is written and checked is the head of [`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md).
 
-**The motive is a tour that cannot drift.** A newcomer reads it before they can tell that it is wrong. Generated from a program the gates compile and run, the code and its explanation sit in one file and are checked together.
+**The motive is a tutorial that cannot drift.** A newcomer reads it before they can tell that it is wrong. Generated from a program the gates compile and run, the code and its explanation sit in one file and are checked together.
 
 **A generated page still needs an order chosen for the learner**, or it reads as a reference. So the declarations stand in teaching order, smallest first, one idea each. **The page ends by naming where to go next.**
 

@@ -88,13 +88,13 @@ priv fn header_depth(blob: U8[]): Sz //<
             depth -= 1
     return deepest
 
-priv fn is_shape(t: Tensor<|F32|>, d0: Sz, d1: Sz): Bool //<
-    //< Whether t is exactly [d0, d1], or exactly [d0] when d1 is 0
+priv fn is_shape(tensor: Tensor<|F32|>, d0: Sz, d1: Sz): Bool //<
+    //< Whether `tensor` is exactly [d0, d1], or exactly [d0] when d1 is 0
     //< Caution: **Check the rank, not only the sizes read.** `[5, 24, 1]` has the right first two
     //< and three times the elements, and the matrix product stops the program on it.
-    if t.shape.len != (1 if d1 == 0 else 2) || t.shape[0] != d0
+    if tensor.shape.len != (1 if d1 == 0 else 2) || tensor.shape[0] != d0
         return false
-    return d1 == 0 || t.shape[1] == d1
+    return d1 == 0 || tensor.shape[1] == d1
 
 priv fn tensor(sf: st.Safetensors@, name: U8[], arena: Arena$@): Tensor<|F32|>!Pilot_error //<
     //< One tensor, with the cause the car prints when it cannot be read
@@ -162,15 +162,15 @@ fn load(blob: U8[], arena: Arena$@): Policy!Pilot_error //<
     return Policy::{ .mlp = mlp, .maneuvers = man, .far_mm = far_mm, .hidden = hidden,
         .actions = actions }
 
-fn decide(p: Policy$@, dist_mm: I64, line: I64, compute: Arena$@): Drive //<
+fn decide(policy: Policy$@, dist_mm: I64, line: I64, compute: Arena$@): Drive //<
     //< Decides the next manoeuvre from an observation
     //< compute is the working arena the caller resets. **On a tie the lower number wins**
     //< (`sampler.argmax`, like the producer's argmax): with nothing measured and no line all logits
     //< are 0, and number 0 is "stop".
-    x: = encoding.features(dist_mm, line, p.far_mm, compute)
-    best: = Sz::sampler.argmax(p.mlp.forward(x))
+    x: = encoding.features(dist_mm, line, policy.far_mm, compute)
+    best: = Sz::sampler.argmax(policy.mlp.forward(x))
     // The manoeuvre table holds small integers as F32 (`load` checked their range), so truncation
     // recovers them exactly.
     row: = best * encoding.DRIVE_FIELDS
-    return Drive::{ .lon = I32::p.maneuvers[row], .lat = I32::p.maneuvers[row + 1],
-        .rot = I32::p.maneuvers[row + 2] }
+    return Drive::{ .lon = I32::policy.maneuvers[row], .lat = I32::policy.maneuvers[row + 1],
+        .rot = I32::policy.maneuvers[row + 2] }

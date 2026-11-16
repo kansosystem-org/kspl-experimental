@@ -1,8 +1,8 @@
 // The ksmd page served by `kssrv --local` on a scratch workspace: opening, saving and reopening,
 // a change made on disk, seen at once while the page is looked at, a draft that outlives its tab,
-// an included file edited in a tab of its own, images, and the refusals. Every check that writes
-// compares the bytes on disk. Drafts and many tabs are `drafts.mjs`; each way the page could lose
-// edits is `losses.mjs`.
+// an included file edited in a tab of its own, images, the refusals, and a document crafted to run
+// script (`hostile.mjs`). Every check that writes compares the bytes on disk. Drafts and many tabs
+// are `drafts.mjs`; each way the page could lose edits is `losses.mjs`.
 // The server is the one the repository builds; it is started on port 0 and stopped by asking it
 // (`kssrv.mjs`).
 import fs from "fs";
@@ -14,6 +14,7 @@ import { drafts } from "./drafts.mjs";
 import { losses } from "./losses.mjs";
 import { own } from "./own.mjs";
 import { redraws } from "./redraws.mjs";
+import { HOSTILE, nothingRan } from "./hostile.mjs";
 
 
 // A 1 by 1 PNG that a browser decodes.
@@ -136,16 +137,12 @@ function snapshot(root) {
 }
 
 // A new tab on the page, once it has opened what its address names. `script` runs in the page
-// before the page's own, as a browser's settings would take effect.
+// before the page's own, as a browser's settings would take effect. **The tab starts blank**, so
+// what its policy refuses is recorded from the page's first load (`blocked` in `cdp.mjs`).
 async function tab(ctx, query = "", script = null) {
-  let page;
-  if (script === null) {
-    page = await ctx.browser.open(ctx.server.url(query));
-  } else {
-    page = await ctx.browser.open("about:blank");
-    await page("Page.addScriptToEvaluateOnNewDocument", { source: script });
-    await page("Page.navigate", { url: ctx.server.url(query) });
-  }
+  const page = await ctx.browser.open("about:blank");
+  if (script !== null) await page("Page.addScriptToEvaluateOnNewDocument", { source: script });
+  await page("Page.navigate", { url: ctx.server.url(query) });
   const d = driver(page);
   if (!await d.until("document.documentElement.dataset.files === 'ready'")) {
     // Say what the page showed, so a failure seen once can be traced.
@@ -903,6 +900,21 @@ const SECTIONS = {
     });
     fs.rmSync(path.join(ctx.root, "pics/wide.png"), { force: true });
     fs.rmSync(path.join(ctx.root, "wideimg.ksmd"), { force: true });
+  },
+
+  // The crafted document of `hostile.mjs`, opened from the workspace: its image shows as pixels,
+  // and the paths that are no file of the workspace are refused at their clauses.
+  async scripts(ctx) {
+    fs.writeFileSync(path.join(ctx.root, "hostile.ksmd"), HOSTILE);
+    await withTab(ctx, "?doc=hostile.ksmd", async (d) => {
+      const img = "document.querySelector('figure[data-to=\"pics/dot.png\"] img')";
+      check(await d.until(`!!${img} && ${img}.complete && ${img}.naturalWidth === 1`),
+        "the crafted document's image shows decoded");
+      await nothingRan(d.js, d.page, 0, "served");
+      const alt = await d.js(`${img}.alt`);
+      check(alt === "<img src=x onerror=window.pwned=29>", "an image's alt text with markup stays text", alt);
+    });
+    fs.rmSync(path.join(ctx.root, "hostile.ksmd"), { force: true });
   },
 
 };

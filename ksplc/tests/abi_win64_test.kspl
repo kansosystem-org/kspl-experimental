@@ -29,10 +29,10 @@ priv fn product_of(shape: Sz$[]): Sz //< the callee
             panic("win64 arg abi: a dimension came back far out of range (corrupted argument?)")
     return size
 
-priv fn build_with_f64(a: Sz, b: Sz, c: Sz, alpha: F64, x: Void@, y: Void$@): Two_sizes //<
+priv fn build_with_f64(first: Sz, second: Sz, third: Sz, alpha: F64, x: Void@, y: Void$@): Two_sizes //<
     //< The shape where alpha (F64) takes the stack's first argument slot
-    $shape_ac: Sz[2] = ::{ a, c }
-    $shape_cb: Sz[2] = ::{ c, b }
+    $shape_ac: Sz[2] = ::{ first, third }
+    $shape_cb: Sz[2] = ::{ third, second }
     // alpha is always read, so nothing can delete it as unused.
     if alpha < 0.0 || x != y
         return Two_sizes::{ .a = 0, .b = 0 }
@@ -49,11 +49,11 @@ struct Sized_pair<|T|> //< the shape where c (Sz) takes "the same slot alpha too
     seed: T
 
 impl<|T|> Sized_pair<|T|>
-    fn probe(p0: Void@, a: Sz, b: Sz, c: Sz, seed: T@): Sized_pair<|T|> //<
+    fn probe(p0: Void@, first: Sz, second: Sz, third: Sz, seed: T@): Sized_pair<|T|> //<
         //< The same run as Lora<|T|>.load_raw (a leading pointer + three Sz + a pointer)
-        //< The hidden return pointer goes first, so `c` takes Win64's first stack slot.
-        $shape_ac: Sz[2] = ::{ a, c }
-        $shape_cb: Sz[2] = ::{ c, b }
+        //< The hidden return pointer goes first, so `third` takes Win64's first stack slot.
+        $shape_ac: Sz[2] = ::{ first, third }
+        $shape_cb: Sz[2] = ::{ third, second }
         if p0 != null
             return Sized_pair<|T|>::{ .a = 0, .b = 0, .seed = seed$ }
         return Sized_pair<|T|>::{ .a = product_of(Sz$[]::{ .ptr = shape_ac@, .len = 2 }),

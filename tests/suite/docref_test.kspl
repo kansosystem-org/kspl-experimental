@@ -352,18 +352,18 @@ priv struct Finding //< where the findings are collected
 priv fn new_finding(arena: Arena$@): Finding
     return Finding::{ .seen = 0, .bad = List<|U8[]|>(arena) }
 
-priv fn report(name: U8[], count: Sz, f: Finding@, tail: U8[], arena: Arena$@)
+priv fn report(name: U8[], count: Sz, finding: Finding@, tail: U8[], arena: Arena$@)
     b: = arena.text()
-    for i in Range.asc(f.bad.len)
+    for i in Range.asc(finding.bad.len)
         if i >= MAX_SHOWN
             break
-        b.s("\n" if i > 0 else "").s(f.bad.get(i))
-    if tail.len > 0 && f.bad.len > 0
+        b.s("\n" if i > 0 else "").s(finding.bad.get(i))
+    if tail.len > 0 && finding.bad.len > 0
         b.s("\n    ").s(tail)
     title: = arena.text().s(name)
     if count > 0
         title.s("(\{count\})")
-    verdict.check(title.take(), f.bad.len == 0, b.take())
+    verdict.check(title.take(), finding.bad.len == 0, b.take())
 
 priv fn quote_needle(name: U8[], arena: Arena$@): U8[] //<
     //< Turns the name carried with a naming into the text to search for in that document
@@ -473,43 +473,43 @@ impl Doc_check
             .unit_ref = new_finding(arena), .stale_quote = new_finding(arena),
             .quoted_head = new_finding(arena) }
 
-    fn is_generated(d: Self@, path: U8[]): Bool //<
+    fn is_generated(r: Self@, path: U8[]): Bool //<
         //< whether the build makes it, so absence is right
-        for g in d.generated
+        for g in r.generated
             if path.starts_with(g)
                 return true
         return false
 
-    fn check_file(d: Self$@, rel: U8[]) //< runs every check on one file
-        arena: = d.arena
+    fn check_file(r: Self$@, rel: U8[]) //< runs every check on one file
+        arena: = r.arena
         text: = harness.read_under_root(rel)
         here: = sys.get_dir_name(rel)
         is_md: = rel.ends_with(".md")
         // The parser's brace fixtures (`.ksplb`, in `ksplc/tests/parse/`) are sources too.
         if rel.ends_with(".kspl") || rel.ends_with(".ksplb")
-            d.unit_ref.seen += unit_ref_defects(rel, text, d.unit_ref.bad@, arena)
+            r.unit_ref.seen += unit_ref_defects(rel, text, r.unit_ref.bad@, arena)
         if is_md
-            d.check_links(rel, here, text)
-        d.check_link_names(rel, text)
+            r.check_links(rel, here, text)
+        r.check_link_names(rel, text)
         // A heading number depends on Markdown syntax (what is read is the `#` line).
         if is_md
-            scan.heading_number_defects(rel, text, d.bad_numbering.bad@, arena)
-            d.check_heading_quotes(rel, text)
+            scan.heading_number_defects(rel, text, r.bad_numbering.bad@, arena)
+            r.check_heading_quotes(rel, text)
         // Caution: **Read symbol namings in every file, not only in Markdown.** A comment's stale
         // backticks mislead just as a document's do.
-        symbol_ref_defects(rel, here, text, d.dirs, d.generated@, d.missing_src@, d.stray_sym@,
+        symbol_ref_defects(rel, here, text, r.dirs, r.generated@, r.missing_src@, r.stray_sym@,
             arena)
-        d.check_src_paths(rel, here, text)
-        d.check_doc_paths(rel, here, text)
-        d.check_doc_quotes(rel, here, text)
-        d.check_sections(rel, here, text)
-        d.check_bare_sections(rel, text)
+        r.check_src_paths(rel, here, text)
+        r.check_doc_paths(rel, here, text)
+        r.check_doc_quotes(rel, here, text)
+        r.check_sections(rel, here, text)
+        r.check_bare_sections(rel, text)
 
-    fn check_links(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
+    fn check_links(r: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That each link's destination exists, and a heading it names too
         //< Caution: A link to a heading is not caught by the number check. Rename the heading and
         //< the anchor alone goes stale, jumping to the document's start.
-        arena: = d.arena
+        arena: = r.arena
         for l in refs.find_links(text, arena)
             // That a link's target exists. **A Markdown link is relative to the file it is written
             // in**, unlike a bare name. `find_src_paths` and `find_doc_paths` pick up **only names
@@ -517,9 +517,9 @@ impl Doc_check
             // (`port/web/...`) is checked here.
             if l.text.len > 0 && !refs.is_external(l.text)
                 dest: = refs.normalize(arena.text().s("\{here\}/\{l.text\}").take(), arena)
-                d.bad_link.seen += 1
-                if !d.is_generated(dest) && !exists_at(dest, arena)
-                    d.bad_link.bad
+                r.bad_link.seen += 1
+                if !r.is_generated(dest) && !exists_at(dest, arena)
+                    r.bad_link.bad
                         .push(arena.text().s(rel).s(": ").s(l.text).s("  (missing: ").s(dest).s(")")
                         .take())
             if l.extra.len == 0
@@ -529,72 +529,72 @@ impl Doc_check
                 target = refs.normalize(arena.text().s("\{here\}/\{l.text\}").take(), arena)
             if !target.ends_with(".md") || !exists_at(target, arena)
                 continue // anything but `.md`, and absence, are looked at by other checks
-            d.bad_anchor.seen += 1
+            r.bad_anchor.seen += 1
             anchors: = heading_anchors(target, arena)
             if !anchors.contains(l.extra)
-                d.bad_anchor.bad
+                r.bad_anchor.bad
                     .push(arena.text().s(rel).s(": there is no heading #").s(l.extra).s(" in ")
                     .s(target).take())
 
-    fn check_link_names(d: Self$@, rel: U8[], text: U8[]) //<
+    fn check_link_names(r: Self$@, rel: U8[], text: U8[]) //<
         //< That a `` [`X`](Y) `` link's text names the file it points at
         //< In every file read, since a comment's link misleads as a document's does.
-        arena: = d.arena
+        arena: = r.arena
         for m in refs.find_misnamed_links(text, arena)
             $line: Sz = 1
             for k in Range.asc(m.at)
                 if text[k] == '\n'
                     line += 1
-            d.misnamed_link.bad
+            r.misnamed_link.bad
                 .push(arena.text().s(rel).s(":\{line\}: [`").s(m.text).s("`](").s(m.extra).s(")")
                 .take())
 
-    fn check_heading_quotes(d: Self$@, rel: U8[], text: U8[]) //<
+    fn check_heading_quotes(r: Self$@, rel: U8[], text: U8[]) //<
         //< That a heading holds no double quote outside a code span
         //< **A fence's `# ...` is a shell comment, not a heading.**
         $n: Sz = 0
         $fenced: = false
-        for line in text.lines(d.arena)
+        for line in text.lines(r.arena)
             n += 1
             if line.trim_spaces().starts_with("```")
                 fenced = !fenced
             else if !fenced && line.starts_with("#")
-                d.quoted_head.seen += 1
+                r.quoted_head.seen += 1
                 if scan.quotes_in_heading(line)
-                    d.quoted_head.bad
-                        .push(d.arena.text().s(rel).s(":\{n\}: ").s(line).take())
+                    r.quoted_head.bad
+                        .push(r.arena.text().s(rel).s(":\{n\}: ").s(line).take())
 
-    fn check_src_paths(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
+    fn check_src_paths(r: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That each implementation or test file named exists
-        arena: = d.arena
-        for p in refs.find_src_paths(text, d.dirs, arena)
-            d.missing_src.seen += 1
-            if !d.is_generated(p.text) &&
+        arena: = r.arena
+        for p in refs.find_src_paths(text, r.dirs, arena)
+            r.missing_src.seen += 1
+            if !r.is_generated(p.text) &&
                 resolve_src(src_here(rel, here, text, p.at, arena), p.text, arena).len == 0
-                d.missing_src.bad.push(arena.text().s("\{rel\}: \{p.text\}").take())
+                r.missing_src.bad.push(arena.text().s("\{rel\}: \{p.text\}").take())
 
-    fn check_doc_paths(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
+    fn check_doc_paths(r: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That each document named exists, and is named in a direction the convention allows
-        arena: = d.arena
-        for p in refs.find_doc_paths(text, d.dirs, arena)
+        arena: = r.arena
+        for p in refs.find_doc_paths(text, r.dirs, arena)
             target: = refs.hit_target(here, text, p, arena)
-            d.missing.seen += 1
+            r.missing.seen += 1
             if !exists_at(target, arena)
-                d.missing.bad.push(arena.text().s("\{rel\}: \{p.text\}").take())
+                r.missing.bad.push(arena.text().s("\{rel\}: \{p.text\}").take())
                 continue
             g_from: = group_of(rel)
             g_to: = group_of(target)
             if !may_refer(g_from, g_to, arena)
-                d.wrong_dir.bad
+                r.wrong_dir.bad
                     .push(arena.text().s(rel).s(" -> ").s(target).s("  (").s(g_from)
                     .s(" does not refer to ").s(g_to).s(")").take())
             if !spec_may_refer(rel, target)
-                d.spec_ref.bad.push(arena.text().s("\{rel\} -> \{target\}").take())
+                r.spec_ref.bad.push(arena.text().s("\{rel\} -> \{target\}").take())
 
-    fn check_doc_quotes(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
+    fn check_doc_quotes(r: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That a name quoted beside a document is one that document holds
-        arena: = d.arena
-        for q in cite.find_doc_quotes(text, d.dirs, d.bares, arena)
+        arena: = r.arena
+        for q in cite.find_doc_quotes(text, r.dirs, r.bares, arena)
             target: = refs.hit_target(here, text, q, arena)
             if !exists_at(target, arena)
                 // Caution: **Do not silently skip a bare name.** `find_doc_paths` picks up only a
@@ -602,12 +602,12 @@ impl Doc_check
                 // resolves to nothing and **is reported by nobody**. It is reported here;
                 // check_doc_paths handles a name with a folder.
                 if q.text.find_char('/').is_none()
-                    d.stale_quote.seen += 1
-                    d.stale_quote.bad
+                    r.stale_quote.seen += 1
+                    r.stale_quote.bad
                         .push(arena.text().s(rel).s(": `").s(q.text).s("` points at no document (")
                         .s(target).s(")").take())
                 continue
-            d.stale_quote.seen += 1
+            r.stale_quote.seen += 1
             // **A document is searched for its own names; a source for the name anywhere.** A
             // check is cited by its verdict line, which a source holds as a string, not as a
             // heading.
@@ -621,14 +621,14 @@ impl Doc_check
                 where: =
                     (" (not in a heading, a bold span, or at a cell's or an item's head)" if is_doc
                     else "")
-                d.stale_quote.bad
+                r.stale_quote.bad
                     .push(arena.text().s(rel).s(": there is no \"").s(q.extra).s("\" in ").s(target)
                     .s(where).take())
 
-    fn check_sections(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
+    fn check_sections(r: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That each section number cited beside a document is a heading there
-        arena: = d.arena
-        for s in cite.find_sections(text, d.dirs, d.bares, arena)
+        arena: = r.arena
+        for s in cite.find_sections(text, r.dirs, r.bares, arena)
             // Caution: **A name with no folder resolves relative to the file it is written in.**
             // From the root, `docs/`'s `DESIGN-programming-language.md` names a root one that does
             // not exist, so **that section number passes unmatched**.
@@ -644,24 +644,24 @@ impl Doc_check
             nums: = heading_numbers(target, arena)
             if nums.len == 0 && !cite.is_marked(text, s, arena)
                 continue // a plain number beside a document numbering nothing may be prose
-            d.stale.seen += 1
+            r.stale.seen += 1
             if nums.len == 0
-                d.stale.bad
+                r.stale.bad
                     .push(arena.text().s(rel).s(": §").s(s.extra).s(" cites ").s(target)
                     .s(", whose headings carry no number: cite the heading by name").take())
             else if !nums.contains(s.extra)
-                d.stale.bad
+                r.stale.bad
                     .push(arena.text().s(rel).s(": there is no §").s(s.extra).s(" in ").s(target)
                     .take())
 
-    fn check_bare_sections(d: Self$@, rel: U8[], text: U8[]) //<
+    fn check_bare_sections(r: Self$@, rel: U8[], text: U8[]) //<
         //< That a section number naming no document is a heading of its own document
         //< Per paragraph: a paragraph naming a document anywhere refers to that document.
         $exempt: = false
         for e in BARE_EXEMPT
             if rel.equals(e)
                 exempt = true
-        arena: = d.arena
+        arena: = r.arena
         own: = heading_numbers(rel, arena)
         lines: = text.lines(arena)
         $start: Sz = 0
@@ -679,19 +679,19 @@ impl Doc_check
             // the naming.
             if !exempt && !names_a_doc(block.take())
                 for k in Range(start, stop, 1)
-                    d.check_bare_line(rel, lines.get(k), k, own@)
+                    r.check_bare_line(rel, lines.get(k), k, own@)
             start = stop + 1
 
-    fn check_bare_line(d: Self$@, rel: U8[], line: U8[], k: Sz, own: List<|U8[]|>@) //<
+    fn check_bare_line(r: Self$@, rel: U8[], line: U8[], line_index: Sz, own: List<|U8[]|>@) //<
         //< The bare section numbers of one line, against its own document's headings
         //< A number the convention quotes as a sample, in a code span, is not counted.
-        arena: = d.arena
+        arena: = r.arena
         masked: = refs.masked_code(line, arena)
         for num in find_bare_sections(masked, arena)
-            d.bare_sec.seen += 1
+            r.bare_sec.seen += 1
             if !own.contains(num)
-                d.bare_sec.bad
-                    .push(arena.text().s(rel).s(":\{k + 1\}: ").s(num)
+                r.bare_sec.bad
+                    .push(arena.text().s(rel).s(":\{line_index + 1\}: ").s(num)
                     .s(" is not in its own document  ").s(line.trim_spaces()).take())
 
 fn main(): I32

@@ -43,40 +43,41 @@ impl<|T|> Lora<|T|>
             (a.data + i)$ = T::((rng.next_f64() * 2.0 - 1.0) * 0.02)
         b.fill(0.0)
         return Lora<|T|>::{ .a = a, .b = b, .scale = T::(alpha / F64::rank) }
-    pub fn forward( //< the delta (x·A·B) * scale, which the caller adds to the base output
-        //< The result is allocated on `x`'s arena.
+    pub fn forward( //< the delta (input·A·B) * scale, which the caller adds to the base output
+        //< The result is allocated on input's arena.
         r: Self$@,
-        $x: Tensor<|T|>, //< the same input the base layer was given, [m, in]
+        $input: Tensor<|T|>, //< the same input the base layer was given, [m, in]
     ): Tensor<|T|>
-        $xa: = x.matmul(r.a) catch // [m, rank]
+        $xa: = input.matmul(r.a) catch // [m, rank]
             panic("Lora.forward: matmul shape mismatch")
         $xab: = xa.matmul(r.b) catch // [m, out]
             panic("Lora.forward: matmul shape mismatch")
         return xab.scale(r.scale)
-    pub fn backward_grads( //< writes the gradients of A and B to `g`; returns the input's gradient
+    pub fn backward_grads( //<
+        //< writes the gradients of A and B to `grads`; returns the input's gradient
         //< **It does not update**, so the caller picks the optimizer (SGD / Adam); `backward` below
         //< is built on it. It returns `dx` so a LoRA in an intermediate layer can be summed with
         //< the base path's dx and passed further back.
         r: Self$@,
-        $x: Tensor<|T|>, //< the input the forward pass was given, needed again here
+        $input: Tensor<|T|>, //< the input the forward pass was given, needed again here
         $dy: Tensor<|T|>, //< the gradient of the output
-        g: Grads<|T|>$@, //< where the two gradients are written
+        grads: Grads<|T|>$@, //< where the two gradients are written
     ): Tensor<|T|>
-        $xa: = x.matmul(r.a) catch // the intermediate value recomputed [m, rank]
+        $xa: = input.matmul(r.a) catch // the intermediate value recomputed [m, rank]
             panic("Lora.backward_grads: matmul shape mismatch")
         $dxab: = dy.scale(r.scale) // d/d(xab) = dy * scale
-        g.db = xa.grad_matmul_weight(dxab) // xa^T · dxab  [rank, out]
+        grads.db = xa.grad_matmul_weight(dxab) // xa^T · dxab  [rank, out]
         $dxa: = dxab.grad_matmul_input(r.b) // dxab · B^T   [m, rank]
-        g.da = x.grad_matmul_weight(dxa) // x^T · dxa    [in, rank]
+        grads.da = input.grad_matmul_weight(dxa) // input^T · dxa    [in, rank]
         return dxa.grad_matmul_input(r.a) // dxa · A^T   [m, in]
     pub fn backward( //< one SGD step on A and B with the base frozen; returns the input's gradient
         r: Self$@,
-        x: Tensor<|T|>, //< the input the forward pass was given
+        input: Tensor<|T|>, //< the input the forward pass was given
         dy: Tensor<|T|>, //< the gradient of the output
         lr: F64, //< the learning rate
     ): Tensor<|T|>
         $g: Grads<|T|> = ::{}
-        dx: = r.backward_grads(x, dy, g@)
+        dx: = r.backward_grads(input, dy, g@)
         r.a.sgd_step(g.da, lr)
         r.b.sgd_step(g.db, lr)
         return dx

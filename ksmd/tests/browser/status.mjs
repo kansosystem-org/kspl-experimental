@@ -8,7 +8,7 @@ import { ALT, CTRL, H, SHIFT, check } from "./drive.mjs";
 
 const FENCE = "```";
 
-export function statusBar({ page, js, settle, until, press, type, select, click, menu, load, saves,
+export function statusBar({ page, media, js, settle, until, press, type, select, click, menu, load, saves,
   rightClick, openCell, drag, resize }) {
   const text = (part) => js(`(() => { const el = document.querySelector(".status-bar ${part}"); ` +
     "return el && !el.hidden && getComputedStyle(el).display !== 'none' ? el.textContent : null; })()");
@@ -142,9 +142,9 @@ export function statusBar({ page, js, settle, until, press, type, select, click,
       await reload();
       await shows(".zoom-level", "175%", "the browser keeps the level");
       await load(`${H}Some text.\n`);
-      await page("Emulation.setEmulatedMedia", { media: "print" });
+      await media("print");
       const printedZoom = await js("getComputedStyle(document.getElementById('doc')).zoom");
-      await page("Emulation.setEmulatedMedia", { media: "" });
+      await media("");
       check(printedZoom === "1", "the print keeps the document's own size", printedZoom);
       await menu("zoom-reset");
       await shows(".zoom-level", "100%", "View, Zoom 100% gives the document's own size back");

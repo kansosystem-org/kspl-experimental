@@ -43,8 +43,8 @@ priv fn overlapping(header: json.Value, arena: Arena$@): Bool //<
         end: = offsets.get_at(1).as_int64().unwrap_or(-1)
         if start >= 0 && end > start
             spans.push(Span::{ .start = start, .end = end })
-    start_first: = fn(a: Span@, b: Span@; ): I32
-        return -1 if a.start < b.start else 1 if a.start > b.start else 0
+    start_first: = fn(left: Span@, right: Span@; ): I32
+        return -1 if left.start < right.start else 1 if left.start > right.start else 0
     sorted: = spans.order_by(start_first, arena)
     for i in Range(1, sorted.len, 1)
         if sorted.get(i).start < sorted.get(i - 1).end
@@ -240,22 +240,22 @@ impl Safetensors_writer
     pub fn add( //< appends one more tensor; its position in the file follows the order added
         r: Self$@,
         name: U8[], //< the tensor's name, written into the header
-        t: Tensor<|F32|>, //< the tensor, whose bytes are copied in
+        values: Tensor<|F32|>, //< the tensor, whose bytes are copied in
     )
         start: = r.data.len
-        nbytes: = t.size * sizeof(F32)
+        nbytes: = values.size * sizeof(F32)
         if r.count > 0
             r.head.s(",")
         // The name is escaped as a JSON string, so a `"` or a `\` in it reads back as written.
         r.head.c('"').escape_and_append(name).s("\":{\"dtype\":\"F32\",\"shape\":[")
-        for j in Range.asc(t.shape.len)
+        for j in Range.asc(values.shape.len)
             if j > 0
                 r.head.s(",")
             // **Each dimension at its full width**: an I32 would cut one above 2^31-1.
-            r.head.s("\{t.shape[j]\}")
+            r.head.s("\{values.shape[j]\}")
         // data_offsets can exceed 2GB, so it is written as I64 (an I32 overflows on a large model).
         r.head.s("],\"data_offsets\":[\{start\},\{start + nbytes\}]}")
-        r.data.s(U8$[]::{ .ptr = U8$@::t.data, .len = nbytes })
+        r.data.s(U8$[]::{ .ptr = U8$@::values.data, .len = nbytes })
         r.count += 1
     pub fn finish(r: Self$@): Str_builder //< the whole file as bytes, header and weights
         //< For a destination that is not a file (sending it over a network, reading it back in

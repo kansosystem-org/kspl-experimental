@@ -23,21 +23,21 @@ priv struct Feed //< what the stand-in writes on the one connection it accepts
     seen: thread.Atomic_sz //< 1 once the client has said it waits at `pause_at`
         //< **An order, not a time**: a fixed pause lets a busy client miss the wait it checks.
 
-extern fn feed_bytes(f: Feed$@): Void$@ //< writes the bytes as the feed says, then closes
-    conn: = f.listener.accept() catch panic("the stand-in accepts the client")
+extern fn feed_bytes(feed: Feed$@): Void$@ //< writes the bytes as the feed says, then closes
+    conn: = feed.listener.accept() catch panic("the stand-in accepts the client")
     $at: Sz = 0
-    for at < f.bytes.len
-        $n: = f.bytes.len - at if f.piece == 0 else f.piece
-        if at < f.pause_at && at + n > f.pause_at
-            n = f.pause_at - at
-        if n > f.bytes.len - at
-            n = f.bytes.len - at
-        conn.write_all(f.bytes.sub(at, n)) catch {}
+    for at < feed.bytes.len
+        $n: = feed.bytes.len - at if feed.piece == 0 else feed.piece
+        if at < feed.pause_at && at + n > feed.pause_at
+            n = feed.pause_at - at
+        if n > feed.bytes.len - at
+            n = feed.bytes.len - at
+        conn.write_all(feed.bytes.sub(at, n)) catch {}
         at += n
-        if at == f.pause_at
-            for f.seen.load() == 0
+        if at == feed.pause_at
+            for feed.seen.load() == 0
                 sys.sleep_ms(1)
-        else if f.piece > 0
+        else if feed.piece > 0
             sys.sleep_ms(1)
     conn.free()
     return null
@@ -58,11 +58,11 @@ priv fn serve(bytes: U8[], piece: Sz, pause_at: Sz, arena: Arena$@): Served //<
     client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("the client connects")
     return Served::{ .feed = f, .worker = t, .client = client }
 
-priv fn finish($s: Served) //< closes the client, then waits for the stand-in
-    s.feed.seen.store(1)
-    s.client.free()
-    s.worker.free()
-    s.feed.listener.free()
+priv fn finish($served: Served) //< closes the client, then waits for the stand-in
+    served.feed.seen.store(1)
+    served.client.free()
+    served.worker.free()
+    served.feed.listener.free()
 
 priv fn read_whole(bytes: U8[], piece: Sz, max_body: Sz, arena: Arena$@): U8[] //<
     //< The body `read_response` reads from those bytes, or `refused: ` and why
@@ -76,8 +76,9 @@ priv fn read_whole(bytes: U8[], piece: Sz, max_body: Sz, arena: Arena$@): U8[] /
     finish(s)
     return out
 
-priv fn error_name(e: http.Http_error): U8[] //< an error's name, and its reason where it has one
-    switch e
+priv fn error_name(error: http.Http_error): U8[] //<
+    //< an error's name, and its reason where it has one
+    switch error
     case .invalid_chunk(why)
         return why
     case .unsupported_transfer_encoding

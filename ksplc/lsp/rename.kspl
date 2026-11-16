@@ -76,7 +76,7 @@ fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Val
     if why.len == 0 && ws_state.sema != null
         why = trait_refusal(ws_state.sema, spots@, old_name, arena)
     if why.len == 0 && !new_name.equals(old_name) && ws_state.sema != null
-        why = Clash::{ .c = ws_state.sema, .old_name = old_name, .new_name = new_name,
+        why = Clash::{ .ctx = ws_state.sema, .old_name = old_name, .new_name = new_name,
             .arena = arena }.refusal(spots@)
     if why.len > 0
         lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED, why, arena)
@@ -161,31 +161,31 @@ priv fn place_refusal(spots: List<|Spot|>@, name: U8[], arena: Arena$@): U8[] //
 
 priv const MAX_SCAN_DEPTH: Sz = 200 //< how deep a scope is searched for its declarations
 
-priv fn is_scope(n: Ast_node$@): Bool //< whether a node opens a scope its declarations belong to
-    switch n.kind_id
+priv fn is_scope(node: Ast_node$@): Bool //< whether a node opens a scope its declarations belong to
+    switch node.kind_id
     case .k_file, .k_decl_fn, .k_decl_fn_proto, .k_stmt_block, .k_stmt_switch, .k_expr_fn_lit
         return true
     default
-        return is_member_scope(n)
+        return is_member_scope(node)
 
-priv fn is_member_scope(n: Ast_node$@): Bool //<
+priv fn is_member_scope(node: Ast_node$@): Bool //<
     //< whether a scope holds members, reached after a `.`
-    switch n.kind_id
+    switch node.kind_id
     case .k_decl_struct, .k_decl_extern_struct, .k_decl_enum, .k_enum_variant, .k_decl_impl,
         .k_decl_trait
         return true
     default
         return false
 
-priv fn decl_name(n: Ast_node$@): U8[] //< the name a node declares; empty where it declares none
+priv fn decl_name(node: Ast_node$@): U8[] //< the name a node declares; empty where it declares none
     //< **What the compiler bound is read from its own record** (`sym_ptr`), so a binding written in
     //< any form is found. A field is no symbol, so it is read from the tree.
-    if n.sym_ptr != null
-        sym: = Sema_symbol$@::n.sym_ptr
-        if sym.node == n
+    if node.sym_ptr != null
+        sym: = Sema_symbol$@::node.sym_ptr
+        if sym.node == node
             return sym.name.get_generic_base_name().fqn_last()
-    if n.kind_id == .k_struct_field || n.kind_id == .k_enum_field
-        id: = n.find_child(.k_identifier)
+    if node.kind_id == .k_struct_field || node.kind_id == .k_enum_field
+        id: = node.find_child(.k_identifier)
         if id != null
             return id.text
     return ""
@@ -205,13 +205,14 @@ priv fn declared_in(scope: Ast_node$@, file: U8[], name: U8[], depth: Sz): Ast_n
                 return .some(found)
     return .none
 
-priv fn names_member(s: Spot): Bool //< whether a place is written after a `.`, or as a type's own
-    if s.is_decl || s.path.len == 0
+priv fn names_member(spot: Spot): Bool //<
+    //< whether a place is written after a `.`, or as a type's own
+    if spot.is_decl || spot.path.len == 0
         return false
-    parent: = s.path.get(s.path.len - 1)
+    parent: = spot.path.get(spot.path.len - 1)
     switch parent.kind_id
     case .k_expr_path, .k_type_path, .k_generic_path
-        return parent.children.len > 0 && parent.children.get(0) != s.node
+        return parent.children.len > 0 && parent.children.get(0) != spot.node
     case .k_expr_postfix, .k_method_access, .k_enum_init, .k_enum_init_call, .k_expr_field_init,
         .k_case_pattern, .k_generic_method, .k_expr_implicit_dot, .k_expr_offsetof
         return true
@@ -219,7 +220,7 @@ priv fn names_member(s: Spot): Bool //< whether a place is written after a `.`, 
         return false
 
 priv struct Clash //< one rename's question: is the new name already taken where it lands
-    c: Sema_ctx$@
+    ctx: Sema_ctx$@
     old_name: U8[]
     new_name: U8[]
     arena: Arena$@
@@ -261,13 +262,14 @@ impl Clash
                     top_done = s.file
         return ""
 
-    priv fn member_refusal(r: Self, s: Spot, scope: Ast_node$@): U8[] //<
+    priv fn member_refusal(r: Self, spot: Spot, scope: Ast_node$@): U8[] //<
         //< Why a member's new name is taken among its type's members; empty where it is not
         //< **A type's methods can be spread over several `impl`s.** So a method is looked up by
         //< its full name as well as in its own block.
-        if got: = declared_in(scope, s.file, r.new_name, 0)
-            return r.taken(got, s)
-        decl: = s.path.get(s.path.len - 1) if s.path.len > 0 else s.node
+        if got: = declared_in(scope, spot.file, r.new_name, 0)
+            return r.taken(got, spot)
+        decl: =
+            spot.path.get(spot.path.len - 1) if spot.path.len > 0 else spot.node
         if decl.sym_ptr == null
             return ""
         sym: = Sema_symbol$@::decl.sym_ptr
@@ -275,44 +277,44 @@ impl Clash
             return ""
         if dot: = sym.name.rfind_char('.')
             sibling: = r.arena.text().s(sym.name.sub(0, dot + 1)).s(r.new_name).take()
-            if other: = r.c.symtab.resolve_fqn(sibling)
-                return r.taken(other.node, s)
+            if other: = r.ctx.symtab.resolve_fqn(sibling)
+                return r.taken(other.node, spot)
         return ""
 
-    priv fn import_refusal(r: Self, s: Spot): U8[] //<
+    priv fn import_refusal(r: Self, spot: Spot): U8[] //<
         //< Why the new name is taken by an import line of the place's file; empty where it is not
-        alias: = r.c.peek_file_alias(s.file, r.new_name)
+        alias: = r.ctx.peek_file_alias(spot.file, r.new_name)
         if (alias != null && alias.decl_node != null) ||
-            r.c.has_explicit_import_symbol(s.file, r.new_name)
+            r.ctx.has_explicit_import_symbol(spot.file, r.new_name)
             return r.arena.text()
-                .s("'\{r.new_name\}' is already bound by an import in \{shown(s.file, r.arena)\}, ")
-                .s("where '\{r.old_name\}' is written").take()
+                .s("'\{r.new_name\}' is already bound by an import in \
+                    \{shown(spot.file, r.arena)\}, ").s("where '\{r.old_name\}' is written").take()
         return ""
 
-    priv fn taken(r: Self, got: Ast_node$@, s: Spot): U8[] //< the message for a collision
+    priv fn taken(r: Self, got: Ast_node$@, spot: Spot): U8[] //< the message for a collision
         return r.arena.text()
             .s("'\{r.new_name\}' is already declared at \{r.where(got)\}, in scope where ")
-            .s("'\{r.old_name\}' is written at \{shown(s.file, r.arena)\}:\{s.line + 1\}:")
-            .s("\{s.character + 1\}").take()
+            .s("'\{r.old_name\}' is written at \{shown(spot.file, r.arena)\}:\{spot.line + 1\}:")
+            .s("\{spot.character + 1\}").take()
 
-    priv fn where(r: Self, n: Ast_node$@): U8[] //< a node's place as a diagnostic names it
-        if n == null
+    priv fn where(r: Self, node: Ast_node$@): U8[] //< a node's place as a diagnostic names it
+        if node == null
             return "?"
-        at: = n.find_deep_child(.k_identifier).unwrap_or(n)
-        pos: = lsp_uses.position_of(r.c, at)
+        at: = node.find_deep_child(.k_identifier).unwrap_or(node)
+        pos: = lsp_uses.position_of(r.ctx, at)
         return r.arena.text().s(shown(at.loc.file(), r.arena)).s(":\{pos.line + 1\}:")
             .s("\{pos.character + 1\}").take()
 
-priv fn own_scope(s: Spot): Ast_node$@? //< the scope a declaration belongs to
-    for i in Range.desc(s.path.len)
-        n: = s.path.get(i)
-        if is_scope(n) && !names_itself(n, s)
+priv fn own_scope(spot: Spot): Ast_node$@? //< the scope a declaration belongs to
+    for i in Range.desc(spot.path.len)
+        n: = spot.path.get(i)
+        if is_scope(n) && !names_itself(n, spot)
             return .some(n)
     return .none
 
-priv fn names_itself(n: Ast_node$@, s: Spot): Bool //<
-    //< whether `n` is what the place's name declares
-    return s.is_decl && n.find_child(.k_identifier) == s.node
+priv fn names_itself(node: Ast_node$@, spot: Spot): Bool //<
+    //< whether `node` is what the place's name declares
+    return spot.is_decl && node.find_child(.k_identifier) == spot.node
 
 priv fn shown(logical: U8[], arena: Arena$@): U8[] //< a file as a diagnostic names it
     defer $out: = Str_builder()
@@ -323,7 +325,7 @@ priv fn shown(logical: U8[], arena: Arena$@): U8[] //< a file as a diagnostic na
 // ⑤ A trait's method is renamed with every implementation, so not here
 // ==========================================
 
-priv fn trait_refusal(c: Sema_ctx$@, spots: List<|Spot|>@, name: U8[], arena: Arena$@): U8[] //<
+priv fn trait_refusal(ctx: Sema_ctx$@, spots: List<|Spot|>@, name: U8[], arena: Arena$@): U8[] //<
     //< Why a method a trait declares, or one that implements a trait, is not renamed; empty where
     //< the target is neither
     //< **The trait and each implementation are matched by the name alone**, and calls through the
@@ -345,9 +347,10 @@ priv fn trait_refusal(c: Sema_ctx$@, spots: List<|Spot|>@, name: U8[], arena: Ar
         type_node: = block.get_decl_type_node()
         if block.kind_id != .k_decl_impl || type_node == null
             continue
-        trait_id: = lsp_uses.trait_with_method(c, type_node.type_id, name)
+        trait_id: = lsp_uses.trait_with_method(ctx, type_node.type_id, name)
         if trait_id != 0
-            return arena.text().s("'\{name\}' implements the trait '\{c.env.display(trait_id)\}'; ")
+            return arena.text()
+                .s("'\{name\}' implements the trait '\{ctx.env.display(trait_id)\}'; ")
                 .s(TRAIT_ADVICE).take()
     return ""
 

@@ -54,31 +54,31 @@ priv const INT_KINDS: Int_kind[8] = ::{ Int_kind::{ .name = "I8", .bits = 8, .si
     Int_kind::{ .name = "U32", .bits = 32, .signed = false },
     Int_kind::{ .name = "U64", .bits = 64, .signed = false } }
 
-priv fn norm(v: I64, k: Int_kind@): I64 //< it wraps at that type's width
+priv fn norm(value: I64, kind: Int_kind@): I64 //< it wraps at that type's width
     //< Signed types wrap as `mod 2^N` too (the same rule as an explicit cast).
-    if k.bits >= 64
-        return v
-    mask: U64 = (1U64 << U64::k.bits) - 1U64
-    m: U64 = U64::v & mask
-    if k.signed && (m >> U64::(k.bits - 1)) != 0U64
+    if kind.bits >= 64
+        return value
+    mask: U64 = (1U64 << U64::kind.bits) - 1U64
+    m: U64 = U64::value & mask
+    if kind.signed && (m >> U64::(kind.bits - 1)) != 0U64
         return I64::(m - mask - 1U64)
     return I64::m
 
-priv fn lo_of(k: Int_kind@): I64
-    return 0I64 if !k.signed else norm(I64::(1U64 << U64::(k.bits - 1)), k)
+priv fn lo_of(kind: Int_kind@): I64
+    return 0I64 if !kind.signed else norm(I64::(1U64 << U64::(kind.bits - 1)), kind)
 
-priv fn hi_of(k: Int_kind@): I64
-    if !k.signed
-        return norm(-1I64, k)
-    return I64::((1U64 << U64::(k.bits - 1)) - 1U64)
+priv fn hi_of(kind: Int_kind@): I64
+    if !kind.signed
+        return norm(-1I64, kind)
+    return I64::((1U64 << U64::(kind.bits - 1)) - 1U64)
 
-priv fn num_text(v: I64, k: Int_kind@, arena: Arena$@): U8[] //< the string
+priv fn num_text(value: I64, kind: Int_kind@, arena: Arena$@): U8[] //< the string
     //< Caution: An unsigned one must read the bit sequence as unsigned (the top end looks like -1).
     b: = arena.text()
-    if k.signed
-        b.s("\{v\}")
+    if kind.signed
+        b.s("\{value\}")
     else
-        b.s("\{U64::v\}")
+        b.s("\{U64::value\}")
     return b.take()
 
 priv struct Expr //< one expression
@@ -86,99 +86,99 @@ priv struct Expr //< one expression
     text: U8[]
     v: I64
 
-priv fn div_of(a: I64, b: I64, k: Int_kind@): I64 //<
+priv fn div_of(left: I64, right: I64, kind: Int_kind@): I64 //<
     //< division and remainder truncating toward zero
     //< Only the minimum / -1 overflows in I64, so it is handled first.
-    if !k.signed
-        return norm(I64::(U64::a / U64::b), k)
-    return norm(-a, k) if b == -1I64 else norm(a / b, k)
+    if !kind.signed
+        return norm(I64::(U64::left / U64::right), kind)
+    return norm(-left, kind) if right == -1I64 else norm(left / right, kind)
 
-priv fn mod_of(a: I64, b: I64, k: Int_kind@): I64
-    if !k.signed
-        return norm(I64::(U64::a % U64::b), k)
-    return 0I64 if b == -1I64 else norm(a % b, k)
+priv fn mod_of(left: I64, right: I64, kind: Int_kind@): I64
+    if !kind.signed
+        return norm(I64::(U64::left % U64::right), kind)
+    return 0I64 if right == -1I64 else norm(left % right, kind)
 
-priv fn less(a: I64, b: I64, k: Int_kind@): Bool
-    return a < b if k.signed else U64::a < U64::b
+priv fn less(left: I64, right: I64, kind: Int_kind@): Bool
+    return left < right if kind.signed else U64::left < U64::right
 
 // ==========================================
-priv fn leaf(r: Prng$@, k: Int_kind@, arena: Arena$@): Expr //< random integer expressions
+priv fn leaf(random: Prng$@, kind: Int_kind@, arena: Arena$@): Expr //< random integer expressions
     //< Caution: **Make unsigned ones too.** Division, remainder, right shift and comparison differ
     //< by sign (`sdiv`/`udiv`, `ashr`/`lshr`). **Make overflows regardless of sign.**
     // The signed minimum cannot be written: `-128I8` negates `128I8`, an out-of-range literal.
-    lo: = lo_of(k) + (1I64 if k.signed else 0I64)
-    hi: = hi_of(k)
+    lo: = lo_of(kind) + (1I64 if kind.signed else 0I64)
+    hi: = hi_of(kind)
     // Caution: **Always include the maximum**, or neither the wrap nor a sign mix-up shows. Small
     // values too, or multiplication always wraps.
     $v: I64 = 0
-    if r.chance(65)
-        small: I64 = 1000I64 if k.bits > 20 else I64::(1U64 << U64::(k.bits / 2))
-        v = r.between(-small if k.signed else 0I64, small)
+    if random.chance(65)
+        small: I64 = 1000I64 if kind.bits > 20 else I64::(1U64 << U64::(kind.bits / 2))
+        v = random.between(-small if kind.signed else 0I64, small)
     else
-        v = r.between(lo, hi)
-    v = norm(v, k)
-    return Expr::{ .text = wrapped(num_text(v, k, arena), k.name, "", arena), .v = v }
+        v = random.between(lo, hi)
+    v = norm(v, kind)
+    return Expr::{ .text = wrapped(num_text(v, kind, arena), kind.name, "", arena), .v = v }
 
-priv fn wrap2(op: U8[], a: Expr@, b: Expr@, v: I64, arena: Arena$@): Expr
-    return Expr::{ .text = paren(a.text, op, b.text, arena), .v = v }
+priv fn wrap2(op: U8[], left: Expr@, right: Expr@, value: I64, arena: Arena$@): Expr
+    return Expr::{ .text = paren(left.text, op, right.text, arena), .v = value }
 
-priv fn gen_int(r: Prng$@, depth: Sz, k: Int_kind@, arena: Arena$@): Expr
-    if depth == 0 || r.chance(35)
-        return leaf(r, k, arena)
+priv fn gen_int(random: Prng$@, depth: Sz, kind: Int_kind@, arena: Arena$@): Expr
+    if depth == 0 || random.chance(35)
+        return leaf(random, kind, arena)
     // Arithmetic is weighted heavily, unary lightly.
-    pick: = r.below(11)
+    pick: = random.below(11)
     if pick < 3
-        a: = gen_int(r, depth - 1, k, arena)
-        b: = gen_int(r, depth - 1, k, arena)
-        which: = r.below(3)
+        a: = gen_int(random, depth - 1, kind, arena)
+        b: = gen_int(random, depth - 1, kind, arena)
+        which: = random.below(3)
         op: = "+" if which == 0 else ("-" if which == 1 else "*")
         v: = a.v + b.v if which == 0 else (a.v - b.v if which == 1 else a.v * b.v)
-        return wrap2(op, a@, b@, norm(v, k), arena)
+        return wrap2(op, a@, b@, norm(v, kind), arena)
     if pick < 5
-        a: = gen_int(r, depth - 1, k, arena)
-        b: = gen_int(r, depth - 1, k, arena)
-        which: = r.below(3)
+        a: = gen_int(random, depth - 1, kind, arena)
+        b: = gen_int(random, depth - 1, kind, arena)
+        which: = random.below(3)
         op: = "&" if which == 0 else ("|" if which == 1 else "^")
         v: = a.v & b.v if which == 0 else (a.v | b.v if which == 1 else a.v ^ b.v)
-        return wrap2(op, a@, b@, norm(v, k), arena)
+        return wrap2(op, a@, b@, norm(v, kind), arena)
     if pick == 5
-        a: = gen_int(r, depth - 1, k, arena)
-        return Expr::{ .text = wrapped("(~(", a.text, "))", arena), .v = norm(~a.v, k) }
-    if pick == 6 && k.signed
+        a: = gen_int(random, depth - 1, kind, arena)
+        return Expr::{ .text = wrapped("(~(", a.text, "))", arena), .v = norm(~a.v, kind) }
+    if pick == 6 && kind.signed
         // Caution: **Always include a unary minus.** Doubled (`-(-x)`) and written bare into C, it
         // becomes the pre-decrement `--x`: valid C, so no warning even under `-Wall -Wextra`.
-        a: = gen_int(r, depth - 1, k, arena)
-        return Expr::{ .text = wrapped("(-(", a.text, "))", arena), .v = norm(-a.v, k) }
+        a: = gen_int(random, depth - 1, kind, arena)
+        return Expr::{ .text = wrapped("(-(", a.text, "))", arena), .v = norm(-a.v, kind) }
     if pick < 9
         // A left shift wraps at `mod 2^N` even when signed; a signed right shift is arithmetic.
-        a: = gen_int(r, depth - 1, k, arena)
-        sh: = r.below(k.bits)
+        a: = gen_int(random, depth - 1, kind, arena)
+        sh: = random.below(kind.bits)
         n: = arena.text().s("\{sh\}").take()
-        right: = r.chance(50)
+        right: = random.chance(50)
         $v: I64 = 0
         if right
-            v = a.v >> I64::sh if k.signed else I64::(U64::a.v >> U64::sh)
+            v = a.v >> I64::sh if kind.signed else I64::(U64::a.v >> U64::sh)
         else
-            v = norm(I64::(U64::a.v << U64::sh), k)
+            v = norm(I64::(U64::a.v << U64::sh), kind)
         return Expr::{ .text = paren(a.text, ">>" if right else "<<", n, arena), .v = v }
-    return gen_divmod(r, depth, k, arena)
+    return gen_divmod(random, depth, kind, arena)
 
-priv fn gen_divmod(r: Prng$@, depth: Sz, k: Int_kind@, arena: Arena$@): Expr //<
+priv fn gen_divmod(random: Prng$@, depth: Sz, kind: Int_kind@, arena: Arena$@): Expr //<
     //< Division and remainder
     //< A divisor of 0 halts at run time, so a known constant replaces it. **The minimum / -1 is not
     //< avoided.** The specification defines it (the dividend back, remainder 0). Only this
     //< shape checks that the generated code sends it to the run-time helper.
-    op: = "/" if r.chance(50) else "%"
-    a: = gen_int(r, depth - 1, k, arena)
-    $b: = gen_int(r, depth - 1, k, arena)
-    if r.chance(30)
+    op: = "/" if random.chance(50) else "%"
+    a: = gen_int(random, depth - 1, kind, arena)
+    $b: = gen_int(random, depth - 1, kind, arena)
+    if random.chance(30)
         // Left to random numbers, a divisor of `-1` comes once in 2^32.
-        minus_one: = arena.text().s("(0").s(k.name).s(" - 1").s(k.name).s(")").take()
-        b = Expr::{ .text = minus_one, .v = norm(-1I64, k) }
+        minus_one: = arena.text().s("(0").s(kind.name).s(" - 1").s(kind.name).s(")").take()
+        b = Expr::{ .text = minus_one, .v = norm(-1I64, kind) }
     if b.v == 0I64
-        one: = arena.text().s("1").s(k.name).take()
+        one: = arena.text().s("1").s(kind.name).take()
         b = Expr::{ .text = paren(b.text, "+", one, arena), .v = 1I64 }
-    v: = div_of(a.v, b.v, k) if op.equals("/") else mod_of(a.v, b.v, k)
+    v: = div_of(a.v, b.v, kind) if op.equals("/") else mod_of(a.v, b.v, kind)
     return wrap2(op, a@, b@, v, arena)
 
 priv struct Item //< the items printed
@@ -189,12 +189,12 @@ priv struct Item //< the items printed
 
 priv const CMP_OPS: U8[][6] = ::{ "<", "<=", ">", ">=", "==", "!=" }
 
-priv fn gen_cmp(r: Prng$@, k: Int_kind@, arena: Arena$@): Item
-    op: = CMP_OPS[r.below(6)]
-    a: = gen_int(r, 3, k, arena)
-    b: = gen_int(r, 3, k, arena)
-    lt: = less(a.v, b.v, k)
-    gt: = less(b.v, a.v, k)
+priv fn gen_cmp(random: Prng$@, kind: Int_kind@, arena: Arena$@): Item
+    op: = CMP_OPS[random.below(6)]
+    a: = gen_int(random, 3, kind, arena)
+    b: = gen_int(random, 3, kind, arena)
+    lt: = less(a.v, b.v, kind)
+    gt: = less(b.v, a.v, kind)
     $yes: = false
     if op.equals("<")
         yes = lt
@@ -212,17 +212,17 @@ priv fn gen_cmp(r: Prng$@, k: Int_kind@, arena: Arena$@): Item
         .want = "true" if yes else "false" }
 
 // ==========================================
-priv fn src_values(r: Prng$@, k: Int_kind@, out: List<|I64|>$@) //<
+priv fn src_values(random: Prng$@, kind: Int_kind@, out: List<|I64|>$@) //<
     //< It puts the source values for the integer explicit cast `Dst::src` into out
     //< The specification defines `::` as "truncation, bit pattern" (`U8::300` is 44).
     //< Caution: **Always include a value with the top bit set and one without**, or neither the
     //< extension nor the truncation's wrap shows. With 64 pairs, few values are taken per type.
-    lo: = lo_of(k)
-    hi: = hi_of(k)
+    lo: = lo_of(kind)
+    hi: = hi_of(kind)
     out.push(lo)
     out.push(hi)
-    out.push(norm(-1I64 if k.signed else 1I64, k))
-    out.push(norm(r.between(lo, hi), k))
+    out.push(norm(-1I64 if kind.signed else 1I64, kind))
+    out.push(norm(random.between(lo, hi), kind))
 
 priv const F32_EDGES: I64[3] = ::{ 127, -126, -149 } //<
     //< The exponent's ends per type
@@ -310,11 +310,11 @@ priv const F2I_MANTISSAS: I64[4] = ::{ 0, -1, 201, -128 } //<
     //< only values whose truncation fits**: the rest, and NaN, are undefined.
 priv const F2I_SHIFTS: Sz[4] = ::{ 0, 1, 1, 0 }
 
-priv fn cast_items(r: Prng$@, decls: List<|U8[]|>$@, out: List<|Item|>$@, arena: Arena$@)
+priv fn cast_items(random: Prng$@, decls: List<|U8[]|>$@, out: List<|Item|>$@, arena: Arena$@)
     for si in Range.asc(8)
         k: = INT_KINDS[si]@
         $vals: = List<|I64|>(arena)
-        src_values(r, k, vals@)
+        src_values(random, k, vals@)
         for j in Range.asc(vals.len)
             v: = vals.get(j)
             src: = arena.text().s("s_").s(k.name).s("_\{j\}").take()
@@ -355,16 +355,16 @@ priv fn cast_items(r: Prng$@, decls: List<|U8[]|>$@, out: List<|Item|>$@, arena:
                     want: = num_text(trunc, dk, arena)
                     out.push(Item::{ .ty = dk.name, .text = cast, .want = want })
 
-priv fn gen_item(r: Prng$@, arena: Arena$@): Item
-    if r.chance(25)
-        k: = FLOAT_KINDS[r.below(2)]@
-        if r.chance(75)
-            e: = gen_float(r, 3, k, arena)
+priv fn gen_item(random: Prng$@, arena: Arena$@): Item
+    if random.chance(25)
+        k: = FLOAT_KINDS[random.below(2)]@
+        if random.chance(75)
+            e: = gen_float(random, 3, k, arena)
             return Item::{ .ty = k.name, .text = e.text,
                 .want = float_bytes(e.v, k, arena) }
-        op: = CMP_OPS[r.below(6)]
-        a: = gen_float(r, 2, k, arena)
-        b: = gen_float(r, 2, k, arena)
+        op: = CMP_OPS[random.below(6)]
+        a: = gen_float(random, 2, k, arena)
+        b: = gen_float(random, 2, k, arena)
         $yes: = false
         if op.equals("<")
             yes = a.v < b.v
@@ -380,21 +380,21 @@ priv fn gen_item(r: Prng$@, arena: Arena$@): Item
             yes = a.v != b.v
         return Item::{ .ty = "Bool", .text = paren(a.text, op, b.text, arena),
             .want = "true" if yes else "false" }
-    k: = INT_KINDS[r.below(8)]@
-    if r.chance(75)
-        e: = gen_int(r, 4, k, arena)
+    k: = INT_KINDS[random.below(8)]@
+    if random.chance(75)
+        e: = gen_int(random, 4, k, arena)
         return Item::{ .ty = k.name, .text = e.text, .want = num_text(e.v, k, arena) }
-    return gen_cmp(r, k, arena)
+    return gen_cmp(random, k, arena)
 
 // ==========================================
 // Building the program and running it on both backends
 // ==========================================
 
-priv fn append_show(b: Str_builder$@, k: Float_kind@) //< it prints the bit sequence
+priv fn append_show(out: Str_builder$@, kind: Float_kind@) //< it prints the bit sequence
     //< Caution: Go by way of `U8@` (`U64::v` is a value conversion and the bits do not remain).
-    b.s("priv fn show_").s(k.name).s("(v: ").s(k.name).s(")\n")
-    b.s("  p: U8@ = U8@::(v@)\n  for i in Range.asc(\{k.bytes\})\n")
-    b.s("    io.out().s(\"\\{(p + i)$\\} \")\n  io.out().s(\"\\n\")\n\n")
+    out.s("priv fn show_").s(kind.name).s("(v: ").s(kind.name).s(")\n")
+    out.s("  p: U8@ = U8@::(v@)\n  for i in Range.asc(\{kind.bytes\})\n")
+    out.s("    io.out().s(\"\\{(p + i)$\\} \")\n  io.out().s(\"\\n\")\n\n")
 
 priv fn build_arith_program(decls: List<|U8[]|>@, items: List<|Item|>@, arena: Arena$@): U8[] //<
     //< It builds the program that binds each item to a typed local and prints it
@@ -465,9 +465,9 @@ priv fn line_at(lines: List<|U8[]|>@, i: Sz): U8[] //< line n (empty if there is
 priv const MAX_SHOWN: Sz = 10 //<
     //< It checks that the three agree and lists only the first disagreements
 
-priv fn compare(items: List<|Item|>@, c: U8[], l: U8[], arena: Arena$@): U8[]
-    $cl: = c.lines(arena)
-    $ll: = l.lines(arena)
+priv fn compare(items: List<|Item|>@, c_text: U8[], llvm_text: U8[], arena: Arena$@): U8[]
+    $cl: = c_text.lines(arena)
+    $ll: = llvm_text.lines(arena)
     $bad: Sz = 0
     detail: = arena.text()
     for i in Range.asc(items.len)
@@ -492,22 +492,22 @@ priv const ESCAPE_BYTES: U8[6] = ::{ 10U8, 13U8, 9U8, 0U8, 92U8, 34U8 } //<
     //< Other escapes are checked elsewhere, against the specification.
 priv const ESCAPE_TEXTS: U8[][6] = ::{ "\\n", "\\r", "\\t", "\\0", "\\\\", "\\\"" }
 
-priv fn escape_of(b: U8): U8[]
+priv fn escape_of(byte: U8): U8[]
     for i in Range.asc(6)
-        if ESCAPE_BYTES[i] == b
+        if ESCAPE_BYTES[i] == byte
             return ESCAPE_TEXTS[i]
     return ""
 
-priv fn gen_bytes(r: Prng$@, n: Sz, arena: Arena$@): U8[] //< one random byte sequence
+priv fn gen_bytes(random: Prng$@, count: Sz, arena: Arena$@): U8[] //< one random byte sequence
     //< `\` and `"` are never placed bare (the escape set has them).
     b: = arena.text()
-    for _i in Range.asc(n)
-        if r.chance(30)
-            b.c(ESCAPE_BYTES[r.below(6)])
+    for _i in Range.asc(count)
+        if random.chance(30)
+            b.c(ESCAPE_BYTES[random.below(6)])
             continue
-        $c: = U8::r.between(32I64, 126I64)
+        $c: = U8::random.between(32I64, 126I64)
         for c == 92U8 || c == 34U8
-            c = U8::r.between(32I64, 126I64)
+            c = U8::random.between(32I64, 126I64)
         b.c(c)
     return b.take()
 
@@ -527,10 +527,10 @@ priv fn build_string_program(strings: List<|U8[]|>@, arena: Arena$@): U8[]
         b.s("  io.out().s(\"\\n\")\n")
     return b.take()
 
-priv fn bytes_want(s: U8[], arena: Arena$@): U8[] //<
+priv fn bytes_want(text: U8[], arena: Arena$@): U8[] //<
     //< A space always follows each byte (including the last one, before a newline)
     b: = arena.text()
-    for byte in s
+    for byte in text
         b.s("\{byte\} ")
     return b.take()
 

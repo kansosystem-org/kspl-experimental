@@ -4,7 +4,7 @@
 
 | You are | What to read |
 | :-- | :-- |
-| Writing programs, with no prebuilt `ksplc` for your system | Only "The two-stage bootstrap (`make`)" and "Putting `ksplc` on the PATH" below. Then continue with the quick start in the root [`README.md`](../README.md) |
+| Writing programs, with no prebuilt `ksplc` for your system | Only "The bootstrap (`make`)" and "Putting `ksplc` on the PATH" below. Then continue with the quick start in the root [`README.md`](../README.md) |
 | Changing Kanso itself | All of it |
 
 ## Requirements
@@ -23,7 +23,7 @@
 
 **Clone the repository, set the console to UTF-8, and run `make` in its top folder.** The steps in this section, in order:
 
-1. `make` builds the compiler ("The two-stage bootstrap" below).
+1. `make` builds the compiler ("The bootstrap" below).
 2. `make install` puts it on your PATH, so you can type `ksplc` anywhere (optional).
 3. If you change Kanso: `make fmt`, `make lint` and `make debug` format, check and test it.
 
@@ -31,7 +31,7 @@
 
 **On WSL2, Docker on WSL2 included, keep the clone inside Linux's own filesystem** (`~/src/kspl`), not on `/mnt/c`, where small files cost more and permissions can differ.
 
-### The two-stage bootstrap (`make`)
+### The bootstrap (`make`)
 
 **`make` builds the compiler in three steps, because the compiler is written in KSPL.** The first compiler is the *seed*, a copy of the compiler already translated to C (`ksplc/seed.c`).
 

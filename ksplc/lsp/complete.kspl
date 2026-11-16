@@ -53,7 +53,7 @@ struct Pick
         //< **The description is read from it.** It is set on every path a candidate comes from, so
         //< none shows without one; null where the path names none.
     type_id: I32 //<
-        //< The candidate's **own** type, where the path finding it knows one; 0 where it does not.
+        //< The candidate's **own** type, where the path finding it knows one; 0 where it does not
         //< Caution: **Do not take a function's from its symbol.** A symbol's `type_id` is the
         //< return type, so a `fn f(): Sz` would read as an `Sz`; `detail_of` reads it from the
         //< declaration.
@@ -147,17 +147,17 @@ priv fn picks_in_scope(state: Doc_state@, path: List<|Ast_node$@|>@, mark: Ast_n
         got: = named_by(child)
         add_pick(out, got.name, got.kind, prefix, got.node, got.type_id)
 
-priv fn detail_of(c: Sema_ctx$@, p: Pick, out: Str_builder$@) //<
+priv fn detail_of(ctx: Sema_ctx$@, pick: Pick, out: Str_builder$@) //<
     //< The text shown beside the name in the list
     //< **A function's is its signature**, a field's, a constant's and a variable's its type, as
     //< rust-analyzer, gopls and clangd show it.
     //< **A struct, an enum, an interface and a module get none**: the icon for `kind` shows it.
-    if p.node.is_fn_decl()
-        defer $sig: = lsp_spell.format_fn_sig_flat(c, p.node)
+    if pick.node.is_fn_decl()
+        defer $sig: = lsp_spell.format_fn_sig_flat(ctx, pick.node)
         out.s(sig.slice())
         return
-    if p.type_id != 0
-        t: = c.env.display(p.type_id)
+    if pick.type_id != 0
+        t: = ctx.env.display(pick.type_id)
         out.s(t)
 
 priv fn send_picks(state: Doc_state$@, out: List<|Pick|>@, id_val: json.Value, arena: Arena$@) //<
@@ -278,50 +278,50 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
     else
         picks_in_scope(state, path, mark, swapped.prefix, out@)
     // By name; picks of one name keep the order they were found in.
-    $sorted: = out.order_by(fn(a: Pick@, b: Pick@; ): I32 {
-        return a.name.compare(b.name);
+    $sorted: = out.order_by(fn(left: Pick@, right: Pick@; ): I32 {
+        return left.name.compare(right.name);
     }, arena)
     send_picks(state, sorted@, id_val, arena)
 
-priv fn picks_of_receiver(c: Sema_ctx$@, recv: lsp_nav.Dot_receiver, prefix: U8[],
+priv fn picks_of_receiver(ctx: Sema_ctx$@, recv: lsp_nav.Dot_receiver, prefix: U8[],
     out: List<|Pick|>$@) //<
         //< The members (fields and methods) of the receiver's type
         //< They come from the same `dot_receiver_of` (`nav.kspl`) that jump-to-definition uses.
         //< **A module alias does not come here** (`qualifier_of` handles it).
     if recv.type_name.len > 0
-        picks_of_type(c, recv.type_name, prefix, out)
+        picks_of_type(ctx, recv.type_name, prefix, out)
 
-priv fn picks_of_type(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
+priv fn picks_of_type(ctx: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
     //< That type's fields and methods
     //< Caution: **Both the path from a receiver and the path qualified by a type's name must go
     //< through here** (Principle 6). Otherwise a member shows for `p.` and not for `P.`.
-    base_only: = c.env.original_generic_name(raw).get_generic_base_name()
+    base_only: = ctx.env.original_generic_name(raw).get_generic_base_name()
     // Fields.
     // **Look a generic up by its base name too** (a `List<|U8[]|>` is registered under
     // `List`).
-    switch c.env.get_struct_def(raw)
+    switch ctx.env.get_struct_def(raw)
     case .some(sd)
         add_fields(sd, prefix, out)
     case .none
-        switch c.env.get_struct_def(base_only)
+        switch ctx.env.get_struct_def(base_only)
         case .some(sd2)
             add_fields(sd2, prefix, out)
         default
-            add_declared_fields(c, raw, prefix, out)
+            add_declared_fields(ctx, raw, prefix, out)
     // Methods. **A trait value's are its trait's** (`w.` on a `w: io.Writer`); a trait has no
     // entry in the methods table.
-    add_trait_methods(c, raw, prefix, out)
+    add_trait_methods(ctx, raw, prefix, out)
     if !base_only.equals(raw)
-        add_trait_methods(c, base_only, prefix, out)
-    add_methods(c, raw, prefix, out)
+        add_trait_methods(ctx, base_only, prefix, out)
+    add_methods(ctx, raw, prefix, out)
     if !base_only.equals(raw)
-        add_methods(c, base_only, prefix, out)
+        add_methods(ctx, base_only, prefix, out)
     // A method with its own type arguments is not in the table; it is found by the template's name.
-    add_by_dot_prefix(c.generics.templates, base_only, prefix, out, KIND_METHOD)
+    add_by_dot_prefix(ctx.generics.templates, base_only, prefix, out, KIND_METHOD)
 
-priv fn add_variants(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@) //<
+priv fn add_variants(ctx: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@) //<
     //< An enum's variants, which follow its name (`Color.red`) and never a value of it
-    switch c.env.get_enum_def(type_name)
+    switch ctx.env.get_enum_def(type_name)
     case .some(ed)
         for v in ed.variants_list
             add_pick(out, v.name, KIND_ENUM_MEMBER, prefix, v.node, 0)
@@ -331,11 +331,11 @@ priv fn add_fields(sd: sema_type_def.Struct_def@, prefix: U8[], out: List<|Pick|
     for f in sd.fields_list
         add_pick(out, f.name, KIND_FIELD, prefix, f.node, f.type_id)
 
-priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
+priv fn add_declared_fields(ctx: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
     //< The fields declared by a generic nothing instantiated, which has no struct entry to list
     //< Caution: **Only for a generic.** Any other struct has its entry. One not found by that
     //< name is a name that did not resolve (a bare `P.`), not one to work around.
-    switch lsp_nav.struct_decl_of(c, raw)
+    switch lsp_nav.struct_decl_of(ctx, raw)
     case .some(decl)
         if decl.find_child(.k_type_gen_params) == null
             return
@@ -348,21 +348,21 @@ priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|P
                         t_node.type_id if t_node != null else 0)
     case .none {}
 
-priv fn add_trait_methods(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@)
-    switch c.env.get_trait_def(type_name)
+priv fn add_trait_methods(ctx: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@)
+    switch ctx.env.get_trait_def(type_name)
     case .some(td)
         for m in td.methods_list
             add_pick(out, m.name, KIND_METHOD, prefix, m.node, 0)
     case .none {}
 
-priv fn add_methods(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@)
+priv fn add_methods(ctx: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@)
     // The table is built only on demand (ensure_instance_methods in
     // ksplc/sema/decl/mono_queue.kspl). Without that call, a type nobody called methods on is
     // empty.
-    type_id: = c.env.type_to_id.get(type_name).unwrap_or(0)
+    type_id: = ctx.env.type_to_id.get(type_name).unwrap_or(0)
     if type_id != 0
-        c.ensure_instance_methods(type_id) catch {}
-    switch c.env.methods_of(type_name)
+        ctx.ensure_instance_methods(type_id) catch {}
+    switch ctx.env.methods_of(type_name)
     case .some(m)
         for e in m.items()
             add_pick(out, e.key, KIND_METHOD, prefix, e.value.node, 0)
@@ -370,7 +370,7 @@ priv fn add_methods(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pic
 
 priv fn add_by_dot_prefix(map: Map<|U8[], Ast_node$@|>$@, head: U8[], prefix: U8[],
     out: List<|Pick|>$@, kind: I32) //<
-        //< From the `<head>.<name>` keys it collects the `<name>`s.
+        //< From the `<head>.<name>` keys it collects the `<name>`s
     if map == null
         return
     lead: = base_core.arena.text().s(head).c('.').take()
@@ -379,10 +379,10 @@ priv fn add_by_dot_prefix(map: Map<|U8[], Ast_node$@|>$@, head: U8[], prefix: U8
             continue
         add_pick(out, e.key.sub_from(lead.len), kind, prefix, e.value, 0)
 
-priv fn add_by_dot_prefix_syms(c: Sema_ctx$@, head: U8[], prefix: U8[], file: U8[],
+priv fn add_by_dot_prefix_syms(ctx: Sema_ctx$@, head: U8[], prefix: U8[], file: U8[],
     out: List<|Pick|>$@) //<
         //< The names a module's alias reaches from file
-    map: = c.symtab.by_fqn
+    map: = ctx.symtab.by_fqn
     if map == null
         return
     lead: = base_core.arena.text().s(head).c('.').take()
@@ -397,7 +397,7 @@ priv fn add_by_dot_prefix_syms(c: Sema_ctx$@, head: U8[], prefix: U8[], file: U8
         // Caution: **List what the access rule lets file name, and nothing else.** A wider list
         // offers another package's internal helpers, an error once chosen; a list of `pub` names
         // alone hides a sibling file's internal ones, which compile.
-        if !c.is_symbol_visible_from(e.value, file)
+        if !ctx.is_symbol_visible_from(e.value, file)
             continue
         add_pick(out, tail, kind_of_sym(e.value), prefix, e.value.node, 0)
 

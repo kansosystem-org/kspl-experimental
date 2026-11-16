@@ -208,7 +208,7 @@ function ksmdFind(ks) {
     show();
     if (m && m.kind === "t") {
       ks.root.focus({ preventScroll: true });
-      ks.place([0, m.block, m.item, m.from], [0, m.block, m.item, m.to]);
+      ks.place([ks.SPOT.TEXT, m.block, m.item, m.from], [ks.SPOT.TEXT, m.block, m.item, m.to]);
     } else if (m) {
       ks.range.set(m.block, m.row, m.column, null);
       const el = cellOf(m);

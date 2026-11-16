@@ -15,7 +15,7 @@ import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/i2c"
 import "ksos/drivers/rp2040/timer"
 
-priv const BRIGHTNESS: U32 = 4 //< the brightness, 0 to 15.
+priv const BRIGHTNESS: U32 = 4 //< the brightness, 0 to 15
     //< Caution: **Do not raise it too far.** There are 128 LEDs, so it drains the battery by itself
     //< (and the driving decision watches the battery).
 
@@ -28,15 +28,15 @@ enum Look //< the expressions it can show
     cry
 
 impl Look
-    fn set(l: Self) //< changes the expression
+    fn set(r: Self) //< changes the expression
         //< **Reset the frame to the first.** Otherwise it starts from a frame partway through the
         //< previous expression.
-        look = l
+        look = r
         frame = 0
         shown = false
 
-    priv fn frames_of(l: Self): Sz //< the frame count per expression
-        switch l
+    priv fn frames_of(r: Self): Sz //< the frame count per expression
+        switch r
         case .rotate
             return ROTATE_FRAMES
         case .blink
@@ -48,8 +48,8 @@ impl Look
         default {}
         return 0
 
-    priv fn step_ms_of(l: Self): U32 //< one frame's length in ms, per expression
-        switch l
+    priv fn step_ms_of(r: Self): U32 //< one frame's length in ms, per expression
+        switch r
         case .rotate
             return 150
         case .blink
@@ -61,18 +61,18 @@ impl Look
         default {}
         return 1000
 
-    priv fn row_of(l: Self, f: Sz, y: Sz): U16 //<
-        //< builds frame f's left and right eyes into one row
+    priv fn row_of(r: Self, frame: Sz, y: Sz): U16 //<
+        //< builds the left and right eyes of frame `frame` into one row
         //< **The left eye is the low byte and the right the high byte.**
-        switch l
+        switch r
         case .rotate
-            return turned_row(ROTATE_L[f], y) | (turned_row(ROTATE_R[f], y) << 8U16)
+            return turned_row(ROTATE_L[frame], y) | (turned_row(ROTATE_R[frame], y) << 8U16)
         case .blink
-            return turned_row(BLINK_LR[f], y) | (turned_row(BLINK_LR[f], y) << 8U16)
+            return turned_row(BLINK_LR[frame], y) | (turned_row(BLINK_LR[frame], y) << 8U16)
         case .smile
-            return turned_row(SMILE_LR[f], y) | (turned_row(SMILE_LR[f], y) << 8U16)
+            return turned_row(SMILE_LR[frame], y) | (turned_row(SMILE_LR[frame], y) << 8U16)
         case .cry
-            return turned_row(CRY_LR[f], y) | (turned_row(CRY_LR[f], y) << 8U16)
+            return turned_row(CRY_LR[frame], y) | (turned_row(CRY_LR[frame], y) << 8U16)
         default {}
         return 0U16
 

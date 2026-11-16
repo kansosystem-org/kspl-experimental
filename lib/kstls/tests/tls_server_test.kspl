@@ -49,8 +49,9 @@ fn test_tls_server_load_refusals()
         load_error(c.cert_pem, c.key_pem, arena).is_none(), "")
     verdict.pass("Each wrong certificate or key is refused, and says which it was.")
 
-priv fn loaded(c: Test_cert, arena: Arena$@): Tls_server$@ //< a server on `c`, which must load
-    return Tls_server.load(c.cert_pem, c.key_pem, arena)
+priv fn loaded(test_cert: Test_cert, arena: Arena$@): Tls_server$@ //<
+    //< a server on `test_cert`, which must load
+    return Tls_server.load(test_cert.cert_pem, test_cert.key_pem, arena)
         catch panic("a certificate and its own key should load")
 
 fn test_tls_server_facts()
@@ -113,68 +114,70 @@ priv const PING: U8[] = "ping"
 priv const PONG: U8[] = "pong"
 priv const QUIET_MS: I32 = 200 //< how long the socket must stay unready with a record held
 
-priv fn wait_for(s: Tls_session@, conn: net.Tcp_stream$@, deadline: I64): Bool //<
+priv fn wait_for(session: Tls_session@, conn: net.Tcp_stream$@, deadline: I64): Bool //<
     //< Waits for what the session needs next: the socket to take its bytes, or to bring more
-    return tls.wait_before(conn, WRITABLE if s.pending() else READABLE, deadline)
+    return tls.wait_before(conn, WRITABLE if session.pending() else READABLE, deadline)
 
-priv fn read_all(p: Srv$@, s: Tls_session$@, conn: net.Tcp_stream$@, want: Sz, deadline: I64): Bool
+priv fn read_all(srv: Srv$@, session: Tls_session$@, conn: net.Tcp_stream$@, want: Sz,
+    deadline: I64): Bool
     $got: U8[16] = ::{}
     $have: Sz = 0
     for have < want
-        n: = s.read(conn, (U8$[]::got).sub_mut(have, want - have)) catch e
-            if e == Tls_session_error.would_block && wait_for(s, conn, deadline)
-                if have == 0
-                    p.idle_reads += 1
-                continue
-            p.error = e
-            p.failed = true
-            return false
+        n: =
+            session.read(conn, (U8$[]::got).sub_mut(have, want - have)) catch e
+                if e == Tls_session_error.would_block && wait_for(session, conn, deadline)
+                    if have == 0
+                        srv.idle_reads += 1
+                    continue
+                srv.error = e
+                srv.failed = true
+                return false
         if n == 0
             return false
         have += n
     return (U8[]::got).sub(0, want).equals(PING)
 
-priv fn write_all(s: Tls_session$@, conn: net.Tcp_stream$@, bytes: U8[], deadline: I64): Bool
+priv fn write_all(session: Tls_session$@, conn: net.Tcp_stream$@, bytes: U8[], deadline: I64): Bool
     $sent: Sz = 0
     for sent < bytes.len
-        n: = s.write(conn, bytes.sub_from(sent)) catch e
-            if e == Tls_session_error.would_block && wait_for(s, conn, deadline)
+        n: = session.write(conn, bytes.sub_from(sent)) catch e
+            if e == Tls_session_error.would_block && wait_for(session, conn, deadline)
                 continue
             return false
         sent += n
-    for s.pending()
-        s.flush(conn) catch e
-            if e != Tls_session_error.would_block || !wait_for(s, conn, deadline)
+    for session.pending()
+        session.flush(conn) catch e
+            if e != Tls_session_error.would_block || !wait_for(session, conn, deadline)
                 return false
     return true
 
-extern fn tls_server_test_peer(p: Srv$@): Void$@
-    conn: = p.listener.accept() catch panic("accept should succeed once a client connects")
+extern fn tls_server_test_peer(srv: Srv$@): Void$@
+    conn: = srv.listener.accept() catch panic("accept should succeed once a client connects")
     conn.set_nonblocking() catch panic("the accepted socket should become non-blocking")
-    s: = Tls_session.start(p.server) catch panic("a session should start")
+    s: = Tls_session.start(srv.server) catch panic("a session should start")
     $one: U8[1] = ::{}
-    p.empty_read = (s.read(conn, (U8$[]::one).sub_mut(0, 0)) catch 1) == 0
+    srv.empty_read = (s.read(conn, (U8$[]::one).sub_mut(0, 0)) catch 1) == 0
     deadline: = sys.deadline_after_ms(SRV_WAIT_MS)
-    if read_all(p, s, conn, PING.len, deadline) && p.act != Srv_act.first_error
-        if p.act == Srv_act.two_records
-            read_second(p, s, conn)
-        p.echoed = write_all(s, conn, PONG, deadline)
+    if read_all(srv, s, conn, PING.len, deadline) && srv.act != Srv_act.first_error
+        if srv.act == Srv_act.two_records
+            read_second(srv, s, conn)
+        srv.echoed = write_all(s, conn, PONG, deadline)
         s.close(conn)
     s.free()
     conn.free()
     return null
 
-priv fn read_second(p: Srv$@, s: Tls_session$@, conn: net.Tcp_stream$@) //<
+priv fn read_second(srv: Srv$@, session: Tls_session$@, conn: net.Tcp_stream$@) //<
     //< Reads the second of two records that came together, with no wait on the socket
-    p.held = s.buffered()
-    p.quiet = !tls.wait_before(conn, READABLE, sys.deadline_after_ms(QUIET_MS))
+    srv.held = session.buffered()
+    srv.quiet = !tls.wait_before(conn, READABLE, sys.deadline_after_ms(QUIET_MS))
     $got: U8[16] = ::{}
-    n: = s.read(conn, U8$[]::got) catch 0
-    p.second = (U8[]::got).sub(0, n).equals(PING)
-    p.drained = !s.buffered()
+    n: = session.read(conn, U8$[]::got) catch 0
+    srv.second = (U8[]::got).sub(0, n).equals(PING)
+    srv.drained = !session.buffered()
 
-priv fn spawn_srv(p: Srv$@): thread.Thread //< starts the server's thread on `p`
-    return thread.Thread.spawn<|Srv|>(tls_server_test_peer, p) catch panic("thread spawn failed")
+priv fn spawn_srv(srv: Srv$@): thread.Thread //< starts the server's thread on `srv`
+    return thread.Thread.spawn<|Srv|>(tls_server_test_peer, srv) catch panic("thread spawn failed")
 
 priv fn srv_on(server: Tls_server$@, act: Srv_act): Srv //< a listener on a free loopback port
     listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed")

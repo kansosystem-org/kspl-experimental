@@ -37,11 +37,13 @@ pub struct Sample_config //< how adventurous the sampling is, and which candidat
 impl Sample_config
     pub fn greedy(): Sample_config //< the settings under which `sample` behaves like `argmax`
         return Sample_config::{ .temperature = 0.0, .top_k = 0, .top_p = 1.0 }
-priv fn ahead(probs: F64$@, a: Sz, b: Sz): Bool //< whether candidate `a` ranks before `b`
+priv fn ahead(probs: F64$@, candidate: Sz, other: Sz): Bool //<
+    //< whether `candidate` ranks before `other`
     //< Caution: **Break a tie by the lower ID.** The order has to be total. Otherwise which of two
     //< equal candidates survives a top-k cut depends on the algorithm. A seed then stops giving
     //< the same run.
-    return (probs + a)$ > (probs + b)$ || ((probs + a)$ == (probs + b)$ && a < b)
+    return (probs + candidate)$ > (probs + other)$ ||
+        ((probs + candidate)$ == (probs + other)$ && candidate < other)
 
 priv fn sift_down(idx: Sz$@, probs: F64$@, from: Sz, len: Sz) //< restores the heap below `from`
     //< The heap keeps its last-ranked candidate at the root, so a better one can replace it.
@@ -60,19 +62,20 @@ priv fn sift_down(idx: Sz$@, probs: F64$@, from: Sz, len: Sz) //< restores the h
         (idx + worst)$ = held
         at = worst
 
-priv fn rank_top(idx: Sz$@, probs: F64$@, n: Sz, k: Sz) //<
-    //< Puts the `k` best of `n` candidates first in `idx`, in rank order; the rest is left unsorted
-    //< A heap of `k` keeps the best seen so far, so it takes O(n log k). A vocabulary of over
-    //< 100,000 with a top-k of 40 is one pass. With `k == n` it is a heapsort, O(n log n).
-    for $i: = k / 2 - 1; i >= 0; i -= 1
-        sift_down(idx, probs, i, k)
-    for i in Range.asc(n - k)
-        cand: = (idx + k + i)$
+priv fn rank_top(idx: Sz$@, probs: F64$@, count: Sz, top: Sz) //<
+    //< Puts the `top` best of `count` candidates first in `idx`, in rank order, the rest unsorted
+    //< A heap of `top` keeps the best seen so far, so it takes O(`count` log `top`). A vocabulary
+    //< of over 100,000 with a top-k of 40 is one pass. With `top == count` it is a heapsort,
+    //< O(`count` log `count`).
+    for $i: = top / 2 - 1; i >= 0; i -= 1
+        sift_down(idx, probs, i, top)
+    for i in Range.asc(count - top)
+        cand: = (idx + top + i)$
         if ahead(probs, cand, idx$)
-            (idx + k + i)$ = idx$
+            (idx + top + i)$ = idx$
             idx$ = cand
-            sift_down(idx, probs, 0, k)
-    for $end: = k - 1; end > 0; end -= 1
+            sift_down(idx, probs, 0, top)
+    for $end: = top - 1; end > 0; end -= 1
         held: = idx$
         idx$ = (idx + end)$
         (idx + end)$ = held

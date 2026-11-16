@@ -60,34 +60,34 @@ fn blocks_size(doc: Document@, blocks: List<|Block|>@, from: Sz, to: Sz): Sz //<
         bytes += 1 + out.slice().len
     return bytes
 
-priv fn write_block(doc: Document@, b: Block, at: Positions@, out: Str_builder$@)
+priv fn write_block(doc: Document@, block: Block, at: Positions@, out: Str_builder$@)
     // A paragraph's or a heading's alignment and note stand on a line of braces before it.
-    if b.align != .none || b.note.len > 0
+    if block.align != .none || block.note.len > 0
         $aligned: = plain_look()
-        aligned.align = b.align
-        write_braces(aligned, b.note, "", out)
+        aligned.align = block.align
+        write_braces(aligned, block.note, "", out)
         out.c('\n')
-    switch b.kind
+    switch block.kind
     case .paragraph
-        write_inlines(doc, b.first, b.count, true, "", out)
+        write_inlines(doc, block.first, block.count, true, "", out)
         out.c('\n')
     case .heading
-        for _ in Range.asc(b.level)
+        for _ in Range.asc(block.level)
             out.c('#')
         out.c(' ')
-        write_inlines(doc, b.first, b.count, false, "", out)
+        write_inlines(doc, block.first, block.count, false, "", out)
         out.c('\n')
     case .code
-        ticks: = fence_length(b.text)
+        ticks: = fence_length(block.text)
         for _ in Range.asc(ticks)
             out.c('`')
-        out.s(b.label).c('\n').s(b.text)
+        out.s(block.label).c('\n').s(block.text)
         for _ in Range.asc(ticks)
             out.c('`')
         out.c('\n')
     case .list
-        for i in Range.asc(b.count)
-            item: = doc.items.get(b.first + i)
+        for i in Range.asc(block.count)
+            item: = doc.items.get(block.first + i)
             for _ in Range.asc(item.depth)
                 out.s("  ")
             out.s("1. " if item.ordered else "- ")
@@ -97,33 +97,33 @@ priv fn write_block(doc: Document@, b: Block, at: Positions@, out: Str_builder$@
             out.c('\n')
     case .quote
         out.s("> ")
-        write_inlines(doc, b.first, b.count, false, "> ", out)
+        write_inlines(doc, block.first, block.count, false, "> ", out)
         out.c('\n')
     case .divider
         out.s("---\n")
     case .blank
         out.s("\\\n")
     case .table
-        write_table(doc, doc.tables[b.first]@, b.invisible, at, out)
+        write_table(doc, doc.tables[block.first]@, block.invisible, at, out)
     case .include
         out.s(":::include")
-        write_attribute("path", b.text, out)
-        write_invisible(b.invisible, out)
+        write_attribute("path", block.text, out)
+        write_invisible(block.invisible, out)
         out.s("\n:::\n")
     case .chart
-        write_chart(doc, doc.charts[b.first]@, b.invisible, out)
-        write_drawings(doc.charts[b.first].drawings@, out)
+        write_chart(doc, doc.charts[block.first]@, block.invisible, out)
+        write_drawings(doc.charts[block.first].drawings@, out)
         out.s(":::\n")
     case .document
-        write_settings(doc.settings[b.first], out)
+        write_settings(doc.settings[block.first], out)
     case .diagram
-        write_diagram(doc.diagrams[b.first]@, b.invisible, out)
+        write_diagram(doc.diagrams[block.first]@, block.invisible, out)
     case .functions
         out.s(":::functions")
-        write_attribute("path", b.text, out)
+        write_attribute("path", block.text, out)
         out.s("\n:::\n")
     case .image
-        image: = doc.images.get(b.first)
+        image: = doc.images.get(block.first)
         out.s(":::image")
         write_attribute("src", image.src, out)
         write_attribute("alt", image.alt, out)
@@ -131,80 +131,80 @@ priv fn write_block(doc: Document@, b: Block, at: Positions@, out: Str_builder$@
             write_attribute("caption", image.caption, out)
         if image.width > 0
             out.s(" width=\"\{image.width\}%\"")
-        write_invisible(b.invisible, out)
+        write_invisible(block.invisible, out)
         out.c('\n')
         write_drawings(image.drawings@, out)
         out.s(":::\n")
 
-priv fn write_table(doc: Document@, t: Table@, invisible: Bool, at: Positions@,
+priv fn write_table(doc: Document@, table: Table@, invisible: Bool, at: Positions@,
     out: Str_builder$@) //<
         //< The opening line, the header and each data row, then the closing line
     out.s(":::table")
-    write_attribute("name", t.name, out)
-    if t.caption.len > 0
-        write_attribute("caption", t.caption, out)
-    if has_width(t)
+    write_attribute("name", table.name, out)
+    if table.caption.len > 0
+        write_attribute("caption", table.caption, out)
+    if has_width(table)
         out.s(" char_widths=\"")
-        for c in Range.asc(t.widths.len)
+        for c in Range.asc(table.widths.len)
             if c > 0
                 out.c(',')
-            w: = t.widths[c]
+            w: = table.widths[c]
             if w > 0
                 out.s("\{w / 10\}")
             if w % 10 > 0
                 out.s(".\{w % 10\}")
         out.c('"')
-    write_heights(t, out)
-    if has_format(t)
+    write_heights(table, out)
+    if has_format(table)
         out.s(" formats=\"")
-        for c in Range.asc(t.formats.len)
+        for c in Range.asc(table.formats.len)
             if c > 0
                 out.c(',')
-            write_format(t.formats[c], out)
+            write_format(table.formats[c], out)
         out.c('"')
-    if has_choices(t.choices@)
+    if has_choices(table.choices@)
         out.s(" choices=\"")
-        write_choices(t.choices@, out)
+        write_choices(table.choices@, out)
         out.c('"')
-    if t.row_colors != UNBOUND
+    if table.row_colors != UNBOUND
         out.s(" color_rows=\"")
-        for c in Range.asc(t.columns.len)
-            if t.columns[c] == t.row_colors
+        for c in Range.asc(table.columns.len)
+            if table.columns[c] == table.row_colors
                 write_column(c, out)
         out.c('"')
-    if has_rule(t.rules@)
+    if has_rule(table.rules@)
         out.s(" rules=\"")
-        for c in Range.asc(t.rules.len)
+        for c in Range.asc(table.rules.len)
             if c > 0
                 out.c(',')
-            write_rule(t.rules[c], out)
+            write_rule(table.rules[c], out)
         out.c('"')
-    if t.merged.len > 0
+    if table.merged.len > 0
         out.s(" merge=\"")
         $first: = true
-        for c in Range.asc(t.columns.len)
-            for id in t.merged
-                if id == t.columns[c]
+        for c in Range.asc(table.columns.len)
+            for id in table.merged
+                if id == table.columns[c]
                     if !first
                         out.c(',')
                     first = false
                     write_column(c, out)
         out.c('"')
-    if t.groups.len + t.column_groups.len > 0
+    if table.groups.len + table.column_groups.len > 0
         out.s(" groups=\"")
-        write_groups(t, out)
+        write_groups(table, out)
         out.c('"')
-    write_filter(t, out)
+    write_filter(table, out)
     write_invisible(invisible, out)
     out.c('\n')
-    for r in Range.asc(t.rows.len + 1)
+    for r in Range.asc(table.rows.len + 1)
         out.c('|')
-        for c in Range.asc(t.columns.len)
-            write_cell(doc, t, t.cells[r * t.columns.len + c], at, out)
+        for c in Range.asc(table.columns.len)
+            write_cell(doc, table, table.cells[r * table.columns.len + c], at, out)
         out.c('\n')
     out.s(":::\n")
 
-priv fn write_cell(doc: Document@, t: Table@, cell: Cell, at: Positions@, out: Str_builder$@) //<
+priv fn write_cell(doc: Document@, table: Table@, cell: Cell, at: Positions@, out: Str_builder$@) //<
     //< One cell, its look in braces, and the '|' after it
     //< A formula's references take the coordinates they have now.
     out.c(' ')
@@ -216,7 +216,7 @@ priv fn write_cell(doc: Document@, t: Table@, cell: Cell, at: Positions@, out: S
         out.s(cell.text)
     case .formula
         out.c('=')
-        write_formula(doc, t, cell, at, 0, 0, out)
+        write_formula(doc, table, cell, at, 0, 0, out)
     plain: = is_plain(cell.look) && cell.note.len == 0 && cell.link.len == 0
     if !plain
         if cell.kind != .empty
@@ -226,55 +226,55 @@ priv fn write_cell(doc: Document@, t: Table@, cell: Cell, at: Positions@, out: S
         out.c(' ')
     out.c('|')
 
-priv fn write_heights(t: Table@, out: Str_builder$@) //<
+priv fn write_heights(table: Table@, out: Str_builder$@) //<
     //< ` heights="..."`, one entry per data row, where a row that stands has a height
     //< An entry whose row is gone stays in the model for an undo, and is left out here.
-    if t.heights.len == 0
+    if table.heights.len == 0
         return
     defer scratch: = Arena(16 * 1024)
     $by_id: = List<|Sz|>(scratch)
-    for _ in Range.asc(t.next_id)
+    for _ in Range.asc(table.next_id)
         by_id.push(0)
-    for h in t.heights
+    for h in table.heights
         by_id[h.row] = h.points
     $any: = false
-    for id in t.rows
+    for id in table.rows
         any = any || by_id[id] > 0
     if !any
         return
     out.s(" heights=\"")
-    for r in Range.asc(t.rows.len)
+    for r in Range.asc(table.rows.len)
         if r > 0
             out.c(',')
-        if by_id[t.rows[r]] > 0
-            out.s("\{by_id[t.rows[r]]\}")
+        if by_id[table.rows[r]] > 0
+            out.s("\{by_id[table.rows[r]]\}")
     out.c('"')
 
-priv fn write_filter(t: Table@, out: Str_builder$@) //<
+priv fn write_filter(table: Table@, out: Str_builder$@) //<
     //< ` filter="..."`, one entry per column, where a column that stands narrows the rows
     $any: = false
-    for f in t.filters
-        for id in t.columns
+    for f in table.filters
+        for id in table.columns
             any = any || id == f.column
     if !any
         return
     out.s(" filter=\"")
-    for c in Range.asc(t.columns.len)
+    for c in Range.asc(table.columns.len)
         if c > 0
             out.c(',')
-        for f in t.filters
-            if f.column == t.columns[c]
+        for f in table.filters
+            if f.column == table.columns[c]
                 out.escape_and_append(f.entry)
     out.c('"')
 
-priv fn has_width(t: Table@): Bool //< whether any column has a set width
-    for w in t.widths
+priv fn has_width(table: Table@): Bool //< whether any column has a set width
+    for w in table.widths
         if w > 0
             return true
     return false
 
-priv fn has_format(t: Table@): Bool //< whether any column has a number format
-    for f in t.formats
+priv fn has_format(table: Table@): Bool //< whether any column has a number format
+    for f in table.formats
         if f.kind != .none
             return true
     return false

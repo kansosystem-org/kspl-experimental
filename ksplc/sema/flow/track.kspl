@@ -37,23 +37,23 @@ impl Df_set
         return Df_set::{ .items = List<|Ast_node$@|>(base_core.arena),
             .merge_is_intersect = merge_is_intersect }
 
-    fn contains(r: Self@, v: Ast_node$@): Bool //< whether v is held (null never is)
-        if v == null
+    fn contains(r: Self@, binding: Ast_node$@): Bool //< whether `binding` is held (null never is)
+        if binding == null
             return false
         for item in r.items
-            if item == v
+            if item == binding
                 return true
         return false
 
-    fn add(r: Self$@, v: Ast_node$@)
-        if v != null && !r.contains(v)
-            r.items.push(v)
+    fn add(r: Self$@, binding: Ast_node$@)
+        if binding != null && !r.contains(binding)
+            r.items.push(binding)
 
-    fn remove(r: Self$@, v: Ast_node@)
-        if v == null
+    fn remove(r: Self$@, binding: Ast_node@)
+        if binding == null
             return
         for $i: = 0; i < r.items.len; i += 1
-            if r.items.get(i) == v
+            if r.items.get(i) == binding
                 r.items.set(i, r.items.get(r.items.len - 1))
                 r.items.truncate(r.items.len - 1)
                 return
@@ -61,16 +61,16 @@ impl Df_set
     fn copy_from(r: Self$@, other: Df_set$@)
         r.items.push_all(other.items.slice())
 
-    priv fn fill_merged(r: Self$@, a: Df_set$@, b: Df_set@) //<
-        //< Fills r, an empty set, with a and b merged in r's direction (intersection / union)
+    priv fn fill_merged(r: Self$@, left: Df_set$@, right: Df_set@) //<
+        //< Fills r, an empty set, with `left` and `right` merged in r's direction (meet or join)
         //< Filled in place, so a merge allocates no set beside the new state's own.
         if r.merge_is_intersect
-            for v in a.items
-                if b.contains(v)
+            for v in left.items
+                if right.contains(v)
                     r.add(v)
             return
-        r.copy_from(a)
-        for v in b.items
+        r.copy_from(left)
+        for v in right.items
             r.add(v)
 
 struct Df_state
@@ -123,49 +123,50 @@ impl Df_state
         //< Writes a branch merge's result back into itself
         r$ = merged$
 
-    fn contains(r: Self@, v: Ast_node$@): Bool
-        return r.init_vars.contains(v)
+    fn contains(r: Self@, binding: Ast_node$@): Bool
+        return r.init_vars.contains(binding)
 
-    fn add(r: Self$@, v: Ast_node$@)
-        r.init_vars.add(v)
+    fn add(r: Self$@, binding: Ast_node$@)
+        r.init_vars.add(binding)
 
-    fn contains_freed(r: Self@, v: Ast_node$@): Bool
-        return r.freed_vars.contains(v)
+    fn contains_freed(r: Self@, binding: Ast_node$@): Bool
+        return r.freed_vars.contains(binding)
 
-    priv fn add_freed(r: Self$@, v: Ast_node$@) //< a release that leaves nothing to give back
-        r.freed_vars.add(v)
-        r.gone_vars.add(v)
-        r.carried_vars.remove(v)
+    priv fn add_freed(r: Self$@, binding: Ast_node$@) //< a release that leaves nothing to give back
+        r.freed_vars.add(binding)
+        r.gone_vars.add(binding)
+        r.carried_vars.remove(binding)
 
-    priv fn add_contents_freed(r: Self$@, v: Ast_node$@) //< a pointer's `free()`: its block stays
-        r.freed_vars.add(v)
-        r.carried_vars.remove(v)
+    priv fn add_contents_freed(r: Self$@, binding: Ast_node$@) //<
+        //< a pointer's `free()`: its block stays
+        r.freed_vars.add(binding)
+        r.carried_vars.remove(binding)
 
-    fn remove_freed(r: Self$@, v: Ast_node$@) //<
+    fn remove_freed(r: Self$@, binding: Ast_node$@) //<
         //< Clears the released flag once a reassignment (x = ...) has stored a new value
-        r.freed_vars.remove(v)
-        r.gone_vars.remove(v)
-        r.carried_vars.remove(v)
+        r.freed_vars.remove(binding)
+        r.gone_vars.remove(binding)
+        r.carried_vars.remove(binding)
 
-    priv fn add_moved(r: Self$@, v: Ast_node$@) //< a move on this pass
-        r.moved_vars.add(v)
-        r.carried_vars.remove(v)
+    priv fn add_moved(r: Self$@, binding: Ast_node$@) //< a move on this pass
+        r.moved_vars.add(binding)
+        r.carried_vars.remove(binding)
 
-    fn remove_moved(r: Self$@, v: Ast_node$@) //< a new value: the binding is usable again
-        r.moved_vars.remove(v)
-        r.carried_vars.remove(v)
+    fn remove_moved(r: Self$@, binding: Ast_node$@) //< a new value: the binding is usable again
+        r.moved_vars.remove(binding)
+        r.carried_vars.remove(binding)
 
-    fn bind(r: Self$@, v: Ast_node$@, has_value: Bool) //<
+    fn bind(r: Self$@, binding: Ast_node$@, has_value: Bool) //<
         //< A declaration starts a binding afresh: with a value or without, and nothing released
         //< **A loop walks a declaration in its body more than once** (df_stmt_for in
         //< sema/flow/stmt.kspl). So what the last pass did to the binding must not reach this one.
         if has_value
-            r.init_vars.add(v)
+            r.init_vars.add(binding)
         else
-            r.init_vars.remove(v)
-        r.remove_freed(v)
-        r.remove_moved(v)
-        r.forget_moved_fields(v, null)
+            r.init_vars.remove(binding)
+        r.remove_freed(binding)
+        r.remove_moved(binding)
+        r.forget_moved_fields(binding, null)
 
     priv fn forget_moved_fields(r: Self$@, root: Ast_node@, at: Ast_node$@) //<
         //< Clears the moved fields of `root` at the path `at` or below it, once it holds a value
@@ -186,7 +187,7 @@ struct Local_state
     // Mutability has two axes, one per field below ("The two axes of mutability" in
     // docs/SPEC-programming-language.md).
     is_reassigned: Bool //<
-        //< The binding axis: the name is given a new value (`x = v` / `x += v`); it decides `$x`.
+        //< The binding axis: the name is given a new value (`x = v` / `x += v`); it decides `$x`
     is_mutated: Bool //<
         //< The value axis: what the name holds is changed in place
         //< It is also set by a receiver's method call or `@` / `[` / `$` (for W0208 and similar).
@@ -271,7 +272,7 @@ impl Ast_node
             ((curr.kind_id == .k_expr_path || curr.kind_id == .k_type_path) &&
             curr.children.len <= 1)
 
-    priv fn write_crosses_indirection(r: Self$@, c: Df_ctx$@): Bool //<
+    priv fn write_crosses_indirection(r: Self$@, df: Df_ctx$@): Bool //<
         //< Whether the path to the assignment destination crosses a pointer or a slice
         //< A value's field (`v.f = x`) or element does not cross: it writes the binding (the axes
         //< are at Local_state). An unresolved type does not cross either; the only cost is [I0601]
@@ -279,7 +280,7 @@ impl Ast_node
         if r == null
             return false
         if r.kind_id == .k_expr_primary && r.children.len > 0
-            return r.get_primary_inner_expr().write_crosses_indirection(c)
+            return r.get_primary_inner_expr().write_crosses_indirection(df)
         if r.kind_id != .k_expr_postfix || r.children.len < 2
             return false
         op: = r.get_postfix_op()
@@ -293,93 +294,93 @@ impl Ast_node
         recv: = r.get_postfix_receiver()
         if recv == null
             return false
-        env: = c.sema.env
+        env: = df.sema.env
         if env.is_pointer(recv.type_id)
             return true
         // An index crosses a slice (the elements are outside the descriptor); `s.ptr = p` writes
         // the descriptor, so it does not.
         if is_index && env.is_slice(recv.type_id)
             return true
-        return recv.write_crosses_indirection(c)
+        return recv.write_crosses_indirection(df)
 
-    fn is_tracked_local(r: Self$@, c: Df_ctx@): Bool
+    fn is_tracked_local(r: Self$@, df: Df_ctx@): Bool
         if r == null
             return false
         d_kind: = r.kind_id
         if d_kind == .k_decl_var || d_kind == .k_decl_const || d_kind == .k_fn_param ||
             d_kind == .k_decl_var_item || d_kind == .k_identifier
-            for local in c.locals
+            for local in df.locals
                 if local.node == r
                     return true
         return false
 
-    fn analyze_df_node(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    fn analyze_df_node(r: Self$@, df: Df_ctx$@, state: Df_state$@)
         if r == null
             return
         if !state.reachable
-            r.report_unreachable(c)
+            r.report_unreachable(df)
             return
-        if c.suppress_move && !r.is_borrow_path()
+        if df.suppress_move && !r.is_borrow_path()
             // A value made inside a borrow (a call, a literal, an operator) is no borrow itself.
-            r.analyze_as_value(c, state)
+            r.analyze_as_value(df, state)
             return
 
         switch r.kind_id
         case .k_decl_var, .k_decl_const
-            r.df_decl_var(c, state)
+            r.df_decl_var(df, state)
         case .k_stmt_expr
-            r.df_stmt_expr(c, state)
+            r.df_stmt_expr(df, state)
         case .k_identifier, .k_expr_path, .k_type_path
-            r.df_identifier(c, state)
+            r.df_identifier(df, state)
         case .k_expr_catch
-            r.df_expr_catch(c, state)
+            r.df_expr_catch(df, state)
         case .k_method_access
-            r.df_method_access(c, state)
+            r.df_method_access(df, state)
         case .k_expr_postfix
-            r.df_expr_postfix(c, state)
+            r.df_expr_postfix(df, state)
         case .k_expr
-            saved: = c.compared
-            c.compared = r.compared_pointer(c).unwrap_or(null)
-            r.df_view_expr(c, state)
-            c.compared = saved
+            saved: = df.compared
+            df.compared = r.compared_pointer(df).unwrap_or(null)
+            r.df_view_expr(df, state)
+            df.compared = saved
         case .k_expr_upcast
-            r.get_upcast_inner().mark_pointer_handed(c)
-            r.get_upcast_inner().analyze_as_borrow(c, state)
-            r.mark_upcast_source_reassigned(c)
+            r.get_upcast_inner().mark_pointer_handed(df)
+            r.get_upcast_inner().analyze_as_borrow(df, state)
+            r.mark_upcast_source_reassigned(df)
         case .k_stmt_if, .k_stmt_switch, .k_stmt_labeled_block
-            c.enter_exit_target(r)
+            df.enter_exit_target(r)
             if r.kind_id == .k_stmt_if
-                r.df_stmt_if(c, state)
+                r.df_stmt_if(df, state)
             else if r.kind_id == .k_stmt_switch
-                r.df_stmt_switch(c, state)
+                r.df_stmt_switch(df, state)
             else if r.children.len > 1
-                r.get_labeled_block_inner().analyze_df_node(c, state)
-            c.leave_exit_target(state)
+                r.get_labeled_block_inner().analyze_df_node(df, state)
+            df.leave_exit_target(state)
             // **A `break` to its label leaves it**, so what follows can run whatever its branches
             // do (`is_left_by_break`, which the missing-return check reads too).
             if r.is_left_by_break()
                 state.reachable = true
         case .k_stmt_for
-            c.enter_exit_target(r)
-            r.df_stmt_for(c, state)
-            c.exit_targets.truncate(c.exit_targets.len - 1)
+            df.enter_exit_target(r)
+            r.df_stmt_for(df, state)
+            df.exit_targets.truncate(df.exit_targets.len - 1)
         case .k_stmt_block
-            r.df_stmt_block_scope(c, state)
+            r.df_stmt_block_scope(df, state)
         case .k_stmt_defer
-            r.df_stmt_defer(c, state)
+            r.df_stmt_defer(df, state)
         case .k_stmt_return, .k_stmt_throw, .k_stmt_fallback, .k_stmt_break, .k_stmt_continue
-            r.df_stmt_return_like(c, state)
+            r.df_stmt_return_like(df, state)
         case .k_expr_ternary
-            r.df_expr_ternary(c, state)
+            r.df_expr_ternary(df, state)
         default
-            r.df_default_traverse(c, state)
+            r.df_default_traverse(df, state)
 
-    priv fn report_unreachable(r: Self$@, c: Df_ctx$@) //<
+    priv fn report_unreachable(r: Self$@, df: Df_ctx$@) //<
         //< [W0201] Warns of a statement nothing reaches, unless one is already reported
         //< Empty statements, blocks, labels and declarations are passed over. The mark points at
         //< the statement's keyword, else at a leading name or literal.
         if r.kind_id == .k_empty || r.kind_id == .k_stmt_block || r.kind_id == .k_stmt_label ||
-            r.kind_id == .k_decl_var || r.kind_id == .k_decl_const || c.has_reported_unreachable
+            r.kind_id == .k_decl_var || r.kind_id == .k_decl_const || df.has_reported_unreachable
             return
         $target_node: = r
         kw: = r.find_child(.k_keyword)
@@ -389,48 +390,48 @@ impl Ast_node
             first: = r.get_child(0)
             if first.kind_id == .k_identifier || first.kind_id == .k_literal
                 target_node = first
-        c.sema.warn(target_node, "[W0201] Unreachable code detected")
-        c.has_reported_unreachable = true
+        df.sema.warn(target_node, "[W0201] Unreachable code detected")
+        df.has_reported_unreachable = true
 
-    priv fn df_expr_ternary(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    priv fn df_expr_ternary(r: Self$@, df: Df_ctx$@, state: Df_state$@)
         if r.children.len == 3
             cond: = r.get_ternary_cond()
-            cond.analyze_df_node(c, state)
+            cond.analyze_df_node(df, state)
 
             state_then: = state.clone()
-            r.get_ternary_true().analyze_df_node(c, state_then)
+            r.get_ternary_true().analyze_df_node(df, state_then)
 
             state_else: = state.clone()
-            r.get_ternary_false().analyze_df_node(c, state_else)
+            r.get_ternary_false().analyze_df_node(df, state_else)
 
             state.apply_merged_state(intersect_states(state_then, state_else))
         else
-            r.df_default_traverse(c, state)
+            r.df_default_traverse(df, state)
 
-    fn df_default_traverse(r: Self@, c: Df_ctx$@, state: Df_state$@)
+    fn df_default_traverse(r: Self@, df: Df_ctx$@, state: Df_state$@)
         for child in r.children
-            child.analyze_df_node(c, state)
+            child.analyze_df_node(df, state)
 
-    fn df_decl_var(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    fn df_decl_var(r: Self$@, df: Df_ctx$@, state: Df_state$@)
         id_node: = r.get_var_decl_id()
         expr_node: = r.get_var_decl_expr()
         if id_node != null
-            c.add_local(r)
-            r.get_var_decl_type_node().df_type_array_sizes(c, state)
+            df.add_local(r)
+            r.get_var_decl_type_node().df_type_array_sizes(df, state)
             has_value: = expr_node != null && expr_node.kind_id != .k_empty
             // **A `for … in` that holds its subject by a `T@` only reads it**, so its `@` marks no
             // write, and a spare `$` on the subject is still reported (`../body/for_in.kspl`).
             if has_value && r.is_for_in_subject() && expr_node.kind_id == .k_expr_postfix &&
                 expr_node.postfix_op_text().equals("@") &&
-                c.sema.env.is_const(c.sema.env.strip_ptr(expr_node.type_id))
-                expr_node.get_postfix_receiver().analyze_as_borrow(c, state)
+                df.sema.env.is_const(df.sema.env.strip_ptr(expr_node.type_id))
+                expr_node.get_postfix_receiver().analyze_as_borrow(df, state)
             else if has_value
-                expr_node.analyze_df_node(c, state)
+                expr_node.analyze_df_node(df, state)
             state.bind(r, has_value)
-            r.df_lock_decl(c, state)
-            r.df_view_decl(c, state)
+            r.df_lock_decl(df, state)
+            r.df_view_decl(df, state)
 
-    priv fn df_type_array_sizes(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    priv fn df_type_array_sizes(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Walks the array-size expression written in a type annotation (the `n` of `a: I32[n]`)
         //< Without it, an in-function `const` used only as an array size gets a false [W0207]
         //< "unused".
@@ -441,33 +442,33 @@ impl Ast_node
         if r.kind_id == .k_type_postfix && r.children.len > 0
             pt: = r.text.strip_prefix("$")
             if pt.starts_with("[")
-                r.get_child(0).analyze_df_node(c, state)
+                r.get_child(0).analyze_df_node(df, state)
         for child in r.children
-            child.df_type_array_sizes(c, state)
+            child.df_type_array_sizes(df, state)
 
-    fn df_stmt_expr(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    fn df_stmt_expr(r: Self$@, df: Df_ctx$@, state: Df_state$@)
         left: = r.get_assign_left()
         right: = r.get_assign_right()
         op: = r.get_assign_op()
-        r.df_lock_stmt(c, state)
+        r.df_lock_stmt(df, state)
 
         if right != null
-            right.analyze_df_node(c, state)
+            right.analyze_df_node(df, state)
         if right != null && op != null
-            left.mark_pointee_write(c)
+            left.mark_pointee_write(df)
             // The definite-initialization tracking only looks at `x = v`.
             is_simple: = left.is_bare_name_target() && op.text.equals("=")
             if def: = left.get_assign_target_def()
-                if def.is_tracked_local(c)
+                if def.is_tracked_local(df)
                     // The binding axis is set only for a bare name: `r.f = v` writes the pointee,
                     // which `Self$@` permits (see Local_state), or [I0601] misses a spare `$` on
                     // `r`.
-                    if left.write_crosses_indirection(c)
-                        c.mark_mutated(def)
+                    if left.write_crosses_indirection(df)
+                        df.mark_mutated(def)
                     else
-                        c.mark_reassigned(def)
+                        df.mark_reassigned(def)
                     if is_simple
-                        r.df_view_assign(c, state, def)
+                        r.df_view_assign(df, state, def)
                         state.add(def)
                         state.remove_freed(def) // a reassignment makes it a new value, so clear released
                         state.remove_moved(def) // and moved
@@ -485,53 +486,53 @@ impl Ast_node
         if left == null
             return
         if right == null || op == null
-            left.analyze_df_node(c, state) // an expression statement, not an assignment
+            left.analyze_df_node(df, state) // an expression statement, not an assignment
             // Control does not come back from a `#noreturn` call, so what follows is unreachable.
             if left.is_noreturn_call()
                 state.reachable = false
             return
         // Storing a new value in a field makes it usable again, and anything below it.
         if op.text.equals("=")
-            if root: = left.owned_field_root(c)
+            if root: = left.owned_field_root(df)
                 state.forget_moved_fields(root, left)
         // A place written to is not read as a value, so nothing moves out of it.
-        left.analyze_as_borrow(c, state)
+        left.analyze_as_borrow(df, state)
         // `m[k] = v` through a `set` that ends the views into `m`, once every part is walked.
-        r.df_view_index_set(c, state)
+        r.df_view_index_set(df, state)
 
-    priv fn df_identifier(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    priv fn df_identifier(r: Self$@, df: Df_ctx$@, state: Df_state$@)
         def: = r.def_node
-        if def.is_tracked_local(c)
-            c.mark_read(def)
-            sema_flow_report.report_uninit_if_needed(c, state, def, r)
-            sema_flow_report.report_freed_if_needed(c, state, def, r)
-            sema_flow_report.report_moved_if_needed(c, state, def, r)
-            c.report_unlocked_use(state, def, r)
-            c.report_stale_view(state, def, r)
-            c.note_view_read(def)
+        if def.is_tracked_local(df)
+            df.mark_read(def)
+            sema_flow_report.report_uninit_if_needed(df, state, def, r)
+            sema_flow_report.report_freed_if_needed(df, state, def, r)
+            sema_flow_report.report_moved_if_needed(df, state, def, r)
+            df.report_unlocked_use(state, def, r)
+            df.report_stale_view(state, def, r)
+            df.note_view_read(def)
             // Read as a whole, the binding must still hold every field (inside a field path, the
             // path's outermost `.` checks only what it reads).
-            if !c.in_field_path
-                sema_flow_report.report_moved_field_if_needed(c, state, def, r)
+            if !df.in_field_path
+                sema_flow_report.report_moved_field_if_needed(df, state, def, r)
             // A Move_only binding read as a value moves, except the borrows under suppress_move
             // (listing the exceptions misses fewer cases than listing the copies).
-            if !c.suppress_move && c.sema.env.is_move_only(def.type_id)
+            if !df.suppress_move && df.sema.env.is_move_only(def.type_id)
                 state.add_moved(def)
             // A pointer read as a value is handed on, to a place that may write through it.
-            if r != c.borrowed && r != c.compared && def.points(c)
-                c.mark_written_through(def)
+            if r != df.borrowed && r != df.compared && def.points(df)
+                df.mark_written_through(def)
 
-    fn analyze_as_borrow(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    fn analyze_as_borrow(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Analyzes a child node as "a read that copies nothing", such as a receiver position
         if r == null
             return
-        saved: = c.suppress_move
-        saved_borrowed: = c.borrowed
-        c.suppress_move = true
-        c.borrowed = r.bare_name()
-        r.analyze_df_node(c, state)
-        c.suppress_move = saved
-        c.borrowed = saved_borrowed
+        saved: = df.suppress_move
+        saved_borrowed: = df.borrowed
+        df.suppress_move = true
+        df.borrowed = r.bare_name()
+        r.analyze_df_node(df, state)
+        df.suppress_move = saved
+        df.borrowed = saved_borrowed
 
     priv fn is_borrow_path(r: Self$@): Bool //<
         //< Whether a borrow reaches through this node to the place it names
@@ -544,60 +545,60 @@ impl Ast_node
             return true
         return k == .k_expr_postfix && !r.postfix_op_text().equals("(")
 
-    fn analyze_as_value(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    fn analyze_as_value(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Analyzes a child node as a read of its value, even inside a borrow
         //< **What a borrowed place's argument or operand copies moves**: `mk(h).get()`,
         //< `xs[take(h)]@` and `w.put(h).get()` move `h`. analyze_as_borrow's flags would otherwise
         //< stay set for the borrowed node's whole subtree, so this clears them.
         if r == null
             return
-        saved: = c.suppress_move
-        saved_borrowed: = c.borrowed
-        saved_path: = c.in_field_path
-        c.suppress_move = false
-        c.borrowed = null
-        c.in_field_path = false
-        r.analyze_df_node(c, state)
-        c.suppress_move = saved
-        c.borrowed = saved_borrowed
-        c.in_field_path = saved_path
+        saved: = df.suppress_move
+        saved_borrowed: = df.borrowed
+        saved_path: = df.in_field_path
+        df.suppress_move = false
+        df.borrowed = null
+        df.in_field_path = false
+        r.analyze_df_node(df, state)
+        df.suppress_move = saved
+        df.borrowed = saved_borrowed
+        df.in_field_path = saved_path
 
-    priv fn df_expr_catch(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    priv fn df_expr_catch(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Walks `expr catch …`: the expression on both paths, then the failure path apart
         //< What follows starts from the success path, the catch block's end and each `fallback`
         //< (record_jump). Caution: **Walk the expression before the paths part**: walked on the
         //< failure path alone, a move in it is lost wherever that path ends in `return`.
-        r.get_catch_chain_expr().analyze_df_node(c, state)
+        r.get_catch_chain_expr().analyze_df_node(df, state)
         catch_state: = state.clone()
         $target_block: Ast_node$@ = null
-        c.enter_exit_target(r) // the target of a `fallback`
+        df.enter_exit_target(r) // the target of a `fallback`
         for i in Range.asc(r.children.len)
             ch: = r.get_child(i)
             if i == 0
                 continue
             if ch.kind_id == .k_identifier
-                c.add_local(ch)
+                df.add_local(ch)
                 catch_state.bind(ch, true)
             else if ch.kind_id == .k_stmt_block
                 target_block = ch
-                ch.analyze_df_node(c, catch_state)
+                ch.analyze_df_node(df, catch_state)
             else if !ch.is_keyword("catch") && ch.kind_id != .k_literal
-                ch.analyze_df_node(c, catch_state)
+                ch.analyze_df_node(df, catch_state)
         if target_block != null
             is_void: =
                 sema_type_env.is_void(r.type_id) || sema_type_env.is_unknown(r.type_id)
             if !is_void && catch_state.reachable
-                c.sema.err(r, "a 'catch' block must produce a value with 'fallback' or exit")
-                c.has_error = true
+                df.sema.err(r, "a 'catch' block must produce a value with 'fallback' or exit")
+                df.has_error = true
         state.apply_merged_state(intersect_states(state, catch_state))
-        c.leave_exit_target(state)
+        df.leave_exit_target(state)
 
-    priv fn mark_postfix_receiver_mutated(r: Self$@, c: Df_ctx$@)
+    priv fn mark_postfix_receiver_mutated(r: Self$@, df: Df_ctx$@)
         receiver: = r.get_postfix_receiver()
         if def: = receiver.get_assign_target_def()
-            c.mark_mutated(def)
+            df.mark_mutated(def)
 
-    priv fn mark_value_receiver_reassigned(r: Self$@, c: Df_ctx$@) //<
+    priv fn mark_value_receiver_reassigned(r: Self$@, df: Df_ctx$@) //<
         //< Sets the binding axis on a method call whose receiver is **a value**
         //< A value is not a pointer, so a `Self$@` method amounts to writing the binding itself, as
         //< `v.f = x` does. Otherwise [I0601] says "`$` is not needed". **A slice is such a
@@ -607,8 +608,8 @@ impl Ast_node
         receiver: = r.get_postfix_receiver()
         if receiver == null
             return
-        env: = c.sema.env
-        if env.is_pointer(receiver.type_id) || receiver.write_crosses_indirection(c)
+        env: = df.sema.env
+        if env.is_pointer(receiver.type_id) || receiver.write_crosses_indirection(df)
             return
         // An unknown method (none resolved) is taken as writing, so no `$` is called spare.
         member: = r.get_postfix_member()
@@ -619,22 +620,22 @@ impl Ast_node
                     return
             case .none {}
         if def: = receiver.get_assign_target_def()
-            c.mark_reassigned(def)
+            df.mark_reassigned(def)
 
-    priv fn mark_upcast_source_reassigned(r: Self$@, c: Df_ctx$@) //<
+    priv fn mark_upcast_source_reassigned(r: Self$@, df: Df_ctx$@) //<
         //< Sets the binding axis on a value made a trait value whose methods write it
         //< As a `Self$@` method call does (mark_value_receiver_reassigned): the upcast needs `$`
         //< there, so [I0601] must not call it spare.
         inner: = r.get_upcast_inner()
         if inner == null
             return
-        env: = c.sema.env
-        if env.is_pointer(inner.type_id) || inner.write_crosses_indirection(c)
+        env: = df.sema.env
+        if env.is_pointer(inner.type_id) || inner.write_crosses_indirection(df)
             return
         if env.trait_slot_writing_receiver(inner.type_id, r.type_id).is_none()
             return
         if def: = inner.get_assign_target_def()
-            c.mark_reassigned(def)
+            df.mark_reassigned(def)
 
     priv fn get_direct_local_def(r: Self$@): Ast_node$@? //<
         //< The receiver of `.free()` / `.dealloc()`, only where it is a bare identifier
@@ -661,12 +662,12 @@ impl Ast_node
                 return r.get_postfix_receiver().get_addressed_local_def()
         return .none
 
-    priv fn mark_free_call_if_any(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    priv fn mark_free_call_if_any(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Registers a bare local's `.free()` / `.dealloc()` in freed_vars
         //< `r.field.free()` is not tracked, avoiding false positives.
         $freed_expr: Ast_node$@ = null
         $frees_the_pointer: = false
-        switch r.get_free_call_receiver(c.sema)
+        switch r.get_free_call_receiver(df.sema)
         case .some(rv)
             freed_expr = rv
         case .none
@@ -678,14 +679,14 @@ impl Ast_node
         if freed_expr != null
             if d: = freed_expr.get_addressed_local_def()
                 def = d
-        if def.is_tracked_local(c)
+        if def.is_tracked_local(df)
             // A pointer's `free()` releases what it points at; the block stays, for `dealloc`.
-            if !frees_the_pointer && c.sema.env.is_pointer(def.type_id)
+            if !frees_the_pointer && df.sema.env.is_pointer(def.type_id)
                 state.add_contents_freed(def)
             else
                 state.add_freed(def)
             if frees_the_pointer
-                r.warn_if_arena_handout(def, c)
+                r.warn_if_arena_handout(def, df)
 
     priv fn release_kept_block_if_any(r: Self$@, state: Df_state$@) //<
         //< Lets a `dealloc` name a pointer whose `free()` left its block, before the call is walked
@@ -698,7 +699,7 @@ impl Ast_node
                 if state.contains_freed(d) && !state.gone_vars.contains(d)
                     state.freed_vars.remove(d)
 
-    priv fn warn_if_arena_handout(r: Self$@, def: Ast_node$@, c: Df_ctx$@) //<
+    priv fn warn_if_arena_handout(r: Self$@, def: Ast_node$@, df: Df_ctx$@) //<
         //< [W0104] Warns when a pointer an arena handed out is passed to a call that releases it
         //< **Only for the free-function form (`dealloc(x)`).** `x.free()` releases `x`'s
         //< **contents**, which is correct for an arena's container
@@ -711,15 +712,15 @@ impl Ast_node
         if kw == null || kw.text.is_mut_binding_kw()
             return
         init: = def.get_var_decl_expr()
-        if init == null || !init.is_arena_handout(c.sema)
+        if init == null || !init.is_arena_handout(df.sema)
             return
-        c.sema.clear_scratch()
+        df.sema.clear_scratch()
             .s("[W0104] This pointer was handed out by an arena, so it cannot be released here. \
                 'Arena.free()' releases all arena memory at once. Releasing one allocation corrupts \
                 the heap")
-        c.sema.warn(r, c.sema.scratch.slice())
+        df.sema.warn(r, df.sema.scratch.slice())
 
-    fn mark_call_freed_args(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    fn mark_call_freed_args(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Marks a bare local argument released where the callee always releases that parameter
         //< The call is `foo(x)`, `obj.m(x)` or `T.m(x)`.
         //< **A method call shifts the parameters by one** (the receiver), or `a` is checked as
@@ -742,35 +743,35 @@ impl Ast_node
                 arg = given
             else
                 break
-            if fn_node.body_frees_param_directly(p.get_decl_id_text(), c.sema, arg.type_id)
+            if fn_node.body_frees_param_directly(p.get_decl_id_text(), df.sema, arg.type_id)
                 if def: = arg.get_addressed_local_def()
-                    if def.is_tracked_local(c)
+                    if def.is_tracked_local(df)
                         state.add_freed(def)
             param_idx += 1
 
-    fn df_method_access(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+    fn df_method_access(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Walks a field access's or method call's receiver without counting it as a use as a value
         //< `x.field` does not move x. It does, however, **run the already-released check**.
         //< Caution: **The freed check must not be suppressed along with it here**, even though some
         //< `.free()` only resets a buffer: `p.free(); p.v` / `p.get()` would go undiagnosed.
         if r.children.len > 0
-            r.mark_postfix_receiver_mutated(c)
-            r.mark_value_receiver_reassigned(c)
-            r.mark_receiver_pointee_write(c)
-        consumes: = r.moves_value_receiver(c)
+            r.mark_postfix_receiver_mutated(df)
+            r.mark_value_receiver_reassigned(df)
+            r.mark_receiver_pointee_write(df)
+        consumes: = r.moves_value_receiver(df)
         for i in Range.asc(r.children.len)
             child: = r.get_child(i)
             if i == 0 && consumes
                 // A method taking `r: Self` gets a copy of a Move_only value: a move.
-                child.analyze_df_node(c, state)
+                child.analyze_df_node(df, state)
             else if i == 0
                 // Not a move, but still a use of something released (analyze_as_borrow).
-                child.analyze_as_borrow(c, state)
+                child.analyze_as_borrow(df, state)
             else
-                child.analyze_as_value(c, state)
-        r.mark_free_call_if_any(c, state)
+                child.analyze_as_value(df, state)
+        r.mark_free_call_if_any(df, state)
 
-    priv fn moves_value_receiver(r: Self$@, c: Df_ctx$@): Bool //<
+    priv fn moves_value_receiver(r: Self$@, df: Df_ctx$@): Bool //<
         //< Whether this call hands a Move_only receiver to a method that takes it by value
         //< **A by-value receiver (`r: Self`) is a copy**, as an argument is, so the caller's
         //< binding is moved: after `h.consume()`, `take(h)` would hold a second copy of one handle.
@@ -780,14 +781,14 @@ impl Ast_node
         member: = r.get_postfix_member()
         if receiver == null || member == null
             return false
-        env: = c.sema.env
+        env: = df.sema.env
         if env.is_pointer(receiver.type_id) || !env.is_move_only(receiver.type_id)
             return false
         need: = env.method_receiver_permission(member.def_node) catch
             return false
         return !need.ptr
 
-    priv fn cast_makes_mutable_view(r: Self$@, c: Df_ctx$@): Bool //<
+    priv fn cast_makes_mutable_view(r: Self$@, df: Df_ctx$@): Bool //<
         //< Whether a prefix cast's destination is a writable indirection
         //< That is a mutable slice or a mutable pointer.
         //< **This also sets the binding axis**: without `$` the C declaration is `const`, and a
@@ -795,13 +796,13 @@ impl Ast_node
         ty: = r.get_postfix_member()
         if ty == null
             return false
-        env: = c.sema.env
+        env: = df.sema.env
         tid: = ty.type_id
         if !env.is_slice(tid) && !env.is_pointer(tid)
             return false
         return !env.const_elem_of(tid)
 
-    priv fn lends_binding_writable(r: Self$@, c: Df_ctx$@): Bool //<
+    priv fn lends_binding_writable(r: Self$@, df: Df_ctx$@): Bool //<
         //< Whether this `@` / `[` / mutable-view cast hands out the root binding's storage writable
         //< Only the `$` before the name allows that (the binding axis).
         //< **Only a path that crosses no pointer or slice reaches that storage.** Fields and a
@@ -809,17 +810,17 @@ impl Ast_node
         //< `$`, a `T$@`'s target and a `T$[]`'s elements are written under the type's `$`, so they
         //< leave it out. df_stmt_expr sets a write itself.
         recv: = r.get_postfix_receiver()
-        if recv == null || recv.write_crosses_indirection(c)
+        if recv == null || recv.write_crosses_indirection(df)
             return false
         op: = r.postfix_op_text()
-        env: = c.sema.env
+        env: = df.sema.env
         // `x@` is a `T$@` only when `x` has the `$`, so the `$` decides what the pointer may do.
         if op.equals("@")
             return true
         // `U8$[]::buf` makes the array's storage writable (without the `$`, its C declaration is
         // `const`); a slice or a pointer cast only views memory elsewhere.
         if op.equals("::")
-            return r.cast_makes_mutable_view(c) && !env.is_pointer(recv.type_id) &&
+            return r.cast_makes_mutable_view(df) && !env.is_pointer(recv.type_id) &&
                 !env.is_slice(recv.type_id)
         // A pointer's or a slice's element is not the binding's. A fixed-length array's is, and its
         // type follows the `$` even when only read. A trait-object element of an unmarked array
@@ -829,44 +830,44 @@ impl Ast_node
             return !env.is_pointer(recv.type_id) && !env.is_slice(recv.type_id)
         return false
 
-    priv fn df_expr_postfix(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    priv fn df_expr_postfix(r: Self$@, df: Df_ctx$@, state: Df_state$@)
         op_node: = r.get_postfix_op()
         $op_text: = r.text
         if op_node != null
             op_text = op_node.text
         if op_text.equals("@") || op_text.equals("[") || op_text.equals("$") ||
-            (op_text.equals("::") && r.cast_makes_mutable_view(c))
-            r.mark_postfix_receiver_mutated(c)
+            (op_text.equals("::") && r.cast_makes_mutable_view(df))
+            r.mark_postfix_receiver_mutated(df)
             if op_text.equals("@")
-                r.get_postfix_receiver().mark_pointee_write(c)
+                r.get_postfix_receiver().mark_pointee_write(df)
             else if op_text.equals("::")
-                r.get_postfix_receiver().mark_pointer_handed(c)
-            if r.lends_binding_writable(c)
+                r.get_postfix_receiver().mark_pointer_handed(df)
+            if r.lends_binding_writable(df)
                 // Caution: Go back to the root to set it: `arr[0]@` is decided by `$arr`.
                 if def: = r.get_postfix_receiver().get_assign_target_def()
-                    c.mark_reassigned(def)
-        if (op_text.equals(".") || op_text.equals("$")) && r != c.borrowed
-            r.mark_view_read(c)
+                    df.mark_reassigned(def)
+        if (op_text.equals(".") || op_text.equals("$")) && r != df.borrowed
+            r.mark_view_read(df)
         if op_text.equals(".") && r.children.len > 0
-            r.df_field_read(c, state)
+            r.df_field_read(df, state)
         else if op_text.equals("@") || op_text.equals("$") || op_text.equals("[")
             // Address-taking, dereferencing and indexing borrow.
-            r.get_postfix_receiver().analyze_as_borrow(c, state)
+            r.get_postfix_receiver().analyze_as_borrow(df, state)
             for $i: = 1; i < r.children.len; i += 1
-                r.get_child(i).analyze_as_value(c, state)
+                r.get_child(i).analyze_as_value(df, state)
         else
             if op_text.equals("(")
                 r.release_kept_block_if_any(state)
-            r.df_default_traverse(c, state)
+            r.df_default_traverse(df, state)
             if op_text.equals("!")
                 // The error leaves the function.
-                c.report_lock_exit(r, c.df_check_defers_on_exit(r, state, 0))
+                df.report_lock_exit(r, df.df_check_defers_on_exit(r, state, 0))
             if op_text.equals("(")
                 // Registers `dealloc(x)` and an argument to a function wrapping a release (one
                 // level).
-                r.mark_free_call_if_any(c, state)
-                r.mark_call_freed_args(c, state)
-                r.df_view_call(c, state)
+                r.mark_free_call_if_any(df, state)
+                r.mark_call_freed_args(df, state)
+                r.df_view_call(df, state)
 
 fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
     if !s1.reachable
@@ -888,17 +889,17 @@ fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
     return ns
 
 impl Df_ctx
-    priv fn add_local(r: Self$@, v: Ast_node$@) //<
+    priv fn add_local(r: Self$@, binding: Ast_node$@) //<
         //< Starts tracking a local binding, once
         //< A defer body is analyzed at each exit that leaves it, so its declarations come here
         //< again. A second entry would never be marked read, and would be reported unused.
-        r.add_bound_local(v, null)
+        r.add_bound_local(binding, null)
 
-    fn add_bound_local(r: Self$@, v: Ast_node$@, pattern: Ast_node$@) //<
+    fn add_bound_local(r: Self$@, binding: Ast_node$@, pattern: Ast_node$@) //<
         //< Starts tracking a local, once, which `pattern`'s payload binds where it is not null
-        if r.find_local(v) < 0
+        if r.find_local(binding) < 0
             r.locals
-                .push(Local_state::{ .node = v, .is_read = false, .is_reassigned = false,
+                .push(Local_state::{ .node = binding, .is_read = false, .is_reassigned = false,
                 .is_mutated = false, .writes_through = false, .pattern = pattern })
 
     priv fn enter_exit_target(r: Self$@, stmt: Ast_node$@) //<
@@ -907,31 +908,32 @@ impl Df_ctx
             .push(Df_exit_target::{ .stmt = stmt, .defers_before = r.pending_defers.len,
             .jump_state = null, .continue_state = null })
 
-    fn find_local(r: Self@, v: Ast_node@): I32
-        if v == null
+    fn find_local(r: Self@, binding: Ast_node@): I32
+        if binding == null
             return -1
         for i in Range.asc(r.locals.len)
-            if r.locals.get(i).node == v
+            if r.locals.get(i).node == binding
                 return I32::i
         return -1
 
-    priv fn mark_read(r: Self$@, v: Ast_node$@)
-        i: = r.find_local(v)
+    priv fn mark_read(r: Self$@, binding: Ast_node$@)
+        i: = r.find_local(binding)
         if i >= 0
             $st: = r.locals.get(i)
             st.is_read = true
             r.locals.set(i, st)
 
-    priv fn mark_mutated(r: Self$@, v: Ast_node$@) //<
+    priv fn mark_mutated(r: Self$@, binding: Ast_node$@) //<
         //< Sets only the value axis (a method call, an application of `@` / `[` / `$`)
-        i: = r.find_local(v)
+        i: = r.find_local(binding)
         if i >= 0
             $st: = r.locals.get(i)
             st.is_mutated = true
             r.locals.set(i, st)
 
-    priv fn mark_reassigned(r: Self$@, v: Ast_node$@) //< sets the binding axis (and the value axis)
-        i: = r.find_local(v)
+    priv fn mark_reassigned(r: Self$@, binding: Ast_node$@) //<
+        //< sets the binding axis (and the value axis)
+        i: = r.find_local(binding)
         if i >= 0
             $st: = r.locals.get(i)
             st.is_reassigned = true
@@ -951,8 +953,8 @@ impl Df_ctx
                 return local.node == st.node
         return false
 
-fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: Ast_node$@): Bool
-    $ctx: = Df_ctx::{ .sema = c, .locals = List<|Local_state|>.create(base_core.arena),
+fn analyze_definite_initialization(ctx: Sema_ctx$@, fn_node: Ast_node$@, block: Ast_node$@): Bool
+    $df: = Df_ctx::{ .sema = ctx, .locals = List<|Local_state|>.create(base_core.arena),
         .has_error = false, .has_reported_unreachable = false, .suppress_move = false,
         .pending_defers = List<|Ast_node$@|>.create(base_core.arena),
         .exit_targets = List<|Df_exit_target|>.create(base_core.arena), .exit_from = null,
@@ -964,17 +966,17 @@ fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: As
     param_list: = fn_node.get_fn_params()
     if param_list != null
         for p in base_ast_ext.Param_cursor(param_list, false)
-            ctx.add_local(p)
+            df.add_local(p)
             state.add(p)
 
-    block.analyze_df_node(ctx@, state)
-    ctx.report_lock_end(state)
-    ctx.keep_pointee_marks(fn_node)
+    block.analyze_df_node(df@, state)
+    df.report_lock_end(state)
+    df.keep_pointee_marks(fn_node)
 
-    if !c.suppress_errors
-        for local in ctx.locals
-            if local.pattern == null || ctx.reads_payload(local.pattern)
-                sema_flow_report.check_local_usage(c, local)
-            else if ctx.binds_first(local)
-                sema_flow_report.report_unread_payload(c, local.pattern)
-    return !ctx.has_error
+    if !ctx.suppress_errors
+        for local in df.locals
+            if local.pattern == null || df.reads_payload(local.pattern)
+                sema_flow_report.check_local_usage(ctx, local)
+            else if df.binds_first(local)
+                sema_flow_report.report_unread_payload(ctx, local.pattern)
+    return !df.has_error

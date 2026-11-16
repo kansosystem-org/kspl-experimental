@@ -30,15 +30,15 @@ enum Info_topic //< the subjects `ksplc info` answers
         //< The folder of the disk cache (ksplc/base/cache.kspl), in the OS's cache area
         //< It is hidden there, so **its growth cannot be checked** without this answer.
     keywords //<
-        //< The reserved words the grammar collected; the only subject that needs the grammar built.
+        //< The reserved words the grammar collected; the only subject that needs the grammar built
     package //<
         //< The package the current folder is in: its name, then what it uses
         //< **Two empty lines are a valid answer too** (no folder above names one), so a script need
         //< not read `ksplc.cfg` itself.
 
 impl Info_topic
-    priv fn info_topic_name(t: Self): U8[] //< a subject as the command line writes it
-        return t.variant_name().replace("_", "-", base_core.arena)
+    priv fn info_topic_name(r: Self): U8[] //< a subject as the command line writes it
+        return r.variant_name().replace("_", "-", base_core.arena)
 
 fn info_topics(): U8[] //< every subject, separated by spaces, in the enum's order
     defer $b: = Str_builder()
@@ -58,7 +58,7 @@ fn parse_info_topic(name: U8[]): Info_topic //< it reads the subject's name
         .take())
     return .std_dir
 
-fn refuse_unread_std_dir(p: argparse.Parser$@, topic: Info_topic) //<
+fn refuse_unread_std_dir(parser: argparse.Parser$@, topic: Info_topic) //<
     //< It rejects `--std-dir=` on a subject whose answer does not read it
     //< `info` takes the option for `std-dir` alone. argparse sees only the subcommand (`only_for`
     //< in `cli.kspl`), so taken silently on another subject it would change nothing (Principle 5 in
@@ -67,21 +67,21 @@ fn refuse_unread_std_dir(p: argparse.Parser$@, topic: Info_topic) //<
     case .std_dir
         return
     default {}
-    if !p.saw("--std-dir")
+    if !parser.saw("--std-dir")
         return
     msg: = base_core.arena.text()
         .s("ksplc info \{topic.info_topic_name()\}: '--std-dir' does not change this subject's \
             answer. It changes only the std-dir answer\n").take()
     error_exit(msg)
 
-fn refuse_empty_values(p: argparse.Parser$@) //<
+fn refuse_empty_values(parser: argparse.Parser$@) //<
     //< It rejects an option given with nothing after its `=` (`--emit-deps=`)
     //< **No option of ksplc means anything by an empty value.** Taken, it would read as the default
     //< or be ignored, and the writer would believe it took effect.
     $names: = List<|U8[]|>(base_core.arena)
-    p.append_names(names@)
+    parser.append_names(names@)
     for name in names
-        if p.saw_empty(name)
+        if parser.saw_empty(name)
             error_exit(base_core.arena.text()
                 .s("Error: \{argparse.Argument_error.missing_value(name)\}\n").take())
 

@@ -116,9 +116,9 @@ priv fn starts_ignoring_case(text: U8[], at: Sz, word: U8[]): Bool //< whether `
         return false
     return text.sub(at, word.len).equals_ignore_case(word)
 
-fn show(raw: U8[], f: Format, date1904: Bool, arena: Arena$@): U8[] //<
+fn show(raw: U8[], format: Format, date1904: Bool, arena: Arena$@): U8[] //<
     //< A stored number (`<v>`'s text) as its format shows it; text that is no number as it stands
-    switch f.shown
+    switch format.shown
     case .plain
         return digits(raw, 0, arena)
     case .percent
@@ -135,17 +135,17 @@ fn show(raw: U8[], f: Format, date1904: Bool, arena: Arena$@): U8[] //<
         days += 1I64
         secs -= 86400I64
     out: = arena.text()
-    switch f.shown
+    switch format.shown
     case .date
         write_date(out, days)
     case .date_time
         write_date(out, days)
         out.c(' ')
-        write_time(out, secs / 3600I64, secs, f.seconds)
+        write_time(out, secs / 3600I64, secs, format.seconds)
     case .time
-        write_time(out, secs / 3600I64, secs, f.seconds)
+        write_time(out, secs / 3600I64, secs, format.seconds)
     case .hours
-        write_time(out, days * 24I64 + secs / 3600I64, secs, f.seconds)
+        write_time(out, days * 24I64 + secs / 3600I64, secs, format.seconds)
     default {}
     return out.take()
 
@@ -181,10 +181,10 @@ priv fn write_time(out: str.Arena_text$@, hours: I64, secs: I64, seconds: Bool) 
         out.c(':')
         two(out, secs % 60I64)
 
-priv fn two(out: str.Arena_text$@, v: I64) //< a number of at least two digits
-    if v < 10I64
+priv fn two(out: str.Arena_text$@, value: I64) //< a number of at least two digits
+    if value < 10I64
         out.c('0')
-    out.s("\{v\}")
+    out.s("\{value\}")
 
 // ==========================================
 // Digits: a stored number rounded to 15 significant digits, worked on its text
@@ -244,11 +244,12 @@ priv struct Rounded //< digits cut to `SIGNIFICANT`, and how many places were dr
     digits: U8[]
     dropped: I32
 
-priv fn round_digits(d: U8[], arena: Arena$@): Rounded //< rounds half up to `SIGNIFICANT` digits
-    if d.len <= SIGNIFICANT
-        return Rounded::{ .digits = d, .dropped = 0 }
-    buf: = arena.dup_str(d.sub(0, SIGNIFICANT))
-    if d[SIGNIFICANT] >= '5'
+priv fn round_digits(digits: U8[], arena: Arena$@): Rounded //<
+    //< rounds half up to `SIGNIFICANT` digits
+    if digits.len <= SIGNIFICANT
+        return Rounded::{ .digits = digits, .dropped = 0 }
+    buf: = arena.dup_str(digits.sub(0, SIGNIFICANT))
+    if digits[SIGNIFICANT] >= '5'
         $k: = SIGNIFICANT
         for k > 0
             k -= 1
@@ -260,32 +261,32 @@ priv fn round_digits(d: U8[], arena: Arena$@): Rounded //< rounds half up to `SI
                 // Every digit carried: 999… became 1000…, one place longer.
                 carried: = arena.text().c('1').s(buf.sub(0, SIGNIFICANT - 1)).take()
                 return Rounded::{ .digits = carried,
-                    .dropped = I32::(d.len - SIGNIFICANT) + 1 }
-    return Rounded::{ .digits = buf, .dropped = I32::(d.len - SIGNIFICANT) }
+                    .dropped = I32::(digits.len - SIGNIFICANT) + 1 }
+    return Rounded::{ .digits = buf, .dropped = I32::(digits.len - SIGNIFICANT) }
 
-priv fn place_point(d: U8[], exp: I32, negative: Bool, arena: Arena$@): U8[] //<
-    //< The digits `d` times 10 to `exp`, written with a point, or with `E` when very large or small
+priv fn place_point(digits: U8[], exp: I32, negative: Bool, arena: Arena$@): U8[] //<
+    //< The digits `digits` times 10 to `exp`, written with a point, or with `E` when very large or small
     out: = arena.text()
     if negative
         out.c('-')
-    whole: = I32::d.len + exp //< how many digits stand before the point
+    whole: = I32::digits.len + exp //< how many digits stand before the point
     if whole > 15 || whole < -5
-        out.c(d[0])
-        if d.len > 1
-            out.c('.').s(d.sub_from(1))
+        out.c(digits[0])
+        if digits.len > 1
+            out.c('.').s(digits.sub_from(1))
         out.s("E+" if whole - 1 >= 0 else "E-").s("\{abs_i32(whole - 1)\}")
     else if exp >= 0
-        out.s(d)
+        out.s(digits)
         for _k in Range.asc(exp)
             out.c('0')
     else if whole > 0
-        out.s(d.sub(0, whole)).c('.').s(d.sub_from(whole))
+        out.s(digits.sub(0, whole)).c('.').s(digits.sub_from(whole))
     else
         out.s("0.")
         for _k in Range.asc((-whole))
             out.c('0')
-        out.s(d)
+        out.s(digits)
     return out.take()
 
-priv fn abs_i32(v: I32): I32 //< the value without its sign
-    return -v if v < 0 else v
+priv fn abs_i32(value: I32): I32 //< the value without its sign
+    return -value if value < 0 else value

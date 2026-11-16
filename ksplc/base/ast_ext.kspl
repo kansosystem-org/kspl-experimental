@@ -51,28 +51,28 @@ priv const LIBRARY_FILE_SUFFIXES: U8[][6] = ::{ ".a", ".so", ".dylib", ".tbd", "
     //< The linker adds the one its platform wants (`-lopenblas` finds `libopenblas.so`, `.a`,
     //< `.dylib` or `openblas.lib`), so a name that ends in one names a file that does not exist.
 
-priv fn is_library_name(s: U8[]): Bool //< whether it names a library as `-l` takes one
+priv fn is_library_name(text: U8[]): Bool //< whether it names a library as `-l` takes one
     //< Caution: **A name, never a flag or a path.** It reaches a build script's shell as one word
     //< (`$(cat prog.libs)`), so only letters, digits and `_ + . -`. `:` asks GNU ld for a file
     //< (`-l:libx.so`) and `/` `\` name a folder; where to look is left to the environment.
-    if s.len == 0 || !s[0].is_alnum()
+    if text.len == 0 || !text[0].is_alnum()
         return false
-    for ch in s
+    for ch in text
         if !(ch.is_alnum() || ch == '+' || ch == '.' || ch == '-')
             return false
     for suffix in LIBRARY_FILE_SUFFIXES
-        if s.ends_with(suffix)
+        if text.ends_with(suffix)
             return false
     return true
 
-priv fn is_section_name(s: U8[]): Bool //< whether it names a linker section as written
+priv fn is_section_name(text: U8[]): Bool //< whether it names a linker section as written
     //< Caution: **Only letters, digits, `_` and `.`.** The name reaches the C, the LLVM IR and the
     //< assembler's `.section` line as written, each with quoting of its own. A `"`, a `\`, a `??/`
     //< (a trigraph under `-std=c99`) or a `;` would end it early. What follows would then become
     //< code that the source never declared.
-    if s.len == 0
+    if text.len == 0
         return false
-    for ch in s
+    for ch in text
         if !(ch.is_alnum() || ch == '.')
             return false
     return true

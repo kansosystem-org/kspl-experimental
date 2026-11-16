@@ -4,12 +4,13 @@
 //< **Start the ADC first** (`adc.init()`; either the demo itself or `common/pilot_boot.kspl`).
 //< `look` returns only what to do this round. How the car stops, and what it restores on coming
 //< back, stay with the caller. So each demo halts in its own way without a copy of the rule.
+//< **The rule itself (`Watch.judge`) touches no hardware**, and this file uses no console. So
+//< `lib/ksos/tests/stops_test.kspl` checks the rule on the host.
 
 // ==========================================
 //   switch watch.look(halted) case .go { … } case .low { halt(…) } case .back { … } default {}
 // ==========================================
 import "ksos/boards/freenove_4wd_pico/board"
-import "ksos/demo/rp2040/common/console" as con
 import "ksos/drivers/rp2040/adc"
 
 const LOW_ROUNDS: U32 = 5 //< the battery's minimum must be seen **several rounds in a row**
@@ -51,16 +52,23 @@ priv fn read_mv(): U32 //< the battery's voltage [mV]
     return board.battery_mv(bat.value) if bat.ok else 0
 
 // One per machine, like the battery. **Do not create one in the caller**; only here does the
-// counting state stay `priv`.
+// counting state stay `priv`. A test makes its own with `Watch()`.
 $watch: Watch = ::{}
 
 impl Watch
+    fn new(): Watch //< a watch that has seen no reading
+        return ::{}
+
     fn look(r: Self$@, halted: Bool): Verdict //<
         //< Checks for one round and returns what to do this round
         //< For `halted`, the caller passes "is it stopped for any reason at all".
         //< Caution: **Call it while stopped too.** Otherwise it misses the switch going off and on.
         //< The Pico runs on USB, so the battery switch does not reset it. This is the only way out.
-        mv: = read_mv()
+        return r.judge(halted, read_mv())
+
+    fn judge(r: Self$@, halted: Bool, mv: U32): Verdict //<
+        //< Counts one round's reading `mv` [mV] and returns what to do, with no hardware access
+        //< `look` reads the battery and calls this. `lib/ksos/tests/stops_test.kspl` checks it.
         if halted
             if !r.on_battery
                 return .hold // stops for reasons other than the battery do not recover here
@@ -85,16 +93,3 @@ impl Watch
         else
             r.low_seen = 0
         return .go
-
-    fn halt_note(r: Self@, ln: con.Line$@, reason: U8[]) //<
-        //< appends ` HALTED: <reason>` to a report
-        //< Where the battery's minimum stopped it, the two voltages follow. Only the current one
-        //< shows the switch turned off and on, so they are printed separately.
-        ln.str(" HALTED: ")
-        ln.str(reason)
-        if r.on_battery
-            ln.str(" (")
-            ln.u32_milli(r.halt_mv)
-            ln.str("V, now ")
-            ln.u32_milli(r.now_mv)
-            ln.str("V)")

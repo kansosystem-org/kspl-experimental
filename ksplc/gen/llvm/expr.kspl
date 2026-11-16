@@ -493,24 +493,25 @@ impl Ast_node
         case .not_constant {}
         return cg.emit_float_to_int_sat(recv_reg, src_id, dst_id)
 
-priv fn emit_tag_check(cg: Genllvm_ctx$@, r: Ast_node$@, def: Enum_def$@, recv_reg: U8$[]): U8$[] //<
-    //< Passes a cast's operand through the tag check against the enum's tags
-    //< It returns the operand at its own width. Tags that run unbroken go to
-    //< `@kspl_tag_range_check` as their ends. Others go to `@kspl_tag_check` in a slot of the
-    //< alloca group, so a cast in a loop takes no more stack each time round.
-    src_id: = cg.env.scalar_repr_id(r.get_postfix_receiver().type_id)
+priv fn emit_tag_check(cg: Genllvm_ctx$@, cast: Ast_node$@, def: Enum_def$@, recv_reg: U8$[]):
+    U8$[] //<
+        //< Passes a cast's operand through the tag check against the enum's tags
+        //< It returns the operand at its own width. Tags that run unbroken go to
+        //< `@kspl_tag_range_check` as their ends. Others go to `@kspl_tag_check` in a slot of the
+        //< alloca group, so a cast in a loop takes no more stack each time round.
+    src_id: = cg.env.scalar_repr_id(cast.get_postfix_receiver().type_id)
     wide_reg: = cg.emit_numeric_coerce(recv_reg, src_id, I64_ID)
     n: = def.variants_list.len
     low: = def.run_low()
     $slot: U8[] = ""
     if low.is_none()
         tags_id: = cg.env.make_array(I32::sema_type_env.Builtin_type_id.i64_type, I32::n)
-        slot = cg.get_or_alloc_tmp_slot(Void$@::r, tags_id)
+        slot = cg.get_or_alloc_tmp_slot(Void$@::cast, tags_id)
         cg.s("    store ").t(tags_id).s(" [")
         for i in Range.asc(n)
             cg.s(", " if i > 0 else "").s("i64 \{def.variants_list.get(i).tag_value\}")
         cg.s("], ptr ").s(slot).s("\n")
-    name: = cg.get_or_add_raw_literal(cg.env.display(r.type_id))
+    name: = cg.get_or_add_raw_literal(cg.env.display(cast.type_id))
     safe_reg: = cg.next_reg()
     // A `U64` above INT64_MAX arrives negative in i64; the flag makes it no tag and prints it
     // unsigned.
@@ -522,7 +523,7 @@ priv fn emit_tag_check(cg: Genllvm_ctx$@, r: Ast_node$@, def: Enum_def$@, recv_r
     else
         cg.s("ptr ").s(slot).s(", i64 \{n\}")
     cg.s(", ptr @.str.\{name\}")
-    emit_check_loc(cg, r.loc)
+    emit_check_loc(cg, cast.loc)
     return cg.emit_numeric_coerce(cg.reg_str(safe_reg), I64_ID, src_id)
 
 priv fn extend_constant_text(cg: Genllvm_ctx$@, text: U8[], src_type: I32, is_zext: Bool): U8$[] //<
@@ -587,14 +588,14 @@ fn emit_llvm_signed_div(cg: Genllvm_ctx$@, op: U8[], left_reg: U8$[], value_type
     emit_check_loc(cg, loc)
     return cg.emit_numeric_coerce(cg.reg_str(res_reg), word_id, value_type_id)
 
-priv fn emit_checked_operand(cg: Genllvm_ctx$@, r: Ast_node$@, val_reg: U8$[], type_id: I32,
+priv fn emit_checked_operand(cg: Genllvm_ctx$@, operand: Ast_node$@, val_reg: U8$[], type_id: I32,
     check: U8[], extra_args: U8[]): U8$[] //<
-        //< It passes the operand r through the run-time check `@<check>` in i64
+        //< It passes the operand through the run-time check `@<check>` in i64
         //< It returns the checked value at type_id's width.
     wide_reg: = cg.emit_numeric_coerce(val_reg, type_id, I64_ID)
     safe_reg: = cg.next_reg()
     cg.s("    %\{safe_reg\} = call i64 @").s(check).s("(i64 ").s(wide_reg).s(extra_args)
-    emit_check_loc(cg, r.loc)
+    emit_check_loc(cg, operand.loc)
     return cg.emit_numeric_coerce(cg.reg_str(safe_reg), I64_ID, type_id)
 
 priv fn emit_check_loc(cg: Genllvm_ctx$@, loc: Loc) //<

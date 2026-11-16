@@ -1,6 +1,6 @@
-//< The process itself: its arguments, its environment, the clock and signals
-//< The path helpers are here too (`get_dir_name`, `last_ext`, `is_absolute` and the rest). They
-//< read a path as text and never touch the filesystem. Operations on the tree are in `std/fs`.
+//< The process itself (its arguments, environment, clock and signals) and the path helpers
+//< The path helpers (`get_dir_name`, `last_ext` and the rest) take a path apart as text, touching
+//< no file. `std/fs` builds paths ("Files and paths" in std/docs/DESIGN-system.md) and walks trees.
 //< **`panic`, `assert` and the error trace are not here** but in `std/lang`. Here, `mem` and `ds`
 //< would have to import `sys`, and a failing `main` could print no trace without it.
 import "std/chars"
@@ -107,7 +107,7 @@ pub fn cpu_count(): Sz //< how many CPUs this process can run on; 1 if unknown, 
     n: = kspl_cpu_count()
     return 1 if n < 1 else n
 
-pub const SCRIPT_ENV_NAME: U8[] = "KSPL_SCRIPT" //< how a launcher passes a script its own path.
+pub const SCRIPT_ENV_NAME: U8[] = "KSPL_SCRIPT" //< how a launcher passes a script its own path
     //< The value is "<the launched executable's path>\n<the script's path>" (see script_path).
     //< Caution: Changing the name on only one side makes script_path silently return .none.
 
@@ -215,7 +215,7 @@ pub fn program_name(): U8[] //< this program's name for messages, without folder
 // ==========================================
 // Signals
 // ==========================================
-pub typedef Signal_handler = fn(sig: I32): Void //< what `set_signal_handler` takes and returns.
+pub typedef Signal_handler = fn(sig: I32): Void //< what `set_signal_handler` takes and returns
     //< An unnamed function-pointer type in an extern declaration produces no valid C type name (the
     //< same holds for Thread_entry in std/thread.kspl).
 
@@ -236,7 +236,7 @@ pub fn raise_signal(sig: I32) //< sends a signal to this process itself
     libc.raise(sig)
 
 // ==========================================
-// The filesystem
+// Taking a path apart, as text
 // ==========================================
 
 priv fn last_path_sep(path: U8[]): Sz? //< the position of the last separator in path, or none
@@ -258,10 +258,11 @@ fn is_absolute_on(path: U8[], windows: Bool): Bool //< `is_absolute`, on Windows
     n: = root_len_on(path, windows)
     return n > 0 && (is_path_sep(path[0]) || is_path_sep(path[n - 1]))
 
-pub fn is_path_sep(c: U8): Bool //< a path separator, `/` or `\`, on every OS; std/fs splits by it
+pub fn is_path_sep(byte: U8): Bool //<
+    //< a path separator, `/` or `\`, on every OS; std/fs splits by it
     //< Caution: Check both `/` and `\`. A path from Windows can be mixed (MSYS2 rewrites a
     //< `/tmp/...` it passes to a child process as `D:/a/_temp/...`).
-    return c == '/' || c == '\\'
+    return byte == '/' || byte == '\\'
 
 pub fn root_len(path: U8[]): Sz //< the length of the root a path starts from; 0 if it has none
     //< A separator is one byte. **A drive is part of the root on Windows only**: `C:` is two and

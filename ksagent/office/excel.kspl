@@ -314,28 +314,28 @@ priv fn read_sheet(book: Book$@, name: U8[], src: U8[]): Void!U8[] //<
             merges.push(merge_of(x.attr_or("ref", "", a)!)!)
     write_rows(book, name, rows@, merges@)!
 
-priv fn show(book: Book$@, c: Value$@): U8[]!U8[] //< what a cell shows, from what it stores
+priv fn show(book: Book$@, cell: Value$@): U8[]!U8[] //< what a cell shows, from what it stores
     a: = book.arena
-    v: = c.v.take()
-    f: = c.f.take()
-    if c.kind.equals("inlineStr")
-        return unescaped(c.inline.take(), a)
+    v: = cell.v.take()
+    f: = cell.f.take()
+    if cell.kind.equals("inlineStr")
+        return unescaped(cell.inline.take(), a)
     if v.len == 0
         // A formula no program has computed yet, as libraries write them: its text is all there is.
         return "" if f.len == 0 else a.text().c('=').s(f).take()
-    if c.kind.equals("s")
+    if cell.kind.equals("s")
         idx: = whole(v)
         if idx < 0 || Sz::idx >= book.strings.len
             throw "a cell refers to a shared string the file does not hold"
         return book.strings.get(idx)
-    if c.kind.equals("b")
+    if cell.kind.equals("b")
         return ("TRUE" if v.equals("1") else "FALSE" if v.equals("0") else v)
-    if c.kind.equals("n")
+    if cell.kind.equals("n")
         format: =
-            (book.formats.get(c.style) if c.style >= 0 && Sz::c.style < book.formats.len
-            else cell_format.plain())
+            (book.formats.get(cell.style)
+            if cell.style >= 0 && Sz::cell.style < book.formats.len else cell_format.plain())
         return cell_format.show(v, format, book.date1904, a)
-    if c.kind.equals("str")
+    if cell.kind.equals("str")
         return unescaped(v, a)
     return v
 
@@ -419,8 +419,8 @@ priv fn write_rows(book: Book$@, name: U8[], rows: List<|Row|>@, merges: List<|M
             m.text = cell_text(rows, m.top, m.left)
             if m.text.len > 0
                 tall.push(m)
-    sorted: = tall.order_by(fn(p: Merge@, q: Merge@; ): I32 {
-        return p.top - q.top;
+    sorted: = tall.order_by(fn(left: Merge@, right: Merge@; ): I32 {
+        return left.top - right.top;
     }, a)
     $first_col: I32 = MAX_COL
     for i in Range.asc(rows.len)

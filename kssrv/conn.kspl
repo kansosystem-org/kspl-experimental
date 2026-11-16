@@ -199,52 +199,53 @@ fn conn_new(stream: net.Tcp_stream$@, serial: I64, local: Bool): Rc<|Conn|>
     }
     return Rc<|Conn|>(fresh)
 
-fn conn_close(c: Conn$@) //< frees a connection's resources
+fn conn_close(connection: Conn$@) //< frees a connection's resources
     //< Caution: Call it before emptying the slot, or the socket and the buffers leak.
-    if c.tls != null
-        c.tls.free()
-    c.stream.free()
-    c.arena.free()
-    c.inbuf.free()
-    c.outbuf.free()
-    c.file.free()
+    if connection.tls != null
+        connection.tls.free()
+    connection.stream.free()
+    connection.arena.free()
+    connection.inbuf.free()
+    connection.outbuf.free()
+    connection.file.free()
 
-fn any_holding(t: Conn_table@): Bool //< whether a page is holding the server open
+fn any_holding(table: Conn_table@): Bool //< whether a page is holding the server open
     //< **This is what "someone is using me" means.** Stopping when nobody is depends on it alone
     //< ("Keeping the server alive while a page is open" in `../docs/SPEC-local-server.md`).
     for i in Range.asc(MAX_CONNS)
-        if !t.slots[i].is_empty() && t.slots[i].get().holding
+        if !table.slots[i].is_empty() && table.slots[i].get().holding
             return true
     return false
 
-fn open_serial(t: Conn_table@, serial: I64): Bool //< whether that connection is still open
+fn open_serial(table: Conn_table@, serial: I64): Bool //< whether that connection is still open
     //< **A connection is dropped only once its answer is sent or it broke** (`conn_send` in
     //< `kssrv/main.kspl`), so false means nothing is left to send on it. **One lingering after its
     //< last answer counts as closed**: everything has been sent on it.
     for i in Range.asc(MAX_CONNS)
-        if !t.slots[i].is_empty() && t.slots[i].get().serial == serial
-            return t.slots[i].get().lingering_since_us == 0I64
+        if !table.slots[i].is_empty() && table.slots[i].get().serial == serial
+            return table.slots[i].get().lingering_since_us == 0I64
     return false
 
-fn table_find_free(t: Conn_table@): Sz //< looks for a free slot
+fn table_find_free(table: Conn_table@): Sz //< looks for a free slot
     //< -1 if there is none.
     for i in Range.asc(MAX_CONNS)
-        if t.slots[i].is_empty()
+        if table.slots[i].is_empty()
             return i
     return -1
 
-fn table_drop(t: Conn_table$@, slot: Sz, lg: Log$@) //< closes a slot's connection and empties it
-    if t.slots[slot].is_empty()
+fn table_drop(table: Conn_table$@, slot: Sz, lg: Log$@) //<
+    //< closes a slot's connection and empties it
+    if table.slots[slot].is_empty()
         return
-    serial: = t.slots[slot].get().serial
+    serial: = table.slots[slot].get().serial
     // Caution: **A page letting go counts as a use.** Counted from the page's last request
     // instead, a page held open past `--idle` stops the server the moment it closes, even for a
     // reload.
-    if t.slots[slot].get().holding
+    if table.slots[slot].get().holding
         used_us = sys.mono_us()
-    conn_close(t.slots[slot].get())
+    conn_close(table.slots[slot].get())
     // Assigning the empty value releases the stored handle.
-    t.slots[slot] = Rc<|Conn|>.empty()
+    table.slots[slot] = Rc<|Conn|>.empty()
     stats.connections_open -= 1I64
     // The close is logged under the open's serial, to match the accept line.
     if ln: = lg.at(.information)
@@ -253,17 +254,17 @@ fn table_drop(t: Conn_table$@, slot: Sz, lg: Log$@) //< closes a slot's connecti
 fn queue_response( //< queues one answer with `body` as its body; to a HEAD, it names the length
     //< **The socket must not be written here** (the reason is in this file's header). The length
     //< goes in from the body (`http.format_response`).
-    c: Conn$@,
+    connection: Conn$@,
     status: I32,
     ctype: U8[],
     body: U8[],
     keep: Bool,
     allow: U8[] = "", //< a 405's `Allow` (`answer_head`); empty for any other answer
 )
-    queue_answer(c, status, ctype, body, keep, allow, no_more(c))
+    queue_answer(connection, status, ctype, body, keep, allow, no_more(connection))
 
 priv fn queue_answer( //< `queue_response` with `more`, the headers this one answer adds
-    c: Conn$@,
+    connection: Conn$@,
     status: I32,
     ctype: U8[],
     body: U8[],
@@ -271,24 +272,24 @@ priv fn queue_answer( //< `queue_response` with `more`, the headers this one ans
     allow: U8[],
     more: http.Headers,
 )
-    if c.answers_head
-        head_only(c, status, ctype, body.len, keep, allow, more)
+    if connection.answers_head
+        head_only(connection, status, ctype, body.len, keep, allow, more)
         return
-    head: = answer_head(c, ctype, keep, allow, more)
-    http.format_response(c.outbuf@, status, head, body) catch _e
-        unbuilt(c)
+    head: = answer_head(connection, ctype, keep, allow, more)
+    http.format_response(connection.outbuf@, status, head, body) catch _e
+        unbuilt(connection)
         return
     if !keep
-        c.close_after_send = true
+        connection.close_after_send = true
 
-priv fn no_more(c: Conn$@): http.Headers //< the headers an answer adds when it adds none
-    return http.headers(c.arena).build()
+priv fn no_more(connection: Conn$@): http.Headers //< the headers an answer adds when it adds none
+    return http.headers(connection.arena).build()
 
 fn queue_file( //< queues an answer whose body is `length` bytes of `file` from `start` on
     //< The body is sent as the connection drains. **The connection then holds one chunk at a time,
     //< not the file** (`conn_send` in `kssrv/main.kspl`). It owns `file` from here on; a HEAD's
     //< answer takes a closed one (`::{}`), as it sends no byte.
-    c: Conn$@,
+    connection: Conn$@,
     status: I32, //< 200 for the whole file, 206 for a part of it (`more` then names which)
     ctype: U8[],
     file: io.File_stream,
@@ -300,63 +301,64 @@ fn queue_file( //< queues an answer whose body is `length` bytes of `file` from 
     $owned: = file
     // Caution: **Move to the first byte before the head is queued.** A seek that fails can still
     // become a 500, where after the head it could only cut the answer short.
-    if !c.answers_head && length > 0 && start > 0
+    if !connection.answers_head && length > 0 && start > 0
         owned.seek_to(start) catch _e
             owned.free()
-            queue_error(c, 500)
+            queue_error(connection, 500)
             return
-    before: = c.outbuf.len
-    head_only(c, status, ctype, length, keep, "", more)
+    before: = connection.outbuf.len
+    head_only(connection, status, ctype, length, keep, "", more)
     // A HEAD names the length and takes no body; a head the builder refused added nothing.
     // Caution: **Close a file no byte of which goes out** (an empty file too). Only a chunk read
     // closes it later (`refill_from_file`). On Windows an open file cannot be replaced, so a
     // page holding the connection made every save of that file fail.
-    if c.answers_head || c.outbuf.len == before || length == 0
+    if connection.answers_head || connection.outbuf.len == before || length == 0
         owned.free()
         return
-    c.file = owned
-    c.file_left = length
+    connection.file = owned
+    connection.file_left = length
 
-fn peer_count(t: Conn_table@, peer: U8[]): Sz //<
+fn peer_count(table: Conn_table@, peer: U8[]): Sz //<
     //< how many open connections come from that address
     $n: Sz = 0
     for i in Range.asc(MAX_CONNS)
-        if t.slots[i].is_empty()
+        if table.slots[i].is_empty()
             continue
-        if from_peer(t.slots[i].get(), peer)
+        if from_peer(table.slots[i].get(), peer)
             n += 1
     return n
 
-fn from_peer(c: Conn@, peer: U8[]): Bool //< whether the connection comes from that address
-    return U8[]::{ .ptr = c.peer[0]@, .len = c.peer_len }.equals(peer)
+fn from_peer(connection: Conn@, peer: U8[]): Bool //< whether the connection comes from that address
+    return U8[]::{ .ptr = connection.peer[0]@, .len = connection.peer_len }.equals(peer)
 
 fn queue_to_head( //< queues the answer to a HEAD: the head a GET would get, and no body
     //< **A body is never sent after it**: the client reads the next answer where the head ends.
-    c: Conn$@,
+    connection: Conn$@,
     status: I32,
     ctype: U8[],
     length: Sz, //< the length the head names
     keep: Bool,
     allow: U8[] = "", //< a 405's `Allow`, as at `queue_response`
 )
-    head_only(c, status, ctype, length, keep, allow, no_more(c))
+    head_only(connection, status, ctype, length, keep, allow, no_more(connection))
 
-priv fn head_only(c: Conn$@, status: I32, ctype: U8[], length: Sz, keep: Bool, allow: U8[],
-    more: http.Headers) //<
+priv fn head_only(connection: Conn$@, status: I32, ctype: U8[], length: Sz, keep: Bool,
+    allow: U8[], more: http.Headers) //<
         //< `queue_to_head` with `more`, the headers this one answer adds
-    head: = answer_head(c, ctype, keep, allow, more)
-    http.format_response_to_head(c.outbuf@, status, head, length) catch _e
-        unbuilt(c)
+    head: = answer_head(connection, ctype, keep, allow, more)
+    http.format_response_to_head(connection.outbuf@, status, head, length) catch _e
+        unbuilt(connection)
         return
     if !keep
-        c.close_after_send = true
+        connection.close_after_send = true
 
-priv fn answer_head(c: Conn$@, ctype: U8[], keep: Bool, allow: U8[], more: http.Headers):
+priv fn answer_head(connection: Conn$@, ctype: U8[], keep: Bool, allow: U8[], more: http.Headers):
     http.Headers //<
         //< The headers every answer carries, then `more`; the length is the builder's to add
         //< `allow` non-empty adds `Allow`, which a 405 must carry (RFC 9110 §15.5.6): without it
         //< the client cannot tell which method would have been taken.
-    $b: = guarded(c, dated(c, http.headers(c.arena)).add("Content-Type", ctype)).add("Connection",
+    $b: = guarded(connection,
+        dated(connection, http.headers(connection.arena)).add("Content-Type", ctype)).add("Connection",
         "keep-alive" if keep else "close")
     if allow.len > 0
         b = b.add("Allow", allow)
@@ -364,12 +366,12 @@ priv fn answer_head(c: Conn$@, ctype: U8[], keep: Bool, allow: U8[], more: http.
         b = b.add(h.name, h.value)
     return b.build()
 
-priv fn dated(c: Conn$@, b: http.Header_builder): http.Header_builder //<
-    //< `b` with `Date`, the time the answer is made
+priv fn dated(connection: Conn$@, headers: http.Header_builder): http.Header_builder //<
+    //< `headers` with `Date`, the time the answer is made
     //< **Every answer carries it**: RFC 9110 §6.6.1 asks it of a server that has a clock. A cache
     //< reads the age of what it keeps from it, and `Last-Modified` is judged against it.
-    now: = c.arena.text().s("\{http.Http_date::{ .unix_s = sys.wall_seconds() }\}").take()
-    return b.add("Date", now)
+    now: = connection.arena.text().s("\{http.Http_date::{ .unix_s = sys.wall_seconds() }\}").take()
+    return headers.add("Date", now)
 
 // **Every answer says that its type is the one named**, so a browser never runs a file as a type it
 // guessed. Caution: **Facing outward, add nothing more**: framing and the referrer are a public
@@ -381,36 +383,37 @@ priv const NOSNIFF: U8[] = "nosniff"
 // only the page knows what it runs, so a page sets one in a `<meta>`.
 priv const FRAMES: U8[] = "frame-ancestors 'none'"
 
-priv fn guarded(c: Conn@, b: http.Header_builder): http.Header_builder //<
-    //< `b` with the headers that guard the answer: `NOSNIFF` always, and `FRAMES` with no referrer
+priv fn guarded(connection: Conn@, headers: http.Header_builder): http.Header_builder //<
+    //< `headers` with the headers that guard the answer: `NOSNIFF` always, and `FRAMES` with no referrer
     //< for local use
-    $out: = b.add("X-Content-Type-Options", NOSNIFF)
-    if c.local
+    $out: = headers.add("X-Content-Type-Options", NOSNIFF)
+    if connection.local
         out = out.add("Content-Security-Policy", FRAMES).add("Referrer-Policy", "no-referrer")
     return out
 
-priv fn unbuilt(c: Conn$@) //< gives up an answer the builder refused, closing without sending
+priv fn unbuilt(connection: Conn$@) //<
+    //< gives up an answer the builder refused, closing without sending
     //< A CRLF in a header or similar is this server's mistake, not the client's. The builder left
     //< `outbuf` as it was, so what was queued before still goes out.
-    c.close_after_send = true
+    connection.close_after_send = true
 
-fn queue_stream_head(c: Conn$@) //<
+fn queue_stream_head(connection: Conn$@) //<
     //< The head of a response that keeps the connection open without a stated length
     //< **Closing the connection marks the end** (the only way when the length is not known).
     //< `GET /api/here` sends this and nothing more.
     //< Caution: **Do not make it `keep-alive`.** With no length, only the close tells the client
     //< where the response ends.
-    head: = guarded(c,
-        dated(c, http.headers(c.arena)).add("Content-Type", "application/octet-stream"))
-        .add("Connection", "close").build()
+    typed: = dated(connection, http.headers(connection.arena)).add("Content-Type",
+        "application/octet-stream")
+    head: = guarded(connection, typed).add("Connection", "close").build()
     // **Do not write it with the function that sets a length.** `format_response` fills in
     // `Content-Length: 0`, and a client that follows the protocol then reads not one byte of the
     // body.
-    http.format_response_head(c.outbuf@, 200, head) catch _e
-        unbuilt(c)
+    http.format_response_head(connection.outbuf@, 200, head) catch _e
+        unbuilt(connection)
 
 fn queue_error( //< queues an error answer in plain text
-    c: Conn$@,
+    connection: Conn$@,
     status: I32,
     allow: U8[] = "", //< a 405's `Allow`
     keep: Bool = false, //< whether the request was read whole and its client keeps the connection
@@ -420,8 +423,8 @@ fn queue_error( //< queues an error answer in plain text
     b.s("\{status\} ").s(http.reason_phrase(status).unwrap_or("")).s("\n")
     if why.len > 0
         b.s(why).s("\n")
-    queue_response(c, status, "text/plain; charset=utf-8", b.slice(), keep && keeps_after(status),
-        allow)
+    queue_response(connection, status, "text/plain; charset=utf-8", b.slice(),
+        keep && keeps_after(status), allow)
 
 fn keeps_after(status: I32): Bool //<
     //< Whether a refusal leaves the connection open for the client's next request
@@ -431,25 +434,27 @@ fn keeps_after(status: I32): Bool //<
     //< be read (a 400), there is no telling where the next one starts.
     return status == 403 || status == 404 || status == 405 || status == 412 || status == 416
 
-fn queue_unchanged(c: Conn$@, ctype: U8[], keep: Bool, more: http.Headers) //<
+fn queue_unchanged(connection: Conn$@, ctype: U8[], keep: Bool, more: http.Headers) //<
     //< Queues a 304: the client's copy is the file as it stands, so no body goes
     //< `more` names the validators again (RFC 9110 §15.4.5), so a cache keeps them up to date.
-    head_only(c, 304, ctype, 0, keep, "", more)
+    head_only(connection, 304, ctype, 0, keep, "", more)
 
-fn queue_unsatisfiable(c: Conn$@, size: Sz, keep: Bool) //<
+fn queue_unsatisfiable(connection: Conn$@, size: Sz, keep: Bool) //<
     //< Queues a 416: the range asked for holds no byte of the file, which is `size` bytes long
     //< **It names the file's length** (`Content-Range: bytes */<size>`, RFC 9110 §15.5.17), so a
     //< client resuming a download it already has whole can tell that it is done.
-    more: = http.headers(c.arena)
-        .add("Content-Range", c.arena.text().s("bytes */\{size\}").take()).build()
-    body: = c.arena.text().s("416 ").s(http.reason_phrase(416).unwrap_or("")).s("\n").take()
-    queue_answer(c, 416, "text/plain; charset=utf-8", body, keep && keeps_after(416), "", more)
+    more: = http.headers(connection.arena)
+        .add("Content-Range", connection.arena.text().s("bytes */\{size\}").take()).build()
+    body: = connection.arena.text().s("416 ").s(http.reason_phrase(416).unwrap_or("")).s("\n")
+        .take()
+    queue_answer(connection, 416, "text/plain; charset=utf-8", body, keep && keeps_after(416), "",
+        more)
 
-fn queue_redirect(c: Conn$@, location: U8[], keep: Bool) //<
+fn queue_redirect(connection: Conn$@, location: U8[], keep: Bool) //<
     //< Queues a 301 to `location`, with a line naming it for a client that does not follow it
-    more: = http.headers(c.arena).add("Location", location).build()
-    body: = c.arena.text().s("301 Moved Permanently: ").s(location).s("\n").take()
-    queue_answer(c, 301, "text/plain; charset=utf-8", body, keep, "", more)
+    more: = http.headers(connection.arena).add("Location", location).build()
+    body: = connection.arena.text().s("301 Moved Permanently: ").s(location).s("\n").take()
+    queue_answer(connection, 301, "text/plain; charset=utf-8", body, keep, "", more)
 
 struct Target //< splits the request target (`/a/b?x=1#f`) into the path part and the query part
     //< Both are still raw, not yet percent-decoded.

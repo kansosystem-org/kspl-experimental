@@ -25,7 +25,7 @@ priv struct Grown //< one fixture to build
     guard: U8[] //< where the check that rejects it is (written into the header likewise)
     expect: U8[] //< the diagnostic that should appear
     limit: Sz //< a **copy** of the limit the rejecting check holds
-    depth: Sz //< the steps to build.
+    depth: Sz //< the steps to build
     // Caution: It must be deeper than the limit
     chain: Chain
     once: Bool //<
@@ -78,14 +78,14 @@ priv const GROWN: Grown[_] = ::{
         .expect = "constant expression nesting too deep", .limit = 1024, .depth = 1500,
         .chain = .const_ref, .once = true },
 }
-priv fn write_head(out: Str_builder$@, g: Grown) //< the fixture's header
+priv fn write_head(out: Str_builder$@, grown: Grown) //< the fixture's header
     //< Caution: **Always write the `EXPECT` line** (the runner fails a fixture with no mark). The
     //< header also says where it was built from, to trace a file found nowhere else.
-    out.s("// It confirms ").s(g.why).s("\n")
-    out.s("// (the ").s(g.guard).s(" safety valve).\n")
+    out.s("// It confirms ").s(grown.why).s("\n")
+    out.s("// (the ").s(grown.guard).s(" safety valve).\n")
     out.s("// **This material is assembled by tests/support/harness_grow.kspl.**\n")
-    out.s("// EXPECT: ").s(g.expect).s("\n")
-    if g.once
+    out.s("// EXPECT: ").s(grown.expect).s("\n")
+    if grown.once
         out.s("// EXPECT: Finished with 1 error(s)\n")
 
 priv fn write_struct_chain(out: Str_builder$@, depth: Sz) //< the struct chain
@@ -135,20 +135,20 @@ priv fn write_const_chain(out: Str_builder$@, depth: Sz) //<
         out.s("const C\{i + 1\}: I32 = C\{i\}\n")
     out.s("\nfn main(): I32\n  x: I32[C\{depth\}] = ::{ 0 }\n  return x[0]\n\n")
 
-priv fn write_body(out: Str_builder$@, g: Grown)
-    switch g.chain
+priv fn write_body(out: Str_builder$@, grown: Grown)
+    switch grown.chain
     case .struct_field
-        write_struct_chain(out, g.depth)
+        write_struct_chain(out, grown.depth)
     case .arc_field
-        write_arc_chain(out, g.depth)
+        write_arc_chain(out, grown.depth)
     case .generic_mono
-        write_generic_chain(out, g.depth)
+        write_generic_chain(out, grown.depth)
     case .type_alias
-        write_alias_chain(out, g.depth)
+        write_alias_chain(out, grown.depth)
     case .type_alias_back
-        write_alias_chain_back(out, g.depth)
+        write_alias_chain_back(out, grown.depth)
     case .const_ref
-        write_const_chain(out, g.depth)
+        write_const_chain(out, grown.depth)
 
 fn write_all(dir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Builds the list under `dir` and returns the paths written

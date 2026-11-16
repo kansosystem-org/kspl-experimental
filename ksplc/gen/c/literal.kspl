@@ -15,14 +15,14 @@ import "std/chars"
 import "std/str" { Str_builder }
 import "std/strfmt"
 
-fn append_c_string_byte(out: Writer, b: U8) //<
+fn append_c_string_byte(out: Writer, byte: U8) //<
     //< It appends one byte as the contents of a C string literal
     //< It uses only a spelling that reads back as the same byte.
     //< The callers are `emit_string_value` below and `emit_embed_decl` in `decl.kspl`.
     //< Caution: **Escape the `?`**: C99 replaces trigraphs such as `??(` before lexing. **An
     //< octal escape must always have three digits**, or C swallows the digit after it. Bytes 0x80
     //< and above are written raw; escaping them makes the generated C several times larger.
-    switch b
+    switch byte
     case '"'
         out.s("\\\"")
     case '\\'
@@ -36,10 +36,11 @@ fn append_c_string_byte(out: Writer, b: U8) //<
     case '\t'
         out.s("\\t")
     default
-        if b < 0x20U8 || b == 0x7fU8
-            out.c('\\').c('0' + ((b >> 6U8) & 7U8)).c('0' + ((b >> 3U8) & 7U8)).c('0' + (b & 7U8))
+        if byte < 0x20U8 || byte == 0x7fU8
+            out.c('\\').c('0' + ((byte >> 6U8) & 7U8)).c('0' + ((byte >> 3U8) & 7U8))
+                .c('0' + (byte & 7U8))
         else
-            out.c(b)
+            out.c(byte)
 
 priv fn decimal_exceeds_i64_max(digits: U8[]): Bool //<
     //< Whether a decimal constant's digits exceed I64::MAX, judged on the digits only
@@ -53,59 +54,59 @@ priv fn decimal_exceeds_i64_max(digits: U8[]): Bool //<
     // magnitude.
     return digits.compare(i64_max) > 0
 
-fn emit_folded_i64(c: Genc_ctx$@, v: I64) //<
+fn emit_folded_i64(cg: Genc_ctx$@, value: I64) //<
     //< It writes a value the constant folder produced as a C `long long` constant
     //< Caution: **I64::MIN has no literal in C.** `-9223372036854775808` is a minus applied to
     //< 9223372036854775808, which fits no signed type, so the compiler warns and the type becomes
     //< unsigned. It is written as `(-9223372036854775807LL - 1)`, as `<stdint.h>` writes INT64_MIN.
-    if v == -9223372036854775807I64 - 1
-        c.s("(-9223372036854775807LL - 1)")
+    if value == -9223372036854775807I64 - 1
+        cg.s("(-9223372036854775807LL - 1)")
     else
-        c.s("\{v\}LL")
+        cg.s("\{value\}LL")
 
-priv fn emit_folded_f64(c: Genc_ctx$@, f: F64) //<
+priv fn emit_folded_f64(cg: Genc_ctx$@, value: F64) //<
     //< It writes a floating-point value the constant folder produced as a C `double` constant
     //< The shortest digits that read back as the same `double` are written, so C's own reading
     //< gives the folded bits. Infinity and a NaN have no literal in C. They are written as the
     //< divisions that give them, which C accepts in a static initializer.
-    if f != f
-        c.s("(0.0 / 0.0)")
-    else if f - f != 0.0
-        c.s("(1.0 / 0.0)" if f > 0.0 else "(-1.0 / 0.0)")
+    if value != value
+        cg.s("(0.0 / 0.0)")
+    else if value - value != 0.0
+        cg.s("(1.0 / 0.0)" if value > 0.0 else "(-1.0 / 0.0)")
     else
-        c.s("\{f\}")
+        cg.s("\{value\}")
 
 impl Ast_node
-    fn emit_static_value(r: Ast_node@, c: Genc_ctx$@, v: Static_value) //<
+    fn emit_static_value(r: Ast_node@, cg: Genc_ctx$@, value: Static_value) //<
         //< It writes the value sema folded for a top-level initializer's node, cast to its type
         //< Both backends write this value, never the expression (sema/body/static_init.kspl).
-        c.s("((").t(r.type_id).s(")")
-        switch v
+        cg.s("((").t(r.type_id).s(")")
+        switch value
         case .whole(n)
-            emit_folded_i64(c, n)
+            emit_folded_i64(cg, n)
         case .real(f)
-            emit_folded_f64(c, f)
-        c.s(")")
+            emit_folded_f64(cg, f)
+        cg.s(")")
 
-    fn emit_negated_i64_min(r: Ast_node$@, c: Genc_ctx$@): Bool //<
+    fn emit_negated_i64_min(r: Ast_node$@, cg: Genc_ctx$@): Bool //<
         //< It writes `-r` as I64's minimum where literal r's magnitude is 2^63, saying if it did
         //< Negated as written, C reads the magnitude as unsigned and warns (emit_folded_i64).
         if r.kind_id != .k_integer ||
             r.text.parse_int_literal_u64().value != 9223372036854775808U64
             return false
-        emit_folded_i64(c, -9223372036854775807I64 - 1)
+        emit_folded_i64(cg, -9223372036854775807I64 - 1)
         return true
 
-    fn emit_float(r: Ast_node@, c: Genc_ctx$@)
+    fn emit_float(r: Ast_node@, cg: Genc_ctx$@)
         text_val: = r.text
         defer $clean_str: = Str_builder()
         // It stops at the 'F' suffix and, for an F32, attaches C's 'f' suffix.
         stop: = text_val.append_clean_number(clean_str@, "F")
         if stop >= 0 && text_val.starts_with("F32", stop)
             clean_str.c('f')
-        c.s(clean_str.slice())
+        cg.s(clean_str.slice())
 
-    fn emit_integer(r: Ast_node@, c: Genc_ctx$@)
+    fn emit_integer(r: Ast_node@, cg: Genc_ctx$@)
         defer $clean_str: = Str_builder()
         r.text.append_clean_number(clean_str@, "UIS")
         digits: = clean_str.slice()
@@ -115,36 +116,36 @@ impl Ast_node
         // turns `1U64 << 40` into `1 << 40`: undefined behaviour, and the result becomes 0.
         // Only `Sz` is written as a cast: it is ptrdiff_t, and a fixed-width suffix would be wrong
         // on a 32-bit target.
-        real_id: = c.env.get_clean_real_type(r.type_id)
+        real_id: = cg.env.get_clean_real_type(r.type_id)
         is_size: = real_id == (I32::sema_type_env.Builtin_type_id.size_type)
         if is_size
-            c.s("(Sz)")
+            cg.s("(Sz)")
         // C99 has no binary literal. Write its value in hexadecimal through the standard formatter.
         if binary
             value: = digits.parse_clean_number_u64().value
-            c.s("0x\{value:x\}")
+            cg.s("0x\{value:x\}")
         else
-            c.s(digits)
+            cg.s(digits)
         // An untyped value is still judged by magnitude: a decimal past I64::MAX becomes unsigned
         // long long with a warning ("interpreting as unsigned"). 0x/0b include unsigned types from
         // the start.
         if real_id == (I32::sema_type_env.Builtin_type_id.u64_type)
-            c.s("ULL")
+            cg.s("ULL")
         else if real_id == (I32::sema_type_env.Builtin_type_id.i64_type)
-            c.s("LL")
+            cg.s("LL")
         else if real_id == (I32::sema_type_env.Builtin_type_id.u32_type)
-            c.s("U")
+            cg.s("U")
         else if !is_size && !binary && !digits.starts_with("0x") && !digits.starts_with("0X") &&
             decimal_exceeds_i64_max(digits)
-            c.s("ULL")
+            cg.s("ULL")
 
-    fn emit_char_literal(r: Ast_node@, c: Genc_ctx$@) //<
+    fn emit_char_literal(r: Ast_node@, cg: Genc_ctx$@) //<
         //< It emits a character literal as its byte value
         //< Caution: **Do not pass the spelling to C's lexer** (as in emit_string_literal):
         //< `'\b'` is 8 in C and 'b' in KSPL. Emitted as a value, it cannot be misread.
-        c.s("\{base_literal.char_literal_byte(r.text)\}")
+        cg.s("\{base_literal.char_literal_byte(r.text)\}")
 
-    fn name_string_literals(r: Ast_node$@, c: Genc_ctx$@) //<
+    fn name_string_literals(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< Writes a named constant for each string slice under r that this unit has none for yet
         //< **At `-O0` a compound literal costs a stack slot, two stores and a copy at each use.** A
         //< constant is written once and read by name: the seed's 8,387 uses hold 3,179 texts, and
@@ -152,57 +153,57 @@ impl Ast_node
         //< definition, where every type is complete. Each unit numbers its own; they are `static`.
         if r == null
             return
-        if r.kind_id == .k_string && c.env.is_slice(r.type_id)
+        if r.kind_id == .k_string && cg.env.is_slice(r.type_id)
             defer $key: = Str_builder()
-            r.literal_key_to(c, key@)
-            if c.literals.get(key.slice()).is_none()
-                name: = base_core.arena.text().s("kspl_lit_\{c.literals.len\}").take()
-                c.literals.set(base_core.arena.dup_str(key.slice()), name)
-                c.s("static const KSPL_UNUSED ").t_ret(r.type_id).s(" ").s(name)
+            r.literal_key_to(cg, key@)
+            if cg.literals.get(key.slice()).is_none()
+                name: = base_core.arena.text().s("kspl_lit_\{cg.literals.len\}").take()
+                cg.literals.set(base_core.arena.dup_str(key.slice()), name)
+                cg.s("static const KSPL_UNUSED ").t_ret(r.type_id).s(" ").s(name)
                     .s(" = KSPL_STR_INIT(\"")
-                r.text.append_literal_bytes(c, append_c_string_byte)
-                c.s("\");\n")
+                r.text.append_literal_bytes(cg, append_c_string_byte)
+                cg.s("\");\n")
         for child in r.children
-            child.name_string_literals(c)
+            child.name_string_literals(cg)
 
-    priv fn literal_key_to(r: Ast_node@, c: Genc_ctx$@, key: Str_builder$@) //<
+    priv fn literal_key_to(r: Ast_node@, cg: Genc_ctx$@, key: Str_builder$@) //<
         //< A string slice's key among the named constants: its C type, unqualified, and spelling
-        c.map_c_type_to_impl(r.type_id, key, 0, true)
+        cg.map_c_type_to_impl(r.type_id, key, 0, true)
         key.c('|').s(r.text)
 
-    fn emit_string_literal(r: Ast_node@, c: Genc_ctx$@, as_init: Bool)
+    fn emit_string_literal(r: Ast_node@, cg: Genc_ctx$@, as_init: Bool)
         // Caution: **Do not pass the spelling to C's lexer.** The escapes differ: `\x41` is 'A' in
         // C but 'x' plus "41" in KSPL; `\101` is 'A' in C but three characters in KSPL. The
         // contents and the `.len` (KSPL_STR counts with sizeof) would change through C. Each byte
         // the literal stands for (append_literal_bytes in base/literal.kspl, which genllvm uses
         // too) gets its own C escape. A `\uXXXX` is emitted as its UTF-8 bytes, because C
         // rejects a `\u` naming a basic character (Principle 2).
-        is_slice: = !c.env.is_pointer(r.type_id)
+        is_slice: = !cg.env.is_pointer(r.type_id)
         if is_slice && !as_init
             defer $key: = Str_builder()
-            r.literal_key_to(c, key@)
-            if name: = c.literals.get(key.slice())
-                c.s(name)
+            r.literal_key_to(cg, key@)
+            if name: = cg.literals.get(key.slice())
+                cg.s(name)
                 return
-        r.emit_string_value(c, as_init)
+        r.emit_string_value(cg, as_init)
 
-    fn emit_string_value(r: Ast_node@, c: Genc_ctx$@, as_init: Bool) //<
+    fn emit_string_value(r: Ast_node@, cg: Genc_ctx$@, as_init: Bool) //<
         //< Writes a string literal in full, as a C string or a slice's compound literal
-        is_slice: = !c.env.is_pointer(r.type_id)
+        is_slice: = !cg.env.is_pointer(r.type_id)
         // **A byte pointer takes a cast.** A C string is `char`, and `U8` is `unsigned char`, so
         // `const U8* a = "A"` differs in sign (-Wpointer-sign). A `Void@` needs none.
-        pointee: = c.env.get_clean_real_type(c.env.strip_ptr(r.type_id))
+        pointee: = cg.env.get_clean_real_type(cg.env.strip_ptr(r.type_id))
         if !is_slice && pointee == (I32::sema_type_env.Builtin_type_id.u8_type)
-            c.s("(").t(r.type_id).s(")")
+            cg.s("(").t(r.type_id).s(")")
         if is_slice
             if as_init
-                c.s("KSPL_STR_INIT(")
+                cg.s("KSPL_STR_INIT(")
             else
                 // Caution: Use the node's own slice type; different instances have different C
                 // names even when their fields match.
-                c.s("KSPL_STR(").t(r.type_id).s(", ")
-        c.c('"')
-        r.text.append_literal_bytes(c, append_c_string_byte)
-        c.c('"')
+                cg.s("KSPL_STR(").t(r.type_id).s(", ")
+        cg.c('"')
+        r.text.append_literal_bytes(cg, append_c_string_byte)
+        cg.c('"')
         if is_slice
-            c.c(')')
+            cg.c(')')

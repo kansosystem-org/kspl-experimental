@@ -51,95 +51,98 @@ fn bind_charts(doc: Document$@) //< finds each chart's table and columns by thei
                     c.series[j] = column_named(t, c.series_names[j])
         doc.charts[i] = c
 
-fn column_at(t: Table@, id: Sz): Sz //< where the column of this identity stands, or `UNBOUND`
-    for c in Range.asc(t.columns.len)
-        if t.columns[c] == id
+fn column_at(table: Table@, id: Sz): Sz //< where the column of this identity stands, or `UNBOUND`
+    for c in Range.asc(table.columns.len)
+        if table.columns[c] == id
             return c
     return UNBOUND
 
-fn write_chart(doc: Document@, c: Chart@, invisible: Bool, out: Str_builder$@) //<
+fn write_chart(doc: Document@, chart: Chart@, invisible: Bool, out: Str_builder$@) //<
     //< The opening line, with its names
     //< A chart whose table is not found, as when it is read alone, writes the names it holds.
-    bound: = is_bound(doc, c)
+    bound: = is_bound(doc, chart)
     out.s(":::chart table=")
-    quoted(doc.tables[c.table].name if bound else c.name, out)
-    out.s(" kind=\"").s("bar" if c.kind == .bar else "line").s("\" labels=")
-    quoted(name_of(doc, c, bound, c.labels, c.label_name), out)
+    quoted(doc.tables[chart.table].name if bound else chart.name, out)
+    out.s(" kind=\"").s("bar" if chart.kind == .bar else "line").s("\" labels=")
+    quoted(name_of(doc, chart, bound, chart.labels, chart.label_name), out)
     out.s(" values=\"")
-    for j in Range.asc(c.series.len)
+    for j in Range.asc(chart.series.len)
         if j > 0
             out.c(',')
-        out
-            .escape_and_append(name_of(doc, c, bound, c.series[j], c.series_names[j]))
+        series_name: =
+            name_of(doc, chart, bound, chart.series[j], chart.series_names[j])
+        out.escape_and_append(series_name)
     out.c('"')
-    if c.by_rows
+    if chart.by_rows
         out.s(" by=\"rows\" from=")
-        quoted(name_of(doc, c, bound, c.from, c.from_name), out)
+        quoted(name_of(doc, chart, bound, chart.from, chart.from_name), out)
         out.s(" to=")
-        quoted(name_of(doc, c, bound, c.to, c.to_name), out)
-    if c.title.len > 0
+        quoted(name_of(doc, chart, bound, chart.to, chart.to_name), out)
+    if chart.title.len > 0
         out.s(" title=")
-        quoted(c.title, out)
+        quoted(chart.title, out)
     write_invisible(invisible, out)
     out.c('\n')
 
-fn reads_back(doc: Document@, c: Chart@): Bool //<
+fn reads_back(doc: Document@, chart: Chart@): Bool //<
     //< Whether the chart, saved and read again, finds the columns it holds now
     //< The reader takes the first column of a name, and splits `values` at each ','. So a column
     //< the chart shows needs a name of its own, and a drawn one no ','. A missing column is kept.
-    if !is_bound(doc, c)
+    if !is_bound(doc, chart)
         return true
-    t: = doc.tables[c.table]@
-    if !found_again(t, c.labels, name_of(doc, c, true, c.labels, c.label_name))
+    t: = doc.tables[chart.table]@
+    if !found_again(t, chart.labels,
+        name_of(doc, chart, true, chart.labels, chart.label_name))
         return false
     defer scratch: = Arena(1024)
     joined: = scratch.text()
-    for j in Range.asc(c.series.len)
+    for j in Range.asc(chart.series.len)
         if j > 0
             joined.c(',')
-        joined.s(name_of(doc, c, true, c.series[j], c.series_names[j]))
+        joined.s(name_of(doc, chart, true, chart.series[j], chart.series_names[j]))
     $names: = List<|U8[]|>(scratch)
-    if !split_names(joined.take(), names@) || names.len != c.series.len
+    if !split_names(joined.take(), names@) || names.len != chart.series.len
         return false
-    if c.by_rows
+    if chart.by_rows
         // A row is found by its name when drawn, so its name is all that must read back.
-        return found_again(t, c.from, name_of(doc, c, true, c.from, c.from_name)) &&
-            found_again(t, c.to, name_of(doc, c, true, c.to, c.to_name))
+        return found_again(t, chart.from,
+            name_of(doc, chart, true, chart.from, chart.from_name)) &&
+            found_again(t, chart.to, name_of(doc, chart, true, chart.to, chart.to_name))
     for j in Range.asc(names.len)
-        if !found_again(t, c.series[j], names[j])
+        if !found_again(t, chart.series[j], names[j])
             return false
     return true
 
-fn row_named(t: Table@, column: Sz, name: U8[]): Sz //<
+fn row_named(table: Table@, column: Sz, name: U8[]): Sz //<
     //< The first data row whose text in the column at place `column` is `name`, or `UNBOUND`
-    for r in Range.asc(t.rows.len)
-        cell: = t.cells[t.at(r, column)]
+    for r in Range.asc(table.rows.len)
+        cell: = table.cells[table.at(r, column)]
         if cell.kind == .text && cell.text.equals(name)
             return r
     return UNBOUND
 
-priv fn found_again(t: Table@, id: Sz, name: U8[]): Bool //<
+priv fn found_again(table: Table@, id: Sz, name: U8[]): Bool //<
     //< Whether a column, written by this name, is found again; a missing one stays missing
     if name.len == 0
         return false
-    return id == UNBOUND || column_at(t, id) == UNBOUND || column_named(t, name) == id
+    return id == UNBOUND || column_at(table, id) == UNBOUND || column_named(table, name) == id
 
-priv fn is_bound(doc: Document@, c: Chart@): Bool //< whether the chart's table is found
-    return c.table != UNBOUND && c.table < doc.tables.len &&
-        doc.tables[c.table].name.len > 0
+priv fn is_bound(doc: Document@, chart: Chart@): Bool //< whether the chart's table is found
+    return chart.table != UNBOUND && chart.table < doc.tables.len &&
+        doc.tables[chart.table].name.len > 0
 
-priv fn name_of(doc: Document@, c: Chart@, bound: Bool, id: Sz, kept: U8[]): U8[] //<
+priv fn name_of(doc: Document@, chart: Chart@, bound: Bool, id: Sz, kept: U8[]): U8[] //<
     //< A column's name now, or the name kept where the column is not found
     if !bound || id == UNBOUND
         return kept
-    t: = doc.tables[c.table]@
+    t: = doc.tables[chart.table]@
     at: = column_at(t, id)
     return kept if at == UNBOUND else t.cells[at].text
 
-priv fn column_named(t: Table@, name: U8[]): Sz //< the identity of the column of that name
-    for c in Range.asc(t.columns.len)
-        if t.cells[c].text.equals(name)
-            return t.columns[c]
+priv fn column_named(table: Table@, name: U8[]): Sz //< the identity of the column of that name
+    for c in Range.asc(table.columns.len)
+        if table.cells[c].text.equals(name)
+            return table.columns[c]
     return UNBOUND
 
 priv fn quoted(text: U8[], out: Str_builder$@) //< a JSON string, as an attribute holds it

@@ -47,21 +47,21 @@ fn directive_shape(name: U8[]): Directive_shape //<
 priv const DIRECTIVE_NAMES: U8[] = "##error ##lint ##link" //< the list shown in a diagnostic
     //< Caution: **Keep it in line with `directive_shape` above.**
 
-fn directive_name(r: Ast_node$@): U8[] //< a directive's name with the `##` stripped
+fn directive_name(directive: Ast_node$@): U8[] //< a directive's name with the `##` stripped
     //< **Empty if absent.** The name is part of the one `Directive_prefix` token; there is no
     //< name-only child.
-    if r == null
+    if directive == null
         return ""
-    prefix: = r.find_child(.k_directive_prefix)
+    prefix: = directive.find_child(.k_directive_prefix)
     if prefix == null || prefix.text.len <= 2
         return ""
     return prefix.text.sub_from(2)
 
-fn is_assertion_directive(r: Ast_node$@): Bool //<
+fn is_assertion_directive(node: Ast_node$@): Bool //<
     //< Whether it is an assertion directive (`##error`)
-    if r.kind_id != .k_decl_directive
+    if node.kind_id != .k_decl_directive
         return false
-    switch directive_shape(directive_name(r))
+    switch directive_shape(directive_name(node))
     case .assertion
         return true
     case .unknown, .settings, .libraries {}
@@ -73,10 +73,10 @@ priv struct Directive_args //<
     settings: Sz
     msg_is_string: Bool //< whether the second argument is a string (the assertion's message)
 
-priv fn scan_directive_args(r: Ast_node@): Directive_args //<
+priv fn scan_directive_args(directive: Ast_node@): Directive_args //<
     //< Scans a directive's arguments; **the name is not counted** (`Directive_prefix`'s child)
     $out: = Directive_args::{ .count = 0, .settings = 0, .msg_is_string = false }
-    for ch in r.children
+    for ch in directive.children
         if ch.kind_id == .k_literal || ch.kind_id == .k_keyword ||
             ch.kind_id == .k_directive_prefix
             continue
@@ -87,86 +87,87 @@ priv fn scan_directive_args(r: Ast_node@): Directive_args //<
             out.msg_is_string = true
     return out
 
-fn check_directive(r: Ast_node$@, c: Sema_ctx$@): Directive_shape //<
+fn check_directive(directive: Ast_node$@, ctx: Sema_ctx$@): Directive_shape //<
     //< Checks a directive's name and the shape of its arguments, and returns the shape
     //< On rejection it returns `.unknown`.
     //< Caution: **Do not silently accept a shape that does not fit.** The grammar lets
     //< `##error(I0305 = off)` and `##lint(sizeof(Sz) == 8)` reach here; if accepted, the first
     //< loses its assertion and the second its level setting.
-    name: = directive_name(r)
+    name: = directive_name(directive)
     shape: = directive_shape(name)
     switch shape
     case .unknown
-        c.clear_scratch().s("unknown directive '##").s(name).s("' (known: ").s(DIRECTIVE_NAMES)
+        ctx.clear_scratch().s("unknown directive '##").s(name).s("' (known: ").s(DIRECTIVE_NAMES)
             .s(")")
         // An attribute's name written with `##` gets a hint with the right spelling.
         if is_known_attribute(name)
-            c.scratch.s(". '").s(name).s("' is an attribute. Write '#").s(name).s("'")
-        c.err(r, c.scratch.slice())
+            ctx.scratch.s(". '").s(name).s("' is an attribute. Write '#").s(name).s("'")
+        ctx.err(directive, ctx.scratch.slice())
         return .unknown
     case .assertion
-        args: = scan_directive_args(r)
+        args: = scan_directive_args(directive)
         if args.settings > 0
-            c.clear_scratch().s("'##").s(name)
+            ctx.clear_scratch().s("'##").s(name)
                 .s("' takes a compile-time expression, not 'CODE = level'")
-            c.err(r, c.scratch.slice())
+            ctx.err(directive, ctx.scratch.slice())
             return .unknown
         if args.count > 2 || (args.count == 2 && !args.msg_is_string)
-            c.clear_scratch().s("'##").s(name).s("(cond)' or '##").s(name).s("(cond, \"message\")'")
-            c.err(r, c.scratch.slice())
+            ctx.clear_scratch().s("'##").s(name).s("(cond)' or '##").s(name)
+                .s("(cond, \"message\")'")
+            ctx.err(directive, ctx.scratch.slice())
             return .unknown
         return .assertion
     case .settings
-        args: = scan_directive_args(r)
+        args: = scan_directive_args(directive)
         if args.settings != args.count
-            c.clear_scratch().s("'##").s(name)
+            ctx.clear_scratch().s("'##").s(name)
                 .s("' takes 'CODE = level' settings, not an expression")
-            c.err(r, c.scratch.slice())
+            ctx.err(directive, ctx.scratch.slice())
             return .unknown
         return .settings
     case .libraries
-        return check_link_directive(r, c)
+        return check_link_directive(directive, ctx)
 
-priv fn check_link_directive(r: Ast_node@, c: Sema_ctx$@): Directive_shape //<
+priv fn check_link_directive(directive: Ast_node@, ctx: Sema_ctx$@): Directive_shape //<
     //< Checks `##link("name", …)`: one or more library names, each as `-l` takes it
     //< **Each argument is checked on its own** (the rule is `is_library_name` in
     //< ksplc/base/ast_ext.kspl), so the message points at the one that is not a name. A flag or a
     //< path would make the source carry one machine's link line.
     // The grammar gives a directive at least one argument.
     $ok: = true
-    for ch in r.children
+    for ch in directive.children
         if ch.kind_id == .k_literal || ch.kind_id == .k_keyword ||
             ch.kind_id == .k_directive_prefix
             continue
         if ch.link_name().len > 0
             continue
         ok = false
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("'##link' takes library names, each as a string. For example, '##link(\"openblas\")' \
                 links as '-lopenblas' does. A name is letters, digits and '_' '+' '.' '-', \
                 beginning with a letter, a digit or '_'. It is not a flag, a path or a file name. \
                 Where the linker looks stays with the environment (LIBRARY_PATH, LIB)")
-        c.err(ch, c.scratch.slice())
+        ctx.err(ch, ctx.scratch.slice())
     return .libraries if ok else .unknown
 
 priv enum Attr_owner //< the kind of declaration an attribute is on, by where it is read
     fn_decl //<
-        //< A `fn` body or prototype (including an extern's, a trait's, and a method in an impl).
+        //< A `fn` body or prototype (including an extern's, a trait's, and a method in an impl)
     value_decl //<
-        //< A declaration making one value: `const` / `var` / `let` / `embed`, a local variable too.
+        //< A declaration making one value: `const` / `var` / `let` / `embed`, a local variable too
     type_decl //<
         //< A `struct` (its `extern` form too), an `enum`, a `trait` or a `typedef`
         //< Only `#cfg` takes effect there.
     group_decl //<
-        //< Syntax that groups declarations: `import` / an `impl` block.
+        //< Syntax that groups declarations: `import` / an `impl` block
     stmt //<
         //< A statement, where any attribute is a violation
         //< Only `#cfg` takes effect, and normalization has consumed it (elide_attributed_stmt in
         //< parse/normalize.kspl).
     other //< none of the above (a position that cannot hold an attribute)
 
-priv fn classify_owner(r: Ast_node$@): Attr_owner
-    switch r.kind_id
+priv fn classify_owner(decl: Ast_node$@): Attr_owner
+    switch decl.kind_id
     case .k_decl_fn, .k_decl_fn_proto
         return .fn_decl
     case .k_decl_var, .k_decl_const, .k_decl_embed
@@ -222,35 +223,35 @@ priv fn attr_rule(name: U8[]): Attr_rule //<
             .targets = "functions, variables, and constants" }
     return Attr_rule::{ .owners = 0, .targets = "" }
 
-priv fn check_cfg_attribute(r: Ast_node$@, c: Sema_ctx$@) //<
+priv fn check_cfg_attribute(decl: Ast_node$@, ctx: Sema_ctx$@) //<
     //< Checks the shape of `#cfg(...)`'s argument
     //< **There is no logical combination (`all(a, b)` / `a && b`) and no comparison.** Silently
     //< accepted, `cfg(all(a, b))` would read as a flag named `all`, and the declaration would
     //< vanish.
     $is_neg: = false
-    if r.cfg_flag_name(is_neg@).len > 0
+    if decl.cfg_flag_name(is_neg@).len > 0
         return
     // Caution: Name the alternative; a bare rejection leaves no way to test a translation-time
     // value.
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("'#cfg' takes exactly one flag name, optionally negated: '#cfg(flag)' or '#cfg(!flag)'. \
             There is no 'all'/'any'/'&&' and no comparison. Combine flags on the build side. \
             Alternatively, use '##error(cond, msg)' to assert on a compile-time value")
-    c.err(r, c.scratch.slice())
+    ctx.err(decl, ctx.scratch.slice())
 
-priv fn check_section_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks `#section("name")`
+priv fn check_section_attribute(decl: Ast_node$@, ctx: Sema_ctx$@) //< checks `#section("name")`
     //< **One name, of letters, digits, `_` and `.`** (the rule is `is_section_name` in
     //< ksplc/base/ast_ext.kspl). It reaches the C and the assembler as written.
-    if r.section_name().len > 0
+    if decl.section_name().len > 0
         return
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("'#section' takes one section name, as a plain string. For example: \
             '#section(\".ram_text\")'. The name is letters, digits, '_' and '.', with no escape or \
             interpolation. The name reaches C and the assembler as written. A quote or a ';' would \
             end it early")
-    c.err(r, c.scratch.slice())
+    ctx.err(decl, ctx.scratch.slice())
 
-priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
+priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, ctx: Sema_ctx$@)
     id_node: = attr.find_child(.k_attribute_prefix)
     if id_node == null
         return
@@ -258,71 +259,72 @@ priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
     // **An attribute that gave way to another spelling is named with it**, so code written for it
     // learns the spelling rather than an "unknown attribute".
     if name.equals("export")
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("the attribute '#export' is no longer written. Write 'extern fn …' (after 'pub' \
                 where it stands): 'extern' before a definition publishes it to C under its own \
                 name, as 'extern' before a declaration without a body brings C's in")
-        c.err(id_node, c.scratch.slice())
+        ctx.err(id_node, ctx.scratch.slice())
         return
     if name.equals("link")
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("the attribute '#link' is no longer written. Write '##link(\"name\")' in the file: \
                 it names the libraries the file's 'extern' declarations are found in")
-        c.err(id_node, c.scratch.slice())
+        ctx.err(id_node, ctx.scratch.slice())
         return
     if !is_known_attribute(name)
-        c.clear_scratch().s("unknown attribute '#\{name\}'. The compiler would silently ignore it")
-        c.err(id_node, c.scratch.slice())
+        ctx.clear_scratch()
+            .s("unknown attribute '#\{name\}'. The compiler would silently ignore it")
+        ctx.err(id_node, ctx.scratch.slice())
         return
     rule: = attr_rule(name)
     if (rule.owners & owner.bit()) == 0
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("attribute '#\{name\}' does nothing here. It applies to \{rule.targets\}")
-        c.err(id_node, c.scratch.slice())
+        ctx.err(id_node, ctx.scratch.slice())
         return
     if name.equals("cfg")
-        check_cfg_attribute(attr, c)
+        check_cfg_attribute(attr, ctx)
     else if name.equals("section")
-        check_section_attribute(attr, c)
+        check_section_attribute(attr, ctx)
 
-priv fn privately_declared(r: Ast_node$@): Bool //<
+priv fn privately_declared(decl: Ast_node$@): Bool //<
     //< Whether `priv` is written, for checking how one declaration's attributes fit together
     //< Caution: **Do not silently resolve a conflicting pair one way** (Principle 5). For `priv`,
     //< **look at both places**, as `get_visibility` in `sema/type/scope.kspl` does, or the check
     //< passes or not depending on the spelling.
-    if r.has_keyword("priv")
+    if decl.has_keyword("priv")
         return true
-    attrs: = r.find_child(.k_attribute_list)
+    attrs: = decl.find_child(.k_attribute_list)
     return attrs != null && attrs.has_keyword("priv")
 
-priv fn check_linkage(r: Ast_node$@, l: Ast_node$@, owner: Attr_owner, in_impl: Bool,
-    c: Sema_ctx$@) //<
-        //< Checks an `extern` (`l`) left on a declaration (`r`): what it stands before, and where
+priv fn check_linkage(decl: Ast_node$@, node: Ast_node$@, owner: Attr_owner, in_impl: Bool,
+    ctx: Sema_ctx$@) //<
+        //< Checks an `extern` (`node`) on a declaration (`decl`): what it stands before, and where
         //< One without a body or a value is already a `decl_extern` (`settle_top_level` in
         //< `parse/normalize_decl.kspl`), so what is left publishes a definition.
         //< **No string is taken.** Every machine KSPL builds for has one C calling convention, so a
         //< string could only repeat it or name what is not so (Principle 5 of
         //< docs/DESIGN-principles.md).
-    if l.find_child(.k_string) != null
-        c.clear_scratch()
+    if node.find_child(.k_string) != null
+        ctx.clear_scratch()
             .s("'extern' takes no string. Write 'extern fn …', 'extern struct …' or 'extern $x: …': \
                 every machine KSPL builds for has one C calling convention")
-        c.err(l, c.scratch.slice())
+        ctx.err(node, ctx.scratch.slice())
         return
     if owner != Attr_owner.fn_decl && owner != Attr_owner.value_decl
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("'extern' does nothing here. With a body or a value it publishes a function, a \
                 variable or a constant to C under its own name. Without one it brings C's in, as \
                 does 'extern struct Name' with no fields. This declaration makes no symbol either \
                 way")
-        c.err(l, c.scratch.slice())
+        ctx.err(node, ctx.scratch.slice())
         return
     // **It does not take effect on a `priv`.**
     // Caution: **Do not treat becoming `static` as the whole reason**: the name's uniqueness
     // decides that (`has_program_unique_c_name` in `sema/type/scope.kspl`), so a method is not
     // `static`.
-    if privately_declared(r)
-        c.clear_scratch()
+    if privately_declared(decl)
+        ctx.clear_scratch()
             .s("'extern' with a body has no effect on a 'priv' declaration. 'priv' says nothing \
                 outside this file can use it. A free function or variable is emitted as C 'static' \
                 (internal linkage). Nothing outside can link to the name that 'extern' kept \
@@ -330,89 +332,89 @@ priv fn check_linkage(r: Ast_node$@, l: Ast_node$@, owner: Attr_owner, in_impl: 
                 controls the symbol name. Visibility controls whether anything can link to it. \
                 Remove 'priv' (unit-wide visibility is enough for the C and wasm boundary), or \
                 remove 'extern'")
-        c.err(l, c.scratch.slice())
+        ctx.err(node, ctx.scratch.slice())
     // **It cannot be written on a method.** A method's name is not unique without its type (`bump`
     // per type), so it cannot be the symbol as written; wrap it in a free function. C++ forbids
     // `extern` on a member function likewise.
-    if in_impl && (r.kind_id == .k_decl_fn || r.kind_id == .k_decl_fn_proto)
-        c.clear_scratch()
+    if in_impl && (decl.kind_id == .k_decl_fn || decl.kind_id == .k_decl_fn_proto)
+        ctx.clear_scratch()
             .s("'extern' cannot be written on a method. 'extern' keeps the name unmangled so C can \
                 call the function, or names C's. A method's name is not unique across types. Every \
                 type can have its own 'bump', so there is no unique name to keep. Wrap the call in \
                 a free function. Write 'extern' on that function")
-        c.err(l, c.scratch.slice())
+        ctx.err(node, ctx.scratch.slice())
 
-priv fn refuse_extern_block(r: Ast_node$@, c: Sema_ctx$@) //<
+priv fn refuse_extern_block(decl: Ast_node$@, ctx: Sema_ctx$@) //<
     //< Refuses an `extern` declaration, naming the spelling that took its place
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("an 'extern \"C\"' block is no longer written. Write 'extern' before each declaration in \
             it: 'extern fn f(): I32', 'extern struct S', 'extern errno: I32'. A '#cfg' on the block \
             goes before a group of them ('#cfg(flag)' with the declarations indented below it), and \
             a '#link(\"name\")' becomes '##link(\"name\")' in the file")
-    c.err(r, c.scratch.slice())
+    ctx.err(decl, ctx.scratch.slice())
 
-priv fn check_attribute_combination(r: Ast_node$@, owner: Attr_owner, in_impl: Bool,
-    c: Sema_ctx$@)
+priv fn check_attribute_combination(decl: Ast_node$@, owner: Attr_owner, in_impl: Bool,
+    ctx: Sema_ctx$@)
     // **An `embed` holds a file's bytes**, made by no expression, so `#raw_address` on it does
     // nothing.
-    if r.has_attribute("raw_address") && r.kind_id == .k_decl_embed
-        c.clear_scratch()
+    if decl.has_attribute("raw_address") && decl.kind_id == .k_decl_embed
+        ctx.clear_scratch()
             .s("attribute '#raw_address' does nothing here. It applies to functions, and top-level \
                 variables and constants")
-        c.err(r, c.scratch.slice())
+        ctx.err(decl, ctx.scratch.slice())
     if owner != Attr_owner.fn_decl
         return
     // **A view is into a method's receiver**, so a free function has nothing to mark.
     for name in VIEW_ATTRIBUTES
-        if r.has_attribute(name) && !in_impl
-            c.clear_scratch()
+        if decl.has_attribute(name) && !in_impl
+            ctx.clear_scratch()
                 .s("attribute '#\{name\}' does nothing here. It applies to methods: it says what a \
                     call does to the memory its receiver owns")
-            c.err(r, c.scratch.slice())
-    if r.has_attribute("inline") && r.has_attribute("noinline")
-        c.clear_scratch()
+            ctx.err(decl, ctx.scratch.slice())
+    if decl.has_attribute("inline") && decl.has_attribute("noinline")
+        ctx.clear_scratch()
             .s("attributes '#inline' and '#noinline' contradict each other. Keep only the one you \
                 intend")
-        c.err(r, c.scratch.slice())
+        ctx.err(decl, ctx.scratch.slice())
         return
     // **A function's `#section` does not take effect unless paired with `#noinline`.** An
     // optimizing C compiler may inline the body into its callers and **nothing is left** in the
     // named section. A variable's or a `const`'s `#section` has nothing to inline.
-    if r.has_attribute("section") && !r.has_attribute("noinline")
-        c.clear_scratch()
+    if decl.has_attribute("section") && !decl.has_attribute("noinline")
+        ctx.clear_scratch()
             .s("attribute '#section' on a function needs '#noinline' as well. Otherwise the body \
                 can be inlined into its callers, and nothing is left in the named section")
-        c.err(r, c.scratch.slice())
+        ctx.err(decl, ctx.scratch.slice())
 
-fn check_attributes(r: Ast_node$@, c: Sema_ctx$@) //< walks the tree and checks the attributes
+fn check_attributes(root: Ast_node$@, ctx: Sema_ctx$@) //< walks the tree and checks the attributes
     //< One walk picks up every position (declaration, formal parameter, field).
     //< Caution: **Always check an attribute from the node it is attached to.** Checking the name
     //< alone cannot check the position.
-    check_attributes_under(r, false, false, c)
+    check_attributes_under(root, false, false, ctx)
 
-priv fn check_attributes_under(r: Ast_node$@, in_impl: Bool, in_body: Bool, c: Sema_ctx$@) //<
-    //< Checks the attributes of r and of every declaration under it
+priv fn check_attributes_under(node: Ast_node$@, in_impl: Bool, in_body: Bool, ctx: Sema_ctx$@) //<
+    //< Checks the attributes of node and of every declaration under it
     //< Caution: **Pass down whether it is inside an `impl` / `trait`, and inside a function.** A
     //< method and a free function are both `decl_fn`, and a local and a top-level `var` are both
     //< `decl_var`; `classify_owner` does not see the position in the tree. A local is a statement,
     //< where only `#cfg` takes effect.
-    if r == null
+    if node == null
         return
-    $owner: = classify_owner(r)
+    $owner: = classify_owner(node)
     if in_body && owner == Attr_owner.value_decl
         owner = .stmt
-    attr_list: = r.find_child(.k_attribute_list)
+    attr_list: = node.find_child(.k_attribute_list)
     if attr_list != null
         for attr in attr_list.children
             if attr.kind_id == .k_attribute
-                check_one_attribute(attr, owner, c)
-        check_attribute_combination(r, owner, in_impl, c)
+                check_one_attribute(attr, owner, ctx)
+        check_attribute_combination(node, owner, in_impl, ctx)
     // **Not under the attribute list alone**: `extern` is written without one.
-    if l: = r.linkage_of()
-        check_linkage(r, l, owner, in_impl, c)
-    if r.kind_id == .k_decl_extern_block
-        refuse_extern_block(r, c)
-    inside: = in_impl || r.kind_id == .k_decl_impl || r.kind_id == .k_decl_trait
-    body: = in_body || r.kind_id == .k_decl_fn
-    for child in r.children
-        check_attributes_under(child, inside, body, c)
+    if l: = node.linkage_of()
+        check_linkage(node, l, owner, in_impl, ctx)
+    if node.kind_id == .k_decl_extern_block
+        refuse_extern_block(node, ctx)
+    inside: = in_impl || node.kind_id == .k_decl_impl || node.kind_id == .k_decl_trait
+    body: = in_body || node.kind_id == .k_decl_fn
+    for child in node.children
+        check_attributes_under(child, inside, body, ctx)

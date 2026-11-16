@@ -52,6 +52,8 @@ The pipeline's folders come first, in the order the data flows. Then come `base/
 
 **A folder imports only the folders before it in that flow, and `base/`.** So `parse/` builds on `base/` alone, `sema/` on `parse/`, `lower/` on `sema/`, and `gen/` on `lower/`. `fmt/` builds on `parse/`, `tools/` on `sema/` and `fmt/`, and `lsp/` on `sema/` and `pipeline.kspl`. `make test-conventions` refuses an import that goes the other way.
 
+**No file here publishes anything**: ksplc is an application, and its files reach one another without `pub`. So `ksplc doc` reads them at the `all` scope: `ksplc doc --surface-scope=all ksplc/sema/body/call` lists a file's declarations with their summaries, and `.<name>` after it shows one.
+
 Directly in this folder:
 
 * [`main.kspl`](main.kspl) — the entry point: it starts the subcommand [`cli.kspl`](cli.kspl) read from the command line. The usage text is in [`usage.kspl`](usage.kspl). It also answers `ksplc info`, the keyword list derived from the grammar included.
@@ -260,7 +262,7 @@ Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update
 | [`tests/parse/`](tests/parse/) [`tests/negative/`](tests/negative/) [`tests/lint/`](tests/lint/) [`tests/runtime/`](tests/runtime/) | The fixtures `test-negative`, `test-lint` and `test-runtime` read: many cases to a file by subject |
 | [`tests/prog/`](tests/prog/) | A program under inspection. A suite builds it on both backends, or reads a line-number landmark from it. It is one file, or `equiv.kspl`. `equiv.kspl` imports `equiv_shapes.kspl`, which holds the shapes that C leaves open |
 | [`tests/filepath/`](tests/filepath/) | `test-file-path`'s material. **It takes two files**: with one, the unspecified-visibility path is never taken |
-| [`tests/notation/`](tests/notation/) | `test-notation`'s samples of the indentation notation. The language tour is written from one of them |
+| [`tests/notation/`](tests/notation/) | `test-notation`'s samples of the indentation notation. The language tutorial is written from one of them |
 | [`tests/ship/`](tests/ship/) | `test-ship`'s two vendors and two customers: libraries built with `--library`, a C program and a KSPL program using them. `app.kspl` imports an interface the suite writes, so it compiles only there |
 | `tests/*_test.kspl` | Tests of the language as a program sees it. [`tests/all.kspl`](tests/all.kspl) imports each, and its suite runs their `test_…` functions (`make debug`). [`tests/c_keyword_names.kspl`](tests/c_keyword_names.kspl) is one more: it writes C's reserved words as KSPL names. [`tests/main.kspl`](tests/main.kspl) gives the tests a `main`, so the package alone can run them |
 | [`tests/c_name_clash/`](tests/c_name_clash/) [`tests/extern_clash/`](tests/extern_clash/) [`tests/extern_decl/`](tests/extern_decl/) [`tests/extern_path/`](tests/extern_path/) [`tests/suite_reach/`](tests/suite_reach/) | Files a test or a fixture imports, which must stand in a file of their own. Each says in its opening comment who imports it |
@@ -285,7 +287,7 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 | :-- | :-- | :-- |
 | [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md) | The CLI options, the formatter, the language server and the linter as seen from outside. | Whoever writes KSPL and runs the tools. Needs a built `ksplc` to try them against |
 | [`ksplc/docs/SPEC-diagnostics.md`](docs/SPEC-diagnostics.md) | What each diagnostic code means and how to fix it, and the errors that have no code; the text `ksplc explain` prints. | Whoever meets a diagnostic, and whoever adds one |
-| [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md) | The compiler's internal design as a whole, the rules every layer shares, and the glossary. | Whoever changes ksplc. **Read at least "The compiler as a whole" and "The Development Principles" before touching anything here** |
+| [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md) | The compiler's internal design as a whole, the rules every layer shares, and the glossary. | Whoever changes ksplc. **Read at least "The compiler as a whole" and "The compiler's own principles" before touching anything here** |
 | [`ksplc/docs/DESIGN-parse.md`](docs/DESIGN-parse.md) | The Parse layer with Desugar: from the source text to the normalized AST, and the sugar rewritten without the types. | Whoever changes `parse/` or the grammar |
 | [`ksplc/docs/DESIGN-sema.md`](docs/DESIGN-sema.md) | The Sema layer: type inference, name resolution, generics' instantiation, and the AST nodes it creates. | Whoever changes `sema/` |
 | [`ksplc/docs/DESIGN-lower.md`](docs/DESIGN-lower.md) | The Lower layer, which flattens the typed tree for both backends, and the rules for implementing ARC. | Whoever changes `lower/` or what ARC inserts |
@@ -295,7 +297,7 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 | [`ksplc/docs/HOWTO-extend.md`](docs/HOWTO-extend.md) | The steps for a diagnostic code, an AST node kind, a primitive type, a subcommand, a target machine and the seed update. | Whoever extends the compiler; needs a clone that builds |
 | [`ksplc/docs/HOWTO-add-a-fixture.md`](docs/HOWTO-add-a-fixture.md) | The steps for adding a fixture to a suite, and the rules each fixture folder keeps. | Whoever adds or moves a test case; needs a clone that builds |
 | [`docs/SPEC-programming-language.md`](../docs/SPEC-programming-language.md) | The language specification being implemented. | Whoever writes KSPL, and whoever changes ksplc |
-| [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) | The build procedure and the two-stage bootstrap. | Whoever changes ksplc. Needs a C compiler |
+| [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) | The build procedure and the bootstrap. | Whoever changes ksplc. Needs a C compiler |
 | [`docs/SPEC-gates.md`](../docs/SPEC-gates.md) | What every gate checks, per platform. | Whoever changes ksplc |
 | [std](../std/README.md) | The standard library the compiler is itself written on; every file it publishes is listed by `ksplc doc std`. | Whoever changes ksplc |
 | [kspeg](../lib/kspeg/README.md) | The engine that drives `kspl.kspeg`, the grammar. | Whoever changes how the language is read |

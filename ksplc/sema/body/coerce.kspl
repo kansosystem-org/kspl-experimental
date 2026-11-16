@@ -17,13 +17,13 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 
 impl Ast_node
-    fn check_unnecessary_cast(r: Ast_node$@, c: Sema_ctx$@, expected_id: I32): Void!Sema_error
+    fn check_unnecessary_cast(r: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): Void!Sema_error
         if !base_core.config.run_lint_checks || r.kind_id != .k_expr_postfix || r.ival == 1
             return // a generated implicit cast (ival == 1) is not linted
         // Skipped while instantiating a generic: a cast redundant at one type argument is needed at
         // another. `F32$@::(a)` in `blas_gemm<|T|>` is identity at T=F32, a real conversion at
         // T=F64. So the advice would break the build if followed.
-        if c.is_instantiating()
+        if ctx.is_instantiating()
             return
         // **The cast's `::` is a Literal child.** Matching text alone would pick up a
         // **subexpression** holding `::` (`a[T::i]`), read its neighbour as a type, and index out
@@ -32,36 +32,36 @@ impl Ast_node
             child: = r.get_child(i)
             if child.is_literal("::")
                 cast_node: = r.get_child(i + 1)
-                cast_id: = cast_node.resolve_type(c)!
+                cast_id: = cast_node.resolve_type(ctx)!
                 original_id: = r.get_child(0).type_id
 
                 if original_id != 0 && cast_id != 0
-                    real_src: = c.env.get_real_type(original_id)
-                    real_dst: = c.env.get_real_type(cast_id)
+                    real_src: = ctx.env.get_real_type(original_id)
+                    real_dst: = ctx.env.get_real_type(cast_id)
                     if is_identity_cast(r.get_child(0), real_src, real_dst)
                         // An identity cast. **Only here is the expected type ignored**: without the
                         // cast the expression infers to the same type, even in `x: = T::f();`.
-                        c.information(r,
+                        ctx.information(r,
                             "[I0301] Unnecessary '::' cast. This conversion is implicit.")
                     else if !sema_type_env.is_unknown(expected_id)
                         // A type-changing cast is checked only where the context fixes a type.
                         // Otherwise it **decides the binding's type itself**, and removing it
                         // changes the permission or width (`x: = U8[]::f()` turns mutable, `x: =
                         // U64::small` narrows).
-                        r.check_widening_cast(c, real_src, real_dst, original_id, expected_id)
+                        r.check_widening_cast(ctx, real_src, real_dst, original_id, expected_id)
                 break
 
-    priv fn check_widening_cast(r: Ast_node$@, c: Sema_ctx$@, real_src: I32, real_dst: I32,
+    priv fn check_widening_cast(r: Ast_node$@, ctx: Sema_ctx$@, real_src: I32, real_dst: I32,
         original_id: I32, expected_id: I32) //<
-            //< Reports type-changing casts the language does implicitly ([I0301]'s other kinds).
+            //< Reports type-changing casts the language does implicitly ([I0301]'s other kinds)
             //< **Called only where the expected type is known** (from check_unnecessary_cast).
-        switch implicit_cast_kind(c, real_src, real_dst, original_id, expected_id)
+        switch implicit_cast_kind(ctx, real_src, real_dst, original_id, expected_id)
         case .numeric
-            c.information(r,
+            ctx.information(r,
                 "[I0301] Unnecessary '::' cast. This numeric conversion is safe and happens \
                     implicitly.")
         case .permission
-            c.information(r,
+            ctx.information(r,
                 "[I0301] Unnecessary '::' cast. Dropping the '$' (write permission) happens \
                     implicitly.")
         default {}
@@ -71,10 +71,10 @@ impl Ast_node
         clone.type_id = type_id
         return clone
 
-    priv fn build_implicit_cast(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32)
+    priv fn build_implicit_cast(r: Ast_node$@, ctx: Sema_ctx$@, type_id: I32, expected_id: I32)
         clone: = r.snapshot_for_morph(type_id)
         kw_node: = Ast_node(.k_literal, "::", r.loc)
-        type_node: = Ast_node(.k_type_expr, c.env.get_str(expected_id), r.loc)
+        type_node: = Ast_node(.k_type_expr, ctx.env.get_str(expected_id), r.loc)
         type_node.type_id = expected_id
         r.children = base_ast.new_ast_node_list()
         r.morph(.k_expr_postfix, "::")
@@ -87,13 +87,13 @@ impl Ast_node
         r.add_child(type_node)
         r.ival = 1
 
-    fn wrap_implicit_cast(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32
+    fn wrap_implicit_cast(r: Ast_node$@, ctx: Sema_ctx$@, type_id: I32, expected_id: I32): I32
         if type_id != expected_id && type_id != 0 && expected_id != 0
-            r.build_implicit_cast(c, type_id, expected_id)
+            r.build_implicit_cast(ctx, type_id, expected_id)
             r.type_id = expected_id
         return expected_id
 
-    fn apply_type_coercion(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32
+    fn apply_type_coercion(r: Ast_node$@, ctx: Sema_ctx$@, type_id: I32, expected_id: I32): I32
         if type_id == expected_id || sema_type_env.is_unknown(expected_id) ||
             sema_type_env.is_unknown(type_id)
             return type_id
@@ -101,26 +101,26 @@ impl Ast_node
         // Swift's `Never`, so `x: = f() catch panic("…");` fits on one line.
         // Caution: **Leave the type as Void.** Given the expected type, lower builds an assignment
         // and emits C reading `T x = <Void>` (lower_fallback_stmt in lower/root.kspl).
-        if c.fn_ctx.in_fallback_value && sema_type_env.is_void(type_id) &&
+        if ctx.fn_ctx.in_fallback_value && sema_type_env.is_void(type_id) &&
             !sema_type_env.is_void(expected_id) && r.is_noreturn_call()
             return type_id
 
-        real_type_id: = c.env.get_real_type(type_id)
-        real_expected_id: = c.env.get_real_type(expected_id)
+        real_type_id: = ctx.env.get_real_type(type_id)
+        real_expected_id: = ctx.env.get_real_type(expected_id)
 
         // The same type under an alias ("A typedef is only another name" in
         // docs/SPEC-programming-language.md).
         if real_type_id == real_expected_id
             return expected_id
 
-        if upcast: = r.upcast_to_trait(c, type_id, expected_id)
+        if upcast: = r.upcast_to_trait(ctx, type_id, expected_id)
             return upcast
 
         if sema_type_env.is_void(expected_id)
-            c.err(r, "cannot return a value from a Void function")
+            ctx.err(r, "cannot return a value from a Void function")
             return expected_id
 
-        if converted: = r.convert_numeric(c, type_id, expected_id)
+        if converted: = r.convert_numeric(ctx, type_id, expected_id)
             return converted
 
         // Any pointer generalizes to the read-only `Void@`, and a writable `T$@` to `Void$@` too
@@ -128,87 +128,88 @@ impl Ast_node
         // become a `Void$@`**: the callee could then write memory that is read-only, a `const` in
         // ROM among it. Write the cast where the memory really is writable.
         void_ptr: = I32::sema_type_env.Builtin_type_id.void_ptr
-        void_ro_ptr: = c.env
-            .make_ptr(c.env.make_const(I32::sema_type_env.Builtin_type_id.void_type))
-        if real_expected_id == void_ptr && c.env.is_pointer(type_id) &&
-            c.env.is_const(c.env.strip_ptr(type_id))
-            shown: = c.env.display(type_id)
-            c.clear_scratch()
+        void_ro_ptr: = ctx.env
+            .make_ptr(ctx.env.make_const(I32::sema_type_env.Builtin_type_id.void_type))
+        if real_expected_id == void_ptr && ctx.env.is_pointer(type_id) &&
+            ctx.env.is_const(ctx.env.strip_ptr(type_id))
+            shown: = ctx.env.display(type_id)
+            ctx.clear_scratch()
                 .s("a read-only '\{shown\}' cannot be passed as a writable 'Void$@'. Take 'Void@' \
                     where nothing is written, or cast with 'Void$@::' where the memory is writable")
-            c.err(r, c.scratch.slice())
+            ctx.err(r, ctx.scratch.slice())
             return expected_id
         if (real_expected_id == void_ptr || real_expected_id == void_ro_ptr) &&
-            (c.env.is_pointer(type_id) || c.env.is_fn_ptr(type_id))
-            return r.wrap_implicit_cast(c, type_id, expected_id)
+            (ctx.env.is_pointer(type_id) || ctx.env.is_fn_ptr(type_id))
+            return r.wrap_implicit_cast(ctx, type_id, expected_id)
         if type_id == void_ptr &&
-            (c.env.is_pointer(expected_id) || c.env.is_fn_ptr(expected_id))
-            sema_body_lint_unchecked.note_void_taken(c, r, expected_id)
-            return r.wrap_implicit_cast(c, type_id, expected_id)
+            (ctx.env.is_pointer(expected_id) || ctx.env.is_fn_ptr(expected_id))
+            sema_body_lint_unchecked.note_void_taken(ctx, r, expected_id)
+            return r.wrap_implicit_cast(ctx, type_id, expected_id)
 
-        if wrapped: = r.wrap_in_result(c, type_id, expected_id)
+        if wrapped: = r.wrap_in_result(ctx, type_id, expected_id)
             return wrapped
 
         // **`[_]` takes the initializer's length alone.** Its elements are then checked as against
         // a written length. So an immutable array's row or a field (`m[1]`, `s.a`) copies in as it
         // does into `I32[3]`. The declaration gets the type a written length gives.
-        switch c.env.get_info(real_expected_id)
+        switch ctx.env.get_info(real_expected_id)
         case .array(exp_b, exp_s)
             if exp_s == -1
-                switch c.env.get_info(c.env.get_clean_real_type(type_id))
+                switch ctx.env.get_info(ctx.env.get_clean_real_type(type_id))
                 case .array(_res_b, res_s)
                     if res_s != -1
-                        return r.apply_type_coercion(c, type_id,
-                            c.env.make_array(exp_b, res_s))
+                        return r.apply_type_coercion(ctx, type_id,
+                            ctx.env.make_array(exp_b, res_s))
                 default {}
         default {}
 
         is_ref: =
-            c.env.is_pointer(type_id) || c.env.is_slice(type_id) || c.env.is_array(type_id)
+            ctx.env.is_pointer(type_id) || ctx.env.is_slice(type_id) ||
+            ctx.env.is_array(type_id)
         // A value copy takes the binding's writability. A view and a type argument that declares
         // variance (`Box<|$I32|>` → `Box<|I32|>`) follow is_const_compatible's one-level weakening.
-        if (c.env.same_shape_ignoring_const(type_id, expected_id) && !is_ref) ||
-            (type_id != expected_id && c.env.is_const_compatible(type_id, expected_id))
+        if (ctx.env.same_shape_ignoring_const(type_id, expected_id) && !is_ref) ||
+            (type_id != expected_id && ctx.env.is_const_compatible(type_id, expected_id))
             // **No cast is emitted** for immutability alone: the representation is identical. A
             // `::` here would discard a qualifier in C (`Const_U8_Slice = U8_Slice` has a non-const
             // ptr while `U8@` is `const U8 *`), and the C compiler warns.
             r.type_id = expected_id
             return expected_id
 
-        c.report_type_mismatch(r, expected_id, type_id)
+        ctx.report_type_mismatch(r, expected_id, type_id)
         return expected_id
 
-    priv fn upcast_to_trait(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
+    priv fn upcast_to_trait(r: Ast_node$@, ctx: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
         //< The upcast to a trait value; none where expected_id is no trait the value implements
         //< **An immutable trait value is a trait value too** (an element of `Shape[2]`), so the
         //< immutability is seen through as well as the alias. The upcast makes the trait value
         //< itself, which the place then holds as it holds any value; a trait value is not upcast.
-        clean_expected_id: = c.env.get_clean_real_type(expected_id)
-        switch c.env.get_info(clean_expected_id)
+        clean_expected_id: = ctx.env.get_clean_real_type(expected_id)
+        switch ctx.env.get_info(clean_expected_id)
         case .trait_type
-            if c.env.get_clean_real_type(type_id) == clean_expected_id
+            if ctx.env.get_clean_real_type(type_id) == clean_expected_id
                 return .some(expected_id)
             // **Finish building the instance's methods before making a trait value.** Otherwise the
             // vtable names a thunk with no instance (register_generic_trait_impls in mono.kspl; the
             // test is ksplc/tests/trait_test.kspl).
-            c.ensure_instance_methods(type_id) catch {}
-            if c.check_trait_implementation(type_id, clean_expected_id, r)
-                if !c.env.is_pointer(type_id) && !c.env.is_slice(type_id) &&
-                    !c.env.is_place_expr(r)
+            ctx.ensure_instance_methods(type_id) catch {}
+            if ctx.check_trait_implementation(type_id, clean_expected_id, r)
+                if !ctx.env.is_pointer(type_id) && !ctx.env.is_slice(type_id) &&
+                    !ctx.env.is_place_expr(r)
                     // Advising a binding is right only where it outlives the call. At a return it
                     // dies with the frame (check_frame_escape in sema/body/stmt_escape.kspl rejects
                     // that).
-                    c.err(r,
+                    ctx.err(r,
                         "cannot cast an rvalue (temporary object) to a trait. The trait value keeps \
                             a pointer to the object. Bind the object to storage that outlives the \
                             trait value (`x: = ...;`). If the object must outlive the call, a heap \
                             allocation is an alternative.")
                     return .some(expected_id)
-                if c.refuse_read_only_upcast(r, type_id, clean_expected_id)
+                if ctx.refuse_read_only_upcast(r, type_id, clean_expected_id)
                     return .some(expected_id)
 
-                c.mark_trait_methods_used(type_id, clean_expected_id)
-                c.env.note_upcast(clean_expected_id, type_id)
+                ctx.mark_trait_methods_used(type_id, clean_expected_id)
+                ctx.env.note_upcast(clean_expected_id, type_id)
                 clone: = r.snapshot_for_morph(type_id)
                 r.children = base_ast.new_ast_node_list()
                 r.morph(.k_expr_upcast, "upcast")
@@ -218,23 +219,23 @@ impl Ast_node
         default {}
         return .none
 
-    priv fn convert_numeric(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
+    priv fn convert_numeric(r: Ast_node$@, ctx: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
         //< The implicit numeric or scalar enum conversion; none where it does not apply
         //< A lossy conversion between two numeric types is reported, and its result is some too.
-        real_type_id: = c.env.get_real_type(type_id)
-        real_expected_id: = c.env.get_real_type(expected_id)
-        if c.env.is_numeric(expected_id) || c.env.is_numeric(type_id)
+        real_type_id: = ctx.env.get_real_type(type_id)
+        real_expected_id: = ctx.env.get_real_type(expected_id)
+        if ctx.env.is_numeric(expected_id) || ctx.env.is_numeric(type_id)
             $is_enum_cast: = false
             $base_type_id: = I32::sema_type_env.Builtin_type_id.i32_type
 
-            exp_def: = c.env.get_enum_def(c.env.get_str(real_expected_id)).unwrap_or(null)
-            act_def: = c.env.get_enum_def(c.env.get_str(real_type_id)).unwrap_or(null)
+            exp_def: = ctx.env.get_enum_def(ctx.env.get_str(real_expected_id)).unwrap_or(null)
+            act_def: = ctx.env.get_enum_def(ctx.env.get_str(real_type_id)).unwrap_or(null)
 
             // An integer or another enum becomes an enum only through the cast. The same enum
             // differing in its immutability alone is the same value.
             if exp_def != null && exp_def.is_scalar() &&
-                c.env.get_clean_real_type(type_id) != c.env.get_clean_real_type(expected_id)
-                sema_body_literal.refuse_implicit_enum(c, r, type_id, expected_id)
+                ctx.env.get_clean_real_type(type_id) != ctx.env.get_clean_real_type(expected_id)
+                sema_body_literal.refuse_implicit_enum(ctx, r, type_id, expected_id)
                 return .some(expected_id)
             if exp_def != null && exp_def.is_scalar()
                 is_enum_cast = true
@@ -250,51 +251,51 @@ impl Ast_node
                 default {}
 
             if is_enum_cast
-                base_clean: = c.env.get_clean_real_type(base_type_id)
-                exp_clean: = c.env.get_clean_real_type(expected_id)
-                res_clean: = c.env.get_clean_real_type(type_id)
+                base_clean: = ctx.env.get_clean_real_type(base_type_id)
+                exp_clean: = ctx.env.get_clean_real_type(expected_id)
+                res_clean: = ctx.env.get_clean_real_type(type_id)
 
                 if base_type_id == expected_id || base_type_id == type_id ||
-                    c.env.is_lossless_numeric(res_clean, exp_clean) ||
-                    c.env.is_lossless_numeric(base_clean, exp_clean) ||
-                    c.env.is_lossless_numeric(res_clean, base_clean)
-                    r.build_implicit_cast(c, type_id, expected_id)
+                    ctx.env.is_lossless_numeric(res_clean, exp_clean) ||
+                    ctx.env.is_lossless_numeric(base_clean, exp_clean) ||
+                    ctx.env.is_lossless_numeric(res_clean, base_clean)
+                    r.build_implicit_cast(ctx, type_id, expected_id)
                     return .some(expected_id)
 
-        if c.env.is_numeric(expected_id) && c.env.is_numeric(type_id)
-            exp_clean: = c.env.get_clean_real_type(expected_id)
-            act_clean: = c.env.get_clean_real_type(type_id)
+        if ctx.env.is_numeric(expected_id) && ctx.env.is_numeric(type_id)
+            exp_clean: = ctx.env.get_clean_real_type(expected_id)
+            act_clean: = ctx.env.get_clean_real_type(type_id)
 
-            if c.env.is_lossless_numeric(act_clean, exp_clean)
+            if ctx.env.is_lossless_numeric(act_clean, exp_clean)
                 if act_clean != exp_clean
-                    r.wrap_implicit_cast(c, type_id, expected_id)
+                    r.wrap_implicit_cast(ctx, type_id, expected_id)
                 return .some(expected_id)
 
-            c.clear_scratch()
-                .s("implicit conversion between '\{c.env.display(type_id)\}' and \
-                    '\{c.env.display(expected_id)\}' is forbidden to prevent data loss. Use an \
+            ctx.clear_scratch()
+                .s("implicit conversion between '\{ctx.env.display(type_id)\}' and \
+                    '\{ctx.env.display(expected_id)\}' is forbidden to prevent data loss. Use an \
                     explicit '::' cast")
-            if c.env.is_float(expected_id) && sema_body_literal.is_untyped_int_literal(r)
-                c.scratch.s(", or write the integer literal as a float ('2.0', not '2')")
-            c.scratch.s(".")
-            c.err(r, c.scratch.slice())
+            if ctx.env.is_float(expected_id) && sema_body_literal.is_untyped_int_literal(r)
+                ctx.scratch.s(", or write the integer literal as a float ('2.0', not '2')")
+            ctx.scratch.s(".")
+            ctx.err(r, ctx.scratch.slice())
             return .some(expected_id)
         return .none
 
-    priv fn wrap_in_result(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
+    priv fn wrap_in_result(r: Ast_node$@, ctx: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
         //< The wrap into an expected Result; none where it does not apply
         //< It coerces to the ok type first, then wraps. A value that is itself a result is wrapped
         //< only where the ok type is that result (`(A!B)!E`); any other result passes as it is.
         //< Caution: Do not wrap only on an exact `strip_result(expected_id) == type_id`. Then no
         //< value **requiring a conversion** would pass, and `fn f(): Trait!Err` or `fn f():
         //< Void$@!Err` could only throw.
-        ok_id: = c.env.strip_result(expected_id)
+        ok_id: = ctx.env.strip_result(expected_id)
         is_ok_value: =
-            !c.env.is_result(type_id) ||
-            c.env.get_clean_real_type(type_id) == c.env.get_clean_real_type(ok_id)
-        if c.env.is_result(expected_id) && ok_id != expected_id && is_ok_value
+            !ctx.env.is_result(type_id) ||
+            ctx.env.get_clean_real_type(type_id) == ctx.env.get_clean_real_type(ok_id)
+        if ctx.env.is_result(expected_id) && ok_id != expected_id && is_ok_value
             if ok_id != type_id
-                inner_id: = r.apply_type_coercion(c, type_id, ok_id)
+                inner_id: = r.apply_type_coercion(ctx, type_id, ok_id)
                 if inner_id != ok_id
                     return .some(expected_id) // already diagnosed inside
             clone: = r.snapshot_for_morph(ok_id)
@@ -316,20 +317,20 @@ enum Implicit_cast //< what a type-changing `::` does that the language would do
     numeric //< a safe numeric widening
     permission //< dropping the `$` (write permission)
 
-fn implicit_cast_kind(c: Sema_ctx$@, real_src: I32, real_dst: I32, original_id: I32,
+fn implicit_cast_kind(ctx: Sema_ctx$@, real_src: I32, real_dst: I32, original_id: I32,
     expected_id: I32): Implicit_cast //<
         //< Whether a type-changing cast, where `expected_id` is expected, only converts implicitly
         //< **The one decision that [I0301] reports on and [H0302] backs off on**
         //< (`lint_repeated_type` in `lint_stmt.kspl`). Following both would drop both the cast and
         //< the type that drives it.
-    if c.env.is_numeric(real_src) && c.env.is_numeric(real_dst)
-        if c.env
-            .is_lossless_numeric(c.env.strip_const(real_src), c.env.strip_const(real_dst))
+    if ctx.env.is_numeric(real_src) && ctx.env.is_numeric(real_dst)
+        if ctx.env
+            .is_lossless_numeric(ctx.env.strip_const(real_src), ctx.env.strip_const(real_dst))
             return .numeric
         return .none
     // A slice or generic instance holds the immutability in its name, which
     // `same_shape_ignoring_const` misses, so `is_const_compatible` decides alone (as in
     // apply_type_coercion).
-    if c.env.is_const_compatible(original_id, expected_id)
+    if ctx.env.is_const_compatible(original_id, expected_id)
         return .permission
     return .none

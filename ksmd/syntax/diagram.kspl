@@ -85,8 +85,8 @@ priv fn figure_kind_of(word: U8[]): Bool //< whether a line's first word names a
 priv fn link_kind_of(word: U8[]): Bool //< whether a line's first word names an arrow or a line
     return word.equals("arrow") || word.equals("line")
 
-priv fn figure_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, d: Diagram@):
-    Figure!Diagnostic //<
+priv fn figure_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>,
+    diagram: Diagram@): Figure!Diagnostic //<
         //< One shape's line: `box id="a" at="40,40" size="200,120"`, with text, font, color, fill
     allow(src, attrs, U8[][]::{ "id", "at", "size", "text", "font", "color", "fill" },
         "a shape takes only id, at, size, text, font, color and fill")!
@@ -105,7 +105,7 @@ priv fn figure_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>
     size: =
         pair_of(src, size_at, 1, MAX_SPOT,
         "size is a width and a height from 1 to 20000, as \"200,120\"")!
-    if place.x + size.x > d.width || place.y + size.y > d.height
+    if place.x + size.x > diagram.width || place.y + size.y > diagram.height
         throw src.diagnostic(at_at.offset, "a shape stands inside its diagram's size")
     $text: U8[] = ""
     if a: = find(attrs, "text")
@@ -135,7 +135,7 @@ priv fn figure_kind(word: U8[]): Figure_kind //< the kind a shape's first word n
         return .note
     return .box
 
-priv fn link_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, d: Diagram@,
+priv fn link_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, diagram: Diagram@,
     ids: Keyed<|Sz|>@, arena: Arena$@): Link!Diagnostic //<
         //< One arrow's or line's line: `arrow from="a" to="b"`, with text, color and via
     allow(src, attrs, U8[][]::{ "from", "to", "text", "color", "via" },
@@ -158,7 +158,7 @@ priv fn link_of(src: Source@, line: Line, word: U8[], attrs: List<|Attribute|>, 
         for part in a.value.split(' ', arena)
             p: = pair_text(part, 0, MAX_SPOT) catch
                 throw src.diagnostic(a.offset, message)
-            if p.x > d.width || p.y > d.height || bends.len == MAX_BENDS * 2
+            if p.x > diagram.width || p.y > diagram.height || bends.len == MAX_BENDS * 2
                 throw src.diagnostic(a.offset, message)
             bends.push(p.x)
             bends.push(p.y)
@@ -205,15 +205,15 @@ priv fn is_text(text: U8[], lines: Bool): Bool //<
             return false
     return true
 
-fn write_diagram(d: Diagram@, invisible: Bool, out: Str_builder$@) //<
+fn write_diagram(diagram: Diagram@, invisible: Bool, out: Str_builder$@) //<
     //< The whole clause, as `read_diagram` reads it
-    out.s(":::diagram size=\"\{d.width\},\{d.height\}\"")
-    if d.caption.len > 0
-        out.s(" caption=\"").escape_and_append(d.caption).c('"')
+    out.s(":::diagram size=\"\{diagram.width\},\{diagram.height\}\"")
+    if diagram.caption.len > 0
+        out.s(" caption=\"").escape_and_append(diagram.caption).c('"')
     if invisible
         out.s(" invisible=\"printing\"")
     out.c('\n')
-    for f in d.figures
+    for f in diagram.figures
         out.s(f.kind.variant_name()).s(" id=\"").s(f.id).s("\" at=\"\{f.x\},\{f.y\}\" size=\"")
             .s("\{f.w\},\{f.h\}\"")
         if f.text.len > 0
@@ -225,9 +225,9 @@ fn write_diagram(d: Diagram@, invisible: Bool, out: Str_builder$@) //<
         if f.fill.len > 0
             out.s(" fill=\"").s(f.fill).c('"')
         out.c('\n')
-    for k in d.links
-        out.s(k.kind.variant_name()).s(" from=\"").s(d.figures[k.from].id).s("\" to=\"")
-            .s(d.figures[k.to].id).c('"')
+    for k in diagram.links
+        out.s(k.kind.variant_name()).s(" from=\"").s(diagram.figures[k.from].id).s("\" to=\"")
+            .s(diagram.figures[k.to].id).c('"')
         if k.text.len > 0
             out.s(" text=\"").escape_and_append(k.text).c('"')
         if k.color.len > 0

@@ -85,44 +85,44 @@ fn ended_with(got: I32?, code: I32): Bool //< whether an exit code is there and 
         return c == code
     return false
 
-priv fn fold_crlf_into(b: Writer, text: U8[]) //< appends text, with each `\r\n` as `\n`
+priv fn fold_crlf_into(out: Writer, text: U8[]) //< appends text, with each `\r\n` as `\n`
     for i in Range.asc(text.len)
         if text[i] == '\r' && i + 1 < text.len && text[i + 1] == '\n'
             continue
-        b.c(text[i])
+        out.c(text[i])
 
-priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz, cut: Bool$@): Bool //<
+priv fn take_into(into: Str_builder$@, chunk: U8[], count: I32, cap: Sz, cut: Bool$@): Bool //<
     //< Appends one read's bytes to the builder; bytes beyond the cap are discarded, setting `cut`
-    //< Returns false if the stream closed or failed. `n == -1` means "nothing yet" at timeout 0; it
-    //< is rare right after poll reported readable, and the stream stays open.
-    if n == -1
+    //< Returns false if the stream closed or failed. `count == -1` means "nothing yet" at timeout
+    //< 0; it is rare right after poll reported readable, and the stream stays open.
+    if count == -1
         return true
-    if n <= 0
+    if count <= 0
         return false
     room: = cap - into.len
-    take: = Sz::n if Sz::n < room else room
+    take: = Sz::count if Sz::count < room else room
     if take > 0
         into.s(chunk.sub(0, take))
-    if take < Sz::n
+    if take < Sz::count
         cut$ = true
     return true
 
 pub struct Run_result //< the outcome of one run that started: how it ended, and what it wrote
-    pub exit_code: I32? //< the child's exit code, 0 for success; none once its limit stopped it.
+    pub exit_code: I32? //< the child's exit code, 0 for success; none once its limit stopped it
         //< Stopped at its limit, it is killed with all it started and has no code of its own.
         //< **A child that crashed or was killed gives 128 + the signal number on every OS** (the
         //< shell's convention: a segmentation fault is 139, an abort 134). A Windows crash code is
         //< read as the signal POSIX raises for the same fault. See "A child's end is one code on
         //< every OS" in std/docs/DESIGN-system.md. Any other code is the child's own. On
         //< Windows it can be negative.
-    pub stdout_data: U8$[] //< what it wrote to standard output, cut at the cap.
+    pub stdout_data: U8$[] //< what it wrote to standard output, cut at the cap
         //< Not named stdout/stderr: MSVC UCRT's headers make those object-like macros. So a field
         //< of that name in the generated C struct fails to compile on Windows.
     pub stderr_data: U8$[] //< what it wrote to standard error, cut at the cap
-    pub output_lost: Bool //< an output could not be read back, so the two above can lack some.
+    pub output_lost: Bool //< an output could not be read back, so the two above can lack some
         //< Only `run_many` collects through files, and only it sets this; read as empty, a lost
         //< output would pass for a child that wrote nothing.
-    pub output_cut: Bool //< an output passed the cap, so the two above lack its rest.
+    pub output_cut: Bool //< an output passed the cap, so the two above lack its rest
         //< Caution: **Do not take a cut output for the whole one.** A file the child wrote, cut
         //< short, still reads as a file and fails only where it is used.
 
@@ -417,7 +417,7 @@ pub fn run( //< runs one child and returns its standard output; any failure is t
 // ==========================================
 
 pub enum Spawn_error //< why a child could not be started
-    spawn_failed //< it could not start; `start_error` gives the OS's own number for why.
+    spawn_failed //< it could not start; `start_error` gives the OS's own number for why
         //< The causes are the same on every OS. Three are no such program, no permission to run it,
         //< and a working directory or output file that cannot be opened. The other two are an
         //< argument holding a NUL and the OS refusing a new process.
@@ -447,7 +447,7 @@ pub fn spawn_wait( //< runs one child with the standard I/O inherited, and waits
 
 pub enum Feed_error //< why a child handed its input gave no exit code that answers for all of it
     spawn_failed //< it could not start; the causes are `Spawn_error.spawn_failed`'s
-    input_not_taken //< it stopped taking its input before all of it went, so it was stopped.
+    input_not_taken //< it stopped taking its input before all of it went, so it was stopped
         //< It closed its standard input or ended early, or took none of it for `idle_ms`. Its
         //< exit code would answer for part of the input, as if it were all.
 
@@ -712,11 +712,11 @@ impl Piped_child: Move_only //< copying it would reap one child twice
 // Turns the C return value (>0 a byte count / -1 a timeout / 0 EOF / anything else a failure)
 // into the result type.
 #cfg(!freestanding)
-priv fn read_one(n: I32): Sz!Read_end
-    if n > 0
-        return Sz::n
-    if n == -1
+priv fn read_one(count: I32): Sz!Read_end
+    if count > 0
+        return Sz::count
+    if count == -1
         throw .timed_out
-    if n == 0
+    if count == 0
         throw .closed
     throw .failed

@@ -47,17 +47,17 @@ priv fn has_definition(text: U8[], marker: U8[]): Bool //<
         return true
     return text.find_str(harness.arena().text().s("\n\{marker\}").take()).is_some()
 
-priv fn build_split(dir: U8[], n: Sz, arena: Arena$@): Built //<
-    //< It builds the fixture at n splits and runs it
-    stem: = fs.join(dir, arena.text().s("u\{n\}").take(), arena)
+priv fn build_split(dir: U8[], count: Sz, arena: Arena$@): Built //<
+    //< It builds the fixture at `count` splits and runs it
+    stem: = fs.join(dir, arena.text().s("u\{count\}").take(), arena)
     single: = arena.text().s("\{stem\}.c").take()
     r: = harness
-        .ksplc(U8[][]::{ arena.text().s("--split=\{n\}").take(), FIXTURE, single })
+        .ksplc(U8[][]::{ arena.text().s("--split=\{count\}").take(), FIXTURE, single })
     if !r.exited_with(0)
         return Built::{ .ok = false,
             .out = arena.text().s("generation failed: \{r.out\}").take() }
     $srcs: = List<|U8[]|>(arena)
-    if n == 1
+    if count == 1
         // Under "do not split", one file is written at the given path.
         if !fs.exists(single)
             return Built::{ .ok = false,
@@ -68,7 +68,7 @@ priv fn build_split(dir: U8[], n: Sz, arena: Arena$@): Built //<
         if !fs.exists(header)
             return Built::{ .ok = false,
                 .out = arena.text().s("no shared header: \{header\}").take() }
-        for i in Range.asc(n)
+        for i in Range.asc(count)
             path: = unit_path(stem, i, arena)
             if !fs.exists(path)
                 return Built::{ .ok = false,

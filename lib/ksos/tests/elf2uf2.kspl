@@ -30,17 +30,17 @@ priv const EHSIZE: Sz = 0x34
 
 priv const FLASH_BASE: U64 = 0x10000000U64 //< the start of the RP2040's Flash
 
-priv fn zeros(out: List<|U8|>$@, n: Sz)
-    for _k in Range.asc(n)
+priv fn zeros(out: List<|U8|>$@, count: Sz)
+    for _k in Range.asc(count)
         out.push(0U8)
 
-priv fn set_u16(out: List<|U8|>$@, at: Sz, v: Sz)
-    out.set(at, U8::(v & 0xFF))
-    out.set(at + 1, U8::((v >> 8) & 0xFF))
+priv fn set_u16(out: List<|U8|>$@, at: Sz, value: Sz)
+    out.set(at, U8::(value & 0xFF))
+    out.set(at + 1, U8::((value >> 8) & 0xFF))
 
-priv fn set_u32(out: List<|U8|>$@, at: Sz, v: U64)
+priv fn set_u32(out: List<|U8|>$@, at: Sz, value: U64)
     for k in Range.asc(4)
-        out.set(at + k, U8::((v >> U64::(k * 8)) & 0xFFU64))
+        out.set(at + k, U8::((value >> U64::(k * 8)) & 0xFFU64))
 
 priv fn program_header(out: List<|U8|>$@, p_offset: U64, p_paddr: U64, p_filesz: U64) //<
     //< One ELF32 program header (32 bytes)
@@ -98,8 +98,8 @@ priv fn convert(ksplc: U8[], tmp: U8[], name: U8[], blob: U8[], arena: Arena$@):
     return Converted::{ .code = r.exit_code,
         .said = arena.text().s(r.stdout_data).s(r.stderr_data).take() }
 
-priv fn detail(r: Converted, arena: Arena$@): U8$[]
-    return U8$[]::arena.text().s("code=\{r.code.unwrap_or(-1)\}\n").s(r.said).take()
+priv fn detail(converted: Converted, arena: Arena$@): U8$[]
+    return U8$[]::arena.text().s("code=\{converted.code.unwrap_or(-1)\}\n").s(converted.said).take()
 
 fn test_elf2uf2_refuses_what_it_cannot_place(ksplc: U8[], work: U8[], arena: Arena$@) //<
     //< The three conversions, the valid one first

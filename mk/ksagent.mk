@@ -4,12 +4,14 @@
 # ==========================================
 
 # **The page is built beside the server**, where the opener looks (`KSAGENT` in
-# `tools/opener_aim.kspl`): one file, which `kssrv --page` serves as it is. The build puts kssrv's
+# `tools/opener_aim.kspl`): one file, which `kssrv --page` serves as it is. The build puts the
+# look (`ksagent/page/chat.css`), the Markdown reader (`ksagent/page/markdown.js`) and kssrv's
 # client for the local server inside it.
 KSAGENT_PAGE := $(OUT_DIR)/ksagent/chat.html
 KSAGENT_CHAT_EXE := $(OUT_DIR)/ksagent_chat.exe
 
-$(KSAGENT_PAGE): $(STAGE1_EXE) ksagent/page/chat.html kssrv/page/bundle.kspl kssrv/page/client.js
+$(KSAGENT_PAGE): $(STAGE1_EXE) ksagent/page/chat.html ksagent/page/chat.css ksagent/page/markdown.js \
+  kssrv/page/bundle.kspl kssrv/page/client.js
 	@mkdir -p "$(dir $@)"
 	./$(STAGE1_EXE) run kssrv/page/bundle.kspl ksagent/page/chat.html "$@" --from=kssrv/page
 

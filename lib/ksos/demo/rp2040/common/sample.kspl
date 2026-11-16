@@ -70,39 +70,39 @@ fn restart() //< saves from nothing again, once the record was erased
     saved = 0
     stop_reason = ""
 
-priv fn encode(v: U8$[], s: Sample) //< lays one out
-    d: = s.dist_mm if s.dist_mm <= 0xffffU32 else 0xffffU32
-    mv: = s.bat_mv if s.bat_mv <= 0xffffU32 else 0xffffU32
-    v.put_u16_le(0, U16::d)
-    v.put_u16_le(2, U16::mv)
-    bits: = U8::s.line
-    flag: U8 = BY_SAFETY_BIT if s.by == Author.safety else 0
-    v[4] = bits | flag
-    v[5] = U8::(s.lon + DRIVE_BIAS)
-    v[6] = U8::(s.lat + DRIVE_BIAS)
-    v[7] = U8::(s.rot + DRIVE_BIAS)
+priv fn encode(out: U8$[], sample: Sample) //< lays one out
+    d: = sample.dist_mm if sample.dist_mm <= 0xffffU32 else 0xffffU32
+    mv: = sample.bat_mv if sample.bat_mv <= 0xffffU32 else 0xffffU32
+    out.put_u16_le(0, U16::d)
+    out.put_u16_le(2, U16::mv)
+    bits: = U8::sample.line
+    flag: U8 = BY_SAFETY_BIT if sample.by == Author.safety else 0
+    out[4] = bits | flag
+    out[5] = U8::(sample.lon + DRIVE_BIAS)
+    out[6] = U8::(sample.lat + DRIVE_BIAS)
+    out[7] = U8::(sample.rot + DRIVE_BIAS)
 
-priv fn decode(b: U8[]): Sample //< reads one back
+priv fn decode(raw: U8[]): Sample //< reads one back
     return Sample::{
-        .dist_mm = b.get_u16_le(0),
-        .bat_mv = b.get_u16_le(2),
+        .dist_mm = raw.get_u16_le(0),
+        .bat_mv = raw.get_u16_le(2),
         // Caution: Always mask the line; the source is in the byte's top bit.
-        .line = b[4] & LINE_BITS_MASK,
+        .line = raw[4] & LINE_BITS_MASK,
         // **Subtract at I32 width** (Sample's field); in U8, `83 - 128` wraps to 211.
-        .lon = b[5] - DRIVE_BIAS,
-        .lat = b[6] - DRIVE_BIAS,
-        .rot = b[7] - DRIVE_BIAS,
-        .by = .safety if (b[4] & BY_SAFETY_BIT) != 0 else .policy,
+        .lon = raw[5] - DRIVE_BIAS,
+        .lat = raw[6] - DRIVE_BIAS,
+        .rot = raw[7] - DRIVE_BIAS,
+        .by = .safety if (raw[4] & BY_SAFETY_BIT) != 0 else .policy,
     }
 
-fn append(kind: U16, s: Sample) //< appends one
+fn append(kind: U16, sample: Sample) //< appends one
     //< **Call it after driving the wheels**: interrupts stop for the write's several ms.
     //< Caution: **It must be callable even when the record is unusable** (not opened, full, a
     //< failed write): it returns silently, and driving is unaffected.
     if !records.ok() || stop_reason.len > 0
         return
     $buf: U8[SAMPLE_BYTES] = ::{}
-    encode(U8$[]::buf, s)
+    encode(U8$[]::buf, sample)
     records.append(kind, U8[]::buf) catch e
         // Caution: Do not discard the reason; full is expected, a failed write is not.
         stop_reason = e.variant_name()
@@ -146,24 +146,24 @@ priv fn emit_line(ln: con.Line$@): Bool //< prints one line
         boot.pump(1)
     return ln.flush()
 
-priv fn say_row(ln: con.Line$@, n: U32, v: Sample): Bool //< prints one as one line of CSV
+priv fn say_row(ln: con.Line$@, index: U32, sample: Sample): Bool //< prints one as one line of CSV
     //< Caution: **Keep the order in step with `dump`'s header line.** Always print the source.
     ln.reset()
     ln.str("[dump] ")
-    ln.u32(n)
+    ln.u32(index)
     ln.str(",")
-    ln.u32(v.dist_mm)
+    ln.u32(sample.dist_mm)
     ln.str(",")
-    ln.u32(v.bat_mv)
+    ln.u32(sample.bat_mv)
     ln.str(",")
-    ln.u32(v.line)
+    ln.u32(sample.line)
     ln.str(",")
-    ln.i32(v.lon)
+    ln.i32(sample.lon)
     ln.str(",")
-    ln.i32(v.lat)
+    ln.i32(sample.lat)
     ln.str(",")
-    ln.i32(v.rot)
-    ln.str(",1" if v.by == Author.safety else ",0")
+    ln.i32(sample.rot)
+    ln.str(",1" if sample.by == Author.safety else ",0")
     return emit_line(ln)
 
 fn dump(ln: con.Line$@, kind: U16) //< prints the whole record to the console

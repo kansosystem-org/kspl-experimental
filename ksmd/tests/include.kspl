@@ -299,7 +299,7 @@ priv fn byte_limit() //< 64 MiB of source text with repeats counted, on a new fi
     scratch.remove_tree(root, arena)
 
 priv fn outcome(root: U8[], top: U8[], arena: Arena$@): U8[] //<
-    //< How many instances a view holds, then each problem's place and message, as `arena`'s text.
+    //< How many instances a view holds, then each problem's place and message, as `arena`'s text
     //< The view itself goes in an arena of its own, freed here.
     defer view: = Arena(1024 * 1024)
     a: = assembled(root, top, view)
@@ -439,23 +439,23 @@ priv fn fetched_rounds() //< a page that fetches what each round lacks ends with
         arena.text().s("\{rounds\} rounds, \{asked\} asked").take())
     scratch.remove_tree(root, arena)
 
-priv fn answer(ws: Folder@, f: Fetched$@, path: U8[], image: Bool, arena: Arena$@) //<
+priv fn answer(ws: Folder@, fetched: Fetched$@, path: U8[], image: Bool, arena: Arena$@) //<
     //< What the local server answers for one path, held as the page holds it
     if image
         ws.check(path, arena) catch why
-            f.hold(path, Held::{ .found = false, .why = why, .bytes = "" })
+            fetched.hold(path, Held::{ .found = false, .why = why, .bytes = "" })
             return
-        f.hold(path, Held::{ .found = true, .why = .missing, .bytes = "" })
+        fetched.hold(path, Held::{ .found = true, .why = .missing, .bytes = "" })
         return
     bytes: = ws.read(path, MAX_SOURCE_BYTES, arena) catch why
-        f.hold(path, Held::{ .found = false, .why = why, .bytes = "" })
+        fetched.hold(path, Held::{ .found = false, .why = why, .bytes = "" })
         return
-    f.hold(path, Held::{ .found = true, .why = .missing, .bytes = bytes })
+    fetched.hold(path, Held::{ .found = true, .why = .missing, .bytes = bytes })
 
-priv fn problems_of(a: Assembly@, arena: Arena$@): U8[] //< each problem's place and message
+priv fn problems_of(assembly: Assembly@, arena: Arena$@): U8[] //< each problem's place and message
     defer $b: = Str_builder()
-    for i in Range.asc(a.problems.len)
-        b.s(problem_of(a, i, arena)).c(' ').s(a.problems.get(i).at.message).c('\n')
+    for i in Range.asc(assembly.problems.len)
+        b.s(problem_of(assembly, i, arena)).c(' ').s(assembly.problems.get(i).at.message).c('\n')
     return arena.dup_str(b.slice())
 
 priv fn leftover_part() //< a part left by an interrupted save is not read
@@ -531,26 +531,26 @@ priv fn edit_text(source: Loaded, node: Sz, text: U8[]) //< replaces one text no
         .set(node,
         Inline::{ .kind = old.kind, .text = text, .offset = old.offset, .color = "" })
 
-priv fn view_of(a: Assembly@, arena: Arena$@): U8[] //<
+priv fn view_of(assembly: Assembly@, arena: Arena$@): U8[] //<
     //< Each entry as `path:offset`; an include adds `>` and the name of the file it opens, an image
     //< `=` and where its path leads
     defer $b: = Str_builder()
-    for i in Range.asc(a.entries.len)
-        e: = a.entries.get(i)
+    for i in Range.asc(assembly.entries.len)
+        e: = assembly.entries.get(i)
         if i > 0
             b.c(' ')
-        b.s(a.source_of(i).path).s(":\{a.block_of(i).offset\}")
+        b.s(assembly.source_of(i).path).s(":\{assembly.block_of(i).offset\}")
         if e.opens != NONE
             b.c('>').s(sys.strip_last_ext(sys.get_file_name(e.target)))
-        else if a.block_of(i).kind == Block_kind.image
+        else if assembly.block_of(i).kind == Block_kind.image
             b.c('=').s(e.target)
     return arena.dup_str(b.slice())
 
-priv fn problem_of(a: Assembly@, index: Sz, arena: Arena$@): U8[] //<
+priv fn problem_of(assembly: Assembly@, index: Sz, arena: Arena$@): U8[] //<
     //< A problem's place, then each include clause on the way to it: `b.ksmd:3:1 < a.ksmd:3:1`
-    if index >= a.problems.len
+    if index >= assembly.problems.len
         return "no such problem"
-    p: = a.problems.get(index)
+    p: = assembly.problems.get(index)
     defer $b: = Str_builder()
     place(p.at, b@)
     for i in Range.asc(p.chain.len)
@@ -558,8 +558,8 @@ priv fn problem_of(a: Assembly@, index: Sz, arena: Arena$@): U8[] //<
         place(p.chain.get(i), b@)
     return arena.dup_str(b.slice())
 
-priv fn place(d: Diagnostic, out: Str_builder$@)
-    out.s(d.path).s(":\{d.line\}:\{d.column\}")
+priv fn place(diagnostic: Diagnostic, out: Str_builder$@)
+    out.s(diagnostic.path).s(":\{diagnostic.line\}:\{diagnostic.column\}")
 
 priv fn snapshot(root: U8[], arena: Arena$@): U8[] //< every file's path and bytes, in order
     defer $b: = Str_builder()

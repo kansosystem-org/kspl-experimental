@@ -5,7 +5,7 @@
 import { ALT, CTRL, H, SHIFT, cellAt, check, rowsShown } from "./drive.mjs";
 
 
-export function tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
+export function tools({ browser, page, media, js, settle, until, press, type, select, click, menu, load,
   saves, dragTo, rightClick, openCell, drag, doubleClickAt, resize }) {
   const text = (selector) => js(`document.querySelector(${JSON.stringify(selector)}).textContent`);
   const found = () => text(".find-count");
@@ -205,11 +205,11 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
         const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
         return el.classList.contains('col-edge');
       })()`), "the edges that resize the columns stay where a press reaches them");
-      await page("Emulation.setEmulatedMedia", { media: "print" });
+      await media("print");
       check(await js("getComputedStyle(document.querySelector('#doc thead')).position") === "static" &&
         await js("getComputedStyle(document.querySelector('#doc thead')).display") === "table-header-group",
       "printed, the heading is the table's own, which the browser repeats on each page");
-      await page("Emulation.setEmulatedMedia", { media: "" });
+      await media("");
       await js("window.scrollTo(0, 0)");
     },
 
@@ -667,7 +667,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       "a table left out of print is marked while editing");
       await click('#doc .table[data-name="t"] td[data-r="0"][data-c="0"]');
       await menu("filter-value");
-      await page("Emulation.setEmulatedMedia", { media: "print" });
+      await media("print");
       const shown = await js(`JSON.stringify((() => {
         const d = (el) => (el ? getComputedStyle(el).display : "absent");
         const t = document.querySelector('#doc .table[data-name="t"]');
@@ -681,7 +681,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
             t.querySelector('tbody tr:not([hidden]) td[data-c="' + c + '"]').getBoundingClientRect().left)
             .every(Boolean)];
       })())`);
-      await page("Emulation.setEmulatedMedia", { media: "" });
+      await media("");
       check(shown === '["none","block","none",true,"none","none","none",1,"page",true]',
         "in print the left-out table, the letters, row numbers, controls and menus go, a filter's " +
         "hidden row stays hidden, a divider ends the page, and each value stands under its name", shown);

@@ -144,6 +144,45 @@
 
 **The editor's memory is a fixed 128 MiB.** An action that starts with less than 16 MiB free is refused, and the page asks the person to save and open the document again. The document and its whole history stay in that memory until another document opens.
 
+## What a document cannot do in the page
+
+**A document is data, never code: the page shows the markup a document holds as text, and runs none of it.** A document someone else wrote may hold `<script>`, an `onerror=` attribute or a `javascript:` link. Two walls stand in its way:
+
+1. **The page puts every text a document holds into the page as a text node or a property's value**, never as markup. The reader refuses a link to any address but `https:`, `http:`, `mailto:` or a `#` place, and a colour that is not `#` and six hex digits.
+2. **The page carries a Content-Security-Policy in its own `<meta>`** (`ksmd/port/web/page.html`). So the policy holds in each way the page reaches a browser. It holds opened as a file, served by `kssrv --page`, and opened by the `ksmd` launcher, which starts `kssrv` the same way.
+
+The policy is:
+
+```text
+default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; worker-src blob:;
+style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; form-action 'none'
+```
+
+| Part | What the page needs it for |
+| :-- | :-- |
+| `script-src 'unsafe-inline'` | The page is one file, so its scripts stand inline. Text run as code (`eval`) stays refused |
+| `'wasm-unsafe-eval'` | The editor is wasm, and so is a person's own functions file, built by the local server |
+| `worker-src blob:` | A person's own functions run in a worker made from a `blob:` URL ("Your own functions" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)) |
+| `style-src 'unsafe-inline'` | The style stands inline, as the scripts do |
+| `img-src blob:` | Served, an image's bytes come through the local server's API and show from a `blob:` URL. No image loads from an address |
+| `connect-src 'self'` | Served, the page calls the local server's API. Opened as a file, the page calls nothing |
+
+* **The first wall carries the weight.** The policy lets the page's own inline scripts run, so it would also run an `onerror=` that reached the page as markup. What the policy adds: nothing loads from outside the page, so a document cannot send what it shows elsewhere, and no text runs as code.
+* **Framing is the local server's to refuse.** A `<meta>` policy cannot hold `frame-ancestors`, so `kssrv` sends `frame-ancestors 'none'` in its header ("What guards the page in the browser" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md#what-guards-the-page-in-the-browser)). A page opened as a file holds no token, so a frame around it reaches no file.
+* **The print's hidden frame runs nothing either** (`pages.js`): it is sandboxed without `allow-scripts`, and it takes the page's policy.
+* **`test-ksmd-browser` checks both walls** (`ksmd/tests/browser/hostile.mjs`). A document holds such markup in every construct that shows text, a link or an image. Opened as a file and served, nothing runs, no dialog opens, and the markup shows as text. Over all its sections, the run also checks that the page does nothing its policy refuses. So a rule too strict for the page's own work fails there.
+
+## How the page's scripts fit together
+
+**Each script is one function, `function ksmdX(ks)`, that adds what it gives to one shared object, `ks`.** `table.js` holds `ksmdTable`, which sets `ks.table`; `filter.js` sets `ks.filter`. A script reaches another script's work only through `ks`, so the scripts share no other names. A few hold only data, such as the command list in `commands.js`.
+
+* **`ksmdStart` in `ksmd/port/web/core.js` makes `ks`, then starts the scripts one after another.** First it sets what every script uses: `ks.act`, `ks.put`, `ks.el`, and the names of the editor's numbers (`ks.CELL`, `ks.SPOT`, `ks.BLOCK` and `ks.TABLE_EDIT`).
+* **A script that calls another's function while it starts must start after it.** So `handlers.js` starts first, because every script registers its commands through `ks.handle`. The menus and the quick access bar start before the commands, which set their ticks. `ks.checkHandlers()` runs after every script, so it sees each command's handler.
+* **Most of the work runs later, when a person acts.** By then every script has started, so a call made then can reach any script.
+* **The scripts that open and save files start last**, after the page's API exists (`ksmdFiles` and `ksmdFunctions`). A few scripts are started by another script, not by `core.js`: `table.js` starts the cell's box (`cellbox.js`), and `file.js` starts `local.js`, `keep.js` and `browse.js`.
+* **A new script is added in two places**: a `<script src>` line in `page.html`, before `core.js`, and its call in `core.js`'s start order. The build puts each script that `page.html` names inside the one page file.
+* **To find who defines `ks.foo`, search `ksmd/port/web/` for `ks.foo =`.** A script that gives several functions sets one object, such as `ks.table = { … }`.
+
 ## Keys alone, and a screen reader
 
 **Every part of the page works with keys alone, and a screen reader reads a table as a grid.** Each choice below follows the spreadsheets' keys and WAI-ARIA's patterns, so a person brings what they already know.

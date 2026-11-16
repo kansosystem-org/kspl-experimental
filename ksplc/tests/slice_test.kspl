@@ -15,21 +15,21 @@ import "std/verdict"
 // ==========================================
 $store: I32[4] = ::{ 10, 20, 30, 40 }
 
-priv fn total(s: I32[]): I32 //< takes only the immutable version
+priv fn total(values: I32[]): I32 //< takes only the immutable version
     $t: I32 = 0
-    for x in s
+    for x in values
         t += x
     return t
 
 priv struct Frame
     s: I32$[]
 
-priv fn poke_through_frame(f: Frame@) //<
+priv fn poke_through_frame(frame: Frame@) //<
     //< It writes to an element through a read-only frame
     //< `at` takes its receiver as `Self@`, so the returned pointer's type carries the permission
     //< ("Where permission lives changes with whether it is owned" in
     //< `docs/DESIGN-programming-language.md`).
-    f.s[0] = 77
+    frame.s[0] = 77
 
 fn test_slice_struct_places()
     verdict.start("[Slice] a slice held as a struct test...")
@@ -76,8 +76,8 @@ impl<|T|> T$[]
     fn nth(r: Self, i: Sz): T
         return r[i]
 
-    fn first_or(r: Self, d: T): T
-        return d if r.len == 0 else r[0]
+    fn first_or(r: Self, alternative: T): T
+        return alternative if r.len == 0 else r[0]
 
 fn test_generic_impl_over_slices()
     verdict.start("[Slice] a generic impl targeting a slice as a whole test...")
@@ -192,10 +192,10 @@ impl Rw_view: Index_place<|Sz, I32|>
 priv struct View_frame
     v: Rw_view
 
-priv fn poke(f: View_frame@) //< takes the frame **read-only**
-    f.v[0] = 99
-    f.v[1] += 5
-    p: I32$@ = f.v[2]@
+priv fn poke(frame: View_frame@) //< takes the frame **read-only**
+    frame.v[0] = 99
+    frame.v[1] += 5
+    p: I32$@ = frame.v[2]@
     p$ = 77
 
 fn test_view_receiver_decides_write_permission()
@@ -247,21 +247,22 @@ fn test_slices_of_slices_differ_by_level() //< read-only at the outer or the inn
 priv struct Pair_row //< an array as a field of a by-value `$` parameter
     v: I32[2]
 
-priv fn set_first($a: I32[3]): I32 //< writes an element of its own copy, then replaces the copy
-    a[0] = 7
-    $sum: = a[0]
-    a = ::{ 4, 5, 6 }
-    a[1] = 8
-    sum += a[1]
+priv fn set_first($values: I32[3]): I32 //<
+    //< writes an element of its own copy, then replaces the copy
+    values[0] = 7
+    $sum: = values[0]
+    values = ::{ 4, 5, 6 }
+    values[1] = 8
+    sum += values[1]
     return sum
 
-priv fn set_cell($m: I32[2][2]): I32 //< an element of an inner array
-    m[1][0] = 5
-    return m[0][0] + m[1][0]
+priv fn set_cell($grid: I32[2][2]): I32 //< an element of an inner array
+    grid[1][0] = 5
+    return grid[0][0] + grid[1][0]
 
-priv fn set_field($p: Pair_row): I32 //< an element of an array field
-    p.v[1] = 9
-    return p.v[0] + p.v[1]
+priv fn set_field($row: Pair_row): I32 //< an element of an array field
+    row.v[1] = 9
+    return row.v[0] + row.v[1]
 
 fn test_dollar_array_param_writes_its_copy() //<
     //< A `$` array parameter writes its elements, as a `$` local does
@@ -273,9 +274,9 @@ fn test_dollar_array_param_writes_its_copy() //<
     x: I32[3] = ::{ 1, 2, 3 }
     g: I32[2][2] = ::{::{ 1, 2 }, ::{ 3, 4 } }
     p: = Pair_row::{ .v = ::{ 1, 2 } }
-    by_fn: = fn($a: I32[3]): I32
-        a[2] = 40
-        return a[2]
+    by_fn: = fn($values: I32[3]): I32
+        values[2] = 40
+        return values[2]
     assert(set_first(x) == 15 && x[0] == 1, "the copy is written, the caller's array is not")
     assert(set_cell(g) == 6 && g[1][0] == 3, "an inner array's element is written in the copy")
     assert(set_field(p) == 10 && p.v[1] == 2, "an array field's element is written in the copy")

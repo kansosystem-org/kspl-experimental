@@ -28,12 +28,12 @@ impl Editor
         if block < 0 || block >= ed.doc.blocks.len ||
             ed.doc.blocks.get(block).kind != .table
             throw .not_whole
-        u: = ed.doc.blocks.get(block).first
-        t: = ed.doc.tables[u]@
+        table: = ed.doc.blocks.get(block).first
+        t: = ed.doc.tables[table]@
         defer scratch: = Arena(16 * 1024)
         $values: = List<|Sz|>(scratch)
-        values.push(numeric_column(ed, u, t) if t.columns.len > 1 else 0)
-        settings: = Chart_settings::{ .table = u, .kind = .bar, .labels = 0, .values = values,
+        values.push(numeric_column(ed, table, t) if t.columns.len > 1 else 0)
+        settings: = Chart_settings::{ .table = table, .kind = .bar, .labels = 0, .values = values,
             .title = "", .by_rows = false, .from = 0, .to = 0 }
         chart: = ed.chart_of(settings@)!
         s: = gap_spot(block + 1)
@@ -49,25 +49,25 @@ impl Editor
         chart.drawings = ed.doc.charts[ed.doc.blocks.get(block).first].drawings
         ed.put_chart(gap_spot(block), gap_spot(block + 1), chart)!
 
-    priv fn chart_of(ed: Self$@, s: Chart_settings@): Chart!Refused //<
+    priv fn chart_of(ed: Self$@, settings: Chart_settings@): Chart!Refused //<
         //< A chart of the settings, its columns held by identity
         //< Refused where the saved chart would not find these columns by their names: one with no
         //< name or another's, or a drawn one whose name holds a ','.
-        if s.table < 0 || s.table >= ed.doc.tables.len ||
-            ed.doc.tables[s.table].name.len == 0
+        if settings.table < 0 || settings.table >= ed.doc.tables.len ||
+            ed.doc.tables[settings.table].name.len == 0
             throw .table(.outside)
-        t: = ed.doc.tables[s.table]@
-        if s.labels < 0 || s.labels >= t.columns.len || s.values.len == 0 ||
-            s.values.len > MAX_SERIES
+        t: = ed.doc.tables[settings.table]@
+        if settings.labels < 0 || settings.labels >= t.columns.len || settings.values.len == 0 ||
+            settings.values.len > MAX_SERIES
             throw .table(.outside)
         $ids: = List<|Sz|>(ed.arena)
         $names: = List<|U8[]|>(ed.arena)
-        for c in s.values
-            if s.by_rows
+        for c in settings.values
+            if settings.by_rows
                 // A row is named by its text in the labels column, as the file writes it.
                 if c < 0 || c >= t.rows.len
                     throw .table(.outside)
-                cell: = t.cells[t.at(c, s.labels)]
+                cell: = t.cells[t.at(c, settings.labels)]
                 if cell.kind != .text || cell.text.len == 0
                     throw .table(.chart_name)
                 ids.push(UNBOUND)
@@ -77,35 +77,37 @@ impl Editor
                 throw .table(.outside)
             ids.push(t.columns[c])
             names.push(t.cells[c].text)
-        if s.by_rows &&
-            (s.from < 0 || s.from >= t.columns.len || s.to < 0 || s.to >= t.columns.len)
+        if settings.by_rows &&
+            (settings.from < 0 || settings.from >= t.columns.len || settings.to < 0 ||
+            settings.to >= t.columns.len)
             throw .table(.outside)
-        chart: = Chart::{ .kind = s.kind, .title = ed.arena.dup_str(s.title), .table = s.table,
-            .name = t.name, .labels = t.columns[s.labels],
-            .label_name = t.cells[s.labels].text, .series = ids, .series_names = names,
-            .by_rows = s.by_rows, .from = t.columns[s.from] if s.by_rows else UNBOUND,
-            .from_name = t.cells[s.from].text if s.by_rows else "",
-            .to = t.columns[s.to] if s.by_rows else UNBOUND,
-            .to_name = t.cells[s.to].text if s.by_rows else "",
+        chart: = Chart::{ .kind = settings.kind, .title = ed.arena.dup_str(settings.title),
+            .table = settings.table, .name = t.name, .labels = t.columns[settings.labels],
+            .label_name = t.cells[settings.labels].text, .series = ids, .series_names = names,
+            .by_rows = settings.by_rows,
+            .from = t.columns[settings.from] if settings.by_rows else UNBOUND,
+            .from_name = t.cells[settings.from].text if settings.by_rows else "",
+            .to = t.columns[settings.to] if settings.by_rows else UNBOUND,
+            .to_name = t.cells[settings.to].text if settings.by_rows else "",
             .drawings = List<|Drawing|>(ed.arena) }
         if !reads_back(ed.doc@, chart@)
             throw .table(.chart_name)
         return chart
 
-    priv fn put_chart(ed: Self$@, s: Spot, e: Spot, chart: Chart): Void!Refused //<
-        //< A block for the chart in place of what stands from `s` to `e`, as one step
+    priv fn put_chart(ed: Self$@, start: Spot, end: Spot, chart: Chart): Void!Refused //<
+        //< A block for the chart in place of what stands from `start` to `end`, as one step
         ed.doc.charts.push(chart)
-        ed.put_whole(s, e, Block.whole(.chart, ed.doc.charts.len - 1, 0))!
+        ed.put_whole(start, end, Block.whole(.chart, ed.doc.charts.len - 1, 0))!
 
-priv fn numeric_column(ed: Editor@, u: Sz, t: Table@): Sz //<
+priv fn numeric_column(ed: Editor@, table: Sz, grid: Table@): Sz //<
     //< The first column after the first whose values are mostly numbers, or the second column
     defer scratch: = Arena(64 * 1024)
     values: = calculate(ed.doc@, ed.today, scratch, ed.own)
-    for c in Range(1, t.columns.len, 1)
+    for c in Range(1, grid.columns.len, 1)
         $numbers: Sz = 0
-        for r in Range.asc(t.rows.len)
-            if values.at(u, r, c).kind == Value_kind.number
+        for r in Range.asc(grid.rows.len)
+            if values.at(table, r, c).kind == Value_kind.number
                 numbers += 1
-        if numbers * 2 > t.rows.len
+        if numbers * 2 > grid.rows.len
             return c
     return 1

@@ -76,7 +76,7 @@ Caution: **Do not put a helper that does not touch `Sema_ctx`'s state into `sema
 | a body walk's flags at the current position | `Fn_ctx` |
 | what every part reads (the current file and its source, the symbol table, the environment), the analysis's switches, and the one path into body | loose on `Sema_ctx` |
 
-The parts are plain records. Every method keeps its one receiver `c`, and the concern's own file holds the methods that keep its part (`decl/layout` for `Layout_state`).
+The parts are plain records. Every method keeps its one receiver, the `Sema_ctx`, and the concern's own file holds the methods that keep its part (`decl/layout` for `Layout_state`).
 
 **Only `decl/mono` and `decl/mono_queue` touch `Mono_state`**; other code asks through their methods (`put_off_constraint`, `ensure_instance_methods`), by convention.
 
@@ -101,7 +101,7 @@ flowchart TD
         S1[resolving the imports] --> S2[provisionally registering the type symbols] --> S3a["registering the names alone<br/>var/const plus the generics' impls<br/>(it resolves no types)"] --> S3b[resolving the declared types<br/>the aliases, the signatures] --> S4[filling the registry in<br/>plus verification]
     end
     collect --> infer["sema_body_infer.run<br/>the main walk (in the files' order of appearance)"]
-    infer -->|"it meets a generic instantiation<br/>(the signature alone is registered at once)"| pending["c.generics.pending<br/>pile it onto the work list"]
+    infer -->|"it meets a generic instantiation<br/>(the signature alone is registered at once)"| pending["ctx.generics.pending<br/>pile it onto the work list"]
     infer --> drain["after the main walk completes, a dedicated drain loop<br/>infers the bodies (re-checking pending.len every time)"]
     drain --> tail["evaluating #error/#warning → rebuilding<br/>root.children with the instantiated nodes → the unused check"]
 ```
@@ -265,7 +265,7 @@ A *generic* is a declaration with type parameters (`List<|T|>`). Its *template* 
 **Monomorphization (`mono.kspl`) fires the moment** `call.kspl` (a function call) or `resolve.kspl` (a generic struct or type) meets an instantiation during the main walk.
 
 * The signature is cloned and registered at once.
-* The body's inference only joins the work list `c.generics.pending`, which a dedicated loop drains right after `infer.kspl`'s top-level walk.
+* The body's inference only joins the work list `ctx.generics.pending`, which a dedicated loop drains right after `infer.kspl`'s top-level walk.
 * The loop re-reads `pending.len` every round, so it also handles generics nested in during the drain (breadth-first, not recursion).
 * `instantiated_nodes` caches each instantiated function or struct, so none is made twice.
 * The method tables, the conformances and the type-argument constraints have queues of their own (below).

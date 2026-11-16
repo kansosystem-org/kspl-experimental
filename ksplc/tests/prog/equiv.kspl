@@ -29,8 +29,8 @@ priv enum Shape
     line(len: I32)
 
 impl Shape
-    priv fn area_tag(s: Self): I32
-        switch s
+    priv fn area_tag(r: Self): I32
+        switch r
         case .dot
             return 0
         case .line(len)
@@ -88,8 +88,8 @@ priv $g_arr: I32[5] = ::{ 3, 1, 4, 1, 5 }
 priv $g_sparse: I32[4] = ::{[2] = 6 }
 priv $g_zero: Point = ::{}
 
-priv fn form_tag(f: Form): I32 //< a variant built through the alias, taken as the alias
-    switch f
+priv fn form_tag(form: Form): I32 //< a variant built through the alias, taken as the alias
+    switch form
     case .dot
         return 0
     case .line(len)
@@ -112,15 +112,15 @@ priv struct Op_slot
     priv tag: I32
     priv op: Unary_op
 
-priv fn char_id(v: U8): U8 //<
-    //< It returns v, so a character literal reaches run time without being folded
-    return v
+priv fn char_id(value: U8): U8 //<
+    //< It returns `value`, so a character literal reaches run time without being folded
+    return value
 
-priv fn twice(a: I32): I32
-    return a * 2
+priv fn twice(value: I32): I32
+    return value * 2
 
-priv fn negate(a: I32): I32
-    return -a
+priv fn negate(value: I32): I32
+    return -value
 
 priv const G_CONST_OP: Unary_op = twice //< a function pointer placed in a global
     //< Each backend breaks at a different place, so both are tested. In C a `const` cannot go in
@@ -147,62 +147,63 @@ priv fn pick_picker(): fn(neg: Bool): fn(a: I32): I32 //<
 priv struct Fn_box<|T|> //< a generic holding a function type as its argument
     priv f: T
 
-priv fn apply_twice<|T|>(f: fn(x: T): T, v: T): T //< a function type over the generic's own `T`
-    return f(f(v))
+priv fn apply_twice<|T|>(func: fn(x: T): T, value: T): T //<
+    //< a function type over the generic's own `T`
+    return func(func(value))
 
-priv fn apply_op(a: I32, op: Unary_op): I32 //< an anonymous function
+priv fn apply_op(value: I32, op: Unary_op): I32 //< an anonymous function
     //< parse/desugar_closure.kspl lifts it to a top-level `priv fn _anon_fn_N`, and where it was
     //< written becomes a reference to that name.
     //< Caution: The reference has to be rewritten into the mangled name (transform_path_access in
     //< lower/abi.kspl). Without the rewrite, C refers to an undeclared name and fails, and LLVM
     //< points at a different symbol. This pins down that both backends give the same answer.
-    return op(a)
+    return op(value)
 
-priv fn apply_c1(a: I32, f: Callable1<|I32, I32|>): I32 //< a closure (with capture)
+priv fn apply_c1(value: I32, func: Callable1<|I32, I32|>): I32 //< a closure (with capture)
     //< A struct pointing at the captured values and an impl for Callable are synthesised
     //< (desugar_closure in parse/desugar.kspl). The environment lives on the caller's frame and
     //< the values are read **at the moment of the call**. This pins down that both backends agree.
-    return f.call(a)
+    return func.call(value)
 
-priv fn apply_c2(a: I32, b: I32, f: Callable2<|I32, I32, I32|>): I32
-    return f.call(a, b)
+priv fn apply_c2(left: I32, right: I32, func: Callable2<|I32, I32, I32|>): I32
+    return func.call(left, right)
 
-priv fn apply_c1_nocap(a: I32, f: Callable1<|I32, I32|>): I32 //<
+priv fn apply_c1_nocap(value: I32, func: Callable1<|I32, I32|>): I32 //<
     //< It calls a Callable that captures nothing: writing the `;` makes one even with no capture
     //< This is the shape for passing a predicate that needs no capture to an API that does not take
     //< a function pointer.
     //< An anonymous function with no `;` is a function pointer, so it cannot be passed here.
-    return f.call(a)
+    return func.call(value)
 
-priv fn apply_slice(s: U8$[], f: Callable1<|U8$[], Sz|>): Sz //<
+priv fn apply_slice(bytes: U8$[], func: Callable1<|U8$[], Sz|>): Sz //<
     //< The capture and the argument of a type holding a mutability marker
     //< Take the type's text from `extract_type_name()`, and the `$` is dropped (`U8$[]` → `U8[]`).
     //< Then the synthesised impl conforms to a `Callable` of another type argument and fails with
     //< "does not explicitly implement trait" (written_type_text in
     //< parse/desugar_closure.kspl).
-    return f.call(s)
+    return func.call(bytes)
 
-priv fn cmp_positive(a: I32, b: I32, f: Callable2<|I32, I32, I32|>): Sz //<
+priv fn cmp_positive(left: I32, right: I32, func: Callable2<|I32, I32, I32|>): Sz //<
     //< It calls an instantiated generic trait's method **where no expected type flows in**
-    //< Use the return value where there is an expected type, as in `return f.call(a);`. Then the
-    //< type is filled from the context, so a type lost on the method goes unseen. Use it where the
-    //< expected type stays `unknown`, such as a comparison's operand (declare_inst_trait_method in
-    //< sema/decl/mono.kspl).
-    return 1 if f.call(a, b) > 0 else 0
+    //< Use the return value where there is an expected type, as in `return func.call(left);`. Then
+    //< the type is filled from the context, so a type lost on the method goes unseen. Use it where
+    //< the expected type stays `unknown`, such as a comparison's operand (declare_inst_trait_method
+    //< in sema/decl/mono.kspl).
+    return 1 if func.call(left, right) > 0 else 0
 
 priv trait Conv<|A, Ret|> //<
     //< A generic trait a user declared, which must work the same as the ones in std/lang
-    fn conv(r: Self, a: A): Ret
+    fn conv(r: Self, value: A): Ret
 
 priv struct Doubler
     priv bias: I32
 
 impl Doubler: Conv<|I32, I32|>
-    fn conv(r: Self@, a: I32): I32
-        return a * 2 + r.bias
+    fn conv(r: Self@, value: I32): I32
+        return value * 2 + r.bias
 
-priv fn conv_positive(k: Conv<|I32, I32|>, a: I32): Sz
-    return 1 if k.conv(a) > 0 else 0
+priv fn conv_positive(conv: Conv<|I32, I32|>, value: I32): Sz
+    return 1 if conv.conv(value) > 0 else 0
 
 priv trait Ranked //<
     //< A trait passed as the argument of a generic method with an explicit type argument
@@ -232,18 +233,18 @@ impl<|T|> Boxed<|T|>: Ranked
     fn score(r: Self@): I32
         return I32::sizeof(T) * 10 + (1 if r.v > 0 else 0)
 
-priv fn score_of(k: Ranked): I32
-    return k.score()
+priv fn score_of(ranked: Ranked): I32
+    return ranked.score()
 
 priv struct Holder<|T|>
     priv v: T
 
-priv fn tagged<|T, U|>(_h: Holder<|T|>@, k: Ranked, _tag: U): I32 //<
+priv fn tagged<|T, U|>(_holder: Holder<|T|>@, ranked: Ranked, _tag: U): I32 //<
     //< A generic free function that has U written explicitly (the same shape as select in std/seq)
     //< It cannot be a method. A generic type's method can use only the type arguments its receiver
     //< holds ("A type argument with nothing to bind to is rejected" in
     //< docs/DESIGN-programming-language.md).
-    return k.score() + I32::sizeof(U) + I32::sizeof(T) * 0
+    return ranked.score() + I32::sizeof(U) + I32::sizeof(T) * 0
 
 impl<|T|> Holder<|T|>
     fn pick(r: Self@, floor: T): I32 //< a closure that uses the enclosing type argument
@@ -260,8 +261,8 @@ impl<|T|> Holder<|T|>
         })
         return I32::nocap * 10 + I32::cap
 
-priv fn apply_c1_gen<|T|>(v: T, f: Callable1<|T, T|>): T
-    return f.call(v)
+priv fn apply_c1_gen<|T|>(value: T, func: Callable1<|T, T|>): T
+    return func.call(value)
 
 priv const REG_BASE: U32 = 0x40000000 //< the constant folding of a global initialiser
     //< Caution: All three shapes "silently become a different value when not folded". They are a
@@ -315,8 +316,9 @@ priv fn naked_ret() //< a `#naked` function: its assembly is its whole body and 
     //< and RISC-V alike.
     __kspl_asm_volatile("ret")
 
-priv fn case_named(n: I32): I32 //< case labels that name constants, which C cannot take as names
-    switch n
+priv fn case_named(value: I32): I32 //<
+    //< case labels that name constants, which C cannot take as names
+    switch value
     case CASE_ONE
         return 10
     case CASE_TWO
@@ -337,10 +339,10 @@ impl U8
     fn top(): U8
         return 255
 
-priv fn runtime_amount(n: I32): I32 //< a shift amount decided at run time
+priv fn runtime_amount(value: I32): I32 //< a shift amount decided at run time
     //< Caution: **Do not make it `const`.** Folded into a constant, it takes the translation-time
     //< path, and the answer under the run-time check is never seen.
-    return n
+    return value
 
 priv struct Width_probe //<
     //< A pair that passes a value to a field and to an argument of a different width
@@ -351,11 +353,11 @@ priv struct Width_probe //<
     wide: Sz
     dbl: F64
 
-priv fn take_sz(v: Sz): Sz
-    return v
+priv fn take_sz(value: Sz): Sz
+    return value
 
-priv fn take_f64(v: F64): F64
-    return v
+priv fn take_f64(value: F64): F64
+    return value
 
 priv struct Abi_probe //<
     //< The struct that checks the layout follows the target C's ABI
@@ -366,22 +368,22 @@ priv struct Abi_probe //<
     c: U16
     d: U8
 
-priv fn runtime_divisor(n: I32): I32 //< a divisor decided at run time
+priv fn runtime_divisor(value: I32): I32 //< a divisor decided at run time
     //< Caution: **Do not make it `const`.** The reason is the same as runtime_amount's.
-    return n
+    return value
 
-priv fn runtime_u16(v: U16): U16 //< a floating-point value decided at run time
+priv fn runtime_u16(value: U16): U16 //< a floating-point value decided at run time
     //< **Do not make it `const`.** Folded, the conversion itself vanishes. **Always include
     //< something narrower than `int`, and an `F32`.** C promotes those to `int` / `double` in the
     //< variadic part, so the C backend is safe because the C compiler promotes. **Only the LLVM
     //< backend must emit the promotion itself**.
-    return v
-priv fn runtime_i16(v: I16): I16
-    return v
-priv fn runtime_bool(v: Bool): Bool
-    return v
-priv fn runtime_u8(v: U8): U8
-    return v
+    return value
+priv fn runtime_i16(value: I16): I16
+    return value
+priv fn runtime_bool(flag: Bool): Bool
+    return flag
+priv fn runtime_u8(value: U8): U8
+    return value
 
 priv fn variadic_line(buf: U8$[]): U8[]
     n: = libc.snprintf(Void$@::buf.ptr, buf.len, "va=%.3f/%d/%d/%d/%d/%d", runtime_f32(1.25),
@@ -391,23 +393,23 @@ priv fn variadic_line(buf: U8$[]): U8[]
         return "va=?"
     return U8[]::{ .ptr = buf.ptr, .len = n }
 
-priv fn embed_sum(d: U8[]): U64 //< it folds the embedded content into one number
+priv fn embed_sum(data: U8[]): U64 //< it folds the embedded content into one number
     //< **The length alone is not enough.** A trigraph's reinterpretation changes both the length
     //< and the content. A one-byte mix-up does not show in the length.
     $sum: U64 = 1469598103934665603U64
-    for i in Range.asc(d.len)
-        b: = (d.ptr + i)$
+    for i in Range.asc(data.len)
+        b: = (data.ptr + i)$
         sum = (sum ^ U64::b) * 1099511628211U64
     return sum
 
-priv fn runtime_f32(v: F32): F32
-    return v
+priv fn runtime_f32(value: F32): F32
+    return value
 
-priv fn runtime_f64(v: F64): F64
-    return v
+priv fn runtime_f64(value: F64): F64
+    return value
 
-priv fn runtime_u64(v: U64): U64
-    return v
+priv fn runtime_u64(value: U64): U64
+    return value
 
 // Caution: **`Exit_probe` must be `pub`.** `main` is visible from outside as the entry point. So
 // its Result's error type cannot be narrowed ([I0402] finds "a `pub` used only inside the unit",
@@ -424,8 +426,8 @@ pub enum Exit_probe: U8 //<
     done = 7
 
 impl Exit_probe
-    priv fn runtime_exit(v: Self): Exit_probe
-        return v
+    priv fn runtime_exit(r: Self): Exit_probe
+        return r
 
 priv const SHIFT_MASK: U32 = 6U32 //<
     //< Conversely, the constant for building an amount that can be folded at translation time
@@ -433,19 +435,22 @@ priv const DIV_PICK: I32 = 6
 
 // Hiding a local is the shape shadow_lines tests, and the one [I0501] is for.
 ##lint(I0501 = off)
+// A closure's parameter spelled `r`, as a receiver usually is, is a shape shadow_lines tests too.
+// [H0501] reports `r` outside a method.
+##lint(H0501 = off)
 
 priv const R: I32 = 100 //< a global named as a method's receiver usually is, read in a closure
 
-priv fn shadow_param(n: I32): I32 //< a body's local hiding the parameter its initializer reads
-    n: = n + 1
-    return n * 10
+priv fn shadow_param(value: I32): I32 //< a body's local hiding the parameter its initializer reads
+    value: = value + 1
+    return value * 10
 
-priv fn even_only(n: I32): I32!U8[]
-    if n % 2 != 0
+priv fn even_only(value: I32): I32!U8[]
+    if value % 2 != 0
         throw "odd"
-    return n
+    return value
 
-priv fn shadow_lines(b: Str_builder$@) //< a local hiding an outer one of its name
+priv fn shadow_lines(out: Str_builder$@) //< a local hiding an outer one of its name
     // **Its initializer reads the outer one** ("Scope and shadowing" in
     // docs/SPEC-programming-language.md). But C sees a declaration from its own declarator on. So
     // the C gives the inner local a name of its own (hiding_local_name in base/c_name.kspl). Each
@@ -475,15 +480,15 @@ priv fn shadow_lines(b: Str_builder$@) //< a local hiding an outer one of its na
     e: = runtime_divisor(3)
     caught: = even_only(e) catch e
         fallback I32::e.len
-    b.s("shadow=\{sum\}/\{x\}/\{len\}/\{caught\}/\{e\}/\{shadow_param(runtime_divisor(4))\}")
+    out.s("shadow=\{sum\}/\{x\}/\{len\}/\{caught\}/\{e\}/\{shadow_param(runtime_divisor(4))\}")
     // A closure's receiver takes a made name, which no capture, parameter or global can meet.
     // The closure's body reads the capture `R`, the parameter `R` and the global `R` in turn.
     r: = runtime_divisor(40)
-    b.s(" recv=\{apply_c1(2, fn(a: I32; r: I32): I32 { return a + r; })\}")
+    out.s(" recv=\{apply_c1(2, fn(value: I32; r: I32): I32 { return value + r; })\}")
         .s("/\{apply_c1(r, fn(r: I32; ): I32 { return r * 2; })\}")
-        .s("/\{apply_c1(2, fn(a: I32; s: U8[]): I32 { return a + I32::s.len + R; })\}\n")
+        .s("/\{apply_c1(2, fn(value: I32; s: U8[]): I32 { return value + I32::s.len + R; })\}\n")
 
-priv fn ptr_lines(b: Str_builder$@, msg: U8[]) //< pointer arithmetic, counted in elements
+priv fn ptr_lines(out: Str_builder$@, msg: U8[]) //< pointer arithmetic, counted in elements
     // Pointer arithmetic ("Pointer arithmetic and implicit dereferencing" in
     // docs/SPEC-programming-language.md). **It counts in elements.** An implementation that counts
     // in bytes differs only for an element size other than 1, so it is checked on an array of
@@ -493,8 +498,8 @@ priv fn ptr_lines(b: Str_builder$@, msg: U8[]) //< pointer arithmetic, counted i
     hop: = runtime_divisor(3)
     // **Test both `+` and `-` between a pointer and an integer.** genllvm emits `-` as "subtract
     // from 0, then add", so `+` alone passes an implementation that drops the sign.
-    b.s("ptrstep=\{(cells[0]@ + hop)$\}/\{(cells[hop]@ - hop)$\}\n")
-    b.s("ptrdiff=\{cells[hop]@ - cells[0]@\}/\{(msg.ptr + hop) - msg.ptr\}\n")
+    out.s("ptrstep=\{(cells[0]@ + hop)$\}/\{(cells[hop]@ - hop)$\}\n")
+    out.s("ptrdiff=\{cells[hop]@ - cells[0]@\}/\{(msg.ptr + hop) - msg.ptr\}\n")
     // Caution: **Test the compound assignment that advances a pointer too.** genllvm emits it by a
     // path separate from the arithmetic (GEP). So even where `p = p + i` agrees, this one alone can
     // end up adding bytes to the address.
@@ -502,21 +507,24 @@ priv fn ptr_lines(b: Str_builder$@, msg: U8[]) //< pointer arithmetic, counted i
     walk += hop
     at_hop: = walk$
     walk -= hop
-    b.s("ptrwalk=\{at_hop\}/\{walk$\}\n")
+    out.s("ptrwalk=\{at_hop\}/\{walk$\}\n")
     // **Step by an unsigned amount past the signed range of its width.** genllvm hands the amount
     // to GEP, which reads it as signed: a U8 200 left narrow moves the pointer back 56 elements.
     wide_buf: U8[256] = ::{}
     far: = runtime_u8(200)
     $far_walk: = wide_buf[0]@
     far_walk += far
-    b.s("ptrwide=\{(wide_buf[0]@ + far) - wide_buf[0]@\}/\{(wide_buf[255]@ - far) - wide_buf[0]@\}")
+    out
+        .s("ptrwide=\{(wide_buf[0]@ + far) - wide_buf[0]@\}/\{(wide_buf[255]@ - far) - wide_buf[0]@\}")
         .s("/\{far_walk - wide_buf[0]@\}\n")
 
-priv fn global_cast_lines(b: Str_builder$@) //< the casts and choices folded in global constants
-    b.s("gcast=\{G_CAST_BACK\}/\{G_CAST_U16\}/\{G_CAST_REF\}/\{G_PICKED\}/\{G_PICKED_BUF.len\}")
+priv fn global_cast_lines(out: Str_builder$@) //< the casts and choices folded in global constants
+    out.s("gcast=\{G_CAST_BACK\}/\{G_CAST_U16\}/\{G_CAST_REF\}/\{G_PICKED\}/\{G_PICKED_BUF.len\}")
         .s(" gsz=\{G_CAST_SZ\}")
-    b.s(" glogic=\{G_AND\}/\{G_NOT_AND\}/\{G_OR\} gdiv=\{G_DIV_NEG\}/\{G_MOD_NEG\}/\{G_DIV_CHAIN\}")
-    b.s("/\{case_named(runtime_divisor(1))\}\{case_named(runtime_divisor(2))\}")
+    out
+        .s(" glogic=\{G_AND\}/\{G_NOT_AND\}/\{G_OR\} \
+            gdiv=\{G_DIV_NEG\}/\{G_MOD_NEG\}/\{G_DIV_CHAIN\}")
+    out.s("/\{case_named(runtime_divisor(1))\}\{case_named(runtime_divisor(2))\}")
 
 fn main(): Void!Exit_probe
     defer $b: = Str_builder()
@@ -593,11 +601,11 @@ raw-line-2""").s("<END>\n")
     b.s("fnptr=\{I32::sizeof(Unary_op)\}/\{I32::sizeof(Op_slot)\}/\{slot.op(21)\}\n")
     // Anonymous functions: passed directly / nested / as a struct literal's field / a binding with
     // a type annotation.
-    anon_slot: = Op_slot::{ .tag = 2, .op = fn(a: I32): I32 {
-        return a - 5;
+    anon_slot: = Op_slot::{ .tag = 2, .op = fn(value: I32): I32 {
+        return value - 5;
     } }
-    anon_bound: Unary_op = fn(a: I32): I32
-        return a * a
+    anon_bound: Unary_op = fn(value: I32): I32
+        return value * value
     // Closures with capture: one capture / two captures / Callable2 / reading a value rewritten
     // after the capture.
     base: = 100
@@ -628,11 +636,11 @@ raw-line-2""").s("<END>\n")
     holder_lo: = Holder<|I32|>::{ .v = 1 }
     b.s("genclosure=\{holder_hi.pick(5)\}/\{holder_lo.pick(5)\}\n")
     b
-        .s("closure0=\{apply_c1_nocap(6, fn(x: I32; ): I32 { return x * 11; })\}/\{I32::apply_slice(msl, fn(s: U8$[]; extra: Sz): Sz { return s.len + extra; })\}\n")
+        .s("closure0=\{apply_c1_nocap(6, fn(x: I32; ): I32 { return x * 11; })\}/\{I32::apply_slice(msl, fn(bytes: U8$[]; extra: Sz): Sz { return bytes.len + extra; })\}\n")
     b
         .s("closure=\{apply_c1(3, fn(x: I32; base: I32): I32 { return x + base; })\}/\{apply_c1(3, fn(x: I32; base: I32, step: I32): I32 { return x + base + step; })\}/\{apply_c2(3, 4, fn(x: I32, y: I32; step: I32): I32 { return (x + y) * step; })\}/\{apply_c1(1, late_cl)\}\n")
     b
-        .s("anonfn=\{apply_op(20, fn(a: I32): I32 { return a + 1; })\}/\{apply_op(3, fn(a: I32): I32 { return apply_op(a, fn(c: I32): I32 { return c * 3; }) + 1; })\}/\{anon_slot.op(9)\}/\{anon_bound(7)\}\n")
+        .s("anonfn=\{apply_op(20, fn(value: I32): I32 { return value + 1; })\}/\{apply_op(3, fn(value: I32): I32 { return apply_op(value, fn(value: I32): I32 { return value * 3; }) + 1; })\}/\{anon_slot.op(9)\}/\{anon_bound(7)\}\n")
     const LOCAL_CONST_OP: Unary_op = negate //< a global function pointer
         //< The mutable one checks that storing a new value takes effect (it is not folded to the
         //< initial value). The local `const` tests both the alias and the direct spelling as well

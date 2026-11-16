@@ -53,14 +53,14 @@ priv struct Named //< a `struct` or an `enum` the interface declares, in the ord
     node: Ast_node$@ //< its declaration, for its summary; null where none is found
 
 priv struct Walk //< what the interface declares, gathered before anything is written
-    c: Sema_ctx$@
+    ctx: Sema_ctx$@
     types: List<|Named|>$@
     decl_of: Map<|I32, Ast_node$@|>$@ //< a `struct`'s or `enum`'s type id -> its declaration
     site: Ast_node$@ //< the function being read, where a refusal is reported
 
 impl Walk
     priv fn strip(r: Self@, id: I32): I32 //< the type with its aliases resolved
-        return r.c.env.get_real_type(id)
+        return r.ctx.env.get_real_type(id)
 
     priv fn find(r: Self@, id: I32): Sz //< where `id` stands in `types`; -1 where absent
         for i in Range.asc(r.types.len)
@@ -70,21 +70,21 @@ impl Walk
 
     priv fn refuse(r: Self$@, what: U8[]) //<
         //< reports why the function being read cannot be written
-        r.c.clear_scratch()
+        r.ctx.clear_scratch()
             .s("'\{r.site.get_decl_id_text()\}' cannot be written into the interface ('--library'): \
                 \{what\}")
-        r.c.err(r.site, r.c.scratch.slice())
+        r.ctx.err(r.site, r.ctx.scratch.slice())
 
     fn note(r: Self$@, raw: I32, by_value: Bool, depth: Sz) //<
         //< It records the types `raw` names, a `struct` behind a pointer only as far as it is named
         if depth >= MAX_TYPE_WALK_DEPTH
             return
         id: = r.strip(raw)
-        switch r.c.env.get_info(id)
+        switch r.ctx.env.get_info(id)
         case .const_of(b)
             r.note(b, by_value, depth + 1)
         case .pointer(b)
-            if r.nameable(r.c.env.get_clean_real_type(b))
+            if r.nameable(r.ctx.env.get_clean_real_type(b))
                 r.note(b, false, depth + 1)
         case .fn_type(sig)
             r.note(sig.ret_id, true, depth + 1)
@@ -104,7 +104,7 @@ impl Walk
         name: = r.short_name(id)
         if name.len == 0
             // Only by value: behind a pointer an unnamed type is an address (`void *`).
-            why: = base_core.arena.text().s("it passes '").s(r.c.env.instance_key(id))
+            why: = base_core.arena.text().s("it passes '").s(r.ctx.env.instance_key(id))
                 .s("' by value. This generic type has no single name in C. Declare a plain struct \
                     with the same fields for the interface").take()
             r.refuse(why)
@@ -139,7 +139,7 @@ impl Walk
         if depth >= MAX_TYPE_WALK_DEPTH
             return false
         id: = r.strip(raw)
-        switch r.c.env.get_info(id)
+        switch r.ctx.env.get_info(id)
         case .const_of(b)
             return r.crosses(b, depth + 1)
         case .pointer
@@ -160,13 +160,13 @@ impl Walk
 
     priv fn short_name(r: Self$@, id: I32): U8[] //<
         //< A `struct`'s or `enum`'s name as declared; empty for a generic's instance or a slice
-        if r.c.env.instance_of(id).is_some() || r.c.env.is_slice(id)
+        if r.ctx.env.instance_of(id).is_some() || r.ctx.env.is_slice(id)
             return ""
-        return r.c.env.get_str(id).fqn_last()
+        return r.ctx.env.get_str(id).fqn_last()
 
     priv fn nameable(r: Self$@, id: I32): Bool //<
         //< Whether a pointer's target can be named in C; one that cannot is written `void`
-        switch r.c.env.get_info(id)
+        switch r.ctx.env.get_info(id)
         case .pointer
             return true
         case .fn_type
@@ -182,7 +182,7 @@ impl Walk
         scalar: = c_scalar(id)
         if scalar.len > 0
             return scalar
-        switch r.c.env.get_info(id)
+        switch r.ctx.env.get_info(id)
         case .struct_type
             return r.short_name(id)
         case .enum_type(def)
@@ -201,21 +201,21 @@ impl Walk
         if depth >= MAX_TYPE_WALK_DEPTH
             return
         id: = r.strip(raw)
-        switch r.c.env.get_info(id)
+        switch r.ctx.env.get_info(id)
         case .const_of(b)
-            if r.c.env.get_info(r.strip(b)).is_pointer()
+            if r.ctx.env.get_info(r.strip(b)).is_pointer()
                 r.c_decl(b, base_core.arena.text().s("const ").s(inner).take(), false, out,
                     depth + 1)
             else
                 r.c_decl(b, inner, true, out, depth + 1)
             return
         case .pointer(b)
-            base: = r.c.env.get_clean_real_type(b)
+            base: = r.ctx.env.get_clean_real_type(b)
             starred: = base_core.arena.text().s("*").s(inner).take()
             if r.nameable(base)
                 r.c_decl(b, starred, false, out, depth + 1)
             else
-                is_const: = r.c.env.get_info(r.strip(b)).is_const_of()
+                is_const: = r.ctx.env.get_info(r.strip(b)).is_const_of()
                 out.s("const " if is_const else "").s("void ").s(starred)
             return
         case .fn_type(sig)
@@ -237,7 +237,7 @@ impl Walk
         r.c_decl_leaf(r.c_name_of(id), inner, leaf_const, out)
 
     priv fn is_fn(r: Self@, id: I32): Bool //< whether it is a function pointer
-        switch r.c.env.get_info(r.c.env.get_clean_real_type(id))
+        switch r.ctx.env.get_info(r.ctx.env.get_clean_real_type(id))
         case .fn_type
             return true
         default
@@ -253,7 +253,7 @@ impl Walk
         if depth >= MAX_TYPE_WALK_DEPTH
             return
         id: = r.strip(raw)
-        switch r.c.env.get_info(id)
+        switch r.ctx.env.get_info(id)
         case .const_of(b)
             r.k_type(b, out, depth + 1)
             return
@@ -261,12 +261,12 @@ impl Walk
             inner: = r.strip(b)
             $pointee: = inner
             $mutable: = true
-            switch r.c.env.get_info(inner)
+            switch r.ctx.env.get_info(inner)
             case .const_of(bb)
                 pointee = bb
                 mutable = false
             default {}
-            if !r.nameable(r.c.env.get_clean_real_type(pointee))
+            if !r.nameable(r.ctx.env.get_clean_real_type(pointee))
                 out.s("Void")
             else if r.is_fn(pointee)
                 out.c('(')
@@ -293,7 +293,7 @@ impl Walk
             out.s(r.short_name(id))
             return
         default {}
-        out.s(r.c.env.get_str(id))
+        out.s(r.ctx.env.get_str(id))
 
 priv fn c_scalar(id: I32): U8[] //< a built-in type's C spelling; empty for any other
     return sema_type_env.BUILTIN_TYPES[id].c_name if sema_type_env.is_builtin(id) else ""
@@ -306,10 +306,10 @@ priv struct Export //< one `extern` function, as the interface writes it
     node: Ast_node$@
     doc: U8[]
 
-fn render(root: Ast_node$@, c: Sema_ctx$@, form: Form, out_path: U8[], parser: kspeg.Target$@):
+fn render(root: Ast_node$@, ctx: Sema_ctx$@, form: Form, out_path: U8[], parser: kspeg.Target$@):
     U8[] //<
-        //< The interface's text, or empty where a refusal was reported (`c.err`)
-    $walk: = Walk::{ .c = c,
+        //< The interface's text, or empty where a refusal was reported (`ctx.err`)
+    $walk: = Walk::{ .ctx = ctx,
         .types = base_core.arena.create(List<|Named|>(base_core.arena)),
         .decl_of = base_core.arena.create(Map<|I32, Ast_node$@|>(base_core.arena)), .site = null }
     $exports: = List<|Export|>(base_core.arena)
@@ -322,15 +322,15 @@ fn render(root: Ast_node$@, c: Sema_ctx$@, form: Form, out_path: U8[], parser: k
         if n.kind_id != .k_decl_fn || n.sym_ptr == null ||
             !(Sema_symbol$@::n.sym_ptr).flags.is_export
             continue
-        exports.push(Export::{ .node = n, .doc = summary_of(c, n) })
-    errors_before: = c.error_mark()
+        exports.push(Export::{ .node = n, .doc = summary_of(ctx, n) })
+    errors_before: = ctx.error_mark()
     for e in exports
         walk.site = e.node
         walk.note(ret_id_of(e.node), true, 0)
         for p in params_of(e.node)
             walk.note(p.type_id, true, 0)
     check_names(walk@, exports@)
-    if c.error_mark() > errors_before
+    if ctx.error_mark() > errors_before
         return ""
     switch form
     case .c_header
@@ -340,20 +340,20 @@ fn render(root: Ast_node$@, c: Sema_ctx$@, form: Form, out_path: U8[], parser: k
     case .none
         return ""
 
-priv fn summary_of(c: Sema_ctx$@, n: Ast_node$@): U8[] //< a declaration's `//<` summary
-    if n == null
+priv fn summary_of(ctx: Sema_ctx$@, node: Ast_node$@): U8[] //< a declaration's `//<` summary
+    if node == null
         return ""
-    return decl_summary(base_core.source_of(c.source_map, n.loc.file()), n)
+    return decl_summary(base_core.source_of(ctx.source_map, node.loc.file()), node)
 
-priv fn ret_id_of(n: Ast_node$@): I32 //< a function's return type; `Void` where none is written
-    type_node: = n.get_decl_type_node()
+priv fn ret_id_of(node: Ast_node$@): I32 //< a function's return type; `Void` where none is written
+    type_node: = node.get_decl_type_node()
     if type_node == null || type_node.type_id == 0
         return I32::sema_type_env.Builtin_type_id.void_type
     return type_node.type_id
 
-priv fn params_of(n: Ast_node$@): List<|Ast_node$@|> //< a function's parameters, in order
+priv fn params_of(node: Ast_node$@): List<|Ast_node$@|> //< a function's parameters, in order
     $out: = List<|Ast_node$@|>(base_core.arena)
-    for p in base_ast_ext.Param_cursor(n.get_fn_params(), false)
+    for p in base_ast_ext.Param_cursor(node.get_fn_params(), false)
         out.push(p)
     return out
 
@@ -366,7 +366,7 @@ priv fn check_names(walk: Walk$@, exports: List<|Export|>@) //<
         site: = t.node if t.node != null else walk.site
         claim(walk, seen@, site, t.name)
         if t.is_enum
-            switch walk.c.env.get_info(t.type_id)
+            switch walk.ctx.env.get_info(t.type_id)
             case .enum_type(def)
                 for v in def.variants_list
                     claim(walk, seen@, site,
@@ -375,10 +375,10 @@ priv fn check_names(walk: Walk$@, exports: List<|Export|>@) //<
 
 priv fn claim(walk: Walk$@, seen: Map<|U8[], Bool|>$@, site: Ast_node$@, name: U8[])
     if seen.get(name).unwrap_or(false)
-        walk.c.clear_scratch()
+        walk.ctx.clear_scratch()
             .s("'\{name\}' is declared twice in the interface ('--library'). C names a function, a \
                 type and an enum's constant in one space. Rename one of them")
-        walk.c.err(site, walk.c.scratch.slice())
+        walk.ctx.err(site, walk.ctx.scratch.slice())
         return
     seen.set(name, true)
 
@@ -418,23 +418,23 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>@, out_path: U8[]): U8[]
     out.s("#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n")
     for t in walk.types
         if t.is_enum
-            c_doc(summary_of(walk.c, t.node), "", out@)
-            switch walk.c.env.get_info(t.type_id)
+            c_doc(summary_of(walk.ctx, t.node), "", out@)
+            switch walk.ctx.env.get_info(t.type_id)
             case .enum_type(def)
                 render_c_enum(walk, t.name, def, out@)
             default {}
         else
             if !t.body
-                c_doc(summary_of(walk.c, t.node), "", out@)
+                c_doc(summary_of(walk.ctx, t.node), "", out@)
             out.s("typedef struct \{t.name\} \{t.name\};\n")
     out.c('\n')
     for t in bodies_in_order(walk)
-        c_doc(summary_of(walk.c, t.node), "", out@)
+        c_doc(summary_of(walk.ctx, t.node), "", out@)
         out.s("struct \{t.name\} {\n")
-        switch walk.c.env.get_info(t.type_id)
+        switch walk.ctx.env.get_info(t.type_id)
         case .struct_type(def)
             for f in def.fields_list
-                c_doc(summary_of(walk.c, f.node), "    ", out@)
+                c_doc(summary_of(walk.ctx, f.node), "    ", out@)
                 out.s("    ")
                 walk.c_decl(f.type_id, c_ident(f.name), false, out@, 0)
                 out.s(";\n")
@@ -475,11 +475,11 @@ priv fn visit_body(walk: Walk$@, id: I32, done: Map<|I32, Bool|>$@, out: List<|N
     at: = walk.find(id)
     if at < 0 || !walk.types.get(at).body
         return
-    switch walk.c.env.get_info(id)
+    switch walk.ctx.env.get_info(id)
     case .struct_type(def)
         for f in def.fields_list
-            inner: = walk.c.env.get_clean_real_type(f.type_id)
-            switch walk.c.env.get_info(inner)
+            inner: = walk.ctx.env.get_clean_real_type(f.type_id)
+            switch walk.ctx.env.get_info(inner)
             case .struct_type
                 visit_body(walk, inner, done, out, depth + 1)
             default {}
@@ -492,9 +492,9 @@ priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def@, ou
     //< them (`emit_enum_decl` in `../gen/c/types.kspl`).
     out.s("typedef ").s(c_scalar(def.base_type_id)).s(" \{name\};\n")
     if !def.tags_fit_i32()
-        unsigned: = walk.c.env.is_unsigned(def.base_type_id)
+        unsigned: = walk.ctx.env.is_unsigned(def.base_type_id)
         for v in def.variants_list
-            c_doc(summary_of(walk.c, v.node), "", out)
+            c_doc(summary_of(walk.ctx, v.node), "", out)
             out.s("#define \{name\}_\{v.name\} ((\{name\})")
             if unsigned
                 out.s("\{U64::v.tag_value\}ULL)\n")
@@ -505,7 +505,7 @@ priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def@, ou
     out.s("enum {\n")
     for i in Range.asc(def.variants_list.len)
         v: = def.variants_list.get(i)
-        c_doc(summary_of(walk.c, v.node), "    ", out)
+        c_doc(summary_of(walk.ctx, v.node), "    ", out)
         out.s("    \{name\}_\{v.name\} = \{v.tag_value\}")
             .s(",\n" if i + 1 < def.variants_list.len else "\n")
     out.s("};\n\n")
@@ -519,23 +519,23 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>@, root: Ast_node$@, ou
     for t in walk.types
         if !t.body
             continue
-        doc: = summary_of(walk.c, t.node)
-        switch walk.c.env.get_info(t.type_id)
+        doc: = summary_of(walk.ctx, t.node)
+        switch walk.ctx.env.get_info(t.type_id)
         case .enum_type(def)
             out.s("pub enum \{t.name\}")
             if def.base_type_id != I32::sema_type_env.Builtin_type_id.i32_type
-                out.s(": ").s(walk.c.env.get_str(def.base_type_id))
+                out.s(": ").s(walk.ctx.env.get_str(def.base_type_id))
             out.s(" {").s(kspl_doc(doc)).c('\n')
             for v in def.variants_list
                 out.s("  \{v.name\} = \{v.tag_value\};")
-                    .s(kspl_doc(summary_of(walk.c, v.node))).c('\n')
+                    .s(kspl_doc(summary_of(walk.ctx, v.node))).c('\n')
         case .struct_type(def)
             out.s("pub struct \{t.name\} {").s(kspl_doc(doc)).c('\n')
             for f in def.fields_list
                 out.s("  ").s("pub " if f.vis == sema_type_scope.Visibility.public else "")
                     .s(f.name).s(": ")
                 walk.k_type(f.type_id, out@, 0)
-                out.c(';').s(kspl_doc(summary_of(walk.c, f.node))).c('\n')
+                out.c(';').s(kspl_doc(summary_of(walk.ctx, f.node))).c('\n')
         default {}
         out.s("}\n\n")
     // The outside libraries the library itself names: a KSPL caller's `--emit-libs` takes them in.
@@ -549,7 +549,7 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>@, root: Ast_node$@, ou
     for t in walk.types
         if !t.body
             out.s("pub extern struct \{t.name\};")
-                .s(kspl_doc(summary_of(walk.c, t.node))).c('\n')
+                .s(kspl_doc(summary_of(walk.ctx, t.node))).c('\n')
     for e in exports
         out.s("pub extern fn ").s(e.node.get_decl_id_text()).c('(')
         ps: = params_of(e.node)

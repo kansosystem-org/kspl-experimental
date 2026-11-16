@@ -39,7 +39,7 @@ function ksmdChoices(ks) {
       const byName = new Map(list.map((one) => [lower(one[0]), one]));
       wrap.values.forEach((row, r) => {
         const v = row[c];
-        const one = v && v[0] === 2 ? byName.get(lower(String(v[1]))) : undefined;
+        const one = v && v[0] === ks.CELL.TEXT ? byName.get(lower(String(v[1]))) : undefined;
         const off = v && v.length > 1 && !one;
         const el = ks.table.cellAt(wrap, r, c);
         if (!el) return;

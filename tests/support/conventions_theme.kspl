@@ -66,8 +66,8 @@ priv const LUM_WEIGHT: F64[_] = ::{ 0.2126, 0.7152, 0.0722 } //< the contrast's 
     //< browser keeps that readable.
     //< Note: The threshold is 4.5:1, the same as WCAG 2.2's 1.4.3 for text of an ordinary size.
 
-priv fn srgb_part(v: F64): F64
-    return v / 12.92 if v <= 0.03928 else math.pow((v + 0.055) / 1.055, 2.4)
+priv fn srgb_part(value: F64): F64
+    return value / 12.92 if value <= 0.03928 else math.pow((value + 0.055) / 1.055, 2.4)
 
 priv fn luminance(hex: U8[]): F64 //< the relative luminance of a `#rrggbb`
     //< Caution: **Pass it six hex digits and nothing else**; the caller filters out
@@ -89,23 +89,32 @@ priv fn contrast_x100(fg: U8[], bg: U8[]): I64 //<
     lo: = math.min(a, b)
     return I64::((hi + 0.05) / (lo + 0.05) * 100.0)
 
-priv fn is_hex6(v: U8[]): Bool
-    if v.len != 7 || v[0] != '#'
+priv fn is_hex6(text: U8[]): Bool
+    if text.len != 7 || text[0] != '#'
         return false
     for k in Range.asc(6)
-        if v[1 + k].hex_val().is_none()
+        if text[1 + k].hex_val().is_none()
             return false
     return true
 
 // The pairs of colours checked.
 // Caution: **List only pairs that really overlap** (a pair that never meets adds a finding
 // nobody can fix).
-// **List them two at a time, the foreground colour then the background's.**
+// **List them two at a time, the foreground colour then the background's.** A pair is measured in
+// each file that holds both roles: ksmd's page (`ksmd/port/web/page.css`) first, then ksagent's
+// chat page (`ksagent/page/chat.css`).
 priv const THEME_PAIR: U8[][_] = ::{ "--ink", "--paper", "--ink", "--soft", "--ink", "--notice",
-    "--muted", "--paper", "--muted", "--soft", "--error", "--paper", "--paper", "--mark" }
+    "--muted", "--paper", "--muted", "--soft", "--error", "--paper", "--paper", "--mark", "--text",
+    "--bg", "--text", "--side", "--text", "--bubble", "--text", "--code", "--muted", "--bg",
+    "--accent", "--bg", "--ok", "--bg", "--warn", "--bg", "--bad", "--bg", "--on-accent",
+    "--accent" }
 
-priv fn value_of(names: List<|U8[]|>@, vals: List<|U8[]|>@, want: U8[]): U8[]
-    for k in Range.asc(names.len)
+priv fn value_of(names: List<|U8[]|>@, vals: List<|U8[]|>@, want: U8[]): U8[] //<
+    //< The value the role holds last
+    //< Caution: **Search from the end.** The dark scheme's block sets the roles again after the
+    //< light one, as the browser reads them; the first value found would measure the light scheme
+    //< twice.
+    for k in Range.desc(names.len)
         if names.get(k).equals(want)
             return vals.get(k)
     return ""
@@ -131,6 +140,12 @@ priv fn theme_defects(rel: U8[], names: List<|U8[]|>@, vals: List<|U8[]|>@,
         k += 2
     return measured
 
+priv fn has_hex6(vals: List<|U8[]|>@): Bool //< whether one value is a written `#rrggbb`
+    for k in Range.asc(vals.len)
+        if is_hex6(vals.get(k))
+            return true
+    return false
+
 priv fn check_theme_contrast(arena: Arena$@) //<
     //< The pairs in the roles' block (`:root {`) that hold written colours reach 4.5:1
     //< Caution: **Fail where not one pair is measured**, or roles all moved to the environment's
@@ -151,7 +166,15 @@ priv fn check_theme_contrast(arena: Arena$@) //<
             if !inside
                 continue
             if t.find_str("}").is_some()
-                measured += theme_defects(rel, names@, vals@, bad@, arena)
+                here: = theme_defects(rel, names@, vals@, bad@, arena)
+                // **A block of written colours that no pair names is a finding**, so a page's
+                // roles left out of `THEME_PAIR`, or renamed, are not passed over.
+                if here == 0 && has_hex6(vals@)
+                    bad
+                        .push(arena.text().s(rel)
+                        .s(": a `:root {` block holds written colours, and no pair names them")
+                        .take())
+                measured += here
                 inside = false
                 continue
             if !t.starts_with("--")
@@ -168,7 +191,7 @@ priv fn check_theme_contrast(arena: Arena$@) //<
             .push("not one pair of written colours was measured (`:root {` in \
                 ksmd/port/web/page.css)")
     verdict.check_list("the letters against the ground are 4.5:1 or more", seen, "colours", bad@,
-        "deepen the role's colour (`:root` in ksmd/port/web/page.css)")
+        "deepen the role's colour (`:root` in the file named), or name its roles in `THEME_PAIR`")
 
 // The samples for the judgment of whether a line holds a colour.
 // Caution: **Include both a role's name and a selector that looks like hex but is not.** Otherwise

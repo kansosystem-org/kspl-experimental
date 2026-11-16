@@ -414,18 +414,18 @@ impl Editor
         b.invisible = on
         ed.put_whole(gap_spot(block), gap_spot(block + 1), b)!
 
-    fn put_whole(ed: Self$@, s: Spot, e: Spot, b: Block): Void!Refused //<
-        //< The whole block `b` in place of what stands from `s` to `e`, as one step
+    fn put_whole(ed: Self$@, start: Spot, end: Spot, block: Block): Void!Refused //<
+        //< The whole block `block` in place of what stands from `start` to `end`, as one step
         defer scratch: = Arena(16 * 1024)
-        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        $w: = ed.work(start, end, start.block, end_block(end), scratch)
         $frag: = List<|Unit|>(scratch)
-        frag.push(whole_unit(b, scratch))
+        frag.push(whole_unit(block, scratch))
         r: = replace(w@, frag@, scratch)
         $tx: = begin(ed.selection(), ed.arena)
         ed.commit(w@, tx@, r.caret, r.caret, scratch)!
         ed.finish(tx, .other, false)!
 
-    fn insert_whole(ed: Self$@, b: Block): Void!Refused //<
+    fn insert_whole(ed: Self$@, block: Block): Void!Refused //<
         //< A whole block in place of the selection, with an empty paragraph on each side
         s: = ed.start_spot()
         e: = ed.end_spot()
@@ -433,7 +433,7 @@ impl Editor
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
         $frag: = List<|Unit|>(scratch)
         frag.push(blank_unit(paragraph_style(), scratch))
-        frag.push(whole_unit(b, scratch))
+        frag.push(whole_unit(block, scratch))
         frag.push(blank_unit(paragraph_style(), scratch))
         r: = replace(w@, frag@, scratch)
         caret: = Pos::{ .unit = r.last, .offset = 0 }
@@ -471,9 +471,10 @@ impl Editor
     fn end_spot(ed: Self@): Spot
         return ed.focus if !later(ed.anchor, ed.focus) else ed.anchor
 
-    fn typed_marks(ed: Self@, w: Work@): Marks //< the marks text typed at the start of `w` takes
-        unit: = w.units[w.start.unit]@
-        return ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
+    fn typed_marks(ed: Self@, work: Work@): Marks //<
+        //< the marks text typed at the start of `work` takes
+        unit: = work.units[work.start.unit]@
+        return ed.typing if ed.marked else marks_before(unit.segs@, work.start.offset)
 
     fn finish(ed: Self$@, $tx: Transaction, kind: Step_kind, join: Bool): Void!Refused //<
         //< Records a transaction, or joins it to the last when `join` says it continues that step
@@ -532,39 +533,41 @@ impl Editor
                 return true
         return false
 
-    fn commit(ed: Self$@, w: Work$@, tx: Transaction$@, anchor: Pos, focus: Pos, scratch: Arena$@):
-        Void!Refused //<
+    fn commit(ed: Self$@, work: Work$@, tx: Transaction$@, anchor: Pos, focus: Pos,
+        scratch: Arena$@): Void!Refused //<
             //< Settles a work's units into blocks, puts them in the document and moves the caret
-        got: = settle(ed.doc@, w.units@, w.from, ed.arena, scratch) catch
-            throw .no_read_back
+        got: =
+            settle(ed.doc@, work.units@, work.from, ed.arena, scratch) catch
+                throw .no_read_back
         $gone: = List<|Sz|>(scratch)
-        for b in Range(w.from, w.to, 1)
+        for b in Range(work.from, work.to, 1)
             block: = ed.doc.blocks.get(b)
             if block.kind == .table && !shows_table(got.blocks@, block.first)
                 gone.push(block.first)
         if gone.len == 0
-            ed.apply(w, tx, got@, anchor, focus)
+            ed.apply(work, tx, got@, anchor, focus)
             return
         // A table whose block goes is emptied, so no reference or new name finds it.
         before: = capture(ed.doc@, scratch)
-        for u in gone
-            edit.remove_table(ed.doc@, u, ed.arena) catch why
+        for table in gone
+            edit.remove_table(ed.doc@, table, ed.arena) catch why
                 throw .table(why)
-        ed.apply(w, tx, got@, anchor, focus)
+        ed.apply(work, tx, got@, anchor, focus)
         record_tables(ed.doc@, before@, tx, ed.arena)
         ed.change.tables = true
         ed.change.any = true
 
-    fn apply(ed: Self$@, w: Work$@, tx: Transaction$@, got: Settled@, anchor: Pos, focus: Pos) //<
+    fn apply(ed: Self$@, work: Work$@, tx: Transaction$@, got: Settled@, anchor: Pos, focus: Pos) //<
         //< Puts settled blocks in the document and moves the caret
-        if w.to > w.from || got.blocks.len > 0
-            was: = blocks_size(ed.doc@, ed.doc.blocks@, w.from, w.to)
-            replace_blocks(ed.doc@, tx, w.from, w.to - w.from, got.blocks@, ed.change@, ed.arena)
+        if work.to > work.from || got.blocks.len > 0
+            was: = blocks_size(ed.doc@, ed.doc.blocks@, work.from, work.to)
+            replace_blocks(ed.doc@, tx, work.from, work.to - work.from, got.blocks@, ed.change@,
+                ed.arena)
             tx.grown += blocks_size(ed.doc@, got.blocks@, 0, got.blocks.len) - was
         ed.anchor = spot_of(got, anchor)
         ed.focus = spot_of(got, focus)
         if ed.focus.place != .text
-            ed.gap = w.units[focus.unit].style
+            ed.gap = work.units[focus.unit].style
         ed.marked = false
 
     priv fn can_join(ed: Self@, kind: Step_kind, at: Sz, removed: Sz): Bool //<
@@ -576,44 +579,44 @@ impl Editor
             last.cells.len == 0 && last.pieces.len == 0 && last.columns.len == 0 &&
             last.blocks[0].at == at && last.blocks[0].count == removed
 
-    priv fn restore(ed: Self$@, s: Selection) //< the selection an undo or a redo returns to
-        ed.anchor = s.anchor
-        ed.focus = s.focus
-        ed.gap = s.gap
+    priv fn restore(ed: Self$@, selection: Selection) //< the selection an undo or a redo returns to
+        ed.anchor = selection.anchor
+        ed.focus = selection.focus
+        ed.gap = selection.gap
         ed.joinable = false
         ed.marked = false
 
-    fn restyle(ed: Self$@, w: Work$@, scratch: Arena$@): Void!Refused //<
+    fn restyle(ed: Self$@, work: Work$@, scratch: Arena$@): Void!Refused //<
         //< Commits a work whose units changed kind or marks, keeping the selection's two ends
         $tx: = begin(ed.selection(), ed.arena)
         anchor_first: = !later(ed.anchor, ed.focus)
-        ed.commit(w, tx@, w.start if anchor_first else w.end, w.end if anchor_first else w.start,
-            scratch)!
+        ed.commit(work, tx@, work.start if anchor_first else work.end,
+            work.end if anchor_first else work.start, scratch)!
         ed.finish(tx, .other, false)!
 
-    priv fn split(ed: Self$@, w: Work$@, out_of_code: Bool, scratch: Arena$@): Void!Refused //<
+    priv fn split(ed: Self$@, work: Work$@, out_of_code: Bool, scratch: Arena$@): Void!Refused //<
         //< Replaces the selection with a line end: the text after it starts a new block
         //< After a heading's last word, or out of code, the new block is a paragraph. At the start
         //< of a block, the caret moves to the gap that opens before it.
         $frag: = List<|Unit|>(scratch)
         frag.push(blank_unit(paragraph_style(), scratch))
         frag.push(blank_unit(paragraph_style(), scratch))
-        heading: = w.units[w.start.unit].style.kind == .heading
-        r: = replace(w, frag@, scratch)
+        heading: = work.units[work.start.unit].style.kind == .heading
+        r: = replace(work, frag@, scratch)
         if r.tail == 0 && (heading || out_of_code)
-            w.units[r.last].style = paragraph_style()
+            work.units[r.last].style = paragraph_style()
         // A note stays on one of the two parts: the one that keeps the text before the split, or
         // the text itself where the split stands at its start.
         if r.first != r.last
-            w.units[r.last if r.head > 0 else r.first].style.note = ""
+            work.units[r.last if r.head > 0 else r.first].style.note = ""
             // The new checklist item a split starts is not ticked yet.
-            if w.units[r.last].style.check == .done && r.head > 0
-                w.units[r.last].style.check = .open
+            if work.units[r.last].style.check == .done && r.head > 0
+                work.units[r.last].style.check = .open
         caret: =
             (Pos::{ .unit = r.first, .offset = 0 } if r.head == 0 && r.tail > 0
             else Pos::{ .unit = r.last, .offset = 0 })
         $tx: = begin(ed.selection(), ed.arena)
-        ed.commit(w, tx@, caret, caret, scratch)!
+        ed.commit(work, tx@, caret, caret, scratch)!
         ed.finish(tx, .other, false)!
 
     fn remove_block(ed: Self$@, block: Sz): Void!Refused //<
@@ -640,10 +643,10 @@ impl Editor
             last: = ed.history.done[ed.history.done.len - 1]@
             last.after = ed.selection()
 
-    fn delete_range(ed: Self$@, s: Spot, e: Spot, kind: Step_kind): Void!Refused //<
+    fn delete_range(ed: Self$@, start: Spot, end: Spot, kind: Step_kind): Void!Refused //<
         //< Removes everything between two spots, joining the text on either side
         defer scratch: = Arena(16 * 1024)
-        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        $w: = ed.work(start, end, start.block, end_block(end), scratch)
         $frag: = List<|Unit|>(scratch)
         frag.push(blank_unit(paragraph_style(), scratch))
         r: = replace(w@, frag@, scratch)
@@ -652,18 +655,18 @@ impl Editor
         ed.commit(w@, tx@, r.caret, r.caret, scratch)!
         ed.finish(tx, kind, join)!
 
-    priv fn lift_or_join(ed: Self$@, p: Spot, scratch: Arena$@): Void!Refused //<
+    priv fn lift_or_join(ed: Self$@, spot: Spot, scratch: Arena$@): Void!Refused //<
         //< Backspace at the start of a block's text
-        if p.item < ed.doc.blocks.get(p.block).count &&
-            ed.doc.blocks.get(p.block).kind == .list
-            item: = ed.doc.items.get(ed.doc.blocks.get(p.block).first + p.item)
+        if spot.item < ed.doc.blocks.get(spot.block).count &&
+            ed.doc.blocks.get(spot.block).kind == .list
+            item: = ed.doc.items.get(ed.doc.blocks.get(spot.block).first + spot.item)
             if item.depth > 0
                 ed.indent(false)!
                 return
             ed.set_kind(paragraph_style())!
             return
-        if previous: = ed.previous_end(p, scratch)
-            ed.delete_range(previous, p, .other)!
+        if previous: = ed.previous_end(spot, scratch)
+            ed.delete_range(previous, spot, .other)!
 
     fn select_beside(ed: Self$@, block: Sz, after: Bool) //<
         //< Puts the caret beside a block, as an arrow key past a table's last or first row leaves it
@@ -678,93 +681,97 @@ impl Editor
             to = spot
         ed.select(to, to)
 
-    priv fn blank_beside(ed: Self@, p: Spot, backward: Bool, scratch: Arena$@): Sz? //<
+    priv fn blank_beside(ed: Self@, spot: Spot, backward: Bool, scratch: Arena$@): Sz? //<
         //< The blank line right before the caret (`backward`) or right after it, if one stands there
         //< The caret stands in a gap beside it, or at the edge of the text beside it.
         $at: Sz = -1
-        if p.place == .block_gap
-            at = p.block - 1 if backward else p.block
-        else if p.place == .text
-            b: = ed.doc.blocks.get(p.block)
+        if spot.place == .block_gap
+            at = spot.block - 1 if backward else spot.block
+        else if spot.place == .text
+            b: = ed.doc.blocks.get(spot.block)
             last: = b.count - 1 if b.kind == .list else 0
-            if backward && p.offset == 0 && p.item == 0
-                at = p.block - 1
-            else if !backward && p.item == last && p.offset == ed.text_at(p, scratch).len
-                at = p.block + 1
+            if backward && spot.offset == 0 && spot.item == 0
+                at = spot.block - 1
+            else if !backward && spot.item == last &&
+                spot.offset == ed.text_at(spot, scratch).len
+                at = spot.block + 1
         if at < 0 || at >= ed.doc.blocks.len || ed.doc.blocks.get(at).kind != .blank
             return .none
         return .some(at)
 
-    priv fn step_out_of_gap(ed: Self$@, p: Spot, backward: Bool) //<
+    priv fn step_out_of_gap(ed: Self$@, caret: Spot, backward: Bool) //<
         //< Backspace in a gap moves the caret to the end of the text before it; Delete, to the start
         //< of the text after it
         defer scratch: = Arena(16 * 1024)
         $to: Spot? = .none
         if backward
-            to = ed.previous_end(p, scratch)
+            to = ed.previous_end(caret, scratch)
         else
-            to = ed.next_start(p)
+            to = ed.next_start(caret)
         if spot: = to
             ed.select(spot, spot)
 
-    priv fn previous_end(ed: Self@, p: Spot, scratch: Arena$@): Spot? //<
+    priv fn previous_end(ed: Self@, spot: Spot, scratch: Arena$@): Spot? //<
         //< The end of the text unit before a spot, when one stands right before it
-        if p.place != .block_gap && p.item > 0
-            at: = text_spot(p.block, p.item - 1, 0)
+        if spot.place != .block_gap && spot.item > 0
+            at: = text_spot(spot.block, spot.item - 1, 0)
             return .some(at_offset(at, ed.text_at(at, scratch).len))
-        if p.block == 0
+        if spot.block == 0
             return .none
-        b: = ed.doc.blocks.get(p.block - 1)
+        b: = ed.doc.blocks.get(spot.block - 1)
         if !is_text_block(b.kind)
             return .none
-        at: = text_spot(p.block - 1, b.count - 1 if b.kind == .list else 0, 0)
+        at: = text_spot(spot.block - 1, b.count - 1 if b.kind == .list else 0, 0)
         return .some(at_offset(at, ed.text_at(at, scratch).len))
 
-    priv fn next_start(ed: Self@, p: Spot): Spot? //< the start of the text unit after a spot
-        if p.place != .block_gap && p.block < ed.doc.blocks.len
-            b: = ed.doc.blocks.get(p.block)
-            next_item: = p.item + 1 if p.place == .text else p.item
+    priv fn next_start(ed: Self@, spot: Spot): Spot? //< the start of the text unit after a spot
+        if spot.place != .block_gap && spot.block < ed.doc.blocks.len
+            b: = ed.doc.blocks.get(spot.block)
+            next_item: = spot.item + 1 if spot.place == .text else spot.item
             if b.kind == .list && next_item < b.count
-                return .some(text_spot(p.block, next_item, 0))
-        next: = p.block if p.place == .block_gap else p.block + 1
+                return .some(text_spot(spot.block, next_item, 0))
+        next: = spot.block if spot.place == .block_gap else spot.block + 1
         if next < ed.doc.blocks.len && is_text_block(ed.doc.blocks.get(next).kind)
             return .some(text_spot(next, 0, 0))
         return .none
 
-    fn text_at(ed: Self@, p: Spot, arena: Arena$@): U8[] //< the visible text of a spot's unit
+    fn text_at(ed: Self@, spot: Spot, arena: Arena$@): U8[] //< the visible text of a spot's unit
         $units: = List<|Unit|>(arena)
-        gather(ed.doc@, p.block, p.block + 1, units@, arena)
-        return visible(units[p.item].segs@, arena)
+        gather(ed.doc@, spot.block, spot.block + 1, units@, arena)
+        return visible(units[spot.item].segs@, arena)
 
-    priv fn valid(ed: Self@, p: Spot): Spot //< the spot, or the nearest gap where it names nothing
+    priv fn valid(ed: Self@, spot: Spot): Spot //<
+        //< the spot, or the nearest gap where it names nothing
         n: = ed.doc.blocks.len
-        if p.block < 0 || p.block > n || p.block == n && p.place != .block_gap
+        if spot.block < 0 || spot.block > n || spot.block == n && spot.place != .block_gap
             return gap_spot(n)
-        if p.place == .block_gap
-            return gap_before(ed.doc@, p.block)
-        b: = ed.doc.blocks.get(p.block)
+        if spot.place == .block_gap
+            return gap_before(ed.doc@, spot.block)
+        b: = ed.doc.blocks.get(spot.block)
         if !is_text_block(b.kind)
-            return gap_before(ed.doc@, p.block)
-        if b.kind != .list && (p.item != 0 || p.place == .item_gap)
-            return gap_spot(p.block)
+            return gap_before(ed.doc@, spot.block)
+        if b.kind != .list && (spot.item != 0 || spot.place == .item_gap)
+            return gap_spot(spot.block)
         if b.kind == .list &&
-            (p.item < 0 || p.item > b.count || p.item == b.count && p.place == .text)
-            return gap_spot(p.block)
-        if p.place == .item_gap
-            return Spot::{ .place = .item_gap, .block = p.block, .item = p.item, .offset = 0 }
+            (spot.item < 0 || spot.item > b.count ||
+            spot.item == b.count && spot.place == .text)
+            return gap_spot(spot.block)
+        if spot.place == .item_gap
+            return Spot::{ .place = .item_gap, .block = spot.block, .item = spot.item,
+                .offset = 0 }
         defer scratch: = Arena(16 * 1024)
-        shown: = ed.text_at(p, scratch)
-        $q: = p
+        shown: = ed.text_at(spot, scratch)
+        $q: = spot
         if q.offset < 0 || q.offset > shown.len
             q.offset = shown.len
         for q.offset > 0 && q.offset < shown.len && (shown[q.offset] & 0xC0U8) == 0x80U8
             q.offset -= 1
         return q
 
-    priv fn gap_style(ed: Self@, p: Spot): Style //< the kind a new block in a gap takes
-        if p.place == .item_gap
-            b: = ed.doc.blocks.get(p.block)
-            near: = p.item - 1 if p.item > 0 else 0
+    priv fn gap_style(ed: Self@, spot: Spot): Style //< the kind a new block in a gap takes
+        if spot.place == .item_gap
+            b: = ed.doc.blocks.get(spot.block)
+            near: = spot.item - 1 if spot.item > 0 else 0
             item: = ed.doc.items.get(b.first + near)
             $style: = paragraph_style()
             style.kind = .list
@@ -773,91 +780,92 @@ impl Editor
             return style
         return paragraph_style()
 
-    fn work(ed: Self$@, s: Spot, e: Spot, from: Sz, $to: Sz, scratch: Arena$@): Work //<
+    fn work(ed: Self$@, start: Spot, end: Spot, from: Sz, $to: Sz, scratch: Arena$@): Work //<
         //< Blocks `from` to `to` as units, with an empty unit standing in each gap the selection's
         //< ends are in
         if to < from
             to = from
         $w: = Work::{ .from = from, .to = to, .units = List<|Unit|>(scratch),
-            .start = Pos::{ .unit = 0, .offset = s.offset },
-            .end = Pos::{ .unit = 0, .offset = e.offset } }
+            .start = Pos::{ .unit = 0, .offset = start.offset },
+            .end = Pos::{ .unit = 0, .offset = end.offset } }
         $starts: = List<|Sz|>(scratch)
         for b in Range(from, to, 1)
             starts.push(w.units.len)
             gather(ed.doc@, b, b + 1, w.units@, scratch)
         starts.push(w.units.len)
         // The end's empty unit goes in first: it stands at or after the start's place.
-        w.start.unit = unit_index(s, from, starts@)
-        w.end.unit = unit_index(e, from, starts@)
-        if e.place != .text
-            w.units.insert(w.end.unit, blank_unit(ed.gap_style_at(e), scratch))
-        if s.place == .text
+        w.start.unit = unit_index(start, from, starts@)
+        w.end.unit = unit_index(end, from, starts@)
+        if end.place != .text
+            w.units.insert(w.end.unit, blank_unit(ed.gap_style_at(end), scratch))
+        if start.place == .text
             return w
-        if same_spot(s, e)
+        if same_spot(start, end)
             w.start.unit = w.end.unit
             return w
-        w.units.insert(w.start.unit, blank_unit(ed.gap_style_at(s), scratch))
+        w.units.insert(w.start.unit, blank_unit(ed.gap_style_at(start), scratch))
         w.end.unit += 1
         return w
 
-    priv fn gap_style_at(ed: Self@, p: Spot): Style //< the kind of the empty unit standing in a gap
-        if same_spot(p, ed.focus)
+    priv fn gap_style_at(ed: Self@, spot: Spot): Style //<
+        //< the kind of the empty unit standing in a gap
+        if same_spot(spot, ed.focus)
             return ed.gap
-        return ed.gap_style(p)
+        return ed.gap_style(spot)
 
-fn later(a: Spot, b: Spot): Bool //< whether `a` stands after `b` in the document
-    if a.block != b.block
-        return a.block > b.block
-    ka: = order_key(a)
-    kb: = order_key(b)
+fn later(left: Spot, right: Spot): Bool //< whether `left` stands after `right` in the document
+    if left.block != right.block
+        return left.block > right.block
+    ka: = order_key(left)
+    kb: = order_key(right)
     if ka != kb
         return ka > kb
-    return a.offset > b.offset
+    return left.offset > right.offset
 
-fn end_block(e: Spot): Sz //< one past the last block a spot reaches into
-    return e.block if e.place == .block_gap else e.block + 1
+fn end_block(spot: Spot): Sz //< one past the last block a spot reaches into
+    return spot.block if spot.place == .block_gap else spot.block + 1
 
-priv fn order_key(p: Spot): Sz //< a gap before a block comes first, then items in order
-    switch p.place
+priv fn order_key(spot: Spot): Sz //< a gap before a block comes first, then items in order
+    switch spot.place
     case .block_gap
         return -1
     case .item_gap
-        return p.item * 2
+        return spot.item * 2
     case .text
-        return p.item * 2 + 1
+        return spot.item * 2 + 1
 
-priv fn unit_index(p: Spot, from: Sz, starts: List<|Sz|>@): Sz
+priv fn unit_index(spot: Spot, from: Sz, starts: List<|Sz|>@): Sz
     base: =
-        starts[p.block - from] if p.block - from < starts.len else starts[starts.len - 1]
-    return base if p.place == .block_gap else base + p.item
+        starts[spot.block - from] if spot.block - from < starts.len else starts[starts.len - 1]
+    return base if spot.place == .block_gap else base + spot.item
 
-priv fn spot_of(got: Settled@, p: Pos): Spot //< where a unit's place landed after settling
-    $s: = got.spots[p.unit]
+priv fn spot_of(got: Settled@, pos: Pos): Spot //< where a unit's place landed after settling
+    $s: = got.spots[pos.unit]
     if s.place == .text
-        s.offset = p.offset
+        s.offset = pos.offset
     return s
 
-priv fn at_offset($p: Spot, offset: Sz): Spot
-    p.offset = offset
-    return p
+priv fn at_offset($spot: Spot, offset: Sz): Spot
+    spot.offset = offset
+    return spot
 
-priv fn top_marker(doc: Document@, b: Sz, ordered: Bool): Bool //<
-    //< Whether block `b` is a list whose top level has that marker
-    block: = doc.blocks.get(b)
+priv fn top_marker(doc: Document@, index: Sz, ordered: Bool): Bool //<
+    //< Whether block `index` is a list whose top level has that marker
+    block: = doc.blocks.get(index)
     return block.kind == .list && doc.items.get(block.first).ordered == ordered
 
-fn replace(w: Work$@, frag: List<|Unit|>$@, scratch: Arena$@): Replaced //<
+fn replace(work: Work$@, frag: List<|Unit|>$@, scratch: Arena$@): Replaced //<
     //< Puts the fragment's units in place of everything from the work's start to its end
     //< The first unit takes the text before the start, and the kind of the start's unit. The last
     //< takes the text after the end; with two or more, it takes the kind of the end's unit.
-    s: = w.start
-    e: = w.end
+    s: = work.start
+    e: = work.end
     $head: = List<|Seg|>(scratch)
-    cut(w.units[s.unit].segs@, 0, s.offset, head@)
+    cut(work.units[s.unit].segs@, 0, s.offset, head@)
     $tail: = List<|Seg|>(scratch)
-    cut(w.units[e.unit].segs@, e.offset, length(w.units[e.unit].segs@), tail@)
-    s_style: = w.units[s.unit].style
-    e_style: = w.units[e.unit].style
+    cut(work.units[e.unit].segs@, e.offset, length(work.units[e.unit].segs@), tail@)
+    s_style: = work.units[s.unit].style
+    e_style: = work.units[e.unit].style
     n: = frag.len
     for k in Range.asc(n)
         f: = frag[k]@
@@ -871,15 +879,15 @@ fn replace(w: Work$@, frag: List<|Unit|>$@, scratch: Arena$@): Replaced //<
     frag[0].segs = first
     frag[n - 1].segs.push_all(tail.slice())
     for _ in Range(s.unit, e.unit + 1, 1)
-        w.units.remove_at(s.unit)
+        work.units.remove_at(s.unit)
     for k in Range.asc(n)
-        w.units.insert(s.unit + k, frag[k])
+        work.units.insert(s.unit + k, frag[k])
         if !frag[k].whole
-            fit(w.units[s.unit + k]@, scratch)
+            fit(work.units[s.unit + k]@, scratch)
     last: = s.unit + n - 1
     return Replaced::{ .first = s.unit, .last = last,
         .caret = Pos::{ .unit = last,
-        .offset = length(w.units[last].segs@) - length(tail@) }, .head = length(head@),
+        .offset = length(work.units[last].segs@) - length(tail@) }, .head = length(head@),
         .tail = length(tail@) }
 
 priv fn lines_of(text: U8[], arena: Arena$@): U8[] //< the text with each CRLF or CR made LF
@@ -906,9 +914,10 @@ priv fn next_char(text: U8[], offset: Sz): Sz //< where the character after `off
         i += 1
     return i
 
-priv fn shows_table(blocks: List<|Block|>@, u: Sz): Bool //< whether a block shows table `u`
+priv fn shows_table(blocks: List<|Block|>@, table: Sz): Bool //<
+    //< whether a block shows the table at `table`
     for b in blocks
-        if b.kind == .table && b.first == u
+        if b.kind == .table && b.first == table
             return true
     return false
 

@@ -36,7 +36,7 @@
 1. **An error is a value, and it is listed** — `Step_error`
 1. **Failing, and a return type that says so** — `step`
 1. **Passing a failure on with `!`** — `step_twice`
-1. **`defer`, in front of what it frees** — `pick_builder`
+1. **`defer`, in front of what it frees** — `joined_len`
 1. **Leaving early** — `note`
 1. **Where the braces have to stay** — `tally`
 1. **A global, and why there is one here** — `seen`
@@ -73,12 +73,12 @@ priv fn greet(who: U8[])
 
 ## A changing binding, and the four shapes of a loop
 
-**A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes one of four shapes. `for x in …` walks what it is given; over `Range.asc(n)` it counts. `for x > 0` goes round while its condition holds. `for a; b; c` serves an index the body moves itself. A bare `for` goes round until something stops it. `continue` takes the next turn; `else if` and `else` chain as they read.
+**A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes one of four shapes. `for x in …` walks what it is given; over `Range.asc(limit)` it counts. `for x > 0` goes round while its condition holds. `for a; b; c` serves an index the body moves itself. A bare `for` goes round until something stops it. `continue` takes the next turn; `else if` and `else` chain as they read.
 
 ```kspl
-priv fn count_up(n: Sz): Sz
+priv fn count_up(limit: Sz): Sz
     $total: Sz = 0
-    for i in Range.asc(n)
+    for i in Range.asc(limit)
         if i % 2 == 0
             total += i
         else if i == 3
@@ -119,7 +119,7 @@ trait Sized_thing
 
 ## Keeping the promise
 
-**The promise is kept in a block of its own**, named for the trait (`impl Point: Sized_thing`). Leave a signature out and the compiler refuses here, at the place that claimed to keep it, rather than at the call.
+**The promise is kept in a block of its own**, named for the trait (`impl Point: Sized_thing`). Leave a signature out and the compiler refuses here, at the place that claimed to keep it, rather than at the call. The trait writes `r: Self` and the block `r: Self@`: an implementation chooses how it receives the value, as "Checking trait conformance" in the language specification allows.
 
 ```kspl
 impl Point: Sized_thing
@@ -169,10 +169,10 @@ impl Shade
 **`<|T|>` is a type the caller chooses**, so one definition serves every type (a generic). The type is chosen at the call (`twice_of<|I32|>`). The second parameter is a function value: its type is its signature, so any function of that shape can be passed.
 
 ```kspl
-priv fn twice_of<|T|>(v: T, add: fn(a: T, b: T): T): T
-    return add(v, v)
-priv fn add_i32(a: I32, b: I32): I32
-    return a + b
+priv fn twice_of<|T|>(value: T, add: fn(a: T, b: T): T): T
+    return add(value, value)
+priv fn add_i32(left: I32, right: I32): I32
+    return left + right
 ```
 
 ## An error is a value, and it is listed
@@ -189,10 +189,10 @@ priv enum Step_error
 **`I32!Step_error` reads "an `I32`, or a `Step_error`".** `throw` hands the error back to the caller as the result; nothing unwinds the stack. The failure is in the signature, so a caller cannot ignore it by accident: nothing quietly returns 0 instead.
 
 ```kspl
-priv fn step(n: I32): I32!Step_error
-    if n > 100
+priv fn step(value: I32): I32!Step_error
+    if value > 100
         throw .too_far
-    return n + 1
+    return value + 1
 ```
 
 ## Passing a failure on with `!`
@@ -200,16 +200,21 @@ priv fn step(n: I32): I32!Step_error
 **A `!` after a call says "if this failed, give up here and hand the failure to my caller".** It needs this function to be able to fail too, which its return type says. A `!` at a line's end does not carry the line on: the `return` below it is a statement of its own.
 
 ```kspl
-priv fn step_twice(n: I32): I32!Step_error
-    once: = step(n)!
+priv fn step_twice(value: I32): I32!Step_error
+    once: = step(value)!
     return step(once)!
 ```
 
 ## `defer`, in front of what it frees
 
-**`defer` in front of a declaration frees the value when the block ends**, however it ends. That is its last line, or a `return` or a `!` that leaves early (`defer $b: = …` in `main` below). Nothing frees itself, so every free stands on the page. A function that hands a value to its caller, as this one does, declares it without `defer`. Another cleanup is a `defer` statement on the next line, naming what it cleans up.
+**`defer` in front of a declaration frees the value when the block ends**, however it ends. That is its last line, or a `return` or a `!` that leaves early. Nothing frees itself, so every free stands on the page. A function that hands a value to its caller, as `pick_builder` does, declares it without `defer`; the caller defers it (`defer $b: = …` in `main`). Another cleanup is a `defer` statement, naming what it cleans up.
 
 ```kspl
+priv fn joined_len(words: U8[][]): Sz
+    defer $b: = Str_builder()
+    for w in words
+        b.s(w)
+    return b.len
 priv fn pick_builder(ok: Bool): Str_builder!Step_error
     if !ok
         throw .too_far
@@ -229,18 +234,21 @@ priv fn note(on: Bool)
 
 ## Where the braces have to stay
 
-**A block holding only a comment cannot be written by indentation.** A comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line below it. A `case` that uses nothing its variant carries names the variant alone.
+**A function written inside a call's brackets keeps its braces when its body runs over lines**, since a newline inside brackets ends nothing. So there each statement ends with `;`, the last one too. An empty block keeps its braces as well (`case .mid {}`). A `case` that uses nothing its variant carries names the variant alone.
 
 ```kspl
-priv fn tally(shades: Shade[])
+priv fn tally(shades: Shade[]): I32
     for shade in shades
         switch shade
         case .dark
             seen += 1
-        case .mid {
-            // A variant that is not counted. As a sample it holds no content.
-        } default
+        case .mid {}
+        default
             seen += 2
+    return twice_of<|I32|>(I32::seen, fn(left: I32, right: I32): I32 {
+        sum: = left + right;
+        return sum;
+    })
 ```
 
 ## A global, and why there is one here
@@ -270,7 +278,7 @@ priv fn gather(arena: Arena$@): List<|U8[]|>
 
 ## Putting it together
 
-**`main` is where a program starts, and what it returns is the exit code.** `catch` handles the failure a call can return. With a value after it, that value is used instead; with a block, the block runs and `fallback` gives the value. `\{…\}` puts a value into a string.
+**`main` is where a program starts, and what it returns is the exit code.** `catch` handles the failure a call can return. With a value after it, that value is used instead; with a block, the block runs and `fallback` gives the value. `\{…\}` puts a value into the text a writer prints (`io.out().s("n=\{n\}")`). It works only there, as a writer's argument.
 
 ```kspl
 fn main(): I32
@@ -283,34 +291,31 @@ fn main(): I32
     bad: = step(999) catch
         io.out().s("step refused.\n")
         fallback -1
-    // **A handler names the error.** The line is written past the width on purpose and still is not
-    // closed on `catch <name>`. Broken there, the handler lands at the block's own column and is
-    // read as its first statement ("The formatting settings (`--style`)" in `ksplc/docs/SPEC-
-    // tools.md`).
-    far: =
-        step(1000 + moved.x + moved.y + p.x + p.y + p.area() + moved.area() + p.moved(1).x) catch refusal_reason
-            switch refusal_reason
-            case .too_far
-                io.out().s("too far.\n")
-            fallback -2
+    // **A handler can name the error**, and `switch` on it.
+    far: = step(1000 + moved.x) catch refusal
+        switch refusal
+        case .too_far
+            io.out().s("too far.\n")
+        fallback -2
     defer $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
         fallback Str_builder()
     b.s("held")
     note(true)
     note(false)
-    tally(Shade[]::{ .dark, .mid(1) })
+    tallied: = tally(Shade[]::{ .dark, .mid(1) })
     words: = gather(arena)
     // **It carries a label.** A block with no heading cannot be told from a continuation of the
     // statement before it. So a block of its own is written only with a label in front.
-    while_locked:
-        io.out().s("a labelled block passes too.\n")
+    words_done:
+        io.out().s("a labelled block runs once.\n")
     defer io.out().s("defer comes out last.\n")
     io.out().s("area=\{p.area()\} moved=(\{moved.x\},\{moved.y\})\n")
     io.out().s("span=\{span.to - span.from\}\n")
     io.out().s("shade=\{Shade.mid(1).name()\}/\{Shade.dark.name()\}\n")
     io.out().s("step=\{ok\}/\{bad\}/\{far\} twice=\{twice_of<|I32|>(5, add_i32)\}\n")
     io.out().s("count=\{count_up(6)\} words=\{words.len\} seen=\{seen\} b=\{b.slice()\}\n")
+    io.out().s("tallied=\{tallied\} joined=\{joined_len(U8[][]::{ "ab", "c" })\}\n")
     io.out().s("twice=\{step_twice(1) catch -1\}/\{step_twice(999) catch -1\}\n")
     return 0
 ```
@@ -321,12 +326,13 @@ fn main(): I32
 hello, Kanso.
 step refused.
 too far.
-a labelled block passes too.
+a labelled block runs once.
 area=12 moved=(5,6)
 span=3
 shade=mid/dark
 step=10/-1/-2 twice=10
 count=16 words=3 seen=5 b=held
+tallied=4 joined=3
 twice=3/-1
 defer comes out last.
 ```
@@ -337,3 +343,5 @@ defer comes out last.
 | :-- | :-- |
 | Look a rule up: the language rule by rule, not for reading through | [`SPEC-programming-language.md`](SPEC-programming-language.md) |
 | Set a project of your own up. That covers an executable to hand out and a program split over files. It also covers VS Code with the language server and the debugger | [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) |
+| Find what the standard library offers: every module, then one module's names | `ksplc doc std`, then `ksplc doc std/io` |
+| Understand a message from the compiler that carries a code, such as `W0207` | `ksplc explain <code>` |

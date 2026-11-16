@@ -59,12 +59,12 @@ fn target_at(state: Doc_state$@, params: json.Value, arena: Arena$@): Target? //
     // taken as the definition.
     return .some(Target::{ .def = name.def_node if name.def_node != null else name, .name = name })
 
-fn filter_word(c: Sema_ctx$@, root: Ast_node$@, def: Ast_node$@): U8[] //<
+fn filter_word(ctx: Sema_ctx$@, root: Ast_node$@, def: Ast_node$@): U8[] //<
     //< The word every file holding a place of `def` spells; empty where it is not known here
     //< Mostly the declaration's own name. **A method the syntax calls is spelled by its type
     //< instead**: a type call (`Vector(1, 2)`) selects `new`, and an operator or a `for` calls a
     //< method of a std/lang trait (`a + b` calls `add`). A file using either names the type.
-    if c == null || def == null
+    if ctx == null || def == null
         return ""
     id: = def.find_child(.k_identifier)
     name: = id.text if id != null else def.text
@@ -75,22 +75,22 @@ fn filter_word(c: Sema_ctx$@, root: Ast_node$@, def: Ast_node$@): U8[] //<
     type_node: = block.get_decl_type_node()
     if block.kind_id != .k_decl_impl || type_node == null
         return name
-    trait_id: = trait_with_method(c, type_node.type_id, name)
-    if !name.equals("new") && !trait_fqn(c, trait_id).starts_with("std.lang.")
+    trait_id: = trait_with_method(ctx, type_node.type_id, name)
+    if !name.equals("new") && !trait_fqn(ctx, trait_id).starts_with("std.lang.")
         return name
     return type_node.get_path_name().get_generic_base_name().fqn_last()
 
-fn trait_with_method(c: Sema_ctx@, type_id: I32, name: U8[]): I32 //<
+fn trait_with_method(ctx: Sema_ctx@, type_id: I32, name: U8[]): I32 //<
     //< A trait the type implements that declares a method `name`; 0 where none does
     //< **The trait and its implementation are matched by the name alone**, wherever the method
     //< stands: in the `impl` naming the trait or in another of the type's.
-    if type_id <= 0 || type_id >= c.env.id_to_type.len
+    if type_id <= 0 || type_id >= ctx.env.id_to_type.len
         return 0
-    traits: = c.env.id_to_type.get(c.env.strip_ptr(type_id)).implemented_traits
+    traits: = ctx.env.id_to_type.get(ctx.env.strip_ptr(type_id)).implemented_traits
     if traits == null
         return 0
     for trait_id in traits
-        switch c.env.get_info(c.env.get_real_type(trait_id))
+        switch ctx.env.get_info(ctx.env.get_real_type(trait_id))
         case .trait_type(def)
             for m in def.methods_list
                 if m.name.fqn_last().equals(name)
@@ -98,13 +98,13 @@ fn trait_with_method(c: Sema_ctx@, type_id: I32, name: U8[]): I32 //<
         default {}
     return 0
 
-priv fn trait_fqn(c: Sema_ctx$@, trait_id: I32): U8[] //< a trait's full name; empty for 0
+priv fn trait_fqn(ctx: Sema_ctx$@, trait_id: I32): U8[] //< a trait's full name; empty for 0
     //< An instance (`Add<|V2, V2|>`) is named by its generic's (`std.lang.Add`).
     if trait_id == 0
         return ""
-    real: = c.env.get_real_type(trait_id)
-    base: = c.env.instance_base(real)
-    return base if base.len > 0 else c.env.get_str(real)
+    real: = ctx.env.get_real_type(trait_id)
+    base: = ctx.env.instance_base(real)
+    return base if base.len > 0 else ctx.env.get_str(real)
 
 priv fn owner_block(node: Ast_node$@, def: Ast_node$@, depth: Sz): Ast_node$@? //<
     //< The `impl` or trait whose member `def` is, searched through the files' tops
@@ -164,9 +164,9 @@ priv fn wants_decl(params: json.Value): Bool //< whether the references count th
     default
         return true
 
-fn collect_spots(ws_state: Doc_state$@, t: Target, style: base_locate.Uri_style, arena: Arena$@):
-    List<|Spot|> //<
-        //< It collects the places of the target's definition, across the whole workspace.
+fn collect_spots(ws_state: Doc_state$@, target: Target, style: base_locate.Uri_style,
+    arena: Arena$@): List<|Spot|> //<
+        //< It collects the places of the target's definition, across the whole workspace
         //< **A closure's capture is the outer name**: its places are collected with the outer
         //< local's, from either side (capture_source, linked_defs).
         //< Caution: **Walk the generics' templates too.** An instantiated tree cannot be reached
@@ -174,9 +174,9 @@ fn collect_spots(ws_state: Doc_state$@, t: Target, style: base_locate.Uri_style,
         //< generic.
     $out: = List<|Spot|>(arena)
     seen: = arena.create(Map<|U8[], I32|>(arena))
-    $w: = Walk::{ .target_def = t.def, .c = ws_state.sema, .style = style, .seen = seen,
+    $w: = Walk::{ .target_def = target.def, .ctx = ws_state.sema, .style = style, .seen = seen,
         .out = out@, .above = List<|Ast_node$@|>.create(arena), .arena = arena,
-        .name = t.name.text.get_generic_base_name(), .gather = true,
+        .name = target.name.text.get_generic_base_name(), .gather = true,
         .named_ids = List<|Ast_node$@|>.create(arena),
         .named_decls = List<|Ast_node$@|>.create(arena) }
     w.walk_all(ws_state)
@@ -200,8 +200,8 @@ fn collect_spots(ws_state: Doc_state$@, t: Target, style: base_locate.Uri_style,
             w.target_def = def
             w.walk_all(ws_state)
     w.seen.free()
-    return out.order_by(fn(a: Spot@, b: Spot@; ): I32 {
-        return spot_order(a, b);
+    return out.order_by(fn(left: Spot@, right: Spot@; ): I32 {
+        return spot_order(left, right);
     }, arena)
 
 priv fn holds(nodes: List<|Ast_node$@|>@, want: Ast_node$@): Bool //< whether want is in nodes
@@ -212,27 +212,27 @@ priv fn holds(nodes: List<|Ast_node$@|>@, want: Ast_node$@): Bool //< whether wa
 
 priv const MAX_CAPTURE_LINKS: Sz = 64 //< how many closures deep a capture of a capture is followed
 
-priv fn spot_order(a: Spot@, b: Spot@): I32 //< by name, then line, then column
-    order: = a.uri.compare(b.uri)
+priv fn spot_order(left: Spot@, right: Spot@): I32 //< by name, then line, then column
+    order: = left.uri.compare(right.uri)
     if order != 0
         return order
-    if a.line != b.line
-        return -1 if a.line < b.line else 1
-    if a.character != b.character
-        return -1 if a.character < b.character else 1
+    if left.line != right.line
+        return -1 if left.line < right.line else 1
+    if left.character != right.character
+        return -1 if left.character < right.character else 1
     return 0
 
 // ==========================================
 // Walking the tree and collecting
 // ==========================================
 
-priv fn is_same_loc(a: Ast_node@, b: Ast_node$@): Bool
-    if a == null || b == null
+priv fn is_same_loc(left: Ast_node@, right: Ast_node$@): Bool
+    if left == null || right == null
         return false
-    if a == b
+    if left == right
         return true
-    return a.loc.offset == b.loc.offset && a.loc.file().len > 0 &&
-        a.loc.file().equals(b.loc.file())
+    return left.loc.offset == right.loc.offset && left.loc.file().len > 0 &&
+        left.loc.file().equals(right.loc.file())
 
 priv fn is_def_match(n_def: Ast_node$@, t_def: Ast_node$@): Bool //<
     //< Whether the two definitions are the same one
@@ -251,15 +251,15 @@ priv fn is_def_match(n_def: Ast_node$@, t_def: Ast_node$@): Bool //<
         is_same_loc(n_id, t_id) || is_same_loc(n_def.def_node, t_def) ||
         is_same_loc(n_def, t_def.def_node) || is_same_loc(n_def.def_node, t_def.def_node)
 
-priv fn is_the_decl(n: Ast_node@, target_def: Ast_node$@): Bool //<
+priv fn is_the_decl(node: Ast_node@, target_def: Ast_node$@): Bool //<
     //< Whether that identifier is the declaration itself
     //< Caution: **Compare strictly**, or a real use passes for the declaration and is dropped where
     //< `includeDeclaration` is false.
-    return n == target_def || n == target_def.find_child(.k_identifier)
+    return node == target_def || node == target_def.find_child(.k_identifier)
 
 priv struct Walk //< what one search for a definition's uses carries down the tree
     target_def: Ast_node$@ //< the definition whose uses are wanted
-    c: Sema_ctx$@
+    ctx: Sema_ctx$@
     style: base_locate.Uri_style
     seen: Map<|U8[], I32|>$@ //< `<file>:<offset>` of each place added
     out: List<|Spot|>$@ //< the places found
@@ -272,54 +272,54 @@ priv struct Walk //< what one search for a definition's uses carries down the tr
     named_decls: List<|Ast_node$@|>$@ //< every local's declaration of that name
 
 impl Walk
-    priv fn walk_all(w: Self$@, ws_state: Doc_state$@) //< the uses in every file and template
+    priv fn walk_all(r: Self$@, ws_state: Doc_state$@) //< the uses in every file and template
         if ws_state.root_file != null
-            w.node(ws_state.root_file, 0)
+            r.node(ws_state.root_file, 0)
         if ws_state.sema != null
             for entry in ws_state.sema.generics.templates.items()
-                w.node(entry.value, 0)
+                r.node(entry.value, 0)
 
-    priv fn restart(w: Self$@, def: Ast_node$@) //< forgets the places found, to walk for def
-        w.target_def = def
-        w.out.clear()
-        w.seen.free()
-        w.seen = w.arena.create(Map<|U8[], I32|>(w.arena))
-        w.named_ids.clear()
-        w.named_decls.clear()
+    priv fn restart(r: Self$@, def: Ast_node$@) //< forgets the places found, to walk for def
+        r.target_def = def
+        r.out.clear()
+        r.seen.free()
+        r.seen = r.arena.create(Map<|U8[], I32|>(r.arena))
+        r.named_ids.clear()
+        r.named_decls.clear()
 
-    priv fn capture_source(w: Self@): Ast_node$@? //<
+    priv fn capture_source(r: Self@): Ast_node$@? //<
         //< The outer local the target reads, where the target is a closure capture's rebinding
         //< The rebinding (`n: = env.n$`) and the argument that passes the outer `n` to the
         //< closure stand at the capture's name (place_capture_rebindings in
         //< `../parse/desugar_closure.kspl`). The argument names the outer local.
-        def: = w.target_def
+        def: = r.target_def
         if def == null || def.kind_id != .k_decl_var
             return .none
         id: = def.get_var_decl_id()
-        for n in w.named_ids
+        for n in r.named_ids
             if n != id && is_same_loc(n, id) && n.def_node != null &&
                 !is_def_match(n.def_node, def)
                 return .some(n.def_node)
         return .none
 
-    priv fn linked_defs(w: Self@, from: Sz, done: List<|Ast_node$@|>@): List<|Ast_node$@|> //<
+    priv fn linked_defs(r: Self@, from: Sz, done: List<|Ast_node$@|>@): List<|Ast_node$@|> //<
         //< The rebindings of the closures that capture what the places from `from` on name
         //< A use at a capture's name is the argument that passes it, so the rebinding standing
         //< there carries it into the closure's body.
-        $out: = List<|Ast_node$@|>(w.arena)
-        for i in Range(from, w.out.len, 1)
-            s: = w.out.get(i)
+        $out: = List<|Ast_node$@|>(r.arena)
+        for i in Range(from, r.out.len, 1)
+            s: = r.out.get(i)
             if s.is_decl
                 continue
-            for d in w.named_decls
+            for d in r.named_decls
                 id: = d.get_var_decl_id()
                 if id != s.node && is_same_loc(id, s.node) && !holds(done, d) &&
                     !holds(out@, d)
                     out.push(d)
         return out
 
-    priv fn node(w: Self$@, node: Ast_node$@, depth: Sz) //< the uses at node and under it
-        target_def: = w.target_def
+    priv fn node(r: Self$@, node: Ast_node$@, depth: Sz) //< the uses at node and under it
+        target_def: = r.target_def
         // **Nodes the compiler generated are not uses** (`made_by_compiler` in
         // `../base/ast_ext.kspl`). Keep implicit member names for rename refusal,
         // but do not publish them as written references.
@@ -333,45 +333,45 @@ impl Walk
                 !node.loc.file().equals(target_def.loc.file())
                 return
 
-        if w.gather
-            w.note_named(node)
-        if node.kind_id == .k_identifier && node.loc.file().len > 0 && w.refers(node) &&
-            !w.in_trait_self(node)
-            w.add_spot(node)
+        if r.gather
+            r.note_named(node)
+        if node.kind_id == .k_identifier && node.loc.file().len > 0 && r.refers(node) &&
+            !r.in_trait_self(node)
+            r.add_spot(node)
 
-        w.above.push(node)
+        r.above.push(node)
         for child in node.children
-            w.node(child, depth + 1)
-        w.above.truncate(w.above.len - 1)
+            r.node(child, depth + 1)
+        r.above.truncate(r.above.len - 1)
 
-    priv fn in_trait_self(w: Self@, n: Ast_node@): Bool //<
-        //< Whether n is a `Self` inside a trait, which names whatever implements it
+    priv fn in_trait_self(r: Self@, node: Ast_node@): Bool //<
+        //< Whether `node` is a `Self` inside a trait, which names whatever implements it
         //< **A trait's instance for one type links its `Self` to that type** (std's `Add` for a
         //< `Vec2`), yet the trait is written for every implementer, so it is no use of the type.
-        if !n.text.equals("Self")
+        if !node.text.equals("Self")
             return false
-        for a in w.above
+        for a in r.above
             if a.kind_id == .k_decl_trait
                 return true
         return false
 
-    priv fn note_named(w: Self$@, node: Ast_node$@) //<
+    priv fn note_named(r: Self$@, node: Ast_node$@) //<
         //< records node where it is an identifier or a local's declaration of the target's name
-        if node.kind_id == .k_identifier && node.text.equals(w.name)
-            w.named_ids.push(node)
+        if node.kind_id == .k_identifier && node.text.equals(r.name)
+            r.named_ids.push(node)
         else if node.kind_id == .k_decl_var
             id: = node.get_var_decl_id()
-            if id != null && id.text.equals(w.name)
-                w.named_decls.push(node)
+            if id != null && id.text.equals(r.name)
+                r.named_decls.push(node)
 
-    priv fn refers(w: Self$@, n: Ast_node$@): Bool //<
+    priv fn refers(r: Self$@, node: Ast_node$@): Bool //<
         //< whether an identifier is a place of the target
-        return is_def_match(n.def_node, w.target_def) || is_def_match(n, w.target_def)
+        return is_def_match(node.def_node, r.target_def) || is_def_match(node, r.target_def)
 
-    priv fn add_spot(w: Self$@, hit: Ast_node$@) //<
+    priv fn add_spot(r: Self$@, hit: Ast_node$@) //<
         //< It adds one place, dropping a duplicate by `<file>:<offset>`
         //< The duplicates come from root_file's walk and a template's.
-        src: = base_core.source_of(w.c.source_map, hit.loc.file())
+        src: = base_core.source_of(r.ctx.source_map, hit.loc.file())
         if src.len == 0
             return
         offset: = src.clamp_offset(hit.loc.offset)
@@ -384,36 +384,36 @@ impl Walk
             return
         defer $key: = Str_builder()
         key.s(hit.loc.file()).c(':').s("\{offset\}")
-        if w.seen.get(key.slice()).unwrap_or(0) != 0
+        if r.seen.get(key.slice()).unwrap_or(0) != 0
             return
-        w.seen.set(w.arena.dup_str(key.slice()), 1)
+        r.seen.set(r.arena.dup_str(key.slice()), 1)
 
-        pos: = position_of(w.c, hit)
+        pos: = position_of(r.ctx, hit)
         defer $safe: = hit.loc.file().with_forward_slashes()
-        uri: = w.style.spell(safe.slice())
-        w.out
-            .push(Spot::{ .uri = w.arena.dup_str(uri), .line = pos.line,
+        uri: = r.style.spell(safe.slice())
+        r.out
+            .push(Spot::{ .uri = r.arena.dup_str(uri), .line = pos.line,
             .character = pos.character, .len = hit.text.get_generic_base_name().len,
-            .is_decl = is_the_decl(hit, w.target_def), .file = hit.loc.file(), .node = hit,
-            .path = w.path_in_file() })
+            .is_decl = is_the_decl(hit, r.target_def), .file = hit.loc.file(), .node = hit,
+            .path = r.path_in_file() })
 
-    priv fn path_in_file(w: Self$@): List<|Ast_node$@|>$@ //<
+    priv fn path_in_file(r: Self$@): List<|Ast_node$@|>$@ //<
         //< The nodes above the one visited, from the top of its own file down
         //< **An imported file hangs under the file importing it**, so the walk's own path starts in
         //< another file. The part above the nearest file's top is cut off.
         $from: Sz = 0
-        for i in Range.asc(w.above.len)
-            if w.above.get(i).kind_id == .k_file
+        for i in Range.asc(r.above.len)
+            if r.above.get(i).kind_id == .k_file
                 from = i
-        out: = List<|Ast_node$@|>.create(w.arena)
-        for i in Range(from, w.above.len, 1)
-            out.push(w.above.get(i))
+        out: = List<|Ast_node$@|>.create(r.arena)
+        for i in Range(from, r.above.len, 1)
+            out.push(r.above.get(i))
         return out
 
-fn position_of(c: Sema_ctx$@, node: Ast_node@): lsp_msg.Position //<
+fn position_of(ctx: Sema_ctx$@, node: Ast_node@): lsp_msg.Position //<
     //< Where a node stands in its file, as the LSP counts
     //< Caution: **Get the line-start table from `line_starts_for`**, which builds it once per file.
     //< Built per place, a name used a thousand times in one file walks that file a thousand times.
-    src: = base_core.source_of(c.source_map, node.loc.file())
+    src: = base_core.source_of(ctx.source_map, node.loc.file())
     return src.get_line_char(src.clamp_offset(node.loc.offset),
-        c.line_starts_for(node.loc.file(), src))
+        ctx.line_starts_for(node.loc.file(), src))

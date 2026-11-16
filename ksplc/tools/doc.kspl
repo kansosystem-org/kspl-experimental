@@ -28,8 +28,9 @@ import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt // `\{n\}` on a `Sz`
 import "std/sys"
 
-priv fn shown(e: Line): Bool //< whether the line is an entry of its own, not a part or the file
-    return !tools_surface.is_file_row(e.key) && tools_surface.owner_of(e.key).len == 0
+priv fn shown(line: Line): Bool //< whether the line is an entry of its own, not a part or the file
+    return !tools_surface.is_file_row(line.key) &&
+        tools_surface.owner_of(line.key).len == 0
 
 // ==========================================
 // Finding and reading the file. **A name resolves as `import` resolves it** (`append_file_path`
@@ -78,6 +79,25 @@ priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): List<|Lin
     root: Ast_node$@ = parse_load.parse_raw_ast(src, logical, parser, true) catch
         return .none
     return .some(tools_surface.surface_lines(root, src))
+
+priv fn read_all_scope(path: U8[], logical: U8[], parser: kspeg.Target$@): List<|Line|>? //<
+    //< One file's entries at the `all` scope, whatever `--surface-scope` says
+    //< **It is read only where `pub` found nothing**, to tell a declaration that is not published
+    //< from one that is not there. The scope is set back after the read.
+    was: = base_core.config.surface_all
+    base_core.config.surface_all = true
+    defer base_core.config.surface_all = was
+    return read_lines(path, logical, parser)
+
+priv fn hidden_count(path: U8[], logical: U8[], parser: kspeg.Target$@): Sz //<
+    //< How many entries the file declares without `pub`; 0 at the `all` scope, where none is hidden
+    if base_core.config.surface_all
+        return 0
+    switch read_all_scope(path, logical, parser)
+    case .some(rows)
+        return entries_in(rows@)
+    case .none
+        return 0
 
 // ==========================================
 // Rendering. **Every heading's anchor is the one the renderer gives it**, so the contents' links
@@ -265,9 +285,11 @@ priv fn scope_says(): U8[] //< the line saying what the reference holds
     return "Published declarations use `pub`. Other declarations are reachable only from inside the \
         package."
 
-priv fn write_file(file: U8[], rows: List<|Line|>@, out: Str_builder$@) //<
+priv fn write_file(file: U8[], rows: List<|Line|>@, hidden: Sz, out: Str_builder$@) //<
     //< One file's reference: what it is for, what it holds, and every entry in it
     //< **The order is the record's** (by key), so a type's members follow it.
+    //< **A file that publishes nothing names the scope that shows its `hidden` declarations**: an
+    //< application's files publish nothing, and an empty list leaves the reader nowhere to go.
     links: = anchors(rows)
     tail: = tail_of(file)
     out.s("# ").s(file).s(" — the API reference\n\n")
@@ -276,6 +298,9 @@ priv fn write_file(file: U8[], rows: List<|Line|>@, out: Str_builder$@) //<
         say(linked(said, rows, links@, tail), out)
         out.s("\n\n")
     out.s(scope_says()).s(" `ksplc doc ").s(file).s(".<name>` shows one entry.\n\n## Contents\n\n")
+    if hidden > 0 && entries_in(rows) == 0
+        out.s("Nothing here is published. `ksplc doc --surface-scope=all ").s(file)
+            .s("` lists its \{hidden\} declarations.\n")
     for i in Range.asc(rows.len)
         r: = rows.get(i)
         if !shown(r)
@@ -351,6 +376,7 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
     out.s("# ").s(name).s(" — the API reference\n\n").s(scope_says())
         .s(" `ksplc doc <file>` shows one file's entries.\n\n")
     $missed: = List<|U8[]|>(base_core.arena)
+    $listed: Sz = 0
     for path in paths
         if !path.has_kspl_ext()
             continue
@@ -368,6 +394,7 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
             n: = entries_in(rows@)
             if n == 0
                 continue
+            listed += 1
             out.s("* `").s(logical).s("` — \{n\} entries")
             first: = summary_of(said_of_file(rows@))
             if first.len > 0
@@ -375,6 +402,11 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
             out.c('\n')
         case .none
             missed.push(logical)
+    // **A folder where no file publishes names the scope that shows what they declare**, as a
+    // file does (`write_file`).
+    if listed == 0 && !base_core.config.surface_all
+        out.s("No file here publishes anything. `ksplc doc --surface-scope=all ").s(name)
+            .s("` lists what each file declares.\n")
     if missed.len > 0
         out.s("\nThese files could not be read. Their contents are not listed:\n\n")
         for one in missed
@@ -384,6 +416,17 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
 // ==========================================
 // The entry point
 // ==========================================
+
+priv fn unpublished(path: U8[], name: U8[], key: U8[], parser: kspeg.Target$@): Bool //<
+    //< Whether the file declares `key` without `pub`; false at the `all` scope, where it is shown
+    if base_core.config.surface_all
+        return false
+    switch read_all_scope(path, name, parser)
+    case .some(rows)
+        defer $discard: = Str_builder()
+        return write_one(name, rows@, key, discard@) > 0
+    case .none
+        return false
 
 fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     //< Prints the reference `target` names; false (with the reason printed) where it names nothing
@@ -431,11 +474,19 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
             return false
         return true
     if key.len == 0
-        write_file(name, rows@, out@)
+        hidden: = 0 if entries_in(rows@) > 0 else hidden_count(path, name, parser)
+        write_file(name, rows@, hidden, out@)
     else if write_one(name, rows@, key, out@) == 0
-        io.err()
-            .s("ksplc doc: \{name\} publishes nothing called '\{key\}'. Run `ksplc doc \{name\}` to \
-                list its published entries\n")
+        // **An entry declared without `pub` names the scope that shows it**; one declared nowhere
+        // does not, since that scope would find nothing either.
+        if unpublished(path, name, key, parser)
+            io.err()
+                .s("ksplc doc: \{name\} declares '\{key\}' without `pub`. Run `ksplc doc \
+                    --surface-scope=all \{name\}.\{key\}` to show it\n")
+        else
+            io.err()
+                .s("ksplc doc: \{name\} publishes nothing called '\{key\}'. Run `ksplc doc \
+                    \{name\}` to list its published entries\n")
         return false
     io.out().s(out.slice())
     return true

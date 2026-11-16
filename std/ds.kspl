@@ -83,9 +83,9 @@ pub fn fmix32( //< MurmurHash3's finalizer, for a hash whose differences are in 
     //< Caution: **Do not add it everywhere.** It costs extra work per lookup. In a `hash` that
     //< runs in the innermost loop, that cost outweighs the better spread. For a parser's memo key,
     //< it slows self-hosting's parse by 10-20%.
-    h: U32, //< the value to spread
+    hash: U32, //< the value to spread
 ): U32 //< the mixed value; two different inputs never give the same one
-    $v: = h
+    $v: = hash
     v = (v ^ (v >> 16)) * 0x85ebca6b
     v = (v ^ (v >> 13)) * 0xc2b2ae35
     return v ^ (v >> 16)
@@ -97,8 +97,8 @@ impl I32: Hashable<|I32|> //< so an `I32` can be a `Map`'s key
     pub fn equals(r: Self@, other: I32): Bool //< whether the two are the same number
         return r$ == other
 
-priv fn spread_u64(h: U64): U32 //< an integer key's bits folded to 32 and spread over the buckets
-    return (U32::(h ^ (h >> 32))) * U32::2654435761
+priv fn spread_u64(key: U64): U32 //< an integer key's bits folded to 32 and spread over the buckets
+    return (U32::(key ^ (key >> 32))) * U32::2654435761
 
 impl I64: Hashable<|I64|> //< so an `I64` can be a `Map`'s key
     //< A primitive's method receives r as a pointer, so the value is r$
@@ -126,13 +126,13 @@ impl U8[]: Hashable<|U8[]|> //< so a string can be a `Map`'s key
         // FNV-1a alone mixes the low bits poorly (keys with a shared prefix share a bucket).
         return fmix32(h)
 
-    pub fn equals(r: U8[], b: U8[]): Bool //<
+    pub fn equals(r: U8[], other: U8[]): Bool //<
         //< whether the bytes are the same; deliberately not `==`
-        if r.len != b.len
+        if r.len != other.len
             return false
-        if r.len == 0 || r.ptr == b.ptr
+        if r.len == 0 || r.ptr == other.ptr
             return true
-        return libc.memcmp(Void$@::r.ptr, Void$@::b.ptr, r.len) == 0
+        return libc.memcmp(Void$@::r.ptr, Void$@::other.ptr, r.len) == 0
 // ==========================================
 // List<|T|> (the generic version)
 // ==========================================
@@ -246,18 +246,19 @@ impl<|T|> List<|T|>
         r.len = 0
 
     #ends_views
-    pub fn truncate( //< releases the elements from `n` on, keeping the first n and the capacity
-        //< An `n` at or past the length leaves the list as it is. O(elements released).
+    pub fn truncate( //<
+        //< releases the elements from `count` on, keeping the first `count` and the capacity
+        //< A `count` at or past the length leaves the list as it is. O(elements released).
         //< Caution: **Do not write `len` instead.** The slots past it keep their ARC counts, and
         //< `free` no longer visits them, so they leak.
         r: Self$@,
-        n: Sz, //< how many elements stay; a negative count stops the program
+        count: Sz, //< how many elements stay; a negative count stops the program
         file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
         line: Sz = caller_line, //< keep the default unless this is called from a wrapper
     )
-        if n < 0
-            bounds_panic("List.truncate", n, r.len, file, line)
-        for r.len > n
+        if count < 0
+            bounds_panic("List.truncate", count, r.len, file, line)
+        for r.len > count
             r.len -= 1
             mem.drop_at(r.ptr + r.len)
 
@@ -357,7 +358,7 @@ pub struct Map_entry<|K, V|> //< one slot of a `Map`, live, empty or a tombstone
     pub value: V //< the value stored for the key
     pub hash: U32 //< the key's hash, kept so a resize need not compute it again
     pub is_active: Bool //< whether this slot holds a live pair
-    pub is_tombstone: Bool //< whether a removal left a mark here, which a lookup skips.
+    pub is_tombstone: Bool //< whether a removal left a mark here, which a lookup skips
         //< An insertion reuses it. **Without it, a removal hides the keys after it.** A colliding
         //< key sits one slot further on, and a plain empty slot before it ends the lookup.
 
@@ -372,7 +373,7 @@ pub struct Map<|K: Hashable<|K|>, V|> //< keys to values, held in an open-addres
     pub entries: Map_entry<|K, V|>$@ //< the slots, `cap` of them
     pub cap: Sz //< how many slots there are, always a power of two
     pub len: Sz //< how many live pairs it holds
-    pub used: Sz //< live slots and tombstones together, which decide a resize.
+    pub used: Sz //< live slots and tombstones together, which decide a resize
         //< **Growth is decided by this, not by len.** With len, repeated set and remove fill the
         //< table with tombstones until no insertion point can be found.
     pub arena: Arena$@ //< where the slots go; null means the global heap
@@ -497,14 +498,14 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
                 e.is_active = false
         r.used = r.len
 
-    priv fn set_with_hash(r: Self$@, key: K, value: V, h: U32) //<
+    priv fn set_with_hash(r: Self$@, key: K, value: V, hash: U32) //<
         //< Takes the hash already known, so resize() does not hash each key again
         // A 50% load factor keeps clustering low under open addressing.
         // Caution: Count the tombstones too (see used). A resize drops the tombstones, so used
         // returns to len.
         if r.used * 2 >= r.cap
             r.resize()
-        $idx: Sz = Sz::h & (r.cap - 1)
+        $idx: Sz = Sz::hash & (r.cap - 1)
         // Caution: **Look ahead for the same key until a plain empty slot is reached.** Writing
         // into the first tombstone at once duplicates a key stored after it. The insertion point is
         // the first free slot passed, a tombstone included.
@@ -512,9 +513,9 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         for
             entry: = r.entries + idx
             if entry.is_active
-                if entry.hash == h && entry.key.equals(key)
+                if entry.hash == hash && entry.key.equals(key)
                     entry.value = value
-                    entry.hash = h
+                    entry.hash = hash
                     return
             else
                 if free_idx < 0
@@ -528,7 +529,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         r.len += 1
         mem.init_at(slot.key@, key)
         mem.init_at(slot.value@, value)
-        slot.hash = h
+        slot.hash = hash
         slot.is_active = true
         slot.is_tombstone = false
 

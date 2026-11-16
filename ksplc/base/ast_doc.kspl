@@ -13,20 +13,20 @@ import "std/chars" // `trim_spaces`
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-fn end_of(n: Ast_node$@): Sz //< the section's end (the next character's position)
-    sp: = n.get_span_offset()
+fn end_of(node: Ast_node$@): Sz //< the section's end (the next character's position)
+    sp: = node.get_span_offset()
     return sp.offset + sp.span
 
-fn brace_at(n: Ast_node$@): Sz //< the position of the `{` where the contents begin
+fn brace_at(node: Ast_node$@): Sz //< the position of the `{` where the contents begin
     //< Where there is none (only a heading), the section's end.
-    for c in n.children
+    for c in node.children
         if c.is_literal("{")
             return c.loc.offset
-    return end_of(n)
+    return end_of(node)
 
-priv fn is_sentence_closer(c: U8): Bool //< the marks that can follow a sentence's last word
+priv fn is_sentence_closer(ch: U8): Bool //< the marks that can follow a sentence's last word
     //< A backtick, a bracket, a quote and a bold mark come after the full stop and are skipped.
-    return c == '`' || c == ')' || c == ']' || c == '}' || c == '"' || c == '\'' || c == '*'
+    return ch == '`' || ch == ')' || ch == ']' || ch == '}' || ch == '"' || ch == '\'' || ch == '*'
 
 priv fn wants_a_stop(text: U8[]): Bool //<
     //< Whether `text` needs a full stop before another description is joined to it
@@ -55,12 +55,13 @@ priv fn described(summary: U8[], account: U8[], gap: U8[]): U8[] //<
     s.s(account)
     return s.take()
 
-fn joined(a: U8[], b: U8[]): U8[] //< it joins two words with a space (an empty word is skipped)
-    if a.len == 0
-        return base_core.arena.dup_str(b)
-    if b.len == 0
-        return base_core.arena.dup_str(a)
-    return base_core.arena.text().s(a).c(' ').s(b).take()
+fn joined(left: U8[], right: U8[]): U8[] //<
+    //< it joins two words with a space (an empty word is skipped)
+    if left.len == 0
+        return base_core.arena.dup_str(right)
+    if right.len == 0
+        return base_core.arena.dup_str(left)
+    return base_core.arena.text().s(left).c(' ').s(right).take()
 
 fn is_continuation_line(src: U8[], at: Sz): Bool //<
     //< Whether the line starting at `at` holds nothing but a `//<` and its text
@@ -159,6 +160,27 @@ priv fn fault_of(run: Doc_run): Summary_fault
         return .label
     return .none
 
+fn summary_stop_at(src: U8[], at: Sz): Bool //<
+    //< Whether the summary of the run behind the code on the line at `at` ends in a full stop
+    //< **`[H0809]` reads the summary the hover reads**, as `[W0213]` does (`summary_fault_at`).
+    return has_trailing_summary(src, at) &&
+        ends_in_stop(run_at(src, at, src.len).summary)
+
+fn file_summary_stop(src: U8[], at: Sz): Bool //<
+    //< Whether the summary of the file's own run, which begins at `at`, ends in a full stop
+    return ends_in_stop(run_at(src, at, src.len).summary)
+
+priv fn ends_in_stop(summary: U8[]): Bool //<
+    //< Whether a summary's last mark is a full stop, past a bracket, a quote or a bold mark
+    //< **A code span's `.` and an ellipsis (`...`) are no full stop**: the first is code, and the
+    //< second leaves the line open.
+    $e: = summary.len
+    for e > 0 && summary[e - 1] != '`' && is_sentence_closer(summary[e - 1])
+        e -= 1
+    if e == 0 || summary[e - 1] != '.'
+        return false
+    return e < 3 || summary[e - 2] != '.' || summary[e - 3] != '.'
+
 priv fn line_doc(src: U8[], at: Sz, limit: Sz): U8[] //<
     //< The run at `at`, its summary and detail joined into one line
     //< **One line is all the place has.** A parameter's or the return type's run shows on the
@@ -221,10 +243,10 @@ priv fn mark_offset(src: U8[], at: Sz, brace: Sz): Sz //<
         return at
     return brace if is_bare_summary(src, line_start(src, brace)) else at
 
-fn decl_summary(src: U8[], n: Ast_node$@): U8[] //<
+fn decl_summary(src: U8[], node: Ast_node$@): U8[] //<
     //< A declaration's own summary, on whichever line its run is
     //< Only the first line, as a declaration file holds; the detail stays with the body.
-    return run_at(src, mark_offset(src, n.loc.offset, body_brace(src, n)), src.len).summary
+    return run_at(src, mark_offset(src, node.loc.offset, body_brace(src, node)), src.len).summary
 
 fn doc_of(src: U8[], at: Sz, brace: Sz): U8[] //< the documentation one declaration carries
     //< **The summary and the detail are joined into one column**, as the record has one entry per
@@ -241,27 +263,27 @@ fn parted(summary: U8[], detail: U8[]): U8[] //<
     //< what goes into a declaration file (the summary) from what stays with the body.
     return described(summary, detail, "\n\n")
 
-priv fn has_contents(n: Ast_node$@): Bool //<
+priv fn has_contents(node: Ast_node$@): Bool //<
     //< Whether this kind of declaration has contents where a run can go
     //< One with none (an interface method's requirement, a `const`, a `typedef`, a field, a
     //< variant) has only a trailing `//<` (see the file head).
-    switch n.kind_id
+    switch node.kind_id
     case .k_decl_fn, .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_impl, .k_stmt_block
         return true
     default {}
     return false
 
-fn body_brace(src: U8[], n: Ast_node$@): Sz //<
+fn body_brace(src: U8[], node: Ast_node$@): Sz //<
     //< Where a declaration's contents begin, found **in the source**; its end where there are none
     //< Caution: **Do not look for a `{` among the children.** `normalize` drops a declaration's
     //< braces (`is_trivia_node` in `../parse/normalize.kspl`), so the editor's tree has none.
     //< **Count the round and square brackets**, or a default argument's `::{ … }` looks like a
     //< body.
-    sp: = n.get_span_offset()
+    sp: = node.get_span_offset()
     $end: = sp.offset + sp.span
     if end > src.len
         end = src.len
-    if !has_contents(n)
+    if !has_contents(node)
         return end
     $depth: Sz = 0
     $i: = sp.offset
@@ -301,14 +323,14 @@ struct Param_doc //< one parameter, as it is written and as it is described
         //< Read from the identifier, so the description follows a rename.
     doc: U8[] //< what its `//<` said, with the run below it joined on
 
-fn param_docs(src: U8[], n: Ast_node$@, out: List<|Param_doc|>$@) //<
+fn param_docs(src: U8[], node: Ast_node$@, out: List<|Param_doc|>$@) //<
     //< Every parameter a declaration takes, in the order written, each with its own `//<`
     //< That is the `//<` on the parameter's own line, empty where there is none.
     //< The editor shows it below a signature, on hover and while the call is typed.
-    params: = n.get_fn_params()
+    params: = node.get_fn_params()
     if params == null
         return
-    end: = body_brace(src, n)
+    end: = body_brace(src, node)
     for i in Range.asc(params.children.len)
         p: = params.children[i]
         if p.kind_id != .k_fn_param
@@ -322,16 +344,16 @@ fn param_docs(src: U8[], n: Ast_node$@, out: List<|Param_doc|>$@) //<
             .push(Param_doc::{ .name = name,
             .doc = line_doc(src, p.loc.offset, next_param_at(params, i, end)) })
 
-fn return_doc(src: U8[], n: Ast_node$@): U8[] //<
+fn return_doc(src: U8[], node: Ast_node$@): U8[] //<
     //< The `//<` on the line of the return type, empty where there is none
     //< The editor shows it after the return type, as a parameter's after the parameter.
     //< Caution: **Read it only where the return type is not on the declaration's first line.**
     //< On a one-line signature the mark describes the declaration (`decl_summary`); read here,
     //< every one would give its summary as what it returns.
-    t: = n.get_decl_type_node()
+    t: = node.get_decl_type_node()
     if t == null
         return ""
-    if line_end(src, n.loc.offset) >= t.loc.offset
+    if line_end(src, node.loc.offset) >= t.loc.offset
         return ""
     // **A mark with no text there belongs to the declaration, not the return type**: it is a
     // wrapped head's anchor (`mark_offset` above).

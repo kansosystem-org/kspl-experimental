@@ -26,12 +26,12 @@ priv const MAX_QUEUE_BYTES: Sz = 16777216 //< the limit [bytes] on a queue's ele
 priv $g_dyn: Dyn_entry[32]
 priv $g_dyn_count: Sz = 0
 
-priv fn find_dyn_by_tcb(t: Task@): Sz //< returns t's index in g_dyn
+priv fn find_dyn_by_tcb(tcb: Task@): Sz //< returns tcb's index in g_dyn
     //< If there is none it returns max_dyn.
     $idx: Sz = MAX_DYN
     $found: = false
     for i in Range.asc(g_dyn_count)
-        if !found && g_dyn[i].tcb == t
+        if !found && g_dyn[i].tcb == tcb
             idx = i
             found = true
     return idx
@@ -58,9 +58,9 @@ priv fn release_dyn(idx: Sz): Dyn_entry //< [Call it inside a critical section] 
     g_dyn[idx].pending_reap = false
     return e
 
-priv fn free_dyn(e: Dyn_entry) //< returns a released entry's stack and Task to the heap
-    heap.heap_free(Void$@::e.stack)
-    heap.heap_free(Void$@::e.tcb)
+priv fn free_dyn(entry: Dyn_entry) //< returns a released entry's stack and Task to the heap
+    heap.heap_free(Void$@::entry.stack)
+    heap.heap_free(Void$@::entry.tcb)
 
 priv fn find_reapable(): Sz //< [Call it inside a critical section] an entry reap_pending frees
     //< If there is none it returns max_dyn.

@@ -10,7 +10,7 @@ Start with the eight Development Principles. The design documents apply them one
 * **This document holds only KSPL's decisions and their grounds**, not a survey of other languages. History is not written here (Principle 7).
 * **The headings carry no numbers.** A section is cited by its heading's words, since a number shifts whenever a section is inserted above it.
 * **A reference to "Principle N" names one of the eight Development Principles below.**
-* **New to KSPL?** The table below gives the notation the chapters use. Shared technical terms are defined in "Words used throughout" in [`SPEC-documents.md`](SPEC-documents.md#words-used-throughout). The tour is [`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md).
+* **New to KSPL?** The table below gives the notation the chapters use. Shared technical terms are defined in "Words used throughout" in [`SPEC-documents.md`](SPEC-documents.md#words-used-throughout). The tutorial is [`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md).
 
 ### The notation the examples use
 
@@ -43,7 +43,7 @@ Eight rules come first in every folder: in the language, the libraries, the tool
 | 4 | Following DRY — one canonical source, copies tied together by a check | Keep each fact in one place. Where a copy must exist, a check compares it with the original | A runtime helper in C and its LLVM counterpart are compared by `make test-conventions` | The check added with each copy, most of them in `make test-conventions` |
 | 5 | Do not leave anything "writable but ineffective" | Whatever the compiler or a tool accepts must have an effect; otherwise it is an error | `defer` has no capture list, since one would change nothing ("Why `defer` has no capture list" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | By review; each check's own samples show that the check can fire |
 | 6 | One means to one purpose | Offer one way to write each thing | No number casts to `Bool`, since `x != 0` already says it | By review |
-| 7 | Documents and comments state only "how it is now", in plain language | Write the present state and its reasons, never the history, in the short, plain sentences of [`SPEC-plain-language.md`](SPEC-plain-language.md) | This document says "X is", never "X used to be" | `make lint` for a comment's length (H0806); `make test-conventions` for a document sentence's length and phrases that tell a history; `tools/repo_stat.kspl` measures the share of comments; the rest by review |
+| 7 | Documents and comments state only "how it is now", in plain language | Write the present state and its reasons, never the history, in the short, plain sentences of [`SPEC-plain-language.md`](SPEC-plain-language.md) | This document says "X is", never "X used to be" | `make lint` for a comment's length (H0806); `make test-conventions` for a document's sentence and heading length; `tools/repo_stat.kspl` measures the share of comments; review for the history rule and the rest |
 | 8 | A check that can only be half kept is not made a guarantee | If ordinary code can slip past a check, do not let the check pose as a guarantee | There is no thread-safety marker, since a global variable bypasses it ("Why data races are not prevented by the type system" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | By review |
 
 1. **The Zen of Subtraction**
@@ -166,7 +166,7 @@ A notation is judged by three questions, in this order. *Sugar* means a short sp
 
 **A pair kept for a transition goes when the transition ends.** A static `new` has one spelling, the type call `T(...)` ("A type call selects its existing constructor" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)).
 
-**Symmetry does not save a form nobody uses.** **A declaration names one variable, and a loop's header holds one init and one step.** The short forms (`a: I32 = 1, b: I32 = 2;`, or several inits and steps in a C-style loop) would each repeat what two declarations write. Withdrawing only one would make the two halves of a loop differ, so neither is carried.
+**Symmetry does not save a form nobody uses.** **A declaration names one variable, and a loop's header holds one init and one step.** The short forms (`a: I32 = 1, b: I32 = 2`, or several inits and steps in a C-style loop) would each repeat what two declarations write. Withdrawing only one would make the two halves of a loop differ, so neither is carried.
 
 **What is given up: the code does not get shorter.** In return, only what is written happens. The extra lines have three sources.
 

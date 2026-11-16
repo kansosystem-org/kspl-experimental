@@ -16,41 +16,42 @@ import "std/verdict"
 // ==========================================
 // The sum of a tensor's elements, as the loss the gradient checks differentiate.
 // ==========================================
-fn tsum_f64(t: Tensor<|F64|>): F64
+fn tsum_f64(values: Tensor<|F64|>): F64
     $s: = 0.0
-    for i in Range.asc(t.size)
-        s += (t.data + i)$
+    for i in Range.asc(values.size)
+        s += (values.data + i)$
     return s
 
 fn max_gap<|T|>( //< the largest gap between an analytic gradient and a central finite difference
-    //< Moves each element of `w` by ±eps, calls `loss` on each side, then restores the element.
-    //< A NaN gap is kept as the largest, so a check `gap < tol` fails on it.
-    w: Tensor<|T|>,
-    g: Tensor<|T|>, //< the analytic gradient, the same shape as `w`
+    //< Moves each element of `weights` by ±eps, calls `loss` on each side, then restores the
+    //< element. A NaN gap is kept as the largest, so a check `gap < tol` fails on it.
+    weights: Tensor<|T|>,
+    grad: Tensor<|T|>, //< the analytic gradient, the same shape as `weights`
     eps: F64,
-    loss: Callable1<|Sz, F64|>, //< the loss at the current `w`; its argument is not used
+    loss: Callable1<|Sz, F64|>, //< the loss at the current `weights`; its argument is not used
 ): F64
     $worst: = 0.0
-    for k in Range.asc(w.size)
-        saved: = (w.data + k)$
-        (w.data + k)$ = saved + T::eps
+    for k in Range.asc(weights.size)
+        saved: = (weights.data + k)$
+        (weights.data + k)$ = saved + T::eps
         l_plus: = loss.call(0)
-        (w.data + k)$ = saved - T::eps
+        (weights.data + k)$ = saved - T::eps
         l_minus: = loss.call(0)
-        (w.data + k)$ = saved
-        d: = (l_plus - l_minus) / (2.0 * eps) - F64::(g.data + k)$
+        (weights.data + k)$ = saved
+        d: = (l_plus - l_minus) / (2.0 * eps) - F64::(grad.data + k)$
         ad: = math.abs(d)
         if ad > worst || ad != ad
             worst = ad
     return worst
 
-priv fn make_logits(a: F32, b: F32, c: F32, d: F32, arena: Arena$@): Tensor<|F32|>
+priv fn make_logits(first: F32, second: F32, third: F32, fourth: F32, arena: Arena$@):
+    Tensor<|F32|>
     shape: Sz[1] = ::{ 4 }
     t: = Tensor<|F32|>(Sz[]::shape, arena)
-    (t.data + 0)$ = a
-    (t.data + 1)$ = b
-    (t.data + 2)$ = c
-    (t.data + 3)$ = d
+    (t.data + 0)$ = first
+    (t.data + 1)$ = second
+    (t.data + 2)$ = third
+    (t.data + 3)$ = fourth
     return t
 // ==========================================
 // The cross-entropy loss's analytic gradient against a finite difference
@@ -172,8 +173,8 @@ fn test_nn_training(arena: Arena$@)
 // ==========================================
 // RMSNorm's backward pass: dX against a finite difference, with L = Σ y_i so dy = 1.
 // ==========================================
-priv fn rmsnorm_sum(rn: ai_nn.Rms_norm<|F32|>$@, x: Tensor<|F32|>): F64
-    y: = rn.forward(x)
+priv fn rmsnorm_sum(rn: ai_nn.Rms_norm<|F32|>$@, input: Tensor<|F32|>): F64
+    y: = rn.forward(input)
     $s: = 0.0
     for i in Range.asc(y.size)
         s += (y.data + i)$
@@ -331,12 +332,12 @@ fn test_block_grad(arena: Arena$@)
 // Caution: **A weight added to a layer is listed here in the same commit as in `init_uniform`.**
 // ==========================================
 
-priv fn all_same(t: Tensor<|F64|>): Bool //< is every element the same value?
-    if t.size == 0
+priv fn all_same(values: Tensor<|F64|>): Bool //< is every element the same value?
+    if values.size == 0
         return true
-    first: = (t.data + 0)$
-    for i in Range.asc(t.size)
-        if (t.data + i)$ != first
+    first: = (values.data + 0)$
+    for i in Range.asc(values.size)
+        if (values.data + i)$ != first
             return false
     return true
 
@@ -378,15 +379,16 @@ fn test_init_breaks_symmetry()
 // Under Adam, the n-th weight passed in a step keeps the n-th state across steps. So the weights
 // end up where one `Adam` per weight would move them.
 // ==========================================
-priv fn filled(n: Sz, v: F32, arena: Arena$@): Tensor<|F32|> //< a vector of n, every element v
-    shape: Sz[1] = ::{ n }
+priv fn filled(count: Sz, value: F32, arena: Arena$@): Tensor<|F32|> //<
+    //< a vector of `count`, every element `value`
+    shape: Sz[1] = ::{ count }
     t: = Tensor<|F32|>(Sz[]::shape, arena)
-    t.fill(v)
+    t.fill(value)
     return t
 
-priv fn same(a: Tensor<|F32|>, b: Tensor<|F32|>): Bool //< element for element, bit for bit
-    for i in Range.asc(a.size)
-        if (a.data + i)$ != (b.data + i)$
+priv fn same(left: Tensor<|F32|>, right: Tensor<|F32|>): Bool //< element for element, bit for bit
+    for i in Range.asc(left.size)
+        if (left.data + i)$ != (right.data + i)$
             return false
     return true
 

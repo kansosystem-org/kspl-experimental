@@ -5,7 +5,7 @@
 //< `extern` names a symbol, not an import, so each action is in the page's wasm wherever it
 //< stands.
 import "ksmd/calc/formula" { Positions, attachable, cycle_fixed, partner }
-import "ksmd/calc/functions_table" as table
+import "ksmd/calc/functions_table" as functions
 import "ksmd/calc/help" { FORMS, Help, write_json }
 import "ksmd/calc/value"
 import "ksmd/edit/editor" { Refused }
@@ -26,6 +26,12 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strnum"
 
+// What `ksmd_web_table_edit` does; `ks.TABLE_EDIT` in `core.js` names the same codes.
+priv const INSERT_ROWS: I32 = 0 //< puts rows in
+priv const REMOVE_ROWS: I32 = 1 //< takes rows out
+priv const INSERT_COLUMNS: I32 = 2 //< puts columns in
+priv const REMOVE_COLUMNS: I32 = 3 //< takes columns out
+
 extern fn ksmd_web_insert_table(columns: Sz, rows: Sz): Sz //<
     //< a new table in place of the selection
     if !begin()
@@ -38,15 +44,15 @@ extern fn ksmd_web_remove_table(block: Sz): Sz
     return done(ed.remove_table(block))
 
 extern fn ksmd_web_table_edit(block: Sz, what: I32, at: Sz, count: Sz, len: Sz): Sz //<
-    //< 0 inserts `count` rows before row `at`, 1 removes `count` from it, 2 and 3 do so with
-    //< columns
+    //< `INSERT_ROWS` puts `count` rows before row `at`, `REMOVE_ROWS` removes `count` from it,
+    //< and `INSERT_COLUMNS` and `REMOVE_COLUMNS` do so with columns
     //< A removal of rows leaves those written in, as `ksmd_web_set_heights` takes rows: the rows
     //< hidden (`Editor.edit_table`).
     if !begin()
         return full()
     edit: Table_edit =
-        (.insert_row if what == 0 else .remove_row if what == 1 else .insert_column if what == 2
-        else .remove_column)
+        (.insert_row if what == INSERT_ROWS else .remove_row if what == REMOVE_ROWS
+        else .insert_column if what == INSERT_COLUMNS else .remove_column)
     defer scratch: = Arena(64 * 1024)
     $left_out: = rows_in(len, scratch) catch e
         return refused(e)
@@ -365,8 +371,8 @@ extern fn ksmd_web_table_texts(block: Sz): Sz //<
     if block < 0 || block >= ed.doc.blocks.len ||
         ed.doc.blocks.get(block).kind != .table
         return 0
-    u: = ed.doc.blocks.get(block).first
-    t: = ed.doc.tables[u]@
+    table: = ed.doc.blocks.get(block).first
+    t: = ed.doc.tables[table]@
     defer scratch: = Arena(64 * 1024)
     at: = Positions(ed.doc@, scratch)
     out.c('[')
@@ -376,7 +382,7 @@ extern fn ksmd_web_table_texts(block: Sz): Sz //<
             if c > 0
                 out.c(',')
             defer cell: = Arena(1024)
-            out.c('"').escape_and_append(ed.cell_text_at(u, r, c, at@, cell)).c('"')
+            out.c('"').escape_and_append(ed.cell_text_at(table, r, c, at@, cell)).c('"')
         out.c(']')
     out.c(']')
     return out.slice().len
@@ -460,26 +466,26 @@ extern fn ksmd_web_rename_table(block: Sz, len: Sz): Sz
         return full()
     return done(ed.rename_table(block, text_in(len)))
 
-extern fn ksmd_web_show_number(n: F64): Sz //<
+extern fn ksmd_web_show_number(amount: F64): Sz //<
     //< A number the page worked out, such as a sum, as a cell shows it without a format
     //< **The page writes no number itself**: a second rule would round some numbers differently.
     //< A sum too large for a number shows `#NUM!`, as a formula's would.
     ensure()
     out.clear()
-    v: = value.number(n)
+    v: = value.number(amount)
     if v.kind == .error
         out.s(v.error.mark())
     else
-        show_plain(n, out)
+        show_plain(amount, out)
     return out.slice().len
 
-extern fn ksmd_web_compare_numbers(a: F64, b: F64): I32 //<
-    //< 0 where two finite numbers show the same 15 digits, else -1 where `a` is less and 1
+extern fn ksmd_web_compare_numbers(left: F64, right: F64): I32 //<
+    //< 0 where two finite numbers show the same 15 digits, else -1 where `left` is less and 1
     //< **The page compares no numbers itself**: a colour rule and a filter then agree with a
     //< formula's `=` and `<` (`shows_same` in `ksmd/model/format.kspl`).
-    if shows_same(a, b)
+    if shows_same(left, right)
         return 0
-    return -1 if a < b else 1
+    return -1 if left < right else 1
 
 extern fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
     //< The text a cell shows to edit, written to the output; empty outside a table
@@ -488,12 +494,12 @@ extern fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
     if block < 0 || block >= ed.doc.blocks.len ||
         ed.doc.blocks.get(block).kind != .table
         return 0
-    u: = ed.doc.blocks.get(block).first
-    t: = ed.doc.tables[u]@
+    table: = ed.doc.blocks.get(block).first
+    t: = ed.doc.tables[table]@
     if column < 0 || column >= t.columns.len || row < -1 || row >= t.rows.len
         return 0
     defer scratch: = Arena(16 * 1024)
-    out.s(ed.cell_text(u, row, column, scratch))
+    out.s(ed.cell_text(table, row, column, scratch))
     return out.slice().len
 
 extern fn ksmd_web_functions(): Sz //<
@@ -502,5 +508,5 @@ extern fn ksmd_web_functions(): Sz //<
     //< the worker that runs them (`ksmd_own_help` in `ksmd/port/own_build.kspl`).
     ensure()
     out.clear()
-    write_json(Help[][]::{ Help[]::FORMS, Help[]::table.HELP }, out)
+    write_json(Help[][]::{ Help[]::FORMS, Help[]::functions.HELP }, out)
     return out.slice().len

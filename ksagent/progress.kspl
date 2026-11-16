@@ -77,8 +77,8 @@ impl Progress
         r.text.clear()
         r.reader.clear()
 
-    fn saw(r: Self$@, p: model.Partial$@) //< shows what a reply adds to what was shown
-        thinking: = p.reasoning.slice()
+    fn saw(r: Self$@, partial: model.Partial$@) //< shows what a reply adds to what was shown
+        thinking: = partial.reasoning.slice()
         if thinking.len > r.thought
             if r.phase != Phase.thinking
                 r.end_line()
@@ -86,11 +86,11 @@ impl Progress
                 r.say("  thinking: ")
             r.say(thinking.sub_from(r.thought))
             r.thought = thinking.len
-        $text: U8[] = p.content.slice()
+        $text: U8[] = partial.content.slice()
         $from_call: = false
         // **The first `answer` call is shown**, as it is the one the loop takes (`agent.run`).
-        for i in Range.asc(p.calls.len)
-            c: = p.calls.ptr + i
+        for i in Range.asc(partial.calls.len)
+            c: = partial.calls.ptr + i
             if c.name.equals("answer")
                 r.reader.more(c.arguments.slice())
                 text = r.reader.out.slice()
@@ -285,102 +285,104 @@ impl Text_reader
             else if r.step(args[r.at])
                 r.at += 1
 
-    priv fn step(r: Self$@, c: U8): Bool //< takes one byte outside the text; false to read it again
+    priv fn step(r: Self$@, byte: U8): Bool //<
+        //< takes one byte outside the text; false to read it again
         switch r.place
         case .open
-            r.place = .key_start if c == '{' else (.open if c.is_space() else .done)
+            r.place = .key_start if byte == '{' else (.open if byte.is_space() else .done)
         case .key_start
-            if c == '"'
+            if byte == '"'
                 r.place = .key
                 r.key_len = 0
                 r.is_text = true
                 r.escaped = false
-            else if !c.is_space() && c != ','
+            else if !byte.is_space() && byte != ','
                 r.place = .done
         case .key
-            r.take_key(c)
+            r.take_key(byte)
         case .colon
-            r.place = .value_start if c == ':' else (.colon if c.is_space() else .done)
+            r.place =
+                .value_start if byte == ':' else (.colon if byte.is_space() else .done)
         case .value_start
-            if c.is_space()
+            if byte.is_space()
                 return true
             if r.is_text
-                r.place = .text if c == '"' else .done
+                r.place = .text if byte == '"' else .done
                 return true
             r.place = .skipping
-            r.in_string = c == '"'
+            r.in_string = byte == '"'
             r.escaped = false
-            r.depth = 1 if c == '{' || c == '[' else 0
+            r.depth = 1 if byte == '{' || byte == '[' else 0
         case .skipping
-            return r.skip(c)
+            return r.skip(byte)
         default {}
         return true
 
-    priv fn take_key(r: Self$@, c: U8) //< takes one byte of a key, comparing it with `text`
-        if r.escaped || c == '\\'
+    priv fn take_key(r: Self$@, byte: U8) //< takes one byte of a key, comparing it with `text`
+        if r.escaped || byte == '\\'
             r.escaped = !r.escaped
             r.is_text = false
-        else if c == '"'
+        else if byte == '"'
             r.is_text = r.is_text && r.key_len == 4
             r.place = .colon
         else
-            r.is_text = r.is_text && r.key_len < 4 && "text"[r.key_len] == c
+            r.is_text = r.is_text && r.key_len < 4 && "text"[r.key_len] == byte
             r.key_len += 1
 
-    priv fn skip(r: Self$@, c: U8): Bool //< takes one byte of another member's value
+    priv fn skip(r: Self$@, byte: U8): Bool //< takes one byte of another member's value
         //< False at the `}` that ends the object, which the next place reads again.
         if r.in_string
             if r.escaped
                 r.escaped = false
-            else if c == '\\'
+            else if byte == '\\'
                 r.escaped = true
-            else if c == '"'
+            else if byte == '"'
                 r.in_string = false
                 r.place = .key_start if r.depth == 0 else .skipping
-        else if c == '"'
+        else if byte == '"'
             r.in_string = true
-        else if c == '{' || c == '['
+        else if byte == '{' || byte == '['
             r.depth += 1
-        else if c == '}' || c == ']'
+        else if byte == '}' || byte == ']'
             if r.depth == 0
                 r.place = .key_start
                 return false
             r.depth -= 1
             r.place = .key_start if r.depth == 0 else .skipping
-        else if r.depth == 0 && (c == ',' || c.is_space())
+        else if r.depth == 0 && (byte == ',' || byte.is_space())
             r.place = .key_start
         return true
 
-    priv fn decode_one(r: Self$@, s: U8[]): Sz //<
+    priv fn decode_one(r: Self$@, text: U8[]): Sz //<
         //< Decodes one character or escape of the text at `at`; the bytes used, or 0 until it comes
         at: = r.at
-        c: = s[at]
+        c: = text[at]
         if c == '"'
             r.place = .done
             return 1
         if c != '\\'
             r.out.c(c)
             return 1
-        if at + 1 >= s.len
+        if at + 1 >= text.len
             return 0
-        e: = s[at + 1]
+        e: = text[at + 1]
         if e != 'u'
             r.out.c(simple_escape(e))
             return 2
-        if at + 6 > s.len
+        if at + 6 > text.len
             return 0
         // What cannot stand as a character shows as U+FFFD: a bad digit, or a surrogate without
         // its other half. The reader shows text as it comes, so it goes on where std's
         // `unescape_to_arena` refuses, and it still writes only well-formed UTF-8.
-        $cp: = s.hex4(at + 2).unwrap_or(0xFFFD)
+        $cp: = text.hex4(at + 2).unwrap_or(0xFFFD)
         $used: Sz = 6
         if cp >= 0xD800 && cp < 0xDC00
             // A high surrogate takes the low one after it, once that has come.
-            if at + 12 > s.len && (s.len <= at + 6 || s[at + 6] == '\\') &&
-                (s.len <= at + 7 || s[at + 7] == 'u')
+            if at + 12 > text.len && (text.len <= at + 6 || text[at + 6] == '\\') &&
+                (text.len <= at + 7 || text[at + 7] == 'u')
                 return 0
-            low: = s.hex4(at + 8).unwrap_or(0)
-            if !s.starts_with("\\u", at + 6) || low < 0xDC00 || low >= 0xE000
+            low: = text.hex4(at + 8).unwrap_or(0)
+            if !text.starts_with("\\u", at + 6) || low < 0xDC00 || low >= 0xE000
                 cp = 0xFFFD
             else
                 cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00)
@@ -400,8 +402,8 @@ priv fn is_not_found_start(text: U8[]): Bool //< whether the text can still be t
     return t.len <= answer.NOT_FOUND.len &&
         answer.NOT_FOUND.sub(0, t.len).equals_ignore_case(t)
 
-priv fn simple_escape(e: U8): U8 //< the character a one-letter JSON escape stands for
-    switch e
+priv fn simple_escape(letter: U8): U8 //< the character a one-letter JSON escape stands for
+    switch letter
     case 'n'
         return '\n'
     case 't'
@@ -413,4 +415,4 @@ priv fn simple_escape(e: U8): U8 //< the character a one-letter JSON escape stan
     case 'f'
         return 12U8
     default
-        return e
+        return letter

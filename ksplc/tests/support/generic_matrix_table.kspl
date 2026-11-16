@@ -144,8 +144,8 @@ const SHAPES: Shape[_] = ::{
         .addr = "recv@", .want = "", .size = "16", .offset = "8", .read = "7" },
 }
 
-fn of_generic_type(s: Shape@): Bool //< whether its type is generic, so it has type arguments
-    return s.owner == Owner.box
+fn of_generic_type(shape: Shape@): Bool //< whether its type is generic, so it has type arguments
+    return shape.owner == Owner.box
 
 // ==========================================
 // Ways of reaching it: where the library is written, its mark, and how this file names it
@@ -237,8 +237,9 @@ const ACCESSES: Access[_] = ::{
         .refusal = "" },
 }
 
-fn library_path(a: Access@): U8[] //< the import path of the library, empty where it is this file
-    switch a.home
+fn library_path(access: Access@): U8[] //<
+    //< the import path of the library, empty where it is this file
+    switch access.home
     case .here
         return ""
     case .pkg
@@ -256,64 +257,65 @@ impl Owner
         case .plain
             return "Plain"
 
-fn base_name(a: Access@, o: Owner, arena: Arena$@): U8[] //<
+fn base_name(access: Access@, owner: Owner, arena: Arena$@): U8[] //<
     //< the library's name as this file spells it
-    switch a.reach
+    switch access.reach
     case .alias
-        return arena.text().s("m.").s(o.own_name()).take()
+        return arena.text().s("m.").s(owner.own_name()).take()
     default
-        return o.own_name()
+        return owner.own_name()
 
-fn import_lines(a: Access@, s: Shape@, arena: Arena$@): U8[] //< what the program imports
+fn import_lines(access: Access@, shape: Shape@, arena: Arena$@): U8[] //< what the program imports
     t: = arena.text()
-    path: = library_path(a)
+    path: = library_path(access)
     if path.len > 0
         t.s("import \"").s(path).s("\"")
-        switch a.reach
+        switch access.reach
         case .alias
             t.s(" as m")
         case .unimported
             t.s(" as _m")
         default
-            t.s(" { ").s(s.owner.own_name()).s(" }")
+            t.s(" { ").s(shape.owner.own_name()).s(" }")
         t.s("\n")
-    switch a.decoy
+    switch access.decoy
     case .pub_pkg
         t.s("import \"third/lib\" as _t\n")
     case .priv_sib
         t.s("import \"app/third\" as _t\n")
     default {}
-    if a.via == Via.alias_type
-        t.s("priv typedef Ints = ").s(base_name(a, .box, arena)).s("<|I64|>\n")
+    if access.via == Via.alias_type
+        t.s("priv typedef Ints = ").s(base_name(access, .box, arena)).s("<|I64|>\n")
     return t.take()
 
-fn spell(text: U8[], a: Access@, s: Shape@, inner: Bool, arena: Arena$@): U8[] //<
+fn spell(text: U8[], access: Access@, shape: Shape@, inner: Bool, arena: Arena$@): U8[] //<
     //< A shape's text with the library's names spelt as this way of reaching them
     //< `inner` is a probe's body, where `Self` stands for the type the probes' `impl` targets.
-    $box: = arena.text().s(base_name(a, .box, arena)).s("<|I64|>").take()
-    $plain: = base_name(a, .plain, arena)
-    switch a.via
+    $box: = arena.text().s(base_name(access, .box, arena)).s("<|I64|>").take()
+    $plain: = base_name(access, .plain, arena)
+    switch access.via
     case .alias_type
         box = "Ints"
     case .self_type
-        if inner && s.owner == Owner.box
+        if inner && shape.owner == Owner.box
             box = "Self"
-        if inner && s.owner == Owner.plain
+        if inner && shape.owner == Owner.plain
             plain = "Self"
     default {}
-    return text.replace("{BB}", base_name(a, .box, arena), arena).replace("{B}", box, arena)
-        .replace("{P}", plain, arena).replace("{G}", base_name(a, .gf, arena), arena)
+    return text.replace("{BB}", base_name(access, .box, arena), arena).replace("{B}", box, arena)
+        .replace("{P}", plain, arena).replace("{G}", base_name(access, .gf, arena), arena)
 
-fn owner_type(a: Access@, s: Shape@, arena: Arena$@): U8[] //<
+fn owner_type(access: Access@, shape: Shape@, arena: Arena$@): U8[] //<
     //< The type the probes' `impl` targets on the way through `Self`, spelt outside it
-    return spell("{B}" if s.owner == Owner.box else "{P}", a, s, false, arena)
+    return spell("{B}" if shape.owner == Owner.box else "{P}", access, shape, false, arena)
 
-fn reaches(a: Access@, s: Shape@): Bool //< whether this way of reaching applies to the shape
-    switch a.via
+fn reaches(access: Access@, shape: Shape@): Bool //<
+    //< whether this way of reaching applies to the shape
+    switch access.via
     case .alias_type
-        return of_generic_type(s)
+        return of_generic_type(shape)
     case .self_type
-        return s.owner != Owner.gf
+        return shape.owner != Owner.gf
     default
         return true
 
@@ -503,8 +505,8 @@ priv fn refused(says: U8[], rule: U8[]): Outcome
     return Outcome::{ .applies = true, .runs = false, .want = "", .says = says, .any_line = false,
         .rule = rule, .open = "" }
 
-priv fn not_a_type(s: Shape@): U8[] //< the refusal of a function-like name where a type goes
-    if s.kind == Kind.function
+priv fn not_a_type(shape: Shape@): U8[] //< the refusal of a function-like name where a type goes
+    if shape.kind == Kind.function
         return "is a function, not a type"
     return "is a member of a type, not a type"
 
@@ -512,67 +514,69 @@ impl Group
     fn needs_bare(r: Self): Bool //< whether the position writes the type with no arguments
         return r == Group.call_type_bare || r == Group.value_type_bare || r == Group.type_bare
 
-priv fn by_rule(s: Shape@, p: Position@): Outcome //< the outcome the language's rules give
-    callable: = s.kind != Kind.type
-    switch p.group
+priv fn by_rule(shape: Shape@, position: Position@): Outcome //<
+    //< the outcome the language's rules give
+    callable: = shape.kind != Kind.type
+    switch position.group
     case .call_written
-        return run(s.want, "8.1") if callable else none()
+        return run(shape.want, "8.1") if callable else none()
     case .call_inferred
-        return run(s.want, "3.3, 8.1") if s.own else none()
+        return run(shape.want, "3.3, 8.1") if shape.own else none()
     case .call_type_bare
-        if !callable || !of_generic_type(s)
+        if !callable || !of_generic_type(shape)
             return none()
         return refused("needs its type arguments before", "3.3")
     case .call_value_written
-        return run(s.want, "3.3") if s.recv && s.own else none()
+        return run(shape.want, "3.3") if shape.recv && shape.own else none()
     case .call_value_inferred
-        return run(s.want, "3.3") if s.recv else none()
+        return run(shape.want, "3.3") if shape.recv else none()
     case .value
         if !callable
-            if !p.type_too
+            if !position.type_too
                 return none()
             return refused("names a type. A type is not a value", "6.3")
-        return run(s.want, "8.1")
+        return run(shape.want, "8.1")
     case .value_own_bare
-        if !s.own
+        if !shape.own
             return none()
         return refused("cannot be used as a value without its type arguments", "8.1")
     case .value_type_bare
-        if !callable || !of_generic_type(s)
+        if !callable || !of_generic_type(shape)
             return none()
         return refused("needs its type arguments before one of its methods can be used as a value",
             "8.1")
     case .value_through_value
-        if !s.recv
+        if !shape.recv
             return none()
         return refused("cannot be used as a value through a value", "8.1")
     case .value_inferred
-        return run(s.want, "8.1") if callable else none()
+        return run(shape.want, "8.1") if callable else none()
     case .compare
         if !callable
             return refused("names a type. A type is not a value", "6.3")
         return run("12", "8.1")
     case .size
-        return refused("'sizeof' cannot take", "6.7") if callable else run(s.size, "6.7")
+        return refused("'sizeof' cannot take", "6.7") if callable else run(shape.size, "6.7")
     case .offset
-        return refused(not_a_type(s), "6.3, 6.7") if callable else run(s.offset, "6.7")
+        return (refused(not_a_type(shape), "6.3, 6.7") if callable
+            else run(shape.offset, "6.7"))
     case .type_position
-        return refused(not_a_type(s), "6.3") if callable else run(s.read, "3.3")
+        return refused(not_a_type(shape), "6.3") if callable else run(shape.read, "3.3")
     case .type_bare
         return none() if callable else refused("is used without type arguments", "3.3")
 
-fn outcome(s: Shape@, a: Access@, p: Position@): Outcome //<
+fn outcome(shape: Shape@, access: Access@, position: Position@): Outcome //<
     //< What a cell must do: the rule's outcome, refused wherever the way of reaching is
-    if !reaches(a, s)
+    if !reaches(access, shape)
         return none()
-    if p.top_subject && a.via == Via.self_type
+    if position.top_subject && access.via == Via.self_type
         return none()
-    if p.group.needs_bare() && a.via != Via.name
+    if position.group.needs_bare() && access.via != Via.name
         return none()
-    o: = by_rule(s, p)
-    if !o.applies || a.refusal.len == 0
+    o: = by_rule(shape, position)
+    if !o.applies || access.refusal.len == 0
         return o
     // Refused for the access: its text, at any line writing the name. A refusal the rule gives
     // as well is the program's other fault, so it is not asked for.
-    return Outcome::{ .applies = true, .runs = false, .want = "", .says = a.refusal,
+    return Outcome::{ .applies = true, .runs = false, .want = "", .says = access.refusal,
         .any_line = true, .rule = "9.2, 9.4", .open = "" }

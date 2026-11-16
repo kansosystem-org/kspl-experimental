@@ -162,8 +162,11 @@ export function drafts({ tab, withTab, idle, said, noticed, choose, typeAtEnd, s
         await d.until(`!!${img} && ${img}.complete`);
         const url = await d.js(`${img}.src`);
         await openInDialog(d, ["parts", "notes.ksmd"]);
-        check(await d.js(`fetch(${JSON.stringify(url)}).then(() => "kept", () => "let go")`) === "let go",
-          "opening another document lets go the images of the one before");
+        // Read as an image, not fetched: the page's policy refuses a fetch of any `blob:` URL, so a
+        // fetch would fail for a URL still held too.
+        check(await d.js(`new Promise((done) => { const i = new Image(); i.onload = () => done("kept"); ` +
+          `i.onerror = () => done("let go"); i.src = ${JSON.stringify(url)}; })`) === "let go",
+        "opening another document lets go the images of the one before");
       });
     },
 

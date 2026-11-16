@@ -1,8 +1,19 @@
 /* The preamble part of the "substance half" of the C runtime's preamble header (an environment
  * with an OS).
  *
- * **The substance half is split per subject.** This side holds the includes and the shared
- * small pieces alone. hosted_io / hosted_proc / hosted_thread / hosted_fs / hosted_fs_win /
+ * **The substance half is split per subject.** This side holds what every subject shares, and
+ * the subjects too small for a file of their own. In order:
+ *   - the checks that stop a program (an index out of bounds, a division by zero, a bad shift or
+ *     tag) and main's failure;
+ *   - the clock, and a wait's length;
+ *   - the shared pieces: a string made C's, a descriptor kept from a child, a wait through a
+ *     signal, UTF-16 for Windows, the OS's argv;
+ *   - sleeping, the host, random bytes, stdio's binary mode, a file's size and seek;
+ *   - the console's setup and the check of stdout at exit;
+ *   - a handler the program sets for a signal;
+ *   - a crash said in words (SIGSEGV / SIGBUS, Windows's access violation and stack overflow);
+ *   - argc and argv, the standard streams, and memory poisoned under the address sanitizer.
+ * hosted_io / hosted_proc / hosted_thread / hosted_fs / hosted_fs_win /
  * hosted_spawn / hosted_spawn_win / hosted_net join behind it **in that order** to make one
  * translation unit. write_impl in ksplc/gen/runtime.kspl holds the order.
  * **The standard for splitting is the

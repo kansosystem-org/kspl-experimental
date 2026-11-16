@@ -21,34 +21,37 @@ priv fn adapter(in_dim: Sz, out_dim: Sz, seed: Sz, rng: prng.Prng$@, arena: Aren
     spread(l.b, seed)
     return l
 
-priv fn sequence(rows: Sz, d: Sz, arena: Arena$@): Tensor<|F64|> //< an input that varies, [rows,d]
-    shape: Sz[2] = ::{ rows, d }
+priv fn sequence(rows: Sz, width: Sz, arena: Arena$@): Tensor<|F64|> //<
+    //< an input that varies, [rows,width]
+    shape: Sz[2] = ::{ rows, width }
     x: = Tensor<|F64|>(Sz[]::shape, arena)
     for i in Range.asc(x.size)
         (x.data + i)$ = 0.1 * (F64::i) - 0.5
     return x
 
-priv fn row_of(x: Tensor<|F64|>, t: Sz, arena: Arena$@): Tensor<|F64|> //< row t of x, as [1,d]
-    d: = x.shape[1]
+priv fn row_of(input: Tensor<|F64|>, row: Sz, arena: Arena$@): Tensor<|F64|> //<
+    //< row `row` of `input`, as [1,d]
+    d: = input.shape[1]
     shape: Sz[2] = ::{ 1, d }
     r: = Tensor<|F64|>(Sz[]::shape, arena)
     for i in Range.asc(d)
-        (r.data + i)$ = (x.data + t * d + i)$
+        (r.data + i)$ = (input.data + row * d + i)$
     return r
 
-priv fn row_gap(whole: Tensor<|F64|>, t: Sz, row: Tensor<|F64|>): F64 //<
-    //< The largest difference between row t of `whole` and `row`
+priv fn row_gap(whole: Tensor<|F64|>, at: Sz, row: Tensor<|F64|>): F64 //<
+    //< The largest difference between row `at` of `whole` and `row`
     $gap: = 0.0
     for i in Range.asc(row.size)
         gap = math.max(gap,
-            math.abs((whole.data + t * row.size + i)$ - (row.data + i)$))
+            math.abs((whole.data + at * row.size + i)$ - (row.data + i)$))
     return gap
 
-priv fn largest_gap(a: Tensor<|F64|>, b: Tensor<|F64|>): F64 //< the largest elementwise difference
-    assert(a.size == b.size, "largest_gap: the sizes differ")
+priv fn largest_gap(left: Tensor<|F64|>, right: Tensor<|F64|>): F64 //<
+    //< the largest elementwise difference
+    assert(left.size == right.size, "largest_gap: the sizes differ")
     $gap: = 0.0
-    for i in Range.asc(a.size)
-        gap = math.max(gap, math.abs((a.data + i)$ - (b.data + i)$))
+    for i in Range.asc(left.size)
+        gap = math.max(gap, math.abs((left.data + i)$ - (right.data + i)$))
     return gap
 
 fn test_attention_forward_lora_matches_training(arena: Arena$@) //<

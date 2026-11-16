@@ -239,13 +239,13 @@ pub struct Rule_line //< a rule as one line writes it
     pub prereqs: U8[] //< as written, after it, with `|` kept; empty for none
     double: Bool //< `::`, a rule of its own for each
 
-pub fn rule_of(l: Source_line, file: U8[]): Rule_line? //<
+pub fn rule_of(line: Source_line, file: U8[]): Rule_line? //<
     //< the rule the line writes, if it writes one
     //< **Not a rule**: a recipe, a directive, an assignment (an `=` before the colon, or `:=`),
     //< and a target's own variable (`t: VAR = x`), whose place the database gives.
-    if l.recipe
+    if line.recipe
         return .none
-    t: = l.text.trim_start()
+    t: = line.text.trim_start()
     for d in U8[][]::{ "include ", "-include ", "sinclude ", "ifeq", "ifneq", "ifdef ", "ifndef ",
         "else", "endif", "export ", "unexport ", "vpath", "undefine ", "define ", "override " }
         if t.starts_with(d)
@@ -268,8 +268,8 @@ pub fn rule_of(l: Source_line, file: U8[]): Rule_line? //<
             after = after.sub(0, after.find_char(';').unwrap_or(after.len))
             if top_level_has(after, '=')
                 return .none
-            return .some(Rule_line::{ .file = file, .line = l.first, .targets = t.sub(0, i),
-                .prereqs = after.trim_spaces(), .double = double })
+            return .some(Rule_line::{ .file = file, .line = line.first,
+                .targets = t.sub(0, i), .prereqs = after.trim_spaces(), .double = double })
     return .none
 
 priv fn top_level_has(text: U8[], want: U8): Bool //< the byte appears outside every `$(…)`
@@ -319,16 +319,16 @@ fn source_op(line: U8[]): U8[] //< the operator a make file's line sets a variab
         return "::=" if eq >= 2 && t[eq - 2] == ':' else ":="
     return "="
 
-pub fn help_of(l: U8[], file: Sz, line: Sz, arena: Arena$@): Help? //<
+pub fn help_of(text: U8[], file: Sz, line: Sz, arena: Arena$@): Help? //<
     //< What one `## <group>|<target>|<description>` line says; none where the line is not one
-    if !l.starts_with("## ")
+    if !text.starts_with("## ")
         return .none
-    parts: = l.sub_from(3).split('|', arena)
+    parts: = text.sub_from(3).split('|', arena)
     if parts.len < 3
         return .none
     return .some(Help::{ .file = file, .line = line, .group = parts.get(0).trim_spaces(),
         .spec = parts.get(1).trim_spaces(),
-        .text = l.sub_from(3 + parts.get(0).len + 1 + parts.get(1).len + 1) })
+        .text = text.sub_from(3 + parts.get(0).len + 1 + parts.get(1).len + 1) })
 
 pub struct Help //< one `##` line of `make help`
     file: Sz //< which of the texts given holds it
@@ -337,8 +337,8 @@ pub struct Help //< one `##` line of `make help`
     pub spec: U8[] //< the target, or a family's name ending in `*`
     text: U8[]
 
-pub fn assigned_name(t: U8[]): U8[] //< the variable the line sets; empty where it sets none
-    body: = t.strip_prefix("override ").strip_prefix("export ").strip_prefix("private ")
+pub fn assigned_name(line: U8[]): U8[] //< the variable the line sets; empty where it sets none
+    body: = line.strip_prefix("override ").strip_prefix("export ").strip_prefix("private ")
     if body.starts_with("define ")
         rest: = body.sub_from(7).trim_spaces()
         return rest.sub(0, rest.find_char(' ').unwrap_or(rest.len))

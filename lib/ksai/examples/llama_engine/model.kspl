@@ -50,12 +50,12 @@ struct Seq_loss //< a sequence's mean cross-entropy in nats: over every position
     tail: F64
 
 impl<|T|> Model_grads<|T|>
-    fn accumulate(r: Self$@, o: Self$@) //< another sequence's gradients added in, in place
-        r.token_embed.accumulate(o.token_embed)
+    fn accumulate(r: Self$@, other: Self$@) //< another sequence's gradients added in, in place
+        r.token_embed.accumulate(other.token_embed)
         for b in Range.asc(r.nblk)
-            (r.blocks + b).accumulate(o.blocks + b)
-        r.norm.accumulate(o.norm@)
-        r.head.accumulate(o.head@)
+            (r.blocks + b).accumulate(other.blocks + b)
+        r.norm.accumulate(other.norm@)
+        r.head.accumulate(other.head@)
 
 impl<|T|> Mini_llama<|T|>
     fn new(vocab_size: Sz, dim: Sz, hidden: Sz, n_layers: Sz, max_seq_len: Sz,
@@ -168,16 +168,16 @@ impl<|T|> Mini_llama<|T|>
             dh = r.blocks[b].backward_grads((cache.caches + b), dh, g.blocks + b)
         g.token_embed = r.token_embed.backward_seq_grads(tokens.slice(), tokens.len, dh)
         return g
-    fn apply_grads(r: Self$@, g: Model_grads<|T|>$@, u: ai_optim.Updater<|T|>$@) //<
-        //< Moves every weight by `g`, as one step of `u`
+    fn apply_grads(r: Self$@, grads: Model_grads<|T|>$@, updater: ai_optim.Updater<|T|>$@) //<
+        //< Moves every weight by `grads`, as one step of `updater`
         //< **Every gradient first, then every step**: an optimizer with memory (Adam) sees each
         //< weight once per step, in the same order every step (`Updater`'s pairing).
-        u.begin_step()
-        u.update(r.token_embed.weight, g.token_embed)
-        for b in Range.asc(g.nblk)
-            r.blocks[b].apply_grads(g.blocks + b, u)
-        r.norm.apply_grads(g.norm@, u)
-        r.lm_head.apply_grads(g.head@, u)
+        updater.begin_step()
+        updater.update(r.token_embed.weight, grads.token_embed)
+        for b in Range.asc(grads.nblk)
+            r.blocks[b].apply_grads(grads.blocks + b, updater)
+        r.norm.apply_grads(grads.norm@, updater)
+        r.lm_head.apply_grads(grads.head@, updater)
     fn train_step(r: Self$@, tokens: List<|I32|>$@, target: I32, lr: F64, arena: Arena$@): F64 //<
         //< One step of end-to-end training (teacher forcing, predicting the final position)
         //< Every layer back-propagated with SGD so the sequence's next token becomes target; it
@@ -213,6 +213,6 @@ impl<|T|> Mini_llama<|T|>
         return Seq_grads<|T|>::{ .loss = loss,
             .grads = r.grads_of(cache@, tokens, dlogits, arena) }
 
-priv fn key(b: Str_builder$@, i: Sz, suffix: U8[]): U8[] //<
+priv fn key(builder: Str_builder$@, i: Sz, suffix: U8[]): U8[] //<
     //< Builds a safetensors weight key ("model.layers.{i}{suffix}")
-    return b.clear().s("model.layers.\{I32::i\}").s(suffix).slice()
+    return builder.clear().s("model.layers.\{I32::i\}").s(suffix).slice()

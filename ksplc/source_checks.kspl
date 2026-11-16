@@ -2,8 +2,9 @@
 //< **They read the text as written, not the tree.** They find misaligned indentation columns, a
 //< `//<` that describes nothing (`[W0209]` / `[W0210]`) or opens with a label (`[W0213]`), and a
 //< comment's name that leads nowhere or a mark that is not read (`[W0211]` / `[W0212]`). They find
-//< a comment past its cap, a run below a `{}`, and a file's description under a banner (`[H0806]`
-//< to `[H0808]`). Each question is asked of the code that answers it elsewhere.
+//< a comment past its cap, a run below a `{}`, a file's description under a banner, and a summary
+//< ending in a full stop (`[H0806]` to `[H0809]`). Each question is asked of the code that answers
+//< it elsewhere.
 //< `Compiler.run_semantic_analysis` in `pipeline.kspl` calls `report_all`.
 import "ksplc/base/as_written" as base_as_written
 import "ksplc/base/ast" { Ast_node }
@@ -20,31 +21,31 @@ import "std/ds" { List, Map }
 import "std/str" { Str_builder }
 
 fn report_all(loaded_files: List<|U8$[]|>$@, source_map: Map<|U8[], U8$[]|>$@,
-    root_file: Ast_node$@, sema: Sema_ctx$@) //<
+    root_file: Ast_node$@, ctx: Sema_ctx$@) //<
         //< It runs every check on the source's own spelling
         //< Caution: **Call it after Pass 0 of the collecting, not before it.** That pass collects a
         //< file's own `##lint(CODE = off)`, which before it would have no effect (Principle 5). The
         //< summary the lint gate reads is counted there. And a comment's names are looked up in the
         //< tables the collecting fills.
     files: = read_files(loaded_files, source_map)
-    report_layout_notes(source_map, sema)
-    report_doc_marks(files@, sema)
-    report_comments(files@, root_file, sema)
+    report_layout_notes(source_map, ctx)
+    report_doc_marks(files@, ctx)
+    report_comments(files@, root_file, ctx)
     for f in files
-        report_comment_caps(f, sema)
+        report_comment_caps(f, ctx)
 
-priv fn report_layout_notes(source_map: Map<|U8[], U8$[]|>@, sema: Sema_ctx$@) //<
+priv fn report_layout_notes(source_map: Map<|U8[], U8$[]|>@, ctx: Sema_ctx$@) //<
     //< It reports the misaligned indentation columns as diagnostics
     //< **This is where the two meet**: `parse/load.kspl` holds the notes, and sema counts and
     //< prints them. Only this file can use both, as sema imports nothing from parse.
     for file in parse_load.layout_noted_files(base_core.arena)
         if src: = source_map.get(file)
             if notes: = parse_load.layout_notes_for(file)
-                report_notes_of(sema, file, src, notes)
+                report_notes_of(ctx, file, src, notes)
 
-priv fn report_notes_of(sema: Sema_ctx$@, file: U8[], src: U8[],
+priv fn report_notes_of(ctx: Sema_ctx$@, file: U8[], src: U8[],
     notes: List<|parse_layout.Note|>$@) //<
-        //< It reports one file's notes.
+        //< It reports one file's notes
         //< **The squiggle goes on the line's first token**, since the indentation is what is wrong.
     starts: = src.line_starts(base_core.arena)
     for nt in notes.slice()
@@ -64,7 +65,7 @@ priv fn report_notes_of(sema: Sema_ctx$@, file: U8[], src: U8[],
                 .s("this line is indented \{got\} columns; sibling lines use \{want\}. It belongs \
                     to the same block. Match their indentation so the text reflects the block \
                     structure")
-            sema.report_diagnostic_at(file, src, at, span, .error, msg.slice())
+            ctx.report_diagnostic_at(file, src, at, span, .error, msg.slice())
         case .tab {
             // **A tab gets no code**: a line at column 0 stops on a syntax error first, so a code
             // would never fire. `tests/layout_test.kspl` checks that it is found; the
@@ -72,13 +73,13 @@ priv fn report_notes_of(sema: Sema_ctx$@, file: U8[], src: U8[],
         } case .terminator(col)
             // **No code either**: accepted, it would be a second spelling of the line's end
             // (Principle 6), so no setting may let it pass.
-            sema.report_diagnostic_at(file, src, starts.get(nt.line - 1) + col, 1, .error,
+            ctx.report_diagnostic_at(file, src, starts.get(nt.line - 1) + col, 1, .error,
                 "a statement in the indentation notation ends at its line boundary. This ';' is \
                     unnecessary. Delete it. A ';' stands only between two statements on one line")
         case .block_end(col)
             // **No code either**, for the same reason: accepted, `}` and `};` would be two
             // spellings of one statement's end.
-            sema.report_diagnostic_at(file, src, starts.get(nt.line - 1) + col, 1, .error,
+            ctx.report_diagnostic_at(file, src, starts.get(nt.line - 1) + col, 1, .error,
                 "the '}' before this ';' closes a block written on one line. It already ends the \
                     statement. Delete the ';'. A ';' after a block stands only where the block is \
                     part of a value, as in 'x: = f() catch { fallback 0 }; g()'")
@@ -98,7 +99,7 @@ priv fn read_files(loaded_files: List<|U8$[]|>@, source_map: Map<|U8[], U8$[]|>@
         out.push(Read_file::{ .name = name, .src = src })
     return out
 
-priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
+priv fn report_doc_marks(files: List<|Read_file|>@, ctx: Sema_ctx$@) //<
     //< It reports the two ways a `//<` says nothing
     //< A continuation with no `//<` above it and an anchor with nothing below both describe
     //< nothing: written but without effect (Principle 5). **The rules are asked, not written
@@ -111,8 +112,10 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
         // after it (`file_doc_at` in `base/ast_doc.kspl`).
         own: = base_ast_doc.file_doc_at(src)
         if own < src.len
-            report_summary_fault(f.name, src, own, base_ast_doc.file_summary_fault(src, own), sema)
-            report_banner_over(f.name, src, own, sema)
+            report_summary_fault(f.name, src, own, base_ast_doc.file_summary_fault(src, own), ctx)
+            if base_ast_doc.file_summary_stop(src, own)
+                report_summary_stop(f.name, src, own, ctx)
+            report_banner_over(f.name, src, own, ctx)
         $at: Sz = 0 if own >= src.len else base_ast_doc.file_doc_end(src, own)
         $line: = src.sub(0, at).count_str("\n") + 1
         $under_braces: = false
@@ -128,12 +131,14 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                 cmt = parse_layout.next_line_comment(src, base_lines.line_end(src, cmt))
             doc_comment: = cmt < stop && src.sub_from(cmt).starts_with("//<")
             if doc_comment
-                report_summary_fault(f.name, src, at, base_ast_doc.summary_fault_at(src, at), sema)
+                report_summary_fault(f.name, src, at, base_ast_doc.summary_fault_at(src, at), ctx)
+                if base_ast_doc.summary_stop_at(src, at)
+                    report_summary_stop(f.name, src, at, ctx)
             if under_braces && cmt == base_lines.skip_blanks(src, at) &&
                 base_ast_doc.is_continuation_line(src, at)
-                sema.report_diagnostic_at(f.name, src, base_lines.skip_blanks(src, at), 3, .hint,
+                ctx.report_diagnostic_at(f.name, src, base_lines.skip_blanks(src, at), 3, .hint,
                     "[H0807] This //< run stands below the '{}' of the declaration it describes, \
-                        outside it. Open the braces and put the //< lines between them.")
+                        outside it. Open the braces and put the //< lines between them")
             under_braces = written_code(f.name, src, at, stop, cmt, line).ends_with("{}")
             line += 1
             if doc_comment && base_ast_doc.is_continuation_line(src, at) && !opens
@@ -141,8 +146,8 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                 defer $msg: = Str_builder()
                 msg
                     .s("[W0209] This //< has no preceding description to continue. The line above \
-                        has no //<. This text appears in neither editor hover nor the API record.")
-                sema.report_diagnostic_at(f.name, src, mark, 3, .warning, msg.slice())
+                        has no //<. This text appears in neither editor hover nor the API record")
+                ctx.report_diagnostic_at(f.name, src, mark, 3, .warning, msg.slice())
             // **The line below holds the anchor's whole description.** `is_continuation_line`
             // returns false past the end, so the last line needs no case of its own.
             if doc_comment && base_ast_doc.is_bare_summary(src, at) &&
@@ -155,8 +160,8 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                 defer $msg2: = Str_builder()
                 msg2
                     .s("[W0210] This //< has no text or continuation. Write a description after the \
-                        marker or on //< lines below it.")
-                sema.report_diagnostic_at(f.name, src, head, 3, .warning, msg2.slice())
+                        marker or on //< lines below it")
+                ctx.report_diagnostic_at(f.name, src, head, 3, .warning, msg2.slice())
             opens = doc_comment && base_ast_doc.opens_a_summary_run(src, at)
             at = stop + 1
 
@@ -173,7 +178,7 @@ priv fn written_code(file: U8[], src: U8[], at: Sz, stop: Sz, cmt: Sz, line: Sz)
         return ""
     return text.sub(0, text.len - tail).trim_spaces()
 
-priv fn report_banner_over(file: U8[], src: U8[], own: Sz, sema: Sema_ctx$@) //<
+priv fn report_banner_over(file: U8[], src: U8[], own: Sz, ctx: Sema_ctx$@) //<
     //< One `[H0808]` on a file's `//<` run, which starts at `own`, where a comment stands above it
     //< **A reader's eye lands on the first line**, and a banner there pushes what the file is for
     //< off the screen. Only blank lines and comments stand above `own` (`file_doc_at`). A `#!`
@@ -189,13 +194,13 @@ priv fn report_banner_over(file: U8[], src: U8[], own: Sz, sema: Sema_ctx$@) //<
                 .s("[H0808] This file's //< description stands below a comment on line \{line\}. \
                     Move the description to the top of the file, and put the other comment below \
                     it.")
-            sema.report_diagnostic_at(file, src, base_lines.skip_blanks(src, own), 3, .hint,
+            ctx.report_diagnostic_at(file, src, base_lines.skip_blanks(src, own), 3, .hint,
                 msg.slice())
             return
         at = stop + 1
 
 priv fn report_summary_fault(file: U8[], src: U8[], at: Sz, fault: base_ast_doc.Summary_fault,
-    sema: Sema_ctx$@) //<
+    ctx: Sema_ctx$@) //<
         //< One `[W0213]` at the start of the line at `at`, where its run's summary has a fault
         //< The summary is what the hover, the completion list and `ksplc doc` show. So it says
         //< what the thing is. See "The documentation a declaration carries" in
@@ -210,7 +215,16 @@ priv fn report_summary_fault(file: U8[], src: U8[], at: Sz, fault: base_ast_doc.
                 one-line description of the item, and move the label to the line below it.")
     // Caution: **Point at the start of the line, not at the mark** (the reason is at `[W0210]`).
     head: = base_lines.skip_blanks(src, at)
-    sema.report_diagnostic_at(file, src, head, 3, .warning, why.slice())
+    ctx.report_diagnostic_at(file, src, head, 3, .warning, why.slice())
+
+priv fn report_summary_stop(file: U8[], src: U8[], at: Sz, ctx: Sema_ctx$@) //<
+    //< One `[H0809]` at the start of the line at `at`, where its run's summary ends in a full stop
+    //< "Comment notation and limits" in `../docs/SPEC-plain-language.md` writes a summary as a
+    //< phrase or a short sentence without one.
+    // Caution: **Point at the start of the line, not at the mark** (the reason is at `[W0210]`).
+    ctx.report_diagnostic_at(file, src, base_lines.skip_blanks(src, at), 3, .hint,
+        "[H0809] This //< summary ends with a full stop. Write it as a phrase or a short sentence \
+            without one.")
 
 priv struct Run_line //<
     //< one line of a comment run, and where its text stands in the run's joined text
@@ -237,7 +251,7 @@ priv fn continues_run(src: U8[], at: Sz, next: Sz): Bool //<
         return false
     return src.starts_with("//<", at) == src.starts_with("//<", next)
 
-priv fn report_comments(files: List<|Read_file|>@, root_file: Ast_node$@, sema: Sema_ctx$@) //<
+priv fn report_comments(files: List<|Read_file|>@, root_file: Ast_node$@, ctx: Sema_ctx$@) //<
     //< It reads every line comment once, for the warnings about a comment's marks and names
     //< Those are an unread `///` (`[W0212]`) and a name that leads nowhere (`[W0211]`), asked of
     //< `base/ast_doc.kspl` and `sema/session/pointer.kspl`, as the editor asks. **A name is read in
@@ -260,7 +274,7 @@ priv fn report_comments(files: List<|Read_file|>@, root_file: Ast_node$@, sema: 
                 // `///`.
                 if base_ast_doc.is_unread_mark(text) &&
                     !(next == 0 && base_as_written.opened_with_shebang(f.name))
-                    report_unread_mark(sema, f.name, src, next, stop)
+                    report_unread_mark(ctx, f.name, src, next, stop)
                 from: = comment_text_start(src, next, stop)
                 if run.len > 0
                     joined.c(' ')
@@ -286,25 +300,25 @@ priv fn report_comments(files: List<|Read_file|>@, root_file: Ast_node$@, sema: 
                 ln: = run.get(line)
                 pos: = ln.from + p.at - ln.joined
                 name: = text.sub(p.at, p.len)
-                pointed: = sema_session_pointer.pointed_at(sema, root_file, f.name, pos, name)
+                pointed: = sema_session_pointer.pointed_at(ctx, root_file, f.name, pos, name)
                 switch pointed
                 case .missing(part)
-                    report_pointer(sema, f.name, src, pos, ln.stop, name, part)
+                    report_pointer(ctx, f.name, src, pos, ln.stop, name, part)
                 default {}
 
-priv fn as_written_at(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz): Sz //<
+priv fn as_written_at(ctx: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz): Sz //<
     //< Where position `pos` of a comment is in the file as written
     //< Caution: **Measure from the line's end.** The layout stage puts a `;` or `}` before a
     //< trailing comment in the indentation notation, but a comment runs to its line's end in both.
     line_start: = base_lines.line_start(src, pos)
-    line: = base_lines.line_for_offset(sema.line_starts_for(file, src), line_start)
+    line: = base_lines.line_for_offset(ctx.line_starts_for(file, src), line_start)
     written: = base_as_written.as_written_line(file, line)
     back: = line_end - pos
     if written.len > 0 && back <= written.len
         return line_start + written.len - back
     return pos
 
-priv fn report_unread_mark(sema: Sema_ctx$@, file: U8[], src: U8[], at: Sz, line_end: Sz) //<
+priv fn report_unread_mark(ctx: Sema_ctx$@, file: U8[], src: U8[], at: Sz, line_end: Sz) //<
     //< One `[W0212]`, under the mark as the file is written, naming where the text should go
     //< **The two marks point in different directions in their home languages**, so each gets its
     //< own advice. A `///` means the thing after it, and a `//!` the file or the item it is inside.
@@ -321,12 +335,12 @@ priv fn report_unread_mark(sema: Sema_ctx$@, file: U8[], src: U8[], at: Sz, line
                 doc`. Put the description after the item on the same line (`fn add(a: I32, b: I32): \
                 I32 //< adds two numbers`). Continue it below with //< lines indented one level. \
                 Use ordinary // comments for implementation notes.")
-    sema.report_diagnostic_at(file, src, as_written_at(sema, file, src, at, line_end), 3, .warning,
+    ctx.report_diagnostic_at(file, src, as_written_at(ctx, file, src, at, line_end), 3, .warning,
         msg.slice())
 
-priv fn report_pointer(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz, name: U8[],
+priv fn report_pointer(ctx: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_end: Sz, name: U8[],
     part: Sz) //< One `[W0211]`, placed under the name as the file is written
-    shown: = as_written_at(sema, file, src, pos, line_end)
+    shown: = as_written_at(ctx, file, src, pos, line_end)
     // The owner is every part before the one that names nothing.
     $cut: Sz = 0
     $seen: Sz = 0
@@ -344,7 +358,7 @@ priv fn report_pointer(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_en
         .s("[W0211] This comment references `\{name\}`, but `\{owner\}` has no `\{member\}`. \
             Reference an existing member. Identify the file that adds a name (`\{name\}` in \
             `<file>`). Introduce another language's name as its own (Python's `json.dumps`).")
-    sema.report_diagnostic_at(file, src, shown, name.len, .warning, msg.slice())
+    ctx.report_diagnostic_at(file, src, shown, name.len, .warning, msg.slice())
 
 priv const COMMENT_CAP: Sz = 6 //< the most lines a comment holds before the next line of code
 priv const HEADER_CAP: Sz = 10 //< the same for a file's opening header, wider but still a cap
@@ -354,14 +368,14 @@ priv struct Cap_run //< the comment lines `report_comment_caps` counts toward a 
     start: Sz //< where the first counted line starts
     in_detail: Bool //< whether a `//<` run has passed its summary, so what follows is its detail
 
-priv fn report_comment_caps(f: Read_file, sema: Sema_ctx$@) //<
+priv fn report_comment_caps(file: Read_file, ctx: Sema_ctx$@) //<
     //< One `[H0806]` for each comment of one file that runs past its cap
     //< The rule is "Comment notation and limits" in `../docs/SPEC-plain-language.md`. **Every
     //< comment line up to the next line of code counts**: a blank line ends nothing, or one in the
     //< middle would pass any length. Not counted: a run's summary, and a gate's marker
     //< (`EXPECT:`). An empty `//<` parts two paragraphs of a detail and starts the count again. A
     //< divider (`---`, `===`) ends the comment it stands in.
-    src: U8[] = f.src
+    src: U8[] = file.src
     $run: = Cap_run::{ .len = 0, .start = 0, .in_detail = false }
     $seen_decl: = false
     $at: Sz = 0
@@ -370,19 +384,19 @@ priv fn report_comment_caps(f: Read_file, sema: Sema_ctx$@) //<
         stop: = base_lines.line_end(src, at)
         for cmt < at
             cmt = parse_layout.next_line_comment(src, base_lines.line_end(src, cmt))
-        shebang: = at == 0 && base_as_written.opened_with_shebang(f.name)
+        shebang: = at == 0 && base_as_written.opened_with_shebang(file.name)
         code_end: = cmt if cmt < stop else stop
         code: = src.sub(at, code_end - at).trim_spaces()
         text: = src.sub(cmt, stop - cmt).trim_spaces() if cmt < stop else ""
         if code.len > 0 || shebang
             run.in_detail =
                 text.starts_with("//<") && text.sub_from(3).trim_spaces().len > 0
-            seen_decl = close_cap_run(f.name, src, run@, seen_decl, sema)
+            seen_decl = close_cap_run(file.name, src, run@, seen_decl, ctx)
             if !shebang && !code.starts_with("import ")
                 seen_decl = true
         else if text.starts_with("//<")
             if text.len == 3
-                seen_decl = close_cap_run(f.name, src, run@, seen_decl, sema)
+                seen_decl = close_cap_run(file.name, src, run@, seen_decl, ctx)
             else if run.in_detail
                 run.add(at)
             else
@@ -394,11 +408,11 @@ priv fn report_comment_caps(f: Read_file, sema: Sema_ctx$@) //<
             if !fmt_comment.marker_head(body)
                 run.add(at)
             if fmt_comment.is_divider(body)
-                seen_decl = close_cap_run(f.name, src, run@, seen_decl, sema)
+                seen_decl = close_cap_run(file.name, src, run@, seen_decl, ctx)
         else
             run.in_detail = false
         at = stop + 1
-    close_cap_run(f.name, src, run@, seen_decl, sema)
+    close_cap_run(file.name, src, run@, seen_decl, ctx)
 
 impl Cap_run
     fn add(r: Self$@, at: Sz) //< counts the line starting at `at` into the run
@@ -406,7 +420,7 @@ impl Cap_run
             r.start = at
         r.len += 1
 
-priv fn close_cap_run(file: U8[], src: U8[], run: Cap_run$@, seen_decl: Bool, sema: Sema_ctx$@):
+priv fn close_cap_run(file: U8[], src: U8[], run: Cap_run$@, seen_decl: Bool, ctx: Sema_ctx$@):
     Bool //<
         //< Ends a run, reporting it where it is past its cap; whether a declaration is seen now
         //< **The first run past the body cap before any declaration is the header**, and takes the
@@ -422,6 +436,6 @@ priv fn close_cap_run(file: U8[], src: U8[], run: Cap_run$@, seen_decl: Bool, se
             .s("[H0806] This comment has \{n\} lines before the next line of code. The cap is \
                 \{cap\} lines (\{COMMENT_CAP\}, or \{HEADER_CAP\} for the header at a file's \
                 start). Shorten it, or move the background to a design document.")
-        sema.report_diagnostic_at(file, src, base_lines.skip_blanks(src, run.start), 2, .hint,
+        ctx.report_diagnostic_at(file, src, base_lines.skip_blanks(src, run.start), 2, .hint,
             msg.slice())
     return true

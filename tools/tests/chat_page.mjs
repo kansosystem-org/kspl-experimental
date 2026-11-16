@@ -1,8 +1,10 @@
 // ksagent's chat page, driven in a headless Chromium along the whole path a question takes: the
 // page appends it to the ask file, `ksagent watch` (started by the opener with `--show`) asks a
 // stand-in model server, the answer grows in the live file, and the checked answer replaces it.
-// The cases: the Markdown reader alone, on usual and on hostile text; asking; the answer growing;
-// the checked answer; a stopped answer; a model's answer holding markup, shown as text; Japanese,
+// The cases: each control's name, the regions and Tab's order, read from the browser's
+// accessibility tree; the Markdown reader alone, on usual and on hostile text; asking;
+// the answer growing; the checked answer; a stopped answer; a model's answer holding markup,
+// shown as text; Japanese,
 // with an Excel source placed by its sheet and row;
 // a save that meets another tab's write; a reload; a turn the reader cannot show; a question whose
 // save is never answered, or answered late; lines ksagent
@@ -14,7 +16,7 @@ import { spawn, spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { launch } from "../../ksmd/tests/browser/cdp.mjs";
-import { driver, verdict, wait, waitFor } from "../../ksmd/tests/browser/drive.mjs";
+import { SHIFT, driver, verdict, wait, waitFor } from "../../ksmd/tests/browser/drive.mjs";
 import { place, standIn } from "./chat_support.mjs";
 
 const [browserBin, opener, work] = process.argv.slice(2);
@@ -144,6 +146,31 @@ async function markdownSteps(page, d, expr) {
   return steps;
 }
 
+// The controls a key can reach that a screen reader cannot name, as `role:name`, from the
+// browser's own accessibility tree. **A name taken from a placeholder counts as none**: the
+// placeholder goes once text is typed, and not every screen reader reads it as a name.
+async function unnamed(page) {
+  const { nodes } = await page("Accessibility.getFullAXTree");
+  const focusable = (n) => (n.properties || []).some((p) => p.name === "focusable" && p.value.value);
+  const named = (n) => {
+    const name = n.name || {};
+    const used = (name.sources || []).find((s) => s.value && !s.superseded);
+    return typeof name.value === "string" && name.value.trim() !== "" &&
+      !(used && used.type === "placeholder");
+  };
+  return nodes.filter((n) => !n.ignored && focusable(n) && !named(n))
+    .map((n) => `${n.role ? n.role.value : "?"}:${n.name ? n.name.value : ""}`);
+}
+
+// The landmarks and live regions a screen reader can go to, as `role:name:live`.
+async function regions(page) {
+  const { nodes } = await page("Accessibility.getFullAXTree");
+  const live = (n) => ((n.properties || []).find((p) => p.name === "live") || { value: {} }).value.value;
+  return nodes.filter((n) => !n.ignored && n.role &&
+    ["navigation", "main", "log", "alert"].includes(n.role.value))
+    .map((n) => `${n.role.value}:${n.name ? n.name.value : ""}:${live(n) || ""}`);
+}
+
 async function main() {
   verdict.part = "chat page";
   const root = path.join(work, "folder");
@@ -175,6 +202,28 @@ async function main() {
     const name = await d.js("new URLSearchParams(location.search).get('chat')");
     check(/^chat-\d{8}-\d{6}$/.test(name || ""), "an empty folder opens a new conversation", name);
 
+    // **A person who cannot see the page, or uses no mouse, can still ask.**
+    await browser.page("Accessibility.enable");
+    const nameless = await unnamed(browser.page);
+    check(nameless.length === 0, "each control a key reaches has a name", nameless.join(" "));
+    const found = await regions(browser.page);
+    check(["navigation:Conversations:", "main::", "log::polite", "alert::assertive"]
+      .every((r) => found.includes(r)),
+      "the conversations, the main part, the log of turns and the notice are each a region",
+      found.join(" "));
+    // Tab from the page's first control reaches the box to ask in, then Ask, in that order.
+    await d.js("document.getElementById('new').focus()");
+    const stops = ["new"];
+    for (let k = 0; k < 10 && stops[stops.length - 1] !== "send"; k++) {
+      await d.press("Tab");
+      stops.push(await d.js("document.activeElement.id || document.activeElement.tagName"));
+    }
+    check(stops.indexOf("text") >= 0 && stops.indexOf("send") === stops.indexOf("text") + 1,
+      "Tab reaches the box to ask in, then Ask", stops.join(" "));
+    await d.press("Tab", SHIFT);
+    check(await d.js("document.activeElement.id") === "text", "Shift+Tab goes back to the box",
+      await d.js("document.activeElement.id"));
+
     for (const [text, want] of RENDER_CASES) {
       const got = await d.js(`ksagentMarkdown.render(ksagentMarkdown.parse(${JSON.stringify(text)}), ` +
         "document.createElement('div')).innerHTML");
@@ -192,7 +241,7 @@ async function main() {
     check(await d.js("ksagentMarkdown.render(ksagentMarkdown.parse('> '.repeat(12) + 'x'), " +
       "document.createElement('div')).querySelectorAll('blockquote').length") === 8,
       "quotes nest 8 deep, and the rest reads as text");
-    // A table's columns stop at MAX_COLUMNS in `ksagent/page/chat.html`: a row has that many cells.
+    // A table's columns stop at MAX_COLUMNS in `ksagent/page/markdown.js`: a row has that many cells.
     const columns = (n) => d.js("(() => { const md = ksagentMarkdown; " +
       `const s = '|' + ' a |'.repeat(${n}) + '\\n|' + ' - |'.repeat(${n}) + '\\n| 1 |'; ` +
       "const t = md.render(md.parse(s), document.createElement('div')).querySelector('table'); " +
@@ -278,6 +327,9 @@ async function main() {
     const focusedAt = await d.js(grown);
     check(await d.until(`${grown} > ${focusedAt} && document.activeElement === window.stopButton`,
       15000), "the focus stays on Stop while the answer grows", await d.js("document.activeElement.tagName"));
+    const namelessThen = await unnamed(browser.page);
+    check(namelessThen.length === 0, "each control a key reaches has a name while answers are shown",
+      namelessThen.join(" "));
     await d.press("Enter");
     check(await d.until("window.stopClicks === 1", 5000), "Enter then presses that Stop",
       await d.js("window.stopClicks"));

@@ -83,15 +83,15 @@ impl Body_reader
         r.buf.s((U8[]::chunk).sub(0, n))
         return true
 
-    priv fn hand(r: Self$@, n: Sz): Body_piece //< hands out the first n buffered bytes
-        r.handed = n
-        r.used += n
-        r.room -= n
-        return .data(r.buf.slice().sub(0, n))
+    priv fn hand(r: Self$@, count: Sz): Body_piece //< hands out the first `count` buffered bytes
+        r.handed = count
+        r.used += count
+        r.room -= count
+        return .data(r.buf.slice().sub(0, count))
 
-    priv fn drop(r: Self$@, n: Sz) //< drops n buffered bytes that are framing, not body
-        r.buf.drop_prefix(n)
-        r.used += n
+    priv fn drop(r: Self$@, count: Sz) //< drops `count` buffered bytes that are framing, not body
+        r.buf.drop_prefix(count)
+        r.used += count
 
     priv fn take(r: Self$@): Body_piece?!Http_error //<
         //< The next piece the buffered bytes give, or none until more arrive
@@ -231,27 +231,27 @@ priv fn check_extensions(rest: U8[]): Void!Http_error //<
                     throw .invalid_chunk("a chunk extension's value is empty")
                 at = value_end
 
-priv fn skip_bws(s: U8[], from: Sz): Sz //< past the spaces and tabs from `from`
+priv fn skip_bws(text: U8[], from: Sz): Sz //< past the spaces and tabs from `from`
     $at: = from
-    for at < s.len && (s[at] == ' ' || s[at] == '\t')
+    for at < text.len && (text[at] == ' ' || text[at] == '\t')
         at += 1
     return at
 
-priv fn token_end(s: U8[], from: Sz): Sz //< past the token characters from `from`
+priv fn token_end(text: U8[], from: Sz): Sz //< past the token characters from `from`
     $at: = from
-    for at < s.len && http.is_token(s.sub(at, 1))
+    for at < text.len && http.is_token(text.sub(at, 1))
         at += 1
     return at
 
-priv fn quoted_end(s: U8[], open: Sz): Sz!Http_error //<
+priv fn quoted_end(text: U8[], open: Sz): Sz!Http_error //<
     //< Past the quoted string that opens at `open`, by RFC 9110 §5.6.4's `quoted-string`
     $at: = open + 1
-    for at < s.len
-        c: = s[at]
+    for at < text.len
+        c: = text[at]
         if c == '"'
             return at + 1
         if c == '\\'
-            if at + 1 >= s.len || !is_quoted_byte(s[at + 1])
+            if at + 1 >= text.len || !is_quoted_byte(text[at + 1])
                 throw .invalid_chunk("a chunk extension's quoted value holds a bad escape")
             at += 2
             continue
@@ -260,8 +260,9 @@ priv fn quoted_end(s: U8[], open: Sz): Sz!Http_error //<
         at += 1
     throw .invalid_chunk("a chunk extension's quoted value does not close")
 
-priv fn is_quoted_byte(c: U8): Bool //< a byte a quoted string can hold: no control byte but a tab
-    return c == '\t' || (c >= ' ' && c != 127)
+priv fn is_quoted_byte(byte: U8): Bool //<
+    //< a byte a quoted string can hold: no control byte but a tab
+    return byte == '\t' || (byte >= ' ' && byte != 127)
 
 priv fn check_trailer(line: U8[]): Void!Http_error //< refuses a trailer line that is no field line
     //< A trailer is checked as a header line is, then dropped: RFC 9110 §6.5.1 forbids merging one

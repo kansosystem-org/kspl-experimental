@@ -226,28 +226,28 @@ priv struct Conversation //< the text of an ask file and of its chat file
     asks: U8[]
     recorded: U8[]
 
-priv fn asked_and_answered(n: Sz, arena: Arena$@): Conversation //<
-    //< An ask file of `n` questions, and a chat file that answers all but the last
+priv fn asked_and_answered(count: Sz, arena: Arena$@): Conversation //<
+    //< An ask file of `count` questions, and a chat file that answers all but the last
     asks: = arena.text()
     recorded: = arena.text()
-    for k in Range.asc(n)
+    for k in Range.asc(count)
         asks.s("{\"type\": \"question\", \"id\": \"q\{k\}\", \"text\": \"Question \{k\}?\"}\n")
-        if k + 1 < n
+        if k + 1 < count
             recorded.s("{\"type\":\"question\",\"id\":\"q\{k\}\",\"text\":\"Question \{k\}?\"}\n")
                 .s("{\"type\":\"answer\",\"id\":\"q\{k\}\",\"state\":\"failed\"}\n")
     return Conversation::{ .asks = asks.take(), .recorded = recorded.take() }
 
-priv fn pending_comparisons(c: Conversation, arena: Arena$@): Sz //<
+priv fn pending_comparisons(conversation: Conversation, arena: Arena$@): Sz //<
     //< The names compared while both files are read and the pending question is found
     before: = sorted_names.comparisons()
-    asks: = chat.read_asks(c.asks, arena)
-    rec: = chat.read_chat(c.recorded, arena) catch panic("the chat file reads")
+    asks: = chat.read_asks(conversation.asks, arena)
+    rec: = chat.read_chat(conversation.recorded, arena) catch panic("the chat file reads")
     _p: = chat.find_pending(asks@, rec@, arena)
     return sorted_names.comparisons() - before
 
-priv fn log2_up(n: Sz): Sz //< the smallest k with 2^k >= n
+priv fn log2_up(count: Sz): Sz //< the smallest k with 2^k >= `count`
     $k: Sz = 0
-    for (1 << k) < n
+    for (1 << k) < count
         k += 1
     return k
 

@@ -27,11 +27,11 @@ struct Note //< a problem found in the indentation
 
 enum Note_kind
     ragged(want: Sz, got: Sz) //<
-        //< Siblings on the same level are not aligned to one column.
+        //< Siblings on the same level are not aligned to one column
         //< Caution: **The conversion hides it silently** — only the heading's column is pushed, so
         //< any deeper line joins the level whatever its column (see `to_braces`).
     tab //<
-        //< A tab is used for indentation.
+        //< A tab is used for indentation
         //< **A tab is not counted in the column** (the walk below counts only spaces). So that line
         //< is treated as column 0, and ends up outside the level around it.
     terminator(col: Sz) //<
@@ -116,13 +116,13 @@ priv struct Line_open //< a bracket opened on the physical line being walked
 // Caution: **Count braces as brackets too.** The only braces left in a `.kspl` are values
 // (`T::{ … }`, `import … { … }`, interpolation), so a value spanning lines stays one logical line.
 // ---------------------------------------------------------
-priv fn begins_anew(c: U8): Bool //<
+priv fn begins_anew(ch: U8): Bool //<
     //< Whether a line starting with this byte starts something new
     //< Otherwise it continues what the line above left open.
     //<
     //< **A closing bracket continues**: a value written over several lines puts its `}` at column
     //< 0, and reading that as a new start breaks valid source.
-    return c != ')' && c != ']' && c != '}' && c != ',' && c != '\n' && c != '\r'
+    return ch != ')' && ch != ']' && ch != '}' && ch != ',' && ch != '\n' && ch != '\r'
 
 priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, arena: Arena$@):
     List<|Phys|>
@@ -323,17 +323,17 @@ priv fn splits_statements(src: U8[], seg_from: Sz, at: Sz, closed_block: Bool): 
     //< the `for` until that loop's block has closed on the line.
     return closed_block || !head_word(src, seg_from, at).equals("for")
 
-priv fn supply_block_end(src: U8[], o: Line_open, close: Sz, semis: List<|Insert|>$@) //<
+priv fn supply_block_end(src: U8[], opened: Line_open, close: Sz, semis: List<|Insert|>$@) //<
     //< It inserts the missing `;` after the last statement of a block opened and closed on one line
     //< It follows the same rule as a line's end: a statement ending in `}` takes one unless its
     //< heading opens a block.
     $last: = close - 1
-    for last > o.at && (src[last] == ' ' || src[last] == TAB_BYTE)
+    for last > opened.at && (src[last] == ' ' || src[last] == TAB_BYTE)
         last -= 1
-    if last == o.at || src[last] == ';'
+    if last == opened.at || src[last] == ';'
         return
     if src[last] == '}' &&
-        is_block_head(heading_of(src, skip_spaces(src, o.stmt_from, last), last + 1))
+        is_block_head(heading_of(src, skip_spaces(src, opened.stmt_from, last), last + 1))
         return
     if src[close - 1] == ' '
         semis.push(Insert::{ .at = close - 1, .text = ";", .drop = 1 })
@@ -589,7 +589,7 @@ priv struct Frame //< one level on the stack of open levels
     indent: Sz
     head: U8[]
     body: Sz //<
-        //< The column of this level's first child. 0 = not seen yet.
+        //< The column of this level's first child. 0 = not seen yet
         //< **Kept only to report whether siblings align; do not close levels by it**, or the rule
         //< above (the column, not the width) breaks.
 
@@ -699,15 +699,15 @@ priv fn written_terminator(src: U8[], cur: Logical): Note //<
     start: = base_lines.line_start(src, cur.code_end - 1)
     return Note::{ .kind = .terminator(cur.code_end - 1 - start), .line = line }
 
-priv fn arms_follow(cur: Logical, lines: List<|Logical|>@, n: Sz): Bool //<
-    //< Whether `cur` (the `n`th line) is a `switch`'s head whose first `case` is the next line
+priv fn arms_follow(cur: Logical, lines: List<|Logical|>@, index: Sz): Bool //<
+    //< Whether `cur` (the line at `index`) is a `switch`'s head whose first `case` is the next line
     //< **The head then takes no terminator**: the `case` continues it, as a later arm continues the
     //< `}` before it. A comment or blank line between them is no logical line, so changes nothing.
     //< Caution: **Only at the head's own column.** A deeper `case` would open a block `switch` does
     //< not have, and a shallower one belongs to the level outside; both stay refused.
-    if !cur.head.equals("switch") || n + 1 >= lines.len
+    if !cur.head.equals("switch") || index + 1 >= lines.len
         return false
-    next: = lines.get(n + 1)
+    next: = lines.get(index + 1)
     return next.indent == cur.indent && next.head.equals("case")
 
 priv fn close_block(ins: List<|Insert|>$@, top: Frame, at: Sz) //<

@@ -58,8 +58,9 @@ fn text_spot(block: Sz, item: Sz, offset: Sz): Spot
 fn gap_spot(block: Sz): Spot
     return Spot::{ .place = .block_gap, .block = block, .item = 0, .offset = 0 }
 
-fn same_spot(a: Spot, b: Spot): Bool
-    return a.place == b.place && a.block == b.block && a.item == b.item && a.offset == b.offset
+fn same_spot(left: Spot, right: Spot): Bool
+    return left.place == right.place && left.block == right.block && left.item == right.item &&
+        left.offset == right.offset
 
 fn is_text_block(kind: Block_kind): Bool //< a block whose text the caret can stand in
     return kind == .paragraph || kind == .heading || kind == .code || kind == .list ||
@@ -119,18 +120,19 @@ fn whole_unit(block: Block, arena: Arena$@): Unit //< a table, an image or an in
     u.edited = false
     return u
 
-fn fit(u: Unit$@, arena: Arena$@) //<
+fn fit(unit: Unit$@, arena: Arena$@) //<
     //< Makes an edited unit's text what its kind can hold
     //< Code holds plain text, where a line break is "\n". A paragraph holds marks and hard breaks.
     //< A heading or a list item is one line, so a line break there becomes a space.
     $out: = List<|Seg|>(arena)
-    for s in u.segs
-        if u.style.kind == .code
+    for s in unit.segs
+        if unit.style.kind == .code
             out.push(text_seg(s.text, plain()))
             continue
         if s.hard
             out
-                .push(hard_break() if u.style.kind == .paragraph else text_seg(" ", plain()))
+                .push(hard_break() if unit.style.kind == .paragraph
+                else text_seg(" ", plain()))
             continue
         $start: Sz = 0
         for i in Range.asc(s.text.len + 1)
@@ -140,15 +142,15 @@ fn fit(u: Unit$@, arena: Arena$@) //<
                 out.push(text_seg(s.text.sub(start, i - start), s.marks))
             if i < s.text.len
                 out
-                    .push(hard_break() if u.style.kind == .paragraph
+                    .push(hard_break() if unit.style.kind == .paragraph
                     else text_seg(" ", s.marks))
             start = i + 1
-    u.segs = out
+    unit.segs = out
 
-fn is_empty(u: Unit@, arena: Arena$@): Bool //< a prose unit with no text the writer would keep
-    if u.whole || u.style.kind == .code
+fn is_empty(unit: Unit@, arena: Arena$@): Bool //< a prose unit with no text the writer would keep
+    if unit.whole || unit.style.kind == .code
         return false
-    return normalized(u.segs@, arena).len == 0
+    return normalized(unit.segs@, arena).len == 0
 
 struct Settled //< blocks made from units, and where each unit landed
     blocks: List<|Block|>
@@ -215,53 +217,53 @@ priv struct Settler //< the state of one `settle`
     arena: Arena$@
 
 impl Settler
-    priv fn here(s: Self@): Sz //< the place the next block takes
-        return s.at + s.out.blocks.len
+    priv fn here(r: Self@): Sz //< the place the next block takes
+        return r.at + r.out.blocks.len
 
-    priv fn end_list(s: Self$@) //< ends the list being made, if any
-        if !s.open
+    priv fn end_list(r: Self$@) //< ends the list being made, if any
+        if !r.open
             return
-        s.open = false
-        if s.items.len == 0
+        r.open = false
+        if r.items.len == 0
             return
-        even_out(s.items@)
-        first: = s.doc.items.len
-        s.doc.items.push_all(s.items.slice())
-        s.out.blocks
+        even_out(r.items@)
+        first: = r.doc.items.len
+        r.doc.items.push_all(r.items.slice())
+        r.out.blocks
             .push(Block::{ .kind = .list, .level = 0, .label = "", .text = "", .first = first,
-            .count = s.items.len, .offset = 0, .align = .none, .note = "", .invisible = false })
-        s.items.clear()
+            .count = r.items.len, .offset = 0, .align = .none, .note = "", .invisible = false })
+        r.items.clear()
 
-    priv fn block_of(s: Self$@, u: Unit@): Block //< a paragraph, a heading or a code block
-        $b: = Block::{ .kind = u.style.kind, .level = 0, .label = "", .text = "", .first = 0,
+    priv fn block_of(r: Self$@, unit: Unit@): Block //< a paragraph, a heading or a code block
+        $b: = Block::{ .kind = unit.style.kind, .level = 0, .label = "", .text = "", .first = 0,
             .count = 0, .offset = 0, .align = .none, .note = "", .invisible = false }
-        switch u.style.kind
+        switch unit.style.kind
         case .code
-            b.label = u.style.label
+            b.label = unit.style.label
             b.text =
-                (u.code if !u.edited
-                else s.arena.text().s(visible(u.segs@, s.arena)).c('\n').take())
+                (unit.code if !unit.edited
+                else r.arena.text().s(visible(unit.segs@, r.arena)).c('\n').take())
         default
-            b.level = u.style.level if u.style.kind == .heading else 0
-            b.align = u.style.align
-            b.note = u.style.note
-            s.run(u, b.first@, b.count@)
+            b.level = unit.style.level if unit.style.kind == .heading else 0
+            b.align = unit.style.align
+            b.note = unit.style.note
+            r.run(unit, b.first@, b.count@)
         return b
 
-    priv fn item_of(s: Self$@, u: Unit@): Item
-        $item: = Item::{ .depth = u.style.depth, .ordered = u.style.ordered,
-            .check = .none if u.style.ordered else u.style.check, .first = 0, .count = 0,
+    priv fn item_of(r: Self$@, unit: Unit@): Item
+        $item: = Item::{ .depth = unit.style.depth, .ordered = unit.style.ordered,
+            .check = .none if unit.style.ordered else unit.style.check, .first = 0, .count = 0,
             .offset = 0 }
-        s.run(u, item.first@, item.count@)
+        r.run(unit, item.first@, item.count@)
         return item
 
-    priv fn run(s: Self$@, u: Unit@, first: Sz$@, count: Sz$@) //< the unit's inline nodes
-        if !u.edited
-            first$ = u.first
-            count$ = u.count
+    priv fn run(r: Self$@, unit: Unit@, first: Sz$@, count: Sz$@) //< the unit's inline nodes
+        if !unit.edited
+            first$ = unit.first
+            count$ = unit.count
             return
-        first$ = build(u.segs@, s.doc, s.arena)
-        count$ = s.doc.inlines.len - first$
+        first$ = build(unit.segs@, r.doc, r.arena)
+        count$ = r.doc.inlines.len - first$
 
 fn even_out(items: List<|Item|>$@) //<
     //< Gives a list's items the nesting and markers the reader takes
@@ -304,32 +306,34 @@ priv fn reads_back(doc: Document@, blocks: List<|Block|>@, scratch: Arena$@): Bo
             return false
     return true
 
-priv fn same_block(a: Document@, x: Block, b: Document@, y: Block, scratch: Arena$@): Bool
-    if x.kind != y.kind || x.level != y.level || x.align != y.align ||
-        !x.note.equals(y.note)
+priv fn same_block(left_doc: Document@, left: Block, right_doc: Document@, right: Block,
+    scratch: Arena$@): Bool
+    if left.kind != right.kind || left.level != right.level || left.align != right.align ||
+        !left.note.equals(right.note)
         return false
-    switch x.kind
+    switch left.kind
     case .code
-        return x.label.equals(y.label) && x.text.equals(y.text)
+        return left.label.equals(right.label) && left.text.equals(right.text)
     case .list
-        if x.count != y.count
+        if left.count != right.count
             return false
-        for i in Range.asc(x.count)
-            p: = a.items.get(x.first + i)
-            q: = b.items.get(y.first + i)
+        for i in Range.asc(left.count)
+            p: = left_doc.items.get(left.first + i)
+            q: = right_doc.items.get(right.first + i)
             if p.depth != q.depth || p.ordered != q.ordered ||
-                !same_run(a, p.first, p.count, b, q.first, q.count, scratch)
+                !same_run(left_doc, p.first, p.count, right_doc, q.first, q.count, scratch)
                 return false
         return true
     default
-        return same_run(a, x.first, x.count, b, y.first, y.count, scratch)
+        return same_run(left_doc, left.first, left.count, right_doc, right.first, right.count,
+            scratch)
 
-priv fn same_run(a: Document@, first: Sz, count: Sz, b: Document@, b_first: Sz, b_count: Sz,
+priv fn same_run(left: Document@, first: Sz, count: Sz, right: Document@, b_first: Sz, b_count: Sz,
     scratch: Arena$@): Bool
     $mine: = List<|Seg|>(scratch)
-    flatten(a, first, count, mine@)
+    flatten(left, first, count, mine@)
     $theirs: = List<|Seg|>(scratch)
-    flatten(b, b_first, b_count, theirs@)
+    flatten(right, b_first, b_count, theirs@)
     kept: = normalized(mine@, scratch)
     read: = normalized(theirs@, scratch)
     return equal(kept@, read@)

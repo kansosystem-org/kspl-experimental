@@ -150,14 +150,14 @@ priv fn has_own_names(path: Ast_node@): Bool //<
             return true
     return false
 
-fn find_path_at_offset(root_file: Ast_node$@, sema: Sema_ctx$@, offset: Sz, target_file: U8$[],
+fn find_path_at_offset(root_file: Ast_node$@, ctx: Sema_ctx$@, offset: Sz, target_file: U8$[],
     path: List<|Ast_node$@|>$@)
-    if sema != null && target_file.len > 0
-        sema.set_current_file(target_file)
+    if ctx != null && target_file.len > 0
+        ctx.set_current_file(target_file)
 
     $src: U8[] = ""
-    if sema != null
-        held: = base_core.source_of(sema.source_map,
+    if ctx != null
+        held: = base_core.source_of(ctx.source_map,
             U8[]::{ .ptr = target_file.ptr, .len = target_file.len })
         src = U8[]::{ .ptr = held.ptr, .len = held.len }
     $walk: = Pick_walk::{ .offset = offset, .target_file = target_file, .src = src,
@@ -168,8 +168,8 @@ fn find_path_at_offset(root_file: Ast_node$@, sema: Sema_ctx$@, offset: Sz, targ
     if root_file != null
         walk.visit(root_file, 0)
 
-    if path.len == 0 && sema != null
-        for entry in sema.generics.templates.items()
+    if path.len == 0 && ctx != null
+        for entry in ctx.generics.templates.items()
             walk.visit(entry.value, 0)
 
     // A click exactly at a declared name's end (the ':' position) takes the whole declaration,
@@ -182,10 +182,10 @@ fn find_path_at_offset(root_file: Ast_node$@, sema: Sema_ctx$@, offset: Sz, targ
             decl_p.get_var_decl_id() == last && offset == last.loc.offset + last.text.len
             path.truncate(path.len - 1)
 
-    if path.len > 0 && sema != null
+    if path.len > 0 && ctx != null
         target_node: = path.get(path.len - 1)
         if target_node.loc.file().len > 0
-            sema.set_current_file(target_node.loc.file())
+            ctx.set_current_file(target_node.loc.file())
 
 fn find_path_at_params(state: Doc_state$@, params: json.Value, arena: Arena$@):
     List<|Ast_node$@|>$@ //<

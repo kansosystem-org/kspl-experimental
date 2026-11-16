@@ -35,9 +35,9 @@ function ksmdTable(ks) {
     el.dataset.c = String(column);
     el.tabIndex = -1;
     if (value) {
-      if (value[0] === 1) el.className = "number";
-      if (value[0] === 5) el.className = "date";
-      if (value[0] === 3) el.className = "error";
+      if (value[0] === ks.CELL.NUMBER) el.className = "number";
+      if (value[0] === ks.CELL.DATE) el.className = "date";
+      if (value[0] === ks.CELL.ERROR) el.className = "error";
       el.textContent = ks.filter.shown(value);
     }
     return el;
@@ -364,7 +364,7 @@ function ksmdTable(ks) {
     const value = (v) => (v ? ks.filter.plain(v) : "");
     const lines = [wrap.names.map((n) => field(n)).join(",")];
     for (const row of wrap.values) {
-      lines.push(row.map((v) => field(value(v), !!v && v[0] === 1)).join(","));
+      lines.push(row.map((v) => field(value(v), !!v && v[0] === ks.CELL.NUMBER)).join(","));
     }
     const file = new Blob(["\uFEFF", lines.join("\r\n"), "\r\n"], { type: "text/csv" });
     const a = document.createElement("a");
@@ -547,8 +547,9 @@ function ksmdTable(ks) {
   // table are cut, Insert row above inserts them instead, and Insert column left the columns
   // (`CUT_FORMS` in `commands.js`). A filter stays, and shows a new row until it is chosen again
   // (`filter.js`).
-  const LINES = { "row-above": [0, 0], "row-below": [0, 1], "row-remove": [1, 0],
-    "column-left": [2, 0], "column-right": [2, 1], "column-remove": [3, 0] };
+  const E = ks.TABLE_EDIT;
+  const LINES = { "row-above": [E.INSERT_ROWS, 0], "row-below": [E.INSERT_ROWS, 1], "row-remove": [E.REMOVE_ROWS, 0],
+    "column-left": [E.INSERT_COLUMNS, 0], "column-right": [E.INSERT_COLUMNS, 1], "column-remove": [E.REMOVE_COLUMNS, 0] };
   const editLines = (name, c) => {
     const rows = name.startsWith("row-");
     if (name in CUT_FORMS && ks.cut.waiting(c.block, rows)) return ks.cut.insert(c.block, rows);
@@ -557,7 +558,7 @@ function ksmdTable(ks) {
     const first = rows ? Math.max(r.r1, 0) : r.c1;
     const last = rows ? Math.max(r.r2, 0) : r.c2;
     const hidden = rows ? ks.range.hiddenRows(c.block, first, last) : [];
-    const removes = what === 1;
+    const removes = what === E.REMOVE_ROWS;
     return ks.act("ksmd_web_table_edit", c.block, what, after ? last + 1 : first,
       last - first + 1 - (removes ? 0 : hidden.length), ks.put(removes ? hidden.join(",") : ""));
   };

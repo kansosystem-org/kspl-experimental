@@ -68,8 +68,8 @@ priv fn build_corpus(text: U8[], arena: Arena$@): List<|Word|> //<
         end: = pretokenizer.chunk_end(text, pos, .qwen2)
         chunks.push(text.sub(pos, end - pos))
         pos = end
-    sorted: = chunks.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
-        return a.compare(b$);
+    sorted: = chunks.order_by(fn(left: U8[]@, right: U8[]@; ): I32 {
+        return left.compare(right$);
     }, arena)
     $out: = List<|Word|>(arena)
     $at: Sz = 0
@@ -118,8 +118,8 @@ priv fn best_pair(corpus: List<|Word|>$@, counts: Pair_counts$@): Merge //<
     return Merge::{ .a = I32::(best_key / counts.size), .b = I32::(best_key % counts.size),
         .id = 0 }
 
-priv fn apply_merge(corpus: List<|Word|>$@, a: I32, b: I32, new_id: I32) //<
-    //< Replaces (a, b) with `new_id` across every word
+priv fn apply_merge(corpus: List<|Word|>$@, left: I32, right: I32, new_id: I32) //<
+    //< Replaces (`left`, `right`) with `new_id` across every word
     // Caution: Get the element with `at`; `get` returns a copy, so shortening its ids misses the
     // original.
     for i in Range.asc(corpus.len)
@@ -128,7 +128,7 @@ priv fn apply_merge(corpus: List<|Word|>$@, a: I32, b: I32, new_id: I32) //<
         $write: Sz = 0
         $read: Sz = 0
         for read < ids.len
-            if read + 1 < ids.len && ids.get(read) == a && ids.get(read + 1) == b
+            if read + 1 < ids.len && ids.get(read) == left && ids.get(read + 1) == right
                 ids.set(write, new_id)
                 read += 2
             else
@@ -148,14 +148,14 @@ priv fn init_expand(arena: Arena$@): List<|U8[]|> //< id -> a byte sequence
         out.push(U8[]::{ .ptr = p, .len = 1 })
     return out
 
-priv fn concat_bytes(x: U8[], y: U8[], arena: Arena$@): U8[] //<
+priv fn concat_bytes(left: U8[], right: U8[], arena: Arena$@): U8[] //<
     //< Builds expand[a] + expand[b] in the arena
-    p: = U8$@::arena.alloc(x.len + y.len)
-    out: = U8$[]::{ .ptr = p, .len = x.len + y.len }
-    for i in Range.asc(x.len)
-        out[i] = x[i]
-    for i in Range.asc(y.len)
-        out[x.len + i] = y[i]
+    p: = U8$@::arena.alloc(left.len + right.len)
+    out: = U8$[]::{ .ptr = p, .len = left.len + right.len }
+    for i in Range.asc(left.len)
+        out[i] = left[i]
+    for i in Range.asc(right.len)
+        out[left.len + i] = right[i]
     return out
 
 priv fn write_vocab(expand: List<|U8[]|>@, path: U8[])

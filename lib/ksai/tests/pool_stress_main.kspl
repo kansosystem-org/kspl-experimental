@@ -73,12 +73,12 @@ priv struct Watch //< what the watchdog reads: rounds ended, and whether the str
     rounds: Atomic_sz
     finished: Atomic_sz
 
-extern fn ksai_pool_watchdog(w: Watch$@): Void$@ //<
+extern fn ksai_pool_watchdog(watch: Watch$@): Void$@ //<
     //< ends the program when no round ends for `STALL_MS`
     $seen: Sz = -1
     $since: = sys.mono_us()
-    for w.finished.load() == 0
-        now: = w.rounds.load()
+    for watch.finished.load() == 0
+        now: = watch.rounds.load()
         if now != seen
             seen = now
             since = sys.mono_us()
@@ -89,7 +89,8 @@ extern fn ksai_pool_watchdog(w: Watch$@): Void$@ //<
         sys.sleep_ms(50)
     return null
 
-priv fn tiny_rounds(w: Watch@): Sz //< the tiny rounds; returns how many used more than one thread
+priv fn tiny_rounds(watch: Watch@): Sz //<
+    //< the tiny rounds; returns how many used more than one thread
     $job: = Tiny_job::{ .round = 0 }
     $shared: Sz = 0
     end: = sys.deadline_after_ms(PART_MS)
@@ -103,13 +104,13 @@ priv fn tiny_rounds(w: Watch@): Sz //< the tiny rounds; returns how many used mo
             if job.out[i] != round * OUTPUTS + i
                 io.err().s("FAIL: pool stress: round \{round\} left output \{i\} unwritten\n")
                 sys.exit(1)
-        w.rounds.fetch_add(1)
+        watch.rounds.fetch_add(1)
     return shared
 
-priv fn slow_rounds(w: Watch@) //< rounds whose second piece ends around the caller's sleep
+priv fn slow_rounds(watch: Watch@) //< rounds whose second piece ends around the caller's sleep
     //< From 70 to 130 hundredths of the spin, so the worker's signal comes on both sides of the
     //< moment the caller goes to sleep. The stretches come in a scattered order, so rounds cut
-    //< short by `part_ms` still cover the whole span.
+    //< short by `PART_MS` still cover the whole span.
     end: = sys.deadline_after_ms(PART_MS)
     for round in Range.asc(SLOW_ROUNDS)
         if sys.mono_us() > end
@@ -117,7 +118,7 @@ priv fn slow_rounds(w: Watch@) //< rounds whose second piece ends around the cal
         $job: = Slow_job::{ .stretch = 70 + round * SCATTER % 61, .taken = Atomic_sz(0),
             .end_us = Atomic_sz(0) }
         _used: = parallel.split(slow_span, Void$@::job@, 2, 1, THREADS)
-        w.rounds.fetch_add(1)
+        watch.rounds.fetch_add(1)
 
 fn main(): I32
     parallel.set_threads(THREADS)

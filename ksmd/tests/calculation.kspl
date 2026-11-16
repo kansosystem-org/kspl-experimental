@@ -925,7 +925,7 @@ fn cases_with(list: U8[][], after: U8[]) //<
     r: = results(arena.dup_str(rows.slice()), arena)
     checked(list, r@, 2, 0, arena)
 
-priv fn checked(list: U8[][], r: Results@, row: Sz, column: Sz, arena: Arena$@) //<
+priv fn checked(list: U8[][], results: Results@, row: Sz, column: Sz, arena: Arena$@) //<
     //< Each case of `list` as `cases_with` writes them, its formula in table `t` from `row` down, at
     //< `column`
     for i in Range.asc(list.len)
@@ -933,15 +933,15 @@ priv fn checked(list: U8[][], r: Results@, row: Sz, column: Sz, arena: Arena$@) 
         at: = arrow(c)
         want: = c.sub_from(at + 4)
         what: = arena.text().c('=').s(c.sub(0, at)).s(" is ").s(want).take()
-        shows(what, r, row + i, column, want)
+        shows(what, results, row + i, column, want)
 
-priv fn arrow(c: U8[]): Sz //< where ` -> ` stands in a case
-    return c.find_str(" -> ").unwrap_or(c.len)
+priv fn arrow(text: U8[]): Sz //< where ` -> ` stands in a case
+    return text.find_str(" -> ").unwrap_or(text.len)
 
-priv fn shows(what: U8[], r: Results@, row: Sz, column: Sz, want: U8[]) //<
+priv fn shows(what: U8[], results: Results@, row: Sz, column: Sz, want: U8[]) //<
     //< The value of a cell of table `t` is `want`: `true`, `false`, an error's mark, text in
     //< quotes written without escapes, a date after `@`, or a number
-    v: = r.at(0, row, column)
+    v: = results.at(0, row, column)
     defer $got: = Str_builder()
     got.s(v.kind.variant_name()).c(' ').s("\{v.number\} ").s(v.text).c(' ').s(v.error.mark())
     $ok: = false
@@ -961,23 +961,23 @@ priv fn shows(what: U8[], r: Results@, row: Sz, column: Sz, want: U8[]) //<
         ok = v.kind == .number && v.number == n
     verdict.check(what, ok, got.slice())
 
-fn number(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: F64) //<
+fn number(what: U8[], results: Results@, table: Sz, row: Sz, column: Sz, want: F64) //<
     //< The cell's value is the number `want`
-    v: = r.at(u, row, column)
+    v: = results.at(table, row, column)
     defer $got: = Str_builder()
     got.s("\{v.number\} ").s(v.kind.variant_name()).c(' ').s(v.error.variant_name())
     verdict.check(what, v.kind == .number && v.number == want, got.slice())
 
-fn failure(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: Calc_error) //<
+fn failure(what: U8[], results: Results@, table: Sz, row: Sz, column: Sz, want: Calc_error) //<
     //< The cell's value is the error `want`
-    v: = r.at(u, row, column)
+    v: = results.at(table, row, column)
     defer $got: = Str_builder()
     got.s("\{v.number\} ").s(v.kind.variant_name()).c(' ').s(v.error.variant_name())
     verdict.check(what, v.kind == .error && v.error == want, got.slice())
 
-priv fn kind(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: Value_kind) //<
+priv fn kind(what: U8[], results: Results@, table: Sz, row: Sz, column: Sz, want: Value_kind) //<
     //< The cell's value is of the kind `want`
-    verdict.check(what, r.at(u, row, column).kind == want, "")
+    verdict.check(what, results.at(table, row, column).kind == want, "")
 
 priv fn results(rows: U8[], arena: Arena$@): Results //< the values of table `t` with these rows
     doc: = read(join(HEAD, rows, arena), arena)

@@ -42,7 +42,7 @@ fn test_thread_spawn_join()
     t0.free()
     assert(marker == 84, "free() must wait until the thread has written its result")
 
-    // 2. Two threads each add 1000 times while protecting the counter with the same Mutex<I32>
+    // 2. Two threads each add 1000 times while protecting the counter with the same Mutex<|I32|>
     defer $mx: = thread.Mutex<|I32|>(0) catch panic("mutex create failed")
     $t1: =
         thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@)
@@ -330,12 +330,12 @@ priv fn held_elsewhere(path: U8[]): Bool //< whether try_take is refused because
             return false
     return false
 
-extern fn lock_test_hold(h: Holder$@): Void$@ //<
+extern fn lock_test_hold(holder: Holder$@): Void$@ //<
     //< takes the lock, holds it a while, and releases it
-    defer $_lock: = fs.File_lock.take(h.path) catch panic("the holder must get the free lock")
-    h.holding.store(1)
+    defer $_lock: = fs.File_lock.take(holder.path) catch panic("the holder must get the free lock")
+    holder.holding.store(1)
     sys.sleep_ms(HOLD_MS)
-    h.let_go.store(1)
+    holder.let_go.store(1)
     return null
 
 fn test_file_lock()
@@ -380,8 +380,8 @@ fn main()
 priv const FOREIGN_UNLOCK_SRC: U8[] = //< a child whose second thread unlocks the main one's mutex
     """import "std/thread"
 
-extern fn foreign_unlock(m: thread.Mutex<|I32|>$@): Void$@
-  m.unlock()
+extern fn foreign_unlock(mutex: thread.Mutex<|I32|>$@): Void$@
+  mutex.unlock()
   return null
 
 fn main()
@@ -397,8 +397,8 @@ priv const EXIT_HOLDING_SRC: U8[] = //< a child whose second thread ends while i
     //< ever, and the test would wait with it.
     """import "std/thread"
 
-extern fn forget_unlock(m: thread.Mutex<|I32|>$@): Void$@
-  _v: = m.lock()
+extern fn forget_unlock(mutex: thread.Mutex<|I32|>$@): Void$@
+  _v: = mutex.lock()
   return null
 
 fn main()
@@ -441,8 +441,8 @@ struct Pair
   m: thread.Mutex<|I32|>
   cv: thread.Cond_var
 
-extern fn foreign_signal(p: Pair$@): Void$@
-  p.cv.signal(p.m@)
+extern fn foreign_signal(pair: Pair$@): Void$@
+  pair.cv.signal(pair.m@)
   return null
 
 fn main()
@@ -624,8 +624,8 @@ priv const ENV_WITH_THREAD_SRC: U8[] = //< a child that changes the environment 
     """import "std/sys"
 import "std/thread"
 
-extern fn env_test_idle(n: I32$@): Void$@
-  n$ = 1
+extern fn env_test_idle(flag: I32$@): Void$@
+  flag$ = 1
   return null
 
 fn main()
@@ -638,9 +638,9 @@ priv const ENV_IN_THREAD_SRC: U8[] = //< a child whose new thread changes the en
     """import "std/sys"
 import "std/thread"
 
-extern fn env_test_set(n: I32$@): Void$@
+extern fn env_test_set(flag: I32$@): Void$@
   sys.set_env("KSPL_ENV_IN_THREAD", "1") catch panic("set_env")
-  n$ = 1
+  flag$ = 1
   return null
 
 fn main()

@@ -33,7 +33,7 @@ priv const ITER_TRAIT_FQN: U8[] = "std.lang.Iter" //<
     //< The trait whose implementers `for x in` loops over with `next()`
 
 impl Ast_node
-    fn hold_for_in_subject(r: Self$@, c: Sema_ctx$@, subject_id: I32): I32!Sema_error //<
+    fn hold_for_in_subject(r: Self$@, ctx: Sema_ctx$@, subject_id: I32): I32!Sema_error //<
         //< Makes the subject's temporary point at the subject, where the subject is a place
         //< It returns the temporary's type. A place is a name or a `.field` chain of names. A fixed
         //< array is held as a slice over it, as no pointer to it carries its length. Anything else
@@ -41,29 +41,29 @@ impl Ast_node
         //< so each loop starts from the subject's own position, and the subject keeps it.
         subject: = r.get_var_decl_expr()
         if !is_named_place(subject) || sema_type_env.is_unknown(subject_id) ||
-            drives_by_next(c, subject_id)
+            drives_by_next(ctx, subject_id)
             return subject_id
-        if c.env.is_array(subject_id)
-            elem_id: = c.env.strip_array(subject_id)
+        if ctx.env.is_array(subject_id)
+            elem_id: = ctx.env.strip_array(subject_id)
             // An array of arrays stays a copy: no slice holds an array as its element.
-            if c.env.is_array(elem_id)
+            if ctx.env.is_array(elem_id)
                 return subject_id
-            view_id: = c.slice_type_of(c.env.make_const(elem_id))
-            return subject.wrap_implicit_cast(c, subject_id, view_id)
+            view_id: = ctx.slice_type_of(ctx.env.make_const(elem_id))
+            return subject.wrap_implicit_cast(ctx, subject_id, view_id)
         place: = subject.snapshot_for_morph(subject_id)
         subject.children = base_ast.new_ast_node_list()
         subject.morph(.k_expr_postfix, "postfix")
         subject.def_node = null
         subject.add_child(place).add_child(Ast_node(.k_literal, "@", subject.loc))
-        $ptr_id: = sema_body_postfix.infer_address_postfix(c, subject, place, subject_id)!
+        $ptr_id: = sema_body_postfix.infer_address_postfix(ctx, subject, place, subject_id)!
         // **The pointer is read-only unless a read needs it writable**, so a spare `$` on the place
         // is still reported (df_decl_var in `../flow/track.kspl`).
-        if !c.index_read_needs_writable(subject_id)
-            ptr_id = c.env.make_ptr(c.env.make_const(subject_id))
+        if !ctx.index_read_needs_writable(subject_id)
+            ptr_id = ctx.env.make_ptr(ctx.env.make_const(subject_id))
         subject.type_id = ptr_id
         return ptr_id
 
-    fn expand_for_in(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
+    fn expand_for_in(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error //<
         //< Expands the loop if it carries the mark (a bare identifier at the init position)
         item_id: = r.get_for_init()
         if item_id == null || item_id.kind_id != .k_identifier
@@ -71,15 +71,16 @@ impl Ast_node
         coll_ref: = r.get_loop_cond()
         // **Infer here**: the temporary's declaration is the statement just before, so it is typed
         // now.
-        coll_id: = coll_ref.infer_expr(c, 0)!
+        coll_id: = coll_ref.infer_expr(ctx, 0)!
         // **Check `Iter` first**, or a type that supports both silently loses the `Iter` its writer
         // declared (Principle 5); the index form is for a subject that declares nothing.
-        if drives_by_next(c, coll_id)
+        if drives_by_next(ctx, coll_id)
             r.build_step_loop(item_id, coll_ref)
             return
-        if refuses_unwalkable_subject(c, r, coll_id)
+        if refuses_unwalkable_subject(ctx, r, coll_id)
             throw .analysis_failed
-        r.build_index_loop(item_id, coll_ref, c.env.is_slice(c.env.strip_ptr(coll_id)))
+        r.build_index_loop(item_id, coll_ref,
+            ctx.env.is_slice(ctx.env.strip_ptr(coll_id)))
 
     priv fn build_index_loop(r: Self$@, item_id: Ast_node$@, coll_ref: Ast_node@, over_slice: Bool) //<
         //< The form that loops by index
@@ -147,7 +148,7 @@ impl Ast_node
 
     priv fn replace_loop_parts(r: Self$@, init_node: Ast_node$@, cond_node: Ast_node$@,
         step_node: Ast_node$@, item_decl: Ast_node$@) //<
-            //< Replaces the for's five children, putting item's declaration at the body's head.
+            //< Replaces the for's five children, putting item's declaration at the body's head
             //< The five children are the label, init, condition, step and body.
         block_node: = r.get_loop_block()
         new_block_children: = base_ast.new_ast_node_list()
@@ -166,7 +167,7 @@ impl Ast_node
         loop_children.push(block_node)
         r.children = loop_children
 
-priv fn refuses_unwalkable_subject(c: Sema_ctx$@, loop: Ast_node$@, subject_id: I32): Bool //<
+priv fn refuses_unwalkable_subject(ctx: Sema_ctx$@, loop: Ast_node$@, subject_id: I32): Bool //<
     //< Whether it reported a subject that offers neither form, with no `len` and no `[]` at all
     //< **Say what the loop needs, not what its expansion missed**: expanded, a plain struct gave
     //< "no field 'len'" and "requires 'Index'", which name code the writer never wrote. A subject
@@ -174,37 +175,38 @@ priv fn refuses_unwalkable_subject(c: Sema_ctx$@, loop: Ast_node$@, subject_id: 
     if sema_type_env.is_unknown(subject_id)
         return false
     $base_id: = subject_id
-    for c.env.is_pointer(base_id)
-        base_id = c.env.strip_ptr(base_id)
-    if c.env.is_array(base_id) || c.env.is_slice(base_id)
+    for ctx.env.is_pointer(base_id)
+        base_id = ctx.env.strip_ptr(base_id)
+    if ctx.env.is_array(base_id) || ctx.env.is_slice(base_id)
         return false
-    c.ensure_instance_methods(base_id) catch {}
-    if !sema_type_env.is_unknown(c.env.field_type_of(base_id, "len")) ||
-        c.env.has_implemented_operator_trait(base_id, "Index") ||
-        c.env.has_implemented_operator_trait(base_id, "Index_ref") ||
-        c.env.has_implemented_operator_trait(base_id, "Index_place")
+    ctx.ensure_instance_methods(base_id) catch {}
+    if !sema_type_env.is_unknown(ctx.env.field_type_of(base_id, "len")) ||
+        ctx.env.has_implemented_operator_trait(base_id, "Index") ||
+        ctx.env.has_implemented_operator_trait(base_id, "Index_ref") ||
+        ctx.env.has_implemented_operator_trait(base_id, "Index_place")
         return false
-    shown: = c.env.display(base_id)
-    c.clear_scratch()
+    shown: = ctx.env.display(base_id)
+    ctx.clear_scratch()
         .s("'for … in' cannot walk a '\{shown\}'. It walks an array, a slice, a type with a 'len' \
             field and '[]' (the trait 'Index' from std/lang), or a type that implements 'Iter' from \
             std/lang, whose 'next()' gives each element")
-    c.err(loop, c.scratch.slice())
+    ctx.err(loop, ctx.scratch.slice())
     return true
 
-fn drives_by_next(c: Sema_ctx$@, subject_id: I32): Bool //< whether `next()` drives the loop
-    return c.env.implemented_trait_instance(subject_id, ITER_TRAIT_FQN) != 0
+fn drives_by_next(ctx: Sema_ctx$@, subject_id: I32): Bool //< whether `next()` drives the loop
+    return ctx.env.implemented_trait_instance(subject_id, ITER_TRAIT_FQN) != 0
 
-priv fn is_named_place(e: Ast_node$@): Bool //< whether it is a name or a `.field` chain of names
+priv fn is_named_place(node: Ast_node$@): Bool //< whether it is a name or a `.field` chain of names
     //< A call, an index or a cast is not one: it is evaluated once into a copy.
-    if e == null
+    if node == null
         return false
-    if e.is_path_or_ident()
+    if node.is_path_or_ident()
         return true
-    if e.kind_id != .k_expr_postfix || !e.postfix_op_text().equals(".") || e.children.len != 3
+    if node.kind_id != .k_expr_postfix || !node.postfix_op_text().equals(".") ||
+        node.children.len != 3
         return false
-    return e.get_postfix_member().kind_id == .k_identifier &&
-        is_named_place(e.get_postfix_receiver())
+    return node.get_postfix_member().kind_id == .k_identifier &&
+        is_named_place(node.get_postfix_receiver())
 
 priv fn next_temp_name(prefix: U8[]): U8[] //< the temporary variable's name
     //< Numbered separately from parse's `for_coll`.

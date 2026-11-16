@@ -24,12 +24,12 @@ priv const W2: Sz[_] = ::{ HIDDEN, ACTIONS }
 priv const B2: Sz[_] = ::{ ACTIONS }
 priv const MAN: Sz[_] = ::{ ACTIONS, encoding.DRIVE_FIELDS }
 
-priv fn add(w: st.Safetensors_writer$@, name: U8[], shape: Sz[], swap: U8[], swap_shape: Sz[],
-    arena: Arena$@) //< adds `name` with its shape, or with `swap_shape` if it is `swap`
+priv fn add(writer: st.Safetensors_writer$@, name: U8[], shape: Sz[], swap: U8[],
+    swap_shape: Sz[], arena: Arena$@) //< adds `name`, shaped `swap_shape` if it is `swap`
     s: = swap_shape if name.equals(swap) else shape
     // An empty shape leaves the tensor out.
     if s.len > 0
-        w.add(name, Tensor<|F32|>(s, arena))
+        writer.add(name, Tensor<|F32|>(s, arena))
 
 priv fn write( //< a policy file, all zeros, with one tensor's shape changed
     swap: U8[], //< the tensor whose shape changes; "" changes none
@@ -138,15 +138,15 @@ fn test_pilot_policy_refuses_a_deep_header() //<
     assert(refusal(four, arena).equals("too_deep"), "four levels is one too many")
     verdict.pass("a header deeper than a policy's own is refused before the parser recurses.")
 
-priv fn with_maneuver_value(v: F32, arena: Arena$@): U8[] //<
-    //< A well-formed policy whose first manoeuvre's forward value is v
+priv fn with_maneuver_value(value: F32, arena: Arena$@): U8[] //<
+    //< A well-formed policy whose first manoeuvre's forward value is `value`
     $w: = st.Safetensors_writer()
     add(w@, "fc1.weight", Sz[]::W1, "", Sz[]::{}, arena)
     add(w@, "fc1.bias", Sz[]::B1, "", Sz[]::{}, arena)
     add(w@, "fc2.weight", Sz[]::W2, "", Sz[]::{}, arena)
     add(w@, "fc2.bias", Sz[]::B2, "", Sz[]::{}, arena)
     man: = Tensor<|F32|>(Sz[]::MAN, arena)
-    man[0] = v
+    man[0] = value
     w.add("maneuvers", man)
     w.set_meta("kspl_pilot", encoding.FORMAT_VERSION)
     w.set_meta("far_mm", "1000")

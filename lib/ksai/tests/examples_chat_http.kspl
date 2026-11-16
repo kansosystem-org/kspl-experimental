@@ -92,15 +92,15 @@ fn asked_as(port: I32, method: U8[], path: U8[], body: U8[], who: Asker, arena: 
         r.headers.find("Content-Type").unwrap_or("").equals("application/json")
     return Got::{ .status = r.status, .body = r.body, .typed = typed }
 
-fn json_of(g: Got, arena: Arena$@): json.Value //< an answer's body as JSON; null where none
-    doc: = json.parse(g.body, arena) catch
+fn json_of(got: Got, arena: Arena$@): json.Value //< an answer's body as JSON; null where none
+    doc: = json.parse(got.body, arena) catch
         return .null_val
     return doc.val
 
-fn refused(r: Got, status: I32, words: U8[], arena: Arena$@): Bool //<
+fn refused(got: Got, status: I32, words: U8[], arena: Arena$@): Bool //<
     //< whether the answer is that status, with an `error.message` holding those words
-    text: = json_of(r, arena).get("error").get("message").as_str().unwrap_or("")
-    return r.status == status && text.find_str(words).is_some()
+    text: = json_of(got, arena).get("error").get("message").as_str().unwrap_or("")
+    return got.status == status && text.find_str(words).is_some()
 
 priv const ASK_BODY: U8[] =
     "{\"model\":\"local\",\"stream\":false,\"messages\":[{\"role\":\"system\",\"content\":\"You \
@@ -108,30 +108,31 @@ priv const ASK_BODY: U8[] =
         leave?\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"search\",\"parameters\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}}}]}" //<
             //< a request in the shape a client with tools sends
 
-priv fn answer_fault(v: json.Value, arena: Arena$@): U8[] //<
+priv fn answer_fault(value: json.Value, arena: Arena$@): U8[] //<
     //< Empty where every field a client reads is there, of its kind, and the counts add up
-    choice: = v.get("choices").get_at(0)
+    choice: = value.get("choices").get_at(0)
     msg: = choice.get("message")
     content: = msg.find("content").unwrap_or(.bool_val(false))
     reason: = choice.get("finish_reason").as_str().unwrap_or("")
-    u: = v.get("usage")
+    u: = value.get("usage")
     prompt: = u.get("prompt_tokens").as_int().unwrap_or(-1)
     done: = u.get("completion_tokens").as_int().unwrap_or(-1)
-    if v.get("id").as_str().unwrap_or("").starts_with("chatcmpl-") &&
-        v.get("object").as_str().unwrap_or("").equals("chat.completion") &&
-        v.get("created").as_int64().unwrap_or(0I64) > 0I64 &&
-        v.get("model").as_str().unwrap_or("").equals("tiny_qwen3") &&
+    if value.get("id").as_str().unwrap_or("").starts_with("chatcmpl-") &&
+        value.get("object").as_str().unwrap_or("").equals("chat.completion") &&
+        value.get("created").as_int64().unwrap_or(0I64) > 0I64 &&
+        value.get("model").as_str().unwrap_or("").equals("tiny_qwen3") &&
         msg.get("role").as_str().unwrap_or("").equals("assistant") &&
         (content.as_str().is_some() || content.equals(.null_val)) &&
         (reason.equals("stop") || reason.equals("length") || reason.equals("tool_calls")) &&
         prompt > 0 && done >= 0 && done <= I32::MAX_TOKENS &&
         u.get("total_tokens").as_int().unwrap_or(-1) == prompt + done
         return ""
-    return arena.text().s("the answer lacks a field a client reads: ").s(json_text(v, arena)).take()
+    return arena.text().s("the answer lacks a field a client reads: ")
+        .s(json_text(value, arena)).take()
 
-fn json_text(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text, for a message
+fn json_text(value: json.Value, arena: Arena$@): U8[] //< a value as JSON text, for a message
     defer $out: = Str_builder()
-    v.dump(out@)
+    value.dump(out@)
     return arena.dup_str(out.slice())
 
 fn check_served(exe: U8[], model: U8[], ask: fn(port: I32, arena: Arena$@): U8[], arena: Arena$@) //<

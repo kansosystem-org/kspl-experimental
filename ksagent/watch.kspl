@@ -61,15 +61,15 @@ fn watch(job: agent.Ask): I32 //< follows the ask files under the root until the
         look(job, seen@, keep)
         sys.sleep_ms(SCAN_GAP_MS)
 
-priv fn lock_refusal(root: U8[], path: U8[], e: fs.Fs_error, arena: Arena$@): U8[] //<
+priv fn lock_refusal(root: U8[], path: U8[], error: fs.Fs_error, arena: Arena$@): U8[] //<
     //< Why `watch` does not start, where its folder's lock cannot be taken
-    switch e
+    switch error
     case .held_elsewhere
         return arena.text()
             .s("ksagent: another ksagent watch answers in \{root\} already. Stop it first, or let \
                 it answer").take()
     default
-        return arena.text().s("ksagent: cannot take the lock \{path\} (\{e\})").take()
+        return arena.text().s("ksagent: cannot take the lock \{path\} (\{error\})").take()
 
 fn other_watch(root: U8[], arena: Arena$@): U8[] //<
     //< A folder above or below the root that another `watch` answers in, or empty where none does
@@ -247,7 +247,7 @@ priv fn say(job: agent.Ask, line: U8[]) //< a line on standard output, where `jo
         answer.write_shown(io.out(), line)
         io.out().c('\n')
 
-fn answer_one(job: agent.Ask, ask_path: U8[], p: chat.Pending, arena: Arena$@): Bool //<
+fn answer_one(job: agent.Ask, ask_path: U8[], pending: chat.Pending, arena: Arena$@): Bool //<
     //< Answers one pending question and records it with its answer; false where nothing was written
     //< **A question stopped on the page is recorded too**, as `stopped`, so the page shows it as
     //< such. Caution: **Read the chat file again just before writing**: a person can have edited
@@ -255,9 +255,9 @@ fn answer_one(job: agent.Ask, ask_path: U8[], p: chat.Pending, arena: Arena$@): 
     chat_path: = files.chat_path(ask_path, arena)
     say(job, arena.text().s("answering a question in \{ask_path\}").take())
     started: = sys.mono_us()
-    defer $shown: = Progress.following(ask_path, files.live_path(ask_path, arena), p.id, p.lang,
-        job.trace, arena)
-    a: = agent.run(job, p.question, p.history@, p.lang, shown@, arena)
+    defer $shown: = Progress.following(ask_path, files.live_path(ask_path, arena), pending.id,
+        pending.lang, job.trace, arena)
+    a: = agent.run(job, pending.question, pending.history@, pending.lang, shown@, arena)
     ended: = answer.ended_line(a@, arena)
     if ended.len > 0
         say(job, arena.text().s("  ").s(ended).take())
@@ -269,12 +269,12 @@ fn answer_one(job: agent.Ask, ask_path: U8[], p: chat.Pending, arena: Arena$@): 
         return false
     // **A turn already there was recorded by another writer meanwhile**, such as a second
     // `watch` started by hand: written again, its id would stand twice and refuse the file.
-    if chat.answered(r@, p.id)
+    if chat.answered(r@, pending.id)
         say(job, "  another writer recorded this question meanwhile; nothing more is written")
         shown.ended("", true)
         return true
     updated: = chat.appended(fresh,
-        chat.turn_lines(p@, a@, shown.text.slice(), arena), arena)
+        chat.turn_lines(pending@, a@, shown.text.slice(), arena), arena)
     fs.replace_file(chat_path, updated, .kept) catch e
         dropped(shown@, job,
             arena.text().s("cannot write \{chat_path\} (\{e\})").take())

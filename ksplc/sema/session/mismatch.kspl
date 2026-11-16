@@ -66,20 +66,21 @@ fn option_hint(env: sema_type_env.Env$@, node: Ast_node$@, expected_id: I32, act
     shown: = node.text if is_int_literal else plain_or_x(written_name(node))
     out.s("\n  Hint: a value becomes an optional only by its variant: '.some(\{shown\})'.")
 
-priv fn written_name(n: Ast_node$@): U8[] //<
-    //< The one name n is written as, for a hint to repeat; empty where n is anything else
+priv fn written_name(node: Ast_node$@): U8[] //<
+    //< The one name `node` is written as, for a hint to repeat; empty where it is anything else
     //< **A plain name reaches here as a path of one segment** once sema has read it.
-    if n != null && n.kind_id == .k_identifier
-        return n.text
-    if n != null && n.kind_id == .k_expr_path && n.children.len == 1
-        return n.get_path_name()
+    if node != null && node.kind_id == .k_identifier
+        return node.text
+    if node != null && node.kind_id == .k_expr_path && node.children.len == 1
+        return node.get_path_name()
     return ""
 
-priv fn declared_here(n: Ast_node$@): Bool //< whether the name n writes is declared in n's file
-    $def: = n.def_node
-    if def == null && n.children.len == 1
-        def = n.get_child(0).def_node
-    return def != null && def.loc.file_id == n.loc.file_id
+priv fn declared_here(node: Ast_node$@): Bool //<
+    //< whether the name `node` writes is declared in its file
+    $def: = node.def_node
+    if def == null && node.children.len == 1
+        def = node.get_child(0).def_node
+    return def != null && def.loc.file_id == node.loc.file_id
 
 priv fn plain_or_x(name: U8[]): U8[] //< the name, or `x` standing for the expression written
     return name if name.len > 0 else "x"

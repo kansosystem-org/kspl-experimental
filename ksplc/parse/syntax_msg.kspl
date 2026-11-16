@@ -314,13 +314,14 @@ priv fn append_deeper_line_hint(msg: Str_builder$@, src: U8[], pos: Sz) //<
             \{here.indent\} of the line above it, so it is read as that line's continuation. If it \
             is a statement of its own, indent it \{here.indent\} columns, as its sibling lines are.")
 
-priv fn ends_with_word(code: U8[], w: U8[]): Bool //< whether the code's last word is `w`
-    if code.len < w.len || !code.sub_from(code.len - w.len).equals(w)
+priv fn ends_with_word(code: U8[], word: U8[]): Bool //< whether the code's last word is `word`
+    if code.len < word.len || !code.sub_from(code.len - word.len).equals(word)
         return false
-    return code.len == w.len || !code[code.len - w.len - 1].is_alnum()
+    return code.len == word.len || !code[code.len - word.len - 1].is_alnum()
 
-priv fn starts_with_word(code: U8[], w: U8[]): Bool //< whether the code's first word is `w`
-    return code.starts_with(w) && (code.len == w.len || !code[w.len].is_alnum())
+priv fn starts_with_word(code: U8[], word: U8[]): Bool //< whether the code's first word is `word`
+    return code.starts_with(word) &&
+        (code.len == word.len || !code[word.len].is_alnum())
 
 priv fn on_case_line(src: U8[], pos: Sz): Bool //< whether the line holding `pos` opens a `case`
     return starts_with_word(code_line(src, line_start(src, pos)).code, "case")
@@ -721,11 +722,11 @@ priv fn starts_item(src: U8[], at: Sz): Bool //<
 priv const CARRYING_WORDS: U8[][5] = ::{ "as", "in", "catch", "if", "else" } //<
     //< The words that stand between two values and continue the first, rather than starting an item
 
-priv fn ends_item(c: U8): Bool //< whether an item of a list can end with the byte
-    return c.is_alnum() || c == '"' || c == '\'' || c == ')' || c == ']' || c == '}'
+priv fn ends_item(ch: U8): Bool //< whether an item of a list can end with the byte
+    return ch.is_alnum() || ch == '"' || ch == '\'' || ch == ')' || ch == ']' || ch == '}'
 
-priv fn is_closer(c: U8): Bool //< whether the byte closes a bracket
-    return c == ')' || c == ']' || c == '}'
+priv fn is_closer(ch: U8): Bool //< whether the byte closes a bracket
+    return ch == ')' || ch == ']' || ch == '}'
 
 priv fn append_place(msg: Str_builder$@, src: U8[], at: Sz) //<
     //< It writes `line L, column C` for a position, counted as the diagnostic's heading counts
@@ -743,7 +744,7 @@ priv fn text_step(src: U8[], i: Sz): Sz //<
         return line_end(src, i)
     return i + 1
 
-priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool, in_laid_block: Bool) //<
+priv fn append_expected(msg: Str_builder$@, expected: Expected, laid_out: Bool, in_laid_block: Bool) //<
     //< It writes one expected item
     //< A name goes in quotes and a kind in a readable phrasing. **Do not quote a kind**:
     //< `'Primitive_type'` reads as text to type, not the name of what can come there.
@@ -751,20 +752,20 @@ priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool, in_laid
     //< the end of the line, or in a block the indentation opened (`in_laid_block`), of the block.
     //< Caution: **Do not make a table of phrasings.** The grammar (`ksplc/kspl.kspeg`) owns the
     //< rule's name, and a copy silently drifts when it is renamed.
-    if !e.is_rule
-        if laid_out && e.text.equals(";")
+    if !expected.is_rule
+        if laid_out && expected.text.equals(";")
             msg.s("the end of the line")
-        else if in_laid_block && e.text.equals("}")
+        else if in_laid_block && expected.text.equals("}")
             msg.s("the end of the block")
         else
-            msg.s("'\{e.text\}'")
+            msg.s("'\{expected.text\}'")
         return
-    head: = e.text[0].to_lower()
+    head: = expected.text[0].to_lower()
     msg
         .s("an " if head == 'a' || head == 'i' || head == 'u' || head == 'e' || head == 'o'
         else "a ")
-    for i in Range.asc(e.text.len)
-        c: = e.text[i]
+    for i in Range.asc(expected.text.len)
+        c: = expected.text[i]
         msg.c(' ' if c == '_' else c.to_lower())
 
 fn parse_error_at(src: U8[], pos: Sz): Sz //<

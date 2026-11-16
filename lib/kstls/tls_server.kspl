@@ -12,12 +12,13 @@ import "std/net"
 import "std/sys"
 
 // OpenSSL's C API that only the server half calls. `long` crosses as in `lib/kstls/tls.kspl`.
-typedef Pem_password_cb = fn(buf: U8$@, size: I32, rwflag: I32, u: Void$@): I32 //<
-    //< what OpenSSL calls for a key's passphrase (`pem_password_cb`)
+typedef Pem_password_cb =
+    fn(buf: U8$@, size: I32, rwflag: I32, user_data: Void$@): I32 //<
+        //< what OpenSSL calls for a key's passphrase (`pem_password_cb`)
 
 ##link("ssl", "crypto")
 extern fn TLS_server_method(): tls.SSL_METHOD@
-extern fn SSL_CTX_use_certificate(ctx: tls.SSL_CTX$@, x: tls.X509$@): I32
+extern fn SSL_CTX_use_certificate(ctx: tls.SSL_CTX$@, cert: tls.X509$@): I32
 extern fn SSL_CTX_use_PrivateKey(ctx: tls.SSL_CTX$@, pkey: tls.EVP_PKEY$@): I32
 extern fn SSL_CTX_check_private_key(ctx: tls.SSL_CTX$@): I32
 extern fn SSL_CTX_set_cipher_list(ctx: tls.SSL_CTX$@, list: Void@): I32
@@ -26,17 +27,18 @@ extern fn SSL_set_accept_state(ssl: tls.SSL$@)
 extern fn SSL_is_init_finished(ssl: tls.SSL@): I32
 extern fn SSL_pending(ssl: tls.SSL@): I32
 extern fn BIO_new_mem_buf(buf: Void@, len: I32): tls.BIO$@
-extern fn PEM_read_bio_X509(bp: tls.BIO$@, x: Void$@, cb: Void@, u: Void$@): tls.X509$@
-extern fn PEM_read_bio_PrivateKey(bp: tls.BIO$@, x: Void$@, cb: Pem_password_cb, u: Void$@):
-    tls.EVP_PKEY$@
-extern fn X509_free(x: tls.X509$@)
+extern fn PEM_read_bio_X509(bp: tls.BIO$@, reuse: Void$@, cb: Void@, user_data: Void$@):
+    tls.X509$@
+extern fn PEM_read_bio_PrivateKey(bp: tls.BIO$@, reuse: Void$@, cb: Pem_password_cb,
+    user_data: Void$@): tls.EVP_PKEY$@
+extern fn X509_free(cert: tls.X509$@)
 extern fn EVP_PKEY_free(pkey: tls.EVP_PKEY$@)
 extern fn X509_check_issued(issuer: tls.X509$@, subject: tls.X509$@): I32
-extern fn X509_get0_notBefore(x: tls.X509$@): tls.ASN1_TIME@
-extern fn X509_get0_notAfter(x: tls.X509$@): tls.ASN1_TIME@
+extern fn X509_get0_notBefore(cert: tls.X509$@): tls.ASN1_TIME@
+extern fn X509_get0_notAfter(cert: tls.X509$@): tls.ASN1_TIME@
 extern fn ASN1_TIME_diff(pday: I32$@, psec: I32$@, from: tls.ASN1_TIME@, to: tls.ASN1_TIME@): I32
-extern fn ASN1_TIME_print(bp: tls.BIO$@, t: tls.ASN1_TIME@): I32
-extern fn X509_get_subject_name(x: tls.X509$@): tls.X509_NAME$@
+extern fn ASN1_TIME_print(bp: tls.BIO$@, time: tls.ASN1_TIME@): I32
+extern fn X509_get_subject_name(cert: tls.X509$@): tls.X509_NAME$@
 extern fn X509_NAME_oneline(name: tls.X509_NAME$@, buf: U8$@, size: I32): U8$@
 
 priv const SSL_CTRL_CHAIN_CERT: I32 = 89 //< SSL_CTRL_CHAIN_CERT, behind SSL_CTX_add0_chain_cert
@@ -75,37 +77,38 @@ pub struct Tls_server //< a certificate chain and its key, ready to answer hands
     pub subject: U8[] //< the first certificate's subject, as OpenSSL prints it on one line
     pub expiry: U8[] //< the first certificate's expiry, as OpenSSL prints a time
 
-extern fn kstls_refuse_passphrase(_buf: U8$@, _size: I32, _rwflag: I32, u: Void$@): I32 //<
+extern fn kstls_refuse_passphrase(_buf: U8$@, _size: I32, _rwflag: I32, _user_data: Void$@): I32 //<
     //< Answers a passphrase request with none, and marks that one was asked for
     //< Caution: **Never leave the callback null.** OpenSSL's own then prompts on the terminal, and
     //< a server started unattended waits there for good.
-    asked: = Bool$@::u
+    asked: = Bool$@::_user_data
     asked$ = true
     return -1
 
-priv fn seconds_until(t: tls.ASN1_TIME@): I64 //< how far from now `t` lies, negative for a past one
+priv fn seconds_until(time: tls.ASN1_TIME@): I64 //<
+    //< how far from now `time` lies, negative for a past one
     $days: I32 = 0
     $secs: I32 = 0
-    if ASN1_TIME_diff(days@, secs@, null, t) != 1
+    if ASN1_TIME_diff(days@, secs@, null, time) != 1
         return 0I64
     return I64::days * 86400I64 + I64::secs
 
-priv fn time_text(t: tls.ASN1_TIME@, arena: Arena$@): U8[] //< `t` as OpenSSL prints a time
+priv fn time_text(time: tls.ASN1_TIME@, arena: Arena$@): U8[] //< `time` as OpenSSL prints a time
     bio: = tls.BIO_new(tls.BIO_s_mem())
     if bio == null
         return ""
     defer tls.BIO_free(bio)
     $buf: U8[TEXT_CAP] = ::{}
-    if ASN1_TIME_print(bio, t) != 1
+    if ASN1_TIME_print(bio, time) != 1
         return ""
     n: = tls.BIO_read(bio, Void$@::buf@, I32::TEXT_CAP)
     if n <= 0
         return ""
     return arena.dup_str(U8[]::{ .ptr = buf@, .len = n })
 
-priv fn subject_text(x: tls.X509$@, arena: Arena$@): U8[] //< the subject on one line (`/CN=...`)
+priv fn subject_text(cert: tls.X509$@, arena: Arena$@): U8[] //< the subject on one line (`/CN=...`)
     $buf: U8[TEXT_CAP] = ::{}
-    if X509_NAME_oneline(X509_get_subject_name(x), buf@, I32::TEXT_CAP) == null
+    if X509_NAME_oneline(X509_get_subject_name(cert), buf@, I32::TEXT_CAP) == null
         return ""
     $n: Sz = 0
     for n < TEXT_CAP && buf[n] != 0U8
@@ -121,7 +124,7 @@ priv fn pem_bio(text: U8[]): tls.BIO$@? //< a read-only memory BIO over `text`
         return .none
     return .some(bio)
 
-priv fn use_chain(r: Tls_server$@, cert_pem: U8[], arena: Arena$@): Void!Tls_setup_error //<
+priv fn use_chain(server: Tls_server$@, cert_pem: U8[], arena: Arena$@): Void!Tls_setup_error //<
     //< Gives the context the chain in `cert_pem`, the server's own certificate first
     bio: tls.BIO$@ = pem_bio(cert_pem) catch
         throw .no_certificate
@@ -131,16 +134,16 @@ priv fn use_chain(r: Tls_server$@, cert_pem: U8[], arena: Arena$@): Void!Tls_set
         throw .no_certificate
     // `SSL_CTX_use_certificate` takes a reference of its own, so this one is freed here.
     defer X509_free(first)
-    if SSL_CTX_use_certificate(r.ctx, first) != 1
+    if SSL_CTX_use_certificate(server.ctx, first) != 1
         throw .certificate_refused
-    r.starts_at = sys.wall_seconds() + seconds_until(X509_get0_notBefore(first))
-    r.expires_at = sys.wall_seconds() + seconds_until(X509_get0_notAfter(first))
-    r.subject = subject_text(first, arena)
-    r.expiry = time_text(X509_get0_notAfter(first), arena)
-    r.chain_len = 1
+    server.starts_at = sys.wall_seconds() + seconds_until(X509_get0_notBefore(first))
+    server.expires_at = sys.wall_seconds() + seconds_until(X509_get0_notAfter(first))
+    server.subject = subject_text(first, arena)
+    server.expiry = time_text(X509_get0_notAfter(first), arena)
+    server.chain_len = 1
     $prev: tls.X509$@ = first
     self_issued: = X509_check_issued(first, first) == tls.X509_V_OK
-    for r.chain_len < MAX_CHAIN
+    for server.chain_len < MAX_CHAIN
         next: = PEM_read_bio_X509(bio, null, null, null)
         if next == null
             break
@@ -148,14 +151,14 @@ priv fn use_chain(r: Tls_server$@, cert_pem: U8[], arena: Arena$@): Void!Tls_set
             X509_free(next)
             throw .chain_out_of_order
         // `add0` takes this reference over, and the context frees it with itself.
-        if tls.SSL_CTX_ctrl(r.ctx, SSL_CTRL_CHAIN_CERT, 0, Void$@::next) != 1
+        if tls.SSL_CTX_ctrl(server.ctx, SSL_CTRL_CHAIN_CERT, 0, Void$@::next) != 1
             X509_free(next)
             throw .ctx_failed
         prev = next
-        r.chain_len += 1
+        server.chain_len += 1
     // The read past the last certificate leaves "no start line" in the error queue.
     tls.ERR_clear_error()
-    r.lone_leaf = r.chain_len == 1 && !self_issued
+    server.lone_leaf = server.chain_len == 1 && !self_issued
 
 priv fn use_key(ctx: tls.SSL_CTX$@, key_pem: U8[]): Void!Tls_setup_error //<
     //< Gives the context the key in `key_pem`, and checks that it belongs to the certificate

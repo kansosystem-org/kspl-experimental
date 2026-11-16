@@ -26,137 +26,138 @@ priv const GENERIC_NESTING: Sz = 64
 priv const ALIAS_CHAIN: Sz = 256
 priv const CONST_CHAIN: Sz = 256
 
-priv fn src_block(n: Sz, arena: Arena$@): U8[] //<
+priv fn src_block(count: Sz, arena: Arena$@): U8[] //<
     //< It makes one value inside an n-deep block and returns it outwards
     //< **Every level carries a label** ("A bare block carries a label" in
     //< `../../../docs/DESIGN-notation.md`); `_` names a level there is nothing to call.
     b: = arena.text()
     // Each level stands one space in from the one around it.
     b.s("fn main(): I32\n $x: I32 = 0\n")
-    for i in Range.asc(n + 1)
+    for i in Range.asc(count + 1)
         for _j in Range.asc(i + 1)
             b.c(' ')
-        b.s("_:\n" if i < n else "x = 7\n")
+        b.s("_:\n" if i < count else "x = 7\n")
     return b.s(" return x - 7\n").take()
 
-priv fn src_paren(n: Sz, arena: Arena$@): U8[]
+priv fn src_paren(count: Sz, arena: Arena$@): U8[]
     b: = arena.text()
     b.s("fn main(): I32 { x: = ")
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         b.c('(')
     b.c('7')
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         b.c(')')
     return b.s("; return x - 7; }\n").take()
 
-priv fn src_type_postfix(n: Sz, arena: Arena$@): U8[] //< `I32@@@...` n deep
+priv fn src_type_postfix(count: Sz, arena: Arena$@): U8[] //< `I32@@@...` `count` deep
     //< It is only a null comparison, so no body is needed.
     b: = arena.text()
     b.s("fn main(): I32\n  p: I32")
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         b.c('@')
     return b.s(" = null\n  return 0 if p == null else 1\n\n").take()
 
-priv fn src_slice_postfix(n: Sz, arena: Arena$@): U8[] //< `I32[][]...` n deep, as a parameter
+priv fn src_slice_postfix(count: Sz, arena: Arena$@): U8[] //<
+    //< `I32[][]...` `count` deep, as a parameter
     b: = arena.text()
     b.s("fn f(_x: I32")
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         b.s("[]")
     return b.s(")\n  return\n\nfn main(): I32\n  return 0\n").take()
 
-priv fn src_interp(n: Sz, arena: Arena$@): U8[] //<
-    //< A string holding a string in its interpolation, n deep, on one line and left open
+priv fn src_interp(count: Sz, arena: Arena$@): U8[] //<
+    //< A string holding a string in its interpolation, `count` deep, on one line and left open
     //< **The reader that places each line's `;` walks it before the parser does**
     //< (`../../parse/layout.kspl`). Walked by recursion, 100,000 levels overflowed the stack there,
     //< and every tool crashed before the parser's depth limit could report it.
     b: = arena.text()
     b.s("import \"std/io\"\nfn main(): I32\n  io.out().s(\"")
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         b.s("\\{\"")
     return b.s("\n  return 0\n").take()
 
-priv fn src_interp_after_error(n: Sz, arena: Arena$@): U8[] //<
-    //< A syntax error on one line, then strings nested n deep in interpolations on the next
+priv fn src_interp_after_error(count: Sz, arena: Arena$@): U8[] //<
+    //< A syntax error on one line, then strings nested `count` deep in interpolations on the next
     //< **The message of a syntax error walks every string in the text** (`parse_error_at` in
     //< `../../parse/syntax_msg.kspl`), even past the error. Walked by recursion, 100,000 levels
     //< overflowed the stack there.
     b: = arena.text()
     b.s("import \"std/io\"\nfn main(): I32\n  y: = = 1\n  io.out().s(\"")
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         b.s("\\{\"")
     return b.s("\n  return 0\n").take()
 
-priv fn src_struct(n: Sz, arena: Arena$@): U8[]
+priv fn src_struct(count: Sz, arena: Arena$@): U8[]
     b: = arena.text()
     b.s("priv struct S0 { v: I32; }\n")
-    for i in Range.asc(n)
+    for i in Range.asc(count)
         b.s("priv struct S\{i + 1\} { inner: S\{i\}; }\n")
-    b.s("fn main(): I32\n  s: S\{n\} = ::{}\n  return s")
-    for _i in Range.asc(n)
+    b.s("fn main(): I32\n  s: S\{count\} = ::{}\n  return s")
+    for _i in Range.asc(count)
         b.s(".inner")
     return b.s(".v\n").take()
 
-priv fn src_generic(n: Sz, arena: Arena$@): U8[]
+priv fn src_generic(count: Sz, arena: Arena$@): U8[]
     t: = arena.text()
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         t.s("List<|")
     t.s("I32")
-    for _i in Range.asc(n)
+    for _i in Range.asc(count)
         t.s("|>")
     nested: = t.take()
     return arena.text().s("import \"std/ds\" { List }\nfn main(): I32\n  p: \{nested\}$@ = null\n")
         .s("  return 0 if p == null else 1\n\n").take()
 
-priv fn src_alias(n: Sz, arena: Arena$@): U8[]
+priv fn src_alias(count: Sz, arena: Arena$@): U8[]
     b: = arena.text()
     b.s("typedef A0 = I32\n")
-    for i in Range.asc(n)
+    for i in Range.asc(count)
         b.s("typedef A\{i + 1\} = A\{i\}\n")
-    return b.s("fn main(): I32 { x: A\{n\} = 7; return I32::x - 7; }\n").take()
+    return b.s("fn main(): I32 { x: A\{count\} = 7; return I32::x - 7; }\n").take()
 
-priv fn src_const_chain(n: Sz, arena: Arena$@): U8[] //<
-    //< It writes a source with a chain of n constants, each the one before plus 1
+priv fn src_const_chain(count: Sz, arena: Arena$@): U8[] //<
+    //< It writes a source with a chain of `count` constants, each the one before plus 1
     //< Caution: **Use the chain's last constant as an array length.** A run-time read alone
-    //< (`return I32::A<n>;`) never walks the chain and goes green without reaching the folding cap.
-    //< Keep the run-time read as well: any other walk superlinear in the depth **stops the suite
-    //< from returning** rather than failing.
+    //< (`return I32::A<count>;`) never walks the chain and goes green without reaching the folding
+    //< cap. Keep the run-time read as well: any other walk superlinear in the depth **stops the
+    //< suite from returning** rather than failing.
     b: = arena.text()
     b.s("const A0: I32 = 1\n")
-    for i in Range.asc(n)
+    for i in Range.asc(count)
         b.s("const A\{i + 1\}: I32 = A\{i\} + 1\n")
-    b.s("fn main(): I32\n  _buf: I32[A\{n\}] = ::{}\n")
-    return b.s("  return I32::_buf.len - A\{n\}\n").take()
+    b.s("fn main(): I32\n  _buf: I32[A\{count\}] = ::{}\n")
+    return b.s("  return I32::_buf.len - A\{count\}\n").take()
 
-priv fn src_const_fan(n: Sz, arena: Arena$@): U8[] //<
-    //< It writes a source with chains of n constants, each naming the one before twice
+priv fn src_const_fan(count: Sz, arena: Arena$@): U8[] //<
+    //< It writes a source with chains of `count` constants, each naming the one before twice
     //< One chain is integers, one floating point. Each constant is folded once and its value
-    //< kept, so the translation is linear in n. **A fold that walks each name again costs 2^n**,
-    //< and the suite would never return.
+    //< kept, so the translation is linear in `count`. **A fold that walks each name again costs
+    //< 2^`count`**, and the suite would never return.
     b: = arena.text()
     b.s("const A0: I32 = 1\nconst X0: F64 = 1.0\n")
-    for i in Range.asc(n)
+    for i in Range.asc(count)
         b.s("const A\{i + 1\}: I32 = A\{i\} * A\{i\}\n")
         b.s("const X\{i + 1\}: F64 = X\{i\} * X\{i\}\n")
-    b.s("fn main(): I32\n  _buf: I32[A\{n\}] = ::{}\n")
-    return b.s("  return I32::_buf.len - A\{n\} + I32::(X\{n\} - 1.0)\n").take()
+    b.s("fn main(): I32\n  _buf: I32[A\{count\}] = ::{}\n")
+    return b.s("  return I32::_buf.len - A\{count\} + I32::(X\{count\} - 1.0)\n").take()
 
-priv fn src_float_chain(n: Sz, arena: Arena$@): U8[] //<
-    //< It writes a source with a chain of n floating-point constants, each the one before plus 1
+priv fn src_float_chain(count: Sz, arena: Arena$@): U8[] //<
+    //< It writes a source with a chain of `count` float constants, each the one before plus 1
     //< Nothing reads the last one, so only the check of each top-level initializer folds it.
     b: = arena.text()
     b.s("const X0: F64 = 1.0\n")
-    for i in Range.asc(n)
+    for i in Range.asc(count)
         b.s("const X\{i + 1\}: F64 = X\{i\} + 1.0\n")
     return b.s("fn main(): I32\n  return 0\n").take()
 
-priv fn src_alias_forward(n: Sz, arena: Arena$@): U8[] //<
-    //< It writes a source with a forward chain of n aliases (`A0 = A1; A1 = A2; ...`)
+priv fn src_alias_forward(count: Sz, arena: Arena$@): U8[] //<
+    //< It writes a source with a forward chain of `count` aliases (`A0 = A1; A1 = A2; ...`)
     //< **A chain takes a different path by direction**: forward nests the resolution, backward
     //< (`A1 = A0; ...`) does not. Testing one alone goes green with the other silently broken.
     b: = arena.text()
-    for i in Range.asc(n)
+    for i in Range.asc(count)
         b.s("typedef A\{i\} = A\{i + 1\}\n")
-    b.s("typedef A\{n\} = I32\n")
+    b.s("typedef A\{count\} = I32\n")
     return b.s("fn main(): I32 { x: A0 = 7; return I32::x - 7; }\n").take()
 
 priv fn write_src(slot: U8[], src: U8[], arena: Arena$@): U8[] //<

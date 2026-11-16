@@ -29,7 +29,9 @@ function ksmdInput(ks) {
     const inserted = after.slice(s, after.length - e);
     const from = ks.view.u8len(before.slice(0, s));
     const to = ks.view.u8len(before.slice(0, before.length - e));
-    if (c.spot[0] === 0) ks.select([0, c.spot[1], c.spot[2], from], [0, c.spot[1], c.spot[2], to]);
+    if (c.spot[0] === ks.SPOT.TEXT) {
+      ks.select([ks.SPOT.TEXT, c.spot[1], c.spot[2], from], [ks.SPOT.TEXT, c.spot[1], c.spot[2], to]);
+    }
     else ks.select(c.spot, c.spot);
     ks.act("ksmd_web_type", ks.put(inserted), 2);
   }
@@ -70,7 +72,7 @@ function ksmdInput(ks) {
       if (ranges.length > 0 && !ranges[0].collapsed) {
         const a = ks.view.spotAt(ranges[0].startContainer, ranges[0].startOffset);
         const f = ks.view.spotAt(ranges[0].endContainer, ranges[0].endOffset);
-        if (a && f && a[0] === 0 && f[0] === 0 && a[1] === f[1] && a[2] === f[2]) ks.select(a, f);
+        if (a && f && a[0] === ks.SPOT.TEXT && f[0] === ks.SPOT.TEXT && a[1] === f[1] && a[2] === f[2]) ks.select(a, f);
       }
     }
     ks.act("ksmd_web_erase", backward ? 1 : 0);
@@ -191,7 +193,7 @@ function ksmdInput(ks) {
     if (all.length === 0) return false;
     const edge = all[end ? all.length - 1 : 0];
     if (edge.classList.contains("u") || edge.classList.contains("list")) return false;
-    ks.place([1, end ? all.length : 0, 0, 0]);
+    ks.place([ks.SPOT.BLOCK_GAP, end ? all.length : 0, 0, 0]);
     const gap = root.querySelector(".gap");
     if (gap) gap.scrollIntoView({ block: "nearest" });
     return true;
@@ -256,7 +258,7 @@ function ksmdInput(ks) {
       ks.table.chooseCell(null);
       ks.setPlace("text");
       ks.root.focus({ preventScroll: true });
-      ks.select([1, at, 0, 0], [1, at, 0, 0]);
+      ks.select([ks.SPOT.BLOCK_GAP, at, 0, 0], [ks.SPOT.BLOCK_GAP, at, 0, 0]);
     } else {
       ks.sync();
     }
@@ -303,7 +305,7 @@ function ksmdInput(ks) {
       }
     }
     root.focus();
-    ks.place([1, b, 0, 0]);
+    ks.place([ks.SPOT.BLOCK_GAP, b, 0, 0]);
   });
 
   // A gap stands only while the caret is in it. The blocks after a gap move up when it goes.

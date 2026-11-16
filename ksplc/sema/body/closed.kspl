@@ -46,38 +46,38 @@ impl Sema_ctx
         r.report_diagnostic_at(r.main_file, base_core.source_of(r.source_map, r.main_file), 0, 0,
             .error, r.scratch.slice())
 
-    priv fn refuse_c_reach(r: Self$@, n: Ast_node$@, closed: U8[]) //<
+    priv fn refuse_c_reach(r: Self$@, node: Ast_node$@, closed: U8[]) //<
         //< Refuses what in n's tree reaches C, once per form, at the form
-        if n == null
+        if node == null
             return
-        what: = c_reach_of(n)
+        what: = c_reach_of(node)
         if what.len > 0
             r.clear_scratch()
                 .s("\{what\} cannot be written in the package '\{closed\}'. The build closes it \
                     (--closed=\{closed\}): its files stay inside KSPL, so they reach no C symbol, \
                     linker or assembler, and the build reads nothing outside them")
-            r.err(n, r.scratch.slice())
+            r.err(node, r.scratch.slice())
             return
-        for child in n.children
+        for child in node.children
             r.refuse_c_reach(child, closed)
 
-priv fn c_reach_of(n: Ast_node$@): U8[] //<
-    //< The form n writes that reaches C, as a message names it; empty where it writes none
-    switch n.kind_id
+priv fn c_reach_of(node: Ast_node$@): U8[] //<
+    //< The form `node` writes that reaches C, as a message names it; empty where it writes none
+    switch node.kind_id
     case .k_decl_extern, .k_decl_extern_block, .k_decl_extern_struct
         return "'extern'"
     case .k_decl_directive
-        if sema_decl_attrs.directive_name(n).equals("link")
+        if sema_decl_attrs.directive_name(node).equals("link")
             return "'##link'"
     case .k_attribute
-        name: = n.attribute_name()
+        name: = node.attribute_name()
         for c_side in C_SIDE_ATTRIBUTES
             if name.equals(c_side)
                 return base_core.arena.text().s("'#").s(name).c('\'').take()
     case .k_identifier
-        if sema_body_call.intrinsic_of(n.text) != .not_intrinsic
-            return base_core.arena.text().c('\'').s(n.text).c('\'').take()
+        if sema_body_call.intrinsic_of(node.text) != .not_intrinsic
+            return base_core.arena.text().c('\'').s(node.text).c('\'').take()
     default {}
-    if n.linkage_of().is_some()
+    if node.linkage_of().is_some()
         return "'extern'"
     return ""

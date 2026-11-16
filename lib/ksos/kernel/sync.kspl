@@ -81,10 +81,11 @@ impl<|T|> Queue<|T|>
         r.cap = cap
         r.head = 0
         r.count = 0
-    priv fn push_locked(r: Self$@, v: T) //< writes v after the last element, waking a receiver
+    priv fn push_locked(r: Self$@, value: T) //<
+        //< writes `value` after the last element, waking a receiver
         //< Caution: **Call it with interrupts off and room checked** (each `send` does both).
         tail: = (r.head + r.count) % r.cap
-        (r.buf + tail)$ = v
+        (r.buf + tail)$ = value
         r.count += 1
         task.wake(Void$@::r.count@, false) // wake a receiver waiting for data
     priv fn pop_locked(r: Self$@): T //< takes the first element, waking a sender waiting for room
@@ -94,25 +95,25 @@ impl<|T|> Queue<|T|>
         r.count -= 1
         task.wake(Void$@::r.cap@, false) // wake a sender waiting for room
         return v
-    fn send(r: Self$@, v: T) //< blocks while it is full, until there is room
+    fn send(r: Self$@, value: T) //< blocks while it is full, until there is room
         //< Writes into the free slot and wakes a receiver waiting for data.
-        r.send_until(v, .none)
+        r.send_until(value, .none)
     fn recv(r: Self$@): T //< blocks while it is empty, until data arrives
         //< Takes the first element and wakes a sender waiting for room.
         for // with no deadline recv_until never comes back empty; this only takes the value out
             if v: = r.recv_until(.none)
                 return v
-    fn send_for(r: Self$@, v: T, ticks: U64): Bool //< send with a timeout
+    fn send_for(r: Self$@, value: T, ticks: U64): Bool //< send with a timeout
         //< true if room appeared and it wrote, false if it stayed full until the timeout.
         assert(ticks > 0,
             "Queue.send_for: ticks must be greater than 0 (try_send waits for nothing)")
-        return r.send_until(v, .some(task.deadline_after(ticks)))
+        return r.send_until(value, .some(task.deadline_after(ticks)))
     fn recv_for(r: Self$@, ticks: U64): T? //< recv with a timeout
         //< some if something arrived, none if it stayed empty until the timeout.
         assert(ticks > 0,
             "Queue.recv_for: ticks must be greater than 0 (try_recv waits for nothing)")
         return r.recv_until(.some(task.deadline_after(ticks)))
-    priv fn send_until(r: Self$@, v: T, deadline: U64?): Bool //< false once deadline passes
+    priv fn send_until(r: Self$@, value: T, deadline: U64?): Bool //< false once deadline passes
         $st: = task.open_wait()
         defer task.irq_restore(st)
         for r.count >= r.cap
@@ -120,7 +121,7 @@ impl<|T|> Queue<|T|>
             if task.deadline_passed(deadline)
                 return false
             st = task.block_and_rearm(Void$@::r.cap@, deadline, st) // full -> waiting for room
-        r.push_locked(v)
+        r.push_locked(value)
         return true
     priv fn recv_until(r: Self$@, deadline: U64?): T? //< none once deadline passes
         $st: = task.open_wait()
@@ -131,14 +132,14 @@ impl<|T|> Queue<|T|>
                 return .none
             st = task.block_and_rearm(Void$@::r.count@, deadline, st) // empty -> waiting for data
         return .some(r.pop_locked())
-    fn try_send(r: Self$@, v: T): Bool //< send's non-blocking version
+    fn try_send(r: Self$@, value: T): Bool //< send's non-blocking version
         //< If it is full it returns false at once. An ISR cannot block, so an ISR always sends with
         //< this.
         st: = task.irq_save()
         defer task.irq_restore(st)
         if r.count >= r.cap
             return false
-        r.push_locked(v)
+        r.push_locked(value)
         return true
     fn try_recv(r: Self$@): T? //< recv's non-blocking version
         //< If it is empty it returns none at once (safe from an ISR too).

@@ -18,64 +18,64 @@ priv const MAX_NORM_STEPS: Sz = 8 //< the limit on repeating the type normalizat
     //< one resolution and one strip are not enough (the regression test is `Meters` in
     //< ksplc/tests/lang_types_test.kspl).
 
-priv fn norm(c: Sema_ctx$@, id: I32): I32 //<
+priv fn norm(ctx: Sema_ctx$@, id: I32): I32 //<
     //< It reduces a type to the form in which equal types compare equal
     //< **const is dropped: a value read out does not carry it** (`$` on a `U8 immut@` reads a
     //< `U8`). **An alias is resolved: another name, the same type.**
     $cur: = id
     for _i in Range.asc(MAX_NORM_STEPS)
-        next: = c.env.strip_const_deep(c.env.get_real_type(cur))
+        next: = ctx.env.strip_const_deep(ctx.env.get_real_type(cur))
         if next == cur
             break
         cur = next
     // **What a pointer points at too** (`Ints@` beside `Box<|I64|>@` after
     // `typedef Ints = Box<|I64|>`). Sema converts one to the other as another name for the same
     // type, and C spells both through the typedef.
-    switch c.env.get_info(cur)
+    switch ctx.env.get_info(cur)
     case .pointer(b)
-        nb: = norm(c, b)
-        return cur if nb == b else c.env.make_ptr(nb)
+        nb: = norm(ctx, b)
+        return cur if nb == b else ctx.env.make_ptr(nb)
     default
         return cur
 
-priv fn fail(c: Sema_ctx$@, r: Ast_node$@, op: U8[], child_id: I32, want: I32)
+priv fn fail(ctx: Sema_ctx$@, node: Ast_node$@, op: U8[], child_id: I32, want: I32)
     defer $msg: = Str_builder()
     msg.s("Lower ICE: the types of '").s(op).s("' do not mesh: child=")
-        .s(c.env.get_str(child_id))
-    msg.s(" means self=").s(c.env.get_str(want)).s(" was expected, but self=")
-        .s(c.env.get_str(r.type_id))
-    r.ice_panic(msg.slice())
+        .s(ctx.env.get_str(child_id))
+    msg.s(" means self=").s(ctx.env.get_str(want)).s(" was expected, but self=")
+        .s(ctx.env.get_str(node.type_id))
+    node.ice_panic(msg.slice())
 
-priv fn check_postfix(r: Ast_node$@, c: Sema_ctx$@)
-    child: = r.get_child(0)
+priv fn check_postfix(node: Ast_node$@, ctx: Sema_ctx$@)
+    child: = node.get_child(0)
     if child == null
         return
-    if r.text.equals("$")
-        want: = c.env.strip_ptr(child.type_id)
-        if norm(c, r.type_id) != norm(c, want)
-            fail(c, r, "$", child.type_id, want)
+    if node.text.equals("$")
+        want: = ctx.env.strip_ptr(child.type_id)
+        if norm(ctx, node.type_id) != norm(ctx, want)
+            fail(ctx, node, "$", child.type_id, want)
         return
-    if !r.text.equals("@")
+    if !node.text.equals("@")
         return
     // **An array decays to a pointer to its element** (`U8[32]`'s `@` is a `U8@`, as in C). The
     // element type after the decay is not checked.
-    if c.env.is_array(c.env.get_real_type(child.type_id))
+    if ctx.env.is_array(ctx.env.get_real_type(child.type_id))
         return
-    want: = c.env.make_ptr(child.type_id)
-    if norm(c, r.type_id) != norm(c, want)
-        fail(c, r, "@", child.type_id, want)
+    want: = ctx.env.make_ptr(child.type_id)
+    if norm(ctx, node.type_id) != norm(ctx, want)
+        fail(ctx, node, "@", child.type_id, want)
 
-priv fn walk(r: Ast_node$@, c: Sema_ctx$@, depth: Sz)
-    if r == null || depth >= lower_root.MAX_LOWER_DEPTH
+priv fn walk(node: Ast_node$@, ctx: Sema_ctx$@, depth: Sz)
+    if node == null || depth >= lower_root.MAX_LOWER_DEPTH
         return
-    if r.kind_id == .k_decl_fn && r.is_generic_template()
-        r
+    if node.kind_id == .k_decl_fn && node.is_generic_template()
+        node
             .ice_panic("Lower ICE: an unrealized generic came here. this stage is to run last in \
                 lower's run (after lower_prune)")
-    if r.kind_id == .k_expr_postfix && r.children.len >= 1
-        check_postfix(r, c)
-    for child in r.children
-        walk(child, c, depth + 1)
+    if node.kind_id == .k_expr_postfix && node.children.len >= 1
+        check_postfix(node, ctx)
+    for child in node.children
+        walk(child, ctx, depth + 1)
 
 fn run(ctx: Sema_ctx$@, root: Ast_node$@)
     base_diag.ice_assert(root != null, "lower_verify.run: root is null")

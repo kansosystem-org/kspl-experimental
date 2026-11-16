@@ -7,22 +7,22 @@ import "std/mem" + { Arena, Own_arena }
 pub enum Url_error //< why a piece of a URL could not be decoded
     invalid_percent_encoding //< what follows a `%` is not two hex digits
 
-priv fn is_unreserved(c: U8): Bool //<
-    //< Whether c is an "unreserved" character (RFC 3986 §2.3)
+priv fn is_unreserved(byte: U8): Bool //<
+    //< Whether `byte` is an "unreserved" character (RFC 3986 §2.3)
     //< These are ALPHA, DIGIT, "-", ".", "_" and "~".
-    return c.is_alnum() || c == '-' || c == '.' || c == '_' || c == '~'
+    return byte.is_alnum() || byte == '-' || byte == '.' || byte == '_' || byte == '~'
 
 pub fn encode( //< percent-encodes a piece of text so it can go inside a URL
     //< An unreserved character stays as it is; any other byte becomes the hex form `%XX`.
-    s: U8[], //< the plain text, not yet escaped
+    text: U8[], //< the plain text, not yet escaped
     arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
 ): U8[] //< the escaped text, hex digits in uppercase
     $n: Sz = 0
-    for c in s
+    for c in text
         n += 1 if is_unreserved(c) else 3
     out: = U8$[]::{ .ptr = U8$@::arena.alloc(n), .len = n }
     $at: Sz = 0
-    for c in s
+    for c in text
         if is_unreserved(c)
             out[at] = c
             at += 1
@@ -37,19 +37,19 @@ pub fn decode_component( //< percent-decodes a path piece, leaving `+` as a `+`
     //< **"+" does not become a space.** Only application/x-www-form-urlencoded writes a space as
     //< "+"; in a URI path a "+" is just a "+" (RFC 3986). `parse_query` reads a query's "+" as a
     //< space.
-    s: U8[], //< the escaped text as it arrived
+    text: U8[], //< the escaped text as it arrived
     arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
 ): U8[]!Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
-    return decode_impl(s, false, arena)
+    return decode_impl(text, false, arena)
 
-priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_error //<
+priv fn decode_impl(text: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_error //<
     //< Checks every `%XX` and counts the bytes first, so a failure has nothing to free
     $n: Sz = 0
     $i: Sz = 0
-    for i < s.len
-        if s[i] == '%'
-            if i + 2 >= s.len || s[i + 1].hex_val().is_none() ||
-                s[i + 2].hex_val().is_none()
+    for i < text.len
+        if text[i] == '%'
+            if i + 2 >= text.len || text[i + 1].hex_val().is_none() ||
+                text[i + 2].hex_val().is_none()
                 throw .invalid_percent_encoding
             i += 3
         else
@@ -58,12 +58,12 @@ priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_erro
     out: = U8$[]::{ .ptr = U8$@::arena.alloc(n), .len = n }
     $at: Sz = 0
     i = 0
-    for i < s.len
-        c: = s[i]
+    for i < text.len
+        c: = text[i]
         if c == '%'
             // The first pass checked both digits, so neither falls back to 0.
             out[at] =
-                U8::(s[i + 1].hex_val().unwrap_or(0) * 16 + s[i + 2].hex_val().unwrap_or(0))
+                U8::(text[i + 1].hex_val().unwrap_or(0) * 16 + text[i + 2].hex_val().unwrap_or(0))
             i += 3
         else
             out[at] = ' ' if c == '+' && plus_is_space else c

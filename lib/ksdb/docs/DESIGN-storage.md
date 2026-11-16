@@ -8,6 +8,8 @@
 | **The power can fail at any moment** | The device can lose power in the middle of any write | The one record being written at that instant can break, but the records finished before it must always read back |
 | **The place is flash** | Erasing and writing work differently from RAM (below) | A record is only appended, never rewritten |
 
+Caution: **ksdb's `Log` is not `std/log`'s `Log`.** ksdb's (`lib/ksdb/log.kspl`) stores records on flash and reads them back. std's writes text lines that carry a level, such as an error or a warning. A file that uses both imports ksdb's under another name, as the README's example does (`import "ksdb/log" as ksdblog`).
+
 How flash differs from RAM:
 
 * *Erasing* sets every bit to 1, so erased flash reads as `0xFF` bytes.

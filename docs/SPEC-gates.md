@@ -175,7 +175,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-freestanding-math | ✅ | ✅(note 3) | ✅ |
 | test-simd | ✅ | ✅ | ✅ |
 | test-surface (the published API matches its record) | ✅ | ➖(note 2) | ➖(note 26) |
-| test-docs (the language tour matches its program and output) | ✅ | ➖(note 2) | ➖(note 26) |
+| test-docs (the language tutorial matches its program and output) | ✅ | ➖(note 2) | ➖(note 26) |
 | test-emit-runtime | ✅ | ✅(note 4) | ✅(note 4) |
 | test-ship (libraries built with `--library`, static and shared, linked into a C and a KSPL program) | ✅(note 19) | ➖(note 2) | ✅(note 19) |
 | run (the AI engine, a smoke test) | ➖(note 25) | ✅ | ➖(note 25) |
@@ -211,7 +211,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | kstls's own tests (the OpenSSL binding, from a copy by `test-extract`) | ✅ | ➖(note 2) | ✅(note 18) |
 | perf-log (peak memory and the tree types' sizes, judged by `perf_guard`) | ✅ | ➖(note 16) | ➖(note 16) |
 | test-race (no data race that the tests reach, under ThreadSanitizer) | ✅ | ➖(note 2) | ➖(note 17) |
-| test-sanitize (the tests of ksplc, std, ksmd, ksagent and ksdb are clean under the memory and undefined-behaviour sanitizers) | ✅ | ➖(note 29) | ➖(note 29) |
+| test-sanitize (the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls are clean under the memory and undefined-behaviour sanitizers) | ✅ | ➖(note 29) | ➖(note 29) |
 | test-holes (each known way to break memory or threads keeps its verdict today) | ✅ | ➖(note 34) | ➖(note 34) |
 
 **The compiler's own suites run from copies.** On Linux and ucrt64, the two compiler extraction shares copy ksplc's folder alone, rebuild the compiler there, and split `SUITES` in `ksplc/Makefile` between them. The core share also runs the copy's unit tests and fuzzing. It checks that the copy does not build without its `ksplc.cfg`. macOS runs the suites its column marks from the repository.
@@ -227,8 +227,8 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | `test-ksos-link` (note 6) | The `arm-none-eabi` toolchain | `KSOS_REQUIRE_ARM` | That ksos's bare-metal demos link (on Linux, the RP2040 ones), and that each window function sits in RAM. It prints `SKIPPED (no ARM toolchain)`, as on ucrt64 |
 | `test-ksmd-browser` (note 31) and `test-ksagent-chat` (note 33) | A Chromium: the image's pinned amd64 build, or one on `PATH` that is not a snap. Windows takes Chrome from its usual folders. Both take the one `ksmd/Makefile` finds | `KSMD_REQUIRE_BROWSER`, for either gate run alone too | ksmd's editing page in a browser, served by `kssrv --local`, and ksagent's chat page. Each prints `SKIPPED (no browser - see docs/SPEC-gates.md)` |
 | `test-race` (note 17) and `test-holes` (note 34) | Clang's ThreadSanitizer runtime | `KANSO_REQUIRE_TSAN` | Data races that the tests of the programs that start threads reach. Windows has no ThreadSanitizer, so ucrt64 does not run it |
-| `test-sanitize` (note 29) and `test-holes` (note 34) | Clang's address, leak and undefined-behaviour sanitizer runtimes (`libclang-rt-<version>-dev`) | `KANSO_REQUIRE_ASAN` | Memory errors and undefined behaviour in the tests of ksplc, std, ksmd, ksagent and ksdb. ucrt64's clang holds no address sanitizer |
-| The fuzzers of std and ksai, in `test-extract` (note 21) | Clang's address sanitizer runtime | `KANSO_REQUIRE_ASAN` | A read past the end, since the fuzzing runs on a plain build, as on ucrt64 |
+| `test-sanitize` (note 29) and `test-holes` (note 34) | Clang's address, leak and undefined-behaviour sanitizer runtimes (`libclang-rt-<version>-dev`) | `KANSO_REQUIRE_ASAN` | Memory errors and undefined behaviour in the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls. ucrt64's clang holds no address sanitizer |
+| The fuzzers of std, kssrv, ksai, ksos and ksmd, in `test-extract` (note 21) | Clang's address sanitizer runtime | `KANSO_REQUIRE_ASAN` | A read past the end, since the fuzzing runs on a plain build, as on ucrt64 |
 | `test-c-warnings`, `test-equiv` and `test-random-equiv` | Both gcc and clang: each warns about code the other passes, and fills in what C leaves open its own way | `KANSO_REQUIRE_BOTH_CC` | The generated C under the missing family: its warnings, and that it means the same. The windows-ucrt64 runner installs clang alone |
 | kstls's own tests, in `test-extract` and `test-race` (note 18) | OpenSSL (`libssl-dev`) | `KSTLS_REQUIRE_LIBS` | The binding, linked and run, as on macOS. kssrv does not build at all without it |
 | `cli`'s two cases on a cache folder (note 22) | Root, or `sudo` without a password, to hand a folder to another user | `KANSO_REQUIRE_CHOWN` | That ksplc refuses a cache folder another user owns. Windows runs neither case |
@@ -288,7 +288,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
   * **No CI job runs the check "the Windows programs run under Wine".** The Linux image leaves Wine out for its size. The Windows job builds natively, and macOS runs no `test-ship`.
   * **To run it by hand, put Wine on a Linux machine or in the dev container (the `wine` package on Debian and Ubuntu), then run `make test-ship`.** The check's two `pass` lines then stand where its `SKIP` line stood.
 * **note 20**: **CI does not run `self-host-ship`.** `make install` runs it before it installs anything, and the release runs it on each of its three platforms (`.github/workflows/release.yml`). Why it is not a CI gate is "Where CI's time goes, and what shrinks it" in [`DESIGN-repository.md`](DESIGN-repository.md).
-* **note 21**: std's and ksai's `test-fuzz` build what they fuzz with the address sanitizer where the C compiler holds it, and print which build they made. ksplc's fuzz runs the compiler unsanitized.
+* **note 21**: std, kssrv, ksai, ksos and ksmd each fuzz a build with the address sanitizer where the C compiler holds it. Each prints which build it made. ksplc's fuzz runs the compiler unsanitized.
 * **note 22**: two of `cli`'s cases check that ksplc refuses a cache folder that others could plant entries in. Windows's permissions are an ACL, which ksplc does not read, so neither case runs there.
 * **note 23**: `test-ksmd-desktop` writes the entry and its MIME declaration, building nothing, and installs them into a scratch data folder as `make install-desktop` does. It also writes an entry for a probe program in a folder whose name holds a space, and starts it. `desktop-file-validate` accepts an Exec that splits at that space. macOS and Windows associate a file with a program another way.
 * **note 24**: `ksplc/tests/suite/layout_targets_test.kspl` needs only clang, which builds for every machine in `MACHINES` in `ksplc/base/target.kspl`. The wasm32 build also needs `wasm-ld`, `node` and clang's wasm32 builtins, for a 128-bit product that links only with them. A folded size decides through a static `if`, a constant chain, a `case` label and reflection; each must answer as wasm32 lays values out.
@@ -298,7 +298,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 27**: `make debug` runs the tests of every package but kssrv and kstls in one program; those two run only as their package's own `make test`. Linux and Windows run every package's own `make test` from a copy (`test-extract`), which also proves it stands alone. So there `make debug-tools` runs only `tools/`, which has no `Makefile`. macOS runs `make debug` instead, leaving kssrv's and kstls's tests unrun.
   * **Windows leaves `debug-tools` out**: `make LLVM=1 debug` runs the same tests of `tools/` there, against the same Windows calls. Only the backend differs, and the C backend is checked on Windows on every package's copy. Linux still runs both.
 * **note 28**: `make LLVM=1 debug` holds neither kssrv nor kstls (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci` does.
-* **note 29**: `test-sanitize` builds the tests of ksplc, std, ksmd, ksagent and `lib/ksdb` with clang's address, leak and undefined-behaviour sanitizers (`tests/suite/sanitize_test.kspl`). ucrt64's clang holds no address sanitizer. macOS's runtime has no leak sanitizer on Apple silicon, and refuses to start when asked for one. So the suite says `SKIP` on both.
+* **note 29**: `test-sanitize` builds the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls with clang's address, leak and undefined-behaviour sanitizers (`tests/suite/sanitize_test.kspl`). kssrv's tests start a server built the same way. ucrt64's clang holds no address sanitizer. macOS's runtime has no leak sanitizer on Apple silicon, and refuses to start when asked for one. So the suite says `SKIP` on both.
 * **note 31**: `test-ksmd-browser` drives ksmd's editing page in a headless Chromium (`ksmd/tests/browser/main.mjs`), then serves it with `kssrv --local` (`ksmd/tests/browser/served.mjs`). The macOS and Windows runners have no browser. On Windows, `make ci` takes Chrome from Program Files or the user's own folder.
 * **note 32**: `test-ksmd-open` runs the cases its driver's header lists (`tools/tests/ksmd_launch.kspl`), with `--show`, so no browser starts. The launcher's lock is `flock` on Linux and macOS, and `LockFileEx` on Windows (`open_or_start` in `tools/opener.kspl`). **Only Linux runs the gate**, so launching and that lock are unchecked on Windows and macOS. The file association is checked on no platform.
 * **note 34**: `test-holes` checks that each known way to break memory or threads keeps its verdict today (`tests/suite/holes_test.kspl`). It needs the same sanitizers as `test-sanitize` and `test-race`, so only Linux runs it.
@@ -404,7 +404,7 @@ Review checks what the gate cannot measure.
 
 ### Principle 7 - how long a comment is
 
-**A comment's length is lint's to measure** ([H0806]), in KSPL source alone. The caps are "Comment notation and limits" in [`SPEC-plain-language.md`](SPEC-plain-language.md), and `ksplc explain H0806` says what counts. A file that no entry point of the lint gate reads is not measured.
+**A comment's length is lint's to measure** ([H0806]), in KSPL source alone, and so is a `//<` summary's final full stop ([H0809]). The caps are "Comment notation and limits" in [`SPEC-plain-language.md`](SPEC-plain-language.md), and `ksplc explain H0806` says what counts. A file that no entry point of the lint gate reads is not measured.
 
 ### Principle 7 - how long a sentence is
 

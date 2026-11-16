@@ -156,15 +156,16 @@ priv struct Worker //< one thread's part of a batch: every `stride`th sequence f
     stride: Sz
     arena: Arena$@ //< this worker's alone, emptied after each step
 
-extern fn fim_worker(w: Worker$@): Void$@ //<
+extern fn fim_worker(worker: Worker$@): Void$@ //<
     //< a worker's sequences of the batch, on the thread it runs on
-    b: = w.batch
-    for $s: = w.first; s < b.inputs.len; s += w.stride
-        b.out[s] = b.model.grads_seq(b.inputs[s]@, b.targets[s].slice(), w.arena)
+    b: = worker.batch
+    for $s: = worker.first; s < b.inputs.len; s += worker.stride
+        b.out[s] = b.model
+            .grads_seq(b.inputs[s]@, b.targets[s].slice(), worker.arena)
     return null
 
-priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|>$@, seed: U64,
-    out_path: U8[]) //<
+priv fn train(corpus: U8[], at: Paths, plan: Schedule, updater: ai_optim.Updater<|F32|>$@,
+    seed: U64, out_path: U8[]) //<
         //< Fits a fresh model to the corpus, a batch of sequences per step, and writes its weights
         //< **The thread count changes only the time.** The sequences are drawn on this thread.
         //< Their gradients are summed in the order drawn, whichever thread computed each.
@@ -233,7 +234,7 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
             loss += batch.out[s].loss / F64::count
             if s > 0
                 batch.out[0].grads.accumulate(batch.out[s].grads@)
-        model.apply_grads(batch.out[0].grads@, u)
+        model.apply_grads(batch.out[0].grads@, updater)
         for t in Range.asc(threads)
             workers[t].arena.reset()
         work.reset()

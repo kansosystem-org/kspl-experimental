@@ -263,19 +263,19 @@ priv struct Race_ctx
     path: U8[]
     fails: thread.Atomic_sz$@
     go: thread.Atomic_sz$@ //<
-        //< The flag that holds every thread until all are up.
+        //< The flag that holds every thread until all are up
         //< Caution: **Without it there is no race**: a late starter would find the tree already
         //< made.
 
 priv const RACE_SPIN: Sz = 100000000
 
-priv fn race_entry(c: Race_ctx$@): Void$@
+priv fn race_entry(race: Race_ctx$@): Void$@
     for _k in Range.asc(RACE_SPIN)
-        if c.go.load() != 0
+        if race.go.load() != 0
             break
-    fs.mkdir_all(c.path) catch
-        _bumped: = c.fails.fetch_add(1)
-    return Void$@::c
+    fs.mkdir_all(race.path) catch
+        _bumped: = race.fails.fetch_add(1)
+    return Void$@::race
 
 fn test_fs_mkdir_all_race()
     verdict.start("[Fs] mkdir_all creating the same tree at once...")

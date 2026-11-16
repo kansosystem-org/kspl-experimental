@@ -192,7 +192,7 @@ priv fn f(): Shape!Err
     return p // the Sq$@ -> Shape upcast works inside a Result too
 ```
 
-**Do not wrap only on an exact match.** Then `fn f(): Trait!Err` could only `throw`: its success type writable but unreturnable. Diagnostics speak of the success type too: `return "str";` gives `expected 'I32'`.
+**Do not wrap only on an exact match.** Then `fn f(): Trait!Err` could only `throw`: its success type writable but unreturnable. Diagnostics speak of the success type too: `return "str"` gives `expected 'I32'`.
 
 ### A cast to an enum gives one of its variants
 
@@ -269,7 +269,7 @@ A slice (`U8[]`: a pointer plus a length) is not built into the compiler. It is 
 
 #### `T[]` is sugar for `Slice<|$T|>`
 
-`std/lang` declares `struct Slice<|$T|> { ptr: T$@; len: Sz; }`, and the slice notation is shorthand for it:
+`std/lang` declares `struct Slice<|$T|> { ptr: T$@; len: Sz }`, and the slice notation is shorthand for it:
 
 | Written | Desugared to | Elements |
 | :-- | :-- | :-- |
@@ -374,9 +374,9 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 
 A type argument can be a constant, as in `Ring<|512|>` ([`docs/SPEC-programming-language.md`, "3.3 Structs (`struct`)"](SPEC-programming-language.md#33-structs-struct)).
 
-**It is the only way to embed fixed-capacity memory in a type where no heap is available.** `struct Buf<|const N: Sz|> { data: U8[N]; }` is sized by its declaration alone. So it works in an interrupt handler, before the scheduler starts, and right after a freestanding boot. `% N` is also a constant in the generated C, so no software division is called.
+**It is the only way to embed fixed-capacity memory in a type where no heap is available.** `struct Buf<|const N: Sz|> { data: U8[N] }` is sized by its declaration alone. So it works in an interrupt handler, before the scheduler starts, and right after a freestanding boot. `% N` is also a constant in the generated C, so no software division is called.
 
-**Arithmetic cannot be written in the argument position**, because the notation as written is the canonical name. Write it in a `const`'s definition: `Foo<|N|>` with `const N: Sz = 4 * 2;` is the same type as `Foo<|8|>`. An array length (`T[ROWS * COLS]`) creates no name, so arithmetic is accepted there.
+**Arithmetic cannot be written in the argument position**, because the notation as written is the canonical name. Write it in a `const`'s definition: `Foo<|N|>` with `const N: Sz = 4 * 2` is the same type as `Foo<|8|>`. An array length (`T[ROWS * COLS]`) creates no name, so arithmetic is accepted there.
 
 **A parameter's kind is checked where the argument is written, a generic's own declaration included.** `fn f<|const N: Sz|>(h: Hold<|N|>@)` passes a value where `Hold` takes a type, and is refused even if nothing calls `f`. Left to a call, the error would blame the caller.
 
@@ -451,7 +451,7 @@ Caution: **Do not choose `at` when the receiver is read-only.** `at` takes `Self
 
 ### A typedef is only another name
 
-`typedef User_id = I32;` gives `I32` a second name; it does not make a new type ("3.5 Typedefs (`typedef`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). For a type kept apart, declare a struct with one field.
+`typedef User_id = I32` gives `I32` a second name; it does not make a new type ("3.5 Typedefs (`typedef`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). For a type kept apart, declare a struct with one field.
 
 **The reason**: a typedef told apart would be "the same type, but remembered". Every feature would have to say which of two spellings a value carries, such as a variant built through the typedef. A struct with one field already gives a separate type at no run-time cost, and makes a mix an error (Principle 6).
 
@@ -582,7 +582,7 @@ Omitting a parameter's type, and `Self` on a parameter **other than the receiver
 | `Self@` (reads) | Accepted | The value is copied into a hidden local, and its address is passed |
 | `Self$@` (writes) | Rejected | The write would change only that hidden copy |
 
-**Accepting it allocates nothing.** The compiler copies the value into an automatic variable in the call's block (`P t = f(); m(&t);`), as `x: = f(); x.m();` would.
+**Accepting it allocates nothing.** The compiler copies the value into an automatic variable in the call's block (`P t = f(); m(&t);`), as `x: = f(); x.m()` would.
 
 **Rejecting a writing receiver** stops `make_point().set_n(5)` from being a call doing nothing (Principle 5). A write to what a descriptor points at does not need `$`, since only the descriptor is copied. The line can be read off the declaration of `m` alone.
 
@@ -1194,7 +1194,7 @@ KSPL has no `async` function and no `await`. A task that waits runs on an OS thr
 
 ### Why a narrow type cannot stand where visibility is wide
 
-A `pub` function cannot return a `priv` type. Otherwise code outside the file would bind the value (`f: = io.open(path);`), call its methods and read its fields. Whoever wrote `priv` believes the type is closed: **a marker that is writable but ineffective** is an error.
+A `pub` function cannot return a `priv` type. Otherwise code outside the file would bind the value (`f: = io.open(path)`), call its methods and read its fields. Whoever wrote `priv` believes the type is closed: **a marker that is writable but ineffective** is an error.
 
 **Only positions where a value leaves are covered**: a function's return, a `struct`'s `pub` fields and an `enum`'s payload. So are a `trait`'s method prototypes and a top-level declaration's type.
 

@@ -46,7 +46,7 @@ const MAX_MONO_DEPTH: Sz = 128 //< the limit on instantiate_struct's recursive c
     //< Caution: **Set it to twice the depth the language guarantees** (`generic_nesting` in
     //< `tests/suite/limits_test.kspl`).
 
-fn check_written_generic_arity(c: Sema_ctx$@, tmpl_node: Ast_node$@, arg_count: Sz,
+fn check_written_generic_arity(ctx: Sema_ctx$@, tmpl_node: Ast_node$@, arg_count: Sz,
     site: Ast_node$@) //<
         //< Checks the count of type arguments **written** as `<|...|>` against the declaration
         //< **Count only the written ones:** an inferred list can be longer than the declaration's
@@ -57,10 +57,10 @@ fn check_written_generic_arity(c: Sema_ctx$@, tmpl_node: Ast_node$@, arg_count: 
     param_count: = count_generic_params(tmpl_node.find_child(.k_type_gen_params))
     name: = tmpl_node.get_decl_id_text()
     direction: = "too many" if arg_count > param_count else "too few"
-    c.clear_scratch()
+    ctx.clear_scratch()
         .s("\{direction\} type arguments for generic '\{name\}'. Expected \{param_count\}, but got \
             \{arg_count\}")
-    c.err(site, c.scratch.slice())
+    ctx.err(site, ctx.scratch.slice())
 
 fn written_generic_arity_matches(tmpl_node: Ast_node$@, arg_count: Sz): Bool //<
     //< Whether the written type arguments are as many as the declaration's (or it declares none)
@@ -79,26 +79,26 @@ priv fn count_generic_params(params_node: Ast_node@): Sz //<
             n += 1
     return n
 
-fn prepare_inst_node(c: Sema_ctx$@, tmpl_node: Ast_node$@, inst_name: U8[], args: I32[]):
+fn prepare_inst_node(ctx: Sema_ctx$@, tmpl_node: Ast_node$@, inst_name: U8[], args: I32[]):
     Ast_node$@
     inst_node: = tmpl_node.clone()
     if tmpl_node != null
-        c.set_current_file(tmpl_node.loc.file())
+        ctx.set_current_file(tmpl_node.loc.file())
         inst_node.propagate_loc_file(tmpl_node.loc.file())
     id_node: = inst_node.find_child(.k_identifier)
     params_node: = inst_node.find_child(.k_type_gen_params)
 
     // Which instantiation a constraint violation belongs to, while the bindings are in force
     // (constraint_failed in sema/session/state.kspl).
-    prev_inst_name: = c.mono.current_inst_name
-    c.mono.current_inst_name = base_core.arena.dup_str(inst_name)
-    c.bind_generic_args(params_node, args, true)
-    c.mono.current_inst_name = prev_inst_name
+    prev_inst_name: = ctx.mono.current_inst_name
+    ctx.mono.current_inst_name = base_core.arena.dup_str(inst_name)
+    ctx.bind_generic_args(params_node, args, true)
+    ctx.mono.current_inst_name = prev_inst_name
     if params_node != null
         params_node.morph(.k_empty, "")
     if id_node != null
         id_node.text = base_core.arena.dup_str(inst_name)
-    inst_node.replace_type_vars(c)
+    inst_node.replace_type_vars(ctx)
     return inst_node
 
 impl Sema_ctx
@@ -275,10 +275,10 @@ impl Sema_ctx
             .current_impl = r.fn_ctx.impl_name,
         }
 
-    fn restore_mono_state(r: Self$@, b: Mono_state_backup@)
-        r.set_current_file(b.file_name)
-        r.fn_ctx.impl_name = b.current_impl
-        r.generics.args.truncate(b.generic_args_depth)
+    fn restore_mono_state(r: Self$@, backup: Mono_state_backup@)
+        r.set_current_file(backup.file_name)
+        r.fn_ctx.impl_name = backup.current_impl
+        r.generics.args.truncate(backup.generic_args_depth)
 
     priv fn register_inst_node(r: Self$@, full_name: U8$[], mangled_name: U8$[], node: Ast_node$@,
         emit: Bool) //<

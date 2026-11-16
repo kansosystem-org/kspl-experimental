@@ -93,7 +93,7 @@ priv struct Round //< how this round runs each gate: the command line's settings
 
 priv const CAP_MAX_S: I64 = 2000000I64 //< the longest cap a child's limit in milliseconds holds
 
-priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
+priv fn run_set(name: U8[], set: Set, round: Round, arena: Arena$@): I32 //<
     //< Runs every gate of the set in the table's order; 0 when all passed
     //< **Every set refuses a gate no set runs**: it would go green everywhere, run nowhere.
     fs.mkdir_all(ci_gates.LOG_DIR) catch {}
@@ -101,13 +101,13 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
         return 1
     // **What only Linux has its tools for runs on Linux alone**: elsewhere, open the repository in
     // its dev container, a Linux host.
-    if s == Set.ci_shard_linux && !r.platform.equals("linux")
+    if set == Set.ci_shard_linux && !round.platform.equals("linux")
         io.err().s("ci: '\{name\}' runs on Linux alone; elsewhere run it in the dev container\n")
         return 1
-    if r.platform.equals("darwin") && s != Set.ci_macos
+    if round.platform.equals("darwin") && set != Set.ci_macos
         version: =
-            subproc.run_capture(U8[][]::{ r.make, "--output-sync=target", "--version" }, "", 10000,
-            4096, arena) catch
+            subproc.run_capture(U8[][]::{ round.make, "--output-sync=target", "--version" }, "",
+            10000, 4096, arena) catch
                 io.err()
                     .s("ci: the shared sections need GNU make 4; install it with brew install \
                         make\n")
@@ -130,34 +130,34 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     $by_switch: = false
     $not_run: = List<|U8[]|>(arena)
     $left: = List<|Gate|>(arena)
-    for g in ci_gates.run_order(r.stop, arena)
-        if !s.runs(g, r.platform)
+    for g in ci_gates.run_order(round.stop, arena)
+        if !set.runs(g, round.platform)
             continue
-        if left_out(g, r, arena)
+        if left_out(g, round, arena)
             left.push(g)
             continue
         if ended_at.is_some()
             not_run.push(g.log)
             continue
         count += 1
-        if !run_gate(g, r, arena)
+        if !run_gate(g, round, arena)
             fallen += 1
-            if g.stops || r.stop
+            if g.stops || round.stop
                 ended_at = .some(g.log)
                 by_switch = !g.stops
     // **A set that runs nothing has gone wrong**: a gate moved to a shard no job runs.
     if count == 0
         io.err().s("ci: the set '\{name\}' holds no gate\n")
         return 1
-    print_digest(r, arena)
-    if r.full
+    print_digest(round, arena)
+    if round.full
         print_skips(arena)
     for g in left
         io.out().s("# left out here: ").s(g.log).s(", as the change reaches no file under ")
             .s(g.local_when).s(" (GitHub CI runs it; `make ").s(g.args).s("` runs it by hand)\n")
     // **A round with a switch off says so last**: green there is not CI's verdict.
-    if r.relaxed.len > 0
-        io.out().s("# turned off here: ").s(r.relaxed)
+    if round.relaxed.len > 0
+        io.out().s("# turned off here: ").s(round.relaxed)
             .s(" (=0), so their gates may skip; CI's Linux job requires every one, and this round ")
             .s("is not its verdict\n")
     // **A round that ended early says so last**, naming what did not run: it is no full verdict.
@@ -173,93 +173,97 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     io.out().s("# \{name\}: ALL GREEN\n")
     return 0
 
-priv fn left_out(g: Gate, r: Round, arena: Arena$@): Bool //<
+priv fn left_out(gate: Gate, round: Round, arena: Arena$@): Bool //<
     //< Whether a local full round leaves the gate out, as the change misses its folder
-    return r.full && g.local_when.len > 0 && !ci_gates.change_reaches(g.local_when, arena)
+    return round.full && gate.local_when.len > 0 &&
+        !ci_gates.change_reaches(gate.local_when, arena)
 
-priv fn run_anywhere(g: Gate): Bool //< whether some set runs the gate
+priv fn run_anywhere(gate: Gate): Bool //< whether some set runs the gate
     for s in Set.variants()
-        if s.runs(g)
+        if s.runs(gate)
             return true
     return false
 
-priv fn run_gate(g: Gate, r: Round, arena: Arena$@): Bool //<
+priv fn run_gate(gate: Gate, round: Round, arena: Arena$@): Bool //<
     //< Runs one gate through `make`, its output on the screen and in its log; true when it passed
     //< **`bash -o pipefail`**, or the pipe answers with `tee`'s status and a fallen gate passes.
-    log: = ci_gates.log_path(g.log, arena)
+    log: = ci_gates.log_path(gate.log, arena)
     defer $cmd: = Str_builder()
-    cmd.c('\'').s(r.make).c('\'')
-    if g.par != ci_gates.Par.serial
-        cmd.s(" -j\{r.jobs\}")
-    if g.par == ci_gates.Par.synced
+    cmd.c('\'').s(round.make).c('\'')
+    if gate.par != ci_gates.Par.serial
+        cmd.s(" -j\{round.jobs\}")
+    if gate.par == ci_gates.Par.synced
         cmd.s(" --output-sync=target")
-    cmd.c(' ').s(g.args).s(" 2>&1 | tee ").s(log)
-    io.out().s("# --- ").s(g.log).s(": make ").s(g.args).s(" ---\n")
+    cmd.c(' ').s(gate.args).s(" 2>&1 | tee ").s(log)
+    io.out().s("# --- ").s(gate.log).s(": make ").s(gate.args).s(" ---\n")
     io.out().flush()
     t0: = sys.mono_us()
     // 127, the shell's "not found", where bash itself cannot start.
-    rc: = ci_gates.run_capped(U8[][]::{ "bash", "-o", "pipefail", "-c", cmd.slice() }, g.log, log,
-        r.cap_s, t0)
-    return judge_gate(g, r, rc, (sys.mono_us() - t0) / 1000000I64, arena)
+    rc: = ci_gates.run_capped(U8[][]::{ "bash", "-o", "pipefail", "-c", cmd.slice() }, gate.log, log,
+        round.cap_s, t0)
+    return judge_gate(gate, round, rc, (sys.mono_us() - t0) / 1000000I64, arena)
 
-priv fn judge_gate(g: Gate, r: Round, exit: I32, sec: I64, arena: Arena$@): Bool //<
+priv fn judge_gate(gate: Gate, round: Round, exit: I32, sec: I64, arena: Arena$@): Bool //<
     //< Judges one gate that has ended by its exit code and its log, and writes its `.end`
-    log: = ci_gates.log_path(g.log, arena)
+    log: = ci_gates.log_path(gate.log, arena)
     $rc: = exit
     // Caution: **A log that cannot be read fails the gate.** Its SKIP lines and its verdict cannot
     // be checked, so a gate that skipped would pass.
     said: = io.read_file(log, arena) catch
         rc = 1
-        io.out().s("# \{g.log\}: its log cannot be read, so its SKIP lines are not known: ").s(log)
-            .c('\n')
+        io.out().s("# \{gate.log\}: its log cannot be read, so its SKIP lines are not known: ")
+            .s(log).c('\n')
         fallback ""
-    j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed, .any_skip = r.full }
-    if rc == 0 && g.verdict && !ci_gates.said_verdict(said, arena)
+    j: = ci_gates.Judge::{ .platform = round.platform, .relaxed = round.relaxed,
+        .any_skip = round.full }
+    if rc == 0 && gate.verdict && !ci_gates.said_verdict(said, arena)
         rc = 1
     if rc == 0
         if odd: = unexpected_skip(said, j@, arena)
             rc = 1
-            io.out().s("# \{g.log\}: a SKIP no row of `EXPECTED_SKIPS` holds for \{r.platform\}: ")
-                .s(odd).c('\n')
+            io.out()
+                .s("# \{gate.log\}: a SKIP no row of `EXPECTED_SKIPS` holds for \{round.platform\}: \
+                    ").s(odd).c('\n')
     defer $end: = Str_builder()
-    end.s("\{rc\} \{sec\} \{r.platform\}\n")
+    end.s("\{rc\} \{sec\} \{round.platform\}\n")
     // A missing `.end` already counts as fallen in the summary (`ci_gates.outcomes`). Say why here,
     // or that gate falls there with no cause named.
-    end_at: = ci_gates.end_path(g.log, arena)
+    end_at: = ci_gates.end_path(gate.log, arena)
     io.write_file(end_at, end.slice()) catch
         io.out()
-            .s("# \{g.log\}: its end file cannot be written, so the summary counts it as fallen: ")
-            .s(end_at).c('\n')
+            .s("# \{gate.log\}: its end file cannot be written, so the summary counts it as fallen: \
+                ").s(end_at).c('\n')
     if rc != 0
-        annotate(g, said, rc, j@, arena)
+        annotate(gate, said, rc, j@, arena)
     return rc == 0
 
-priv fn unexpected_skip(text: U8[], j: ci_gates.Judge@, arena: Arena$@): U8[]? //<
+priv fn unexpected_skip(text: U8[], judge: ci_gates.Judge@, arena: Arena$@): U8[]? //<
     //< The log's first SKIP line no row holds for the platform and the switches off, if any
     for line in ci_gates.skip_lines(text, arena)
-        if j.unexpected(line)
+        if judge.unexpected(line)
             return .some(line)
     return .none
 
-priv fn annotate(g: Gate, text: U8[], rc: I32, j: ci_gates.Judge@, arena: Arena$@) //<
+priv fn annotate(gate: Gate, text: U8[], rc: I32, judge: ci_gates.Judge@, arena: Arena$@) //<
     //< One error mark per fallen gate on GitHub's page (a step keeps ten): its first cause
     //< The cause is the summary's first for that gate (`ci_gates.causes`), else its exit code.
     if !sys.get_env("GITHUB_ACTIONS").is_some()
         return
-    why: = ci_gates.causes(text, g.log, g.verdict, j, arena)
+    why: = ci_gates.causes(text, gate.log, gate.verdict, judge, arena)
     defer $b: = Str_builder()
     if why.len > 0
         ci_gates.put_cause(why.get(0), b@)
     else
         b.s("exit \{rc\}")
-    io.out().s("::error title=").s(g.log).s("::").s(b.slice()).c('\n')
+    io.out().s("::error title=").s(gate.log).s("::").s(b.slice()).c('\n')
 
-priv fn print_digest(r: Round, arena: Arena$@) //<
+priv fn print_digest(round: Round, arena: Arena$@) //<
     //< The gates that ran and why any fell, on the screen
-    j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed, .any_skip = r.full }
+    j: = ci_gates.Judge::{ .platform = round.platform, .relaxed = round.relaxed,
+        .any_skip = round.full }
     outs: = ci_gates.outcomes(j@, arena)
     defer $b: = Str_builder()
-    ci_gates.digest_plain(outs@, r.jobs, j@, b@)
+    ci_gates.digest_plain(outs@, round.jobs, j@, b@)
     io.out().s(b.slice())
 
 priv fn print_skips(arena: Arena$@) //<
@@ -277,11 +281,11 @@ priv fn print_skips(arena: Arena$@) //<
     if count == 0
         io.out().s("# every check ran on this machine\n")
 
-priv fn summary(title: U8[], jobs: I64, j: ci_gates.Judge, arena: Arena$@): I32 //<
+priv fn summary(title: U8[], jobs: I64, judge: ci_gates.Judge, arena: Arena$@): I32 //<
     //< The summary for the job's page, added to `$GITHUB_STEP_SUMMARY` (the screen when unset)
     //< Caution: **Return 0 with no log too, and say so**: the step runs after a fall, and the cause
     //< is the step above.
-    outs: = ci_gates.outcomes(j@, arena)
+    outs: = ci_gates.outcomes(judge@, arena)
     defer $b: = Str_builder()
     if outs.len == 0
         b.s("no gate log: the round fell before a gate ran (the cause is the step above)\n")

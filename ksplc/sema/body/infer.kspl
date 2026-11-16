@@ -54,17 +54,18 @@ import "std/ds" { List, Map }
 // ==========================================
 priv const MAX_MENTION_DEPTH: Sz = 2000 //< as deep as `validate_layout` lets a tree go
 
-priv fn names_any( //< whether an identifier under `n` is one of `names`
-    n: Ast_node$@,
+priv fn names_any( //< whether an identifier under `node` is one of `names`
+    node: Ast_node$@,
     names: Map<|U8[], Bool|>$@,
     own: Ast_node$@, //< a generic's own name, which says nothing about what it uses
     depth: Sz,
 ): Bool
-    if n == null || depth > MAX_MENTION_DEPTH
+    if node == null || depth > MAX_MENTION_DEPTH
         return false
-    if n != own && n.kind_id == .k_identifier && names.get(n.text).unwrap_or(false)
+    if node != own && node.kind_id == .k_identifier &&
+        names.get(node.text).unwrap_or(false)
         return true
-    for k in n.children
+    for k in node.children
         if names_any(k, names, own, depth + 1)
             return true
     return false
@@ -79,12 +80,12 @@ priv fn push_generic_fns(decl: Ast_node$@, out: List<|Ast_node$@|>$@) //<
             if m.kind_id == .k_decl_fn && (whole || m.is_generic_template())
                 out.push(m)
 
-priv fn wanted_names(r: Ast_node$@, name: U8[]): Map<|U8[], Bool|>$@ //<
+priv fn wanted_names(root: Ast_node$@, name: U8[]): Map<|U8[], Bool|>$@ //<
     //< `name`, and the names of the generic functions that use it, directly or through another
     names: = base_core.arena.create(Map<|U8[], Bool|>(base_core.arena))
     names.set(name, true)
     $fns: = List<|Ast_node$@|>(base_core.arena)
-    for child_node in r.children
+    for child_node in root.children
         push_generic_fns(child_node.unwrap_top_level(), fns@)
     $taken: = List<|Bool|>(base_core.arena)
     for _f in fns
@@ -101,54 +102,55 @@ priv fn wanted_names(r: Ast_node$@, name: U8[]): Map<|U8[], Bool|>$@ //<
                 grew = true
     return names
 
-priv fn wants_names(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
+priv fn wants_names(ctx: Sema_ctx$@, decl: Ast_node$@): Bool //<
     //< Whether the editor's final pass resolves the names in this declaration
     //< **Only `Bodies.mentioning` narrows it**: a declaration naming none of the names holds no
     //< site to find. The document view keeps every file's, which its hover reads.
-    switch c.bodies
+    switch ctx.bodies
     case .mentioning
-        return names_any(decl, c.body_names, null, 0)
+        return names_any(decl, ctx.body_names, null, 0)
     default
         return true
 
-priv fn wants_body(c: Sema_ctx$@, decl: Ast_node$@): Bool //< whether `c.bodies` checks this body
-    if decl.loc.file().equals(c.main_file)
+priv fn wants_body(ctx: Sema_ctx$@, decl: Ast_node$@): Bool //<
+    //< whether `ctx.bodies` checks this body
+    if decl.loc.file().equals(ctx.main_file)
         return true
-    switch c.bodies
+    switch ctx.bodies
     case .main_file
         return false
     case .everywhere
         return true
     case .mentioning
-        return names_any(decl, c.body_names, null, 0)
+        return names_any(decl, ctx.body_names, null, 0)
 
-priv fn implicit_cleanup_method(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+priv fn implicit_cleanup_method(ctx: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< cleanup is a use without a source call
     $params: = base_ast_ext.Param_cursor(node.get_fn_params(), false)
     if p: = params.next()
-        owner: = c.env.strip_ptr_full(p.param_type_id())
-        name: = c.env.source_fn_name(node)
-        return c.env.is_arc_type(owner) &&
+        owner: = ctx.env.strip_ptr_full(p.param_type_id())
+        name: = ctx.env.source_fn_name(node)
+        return ctx.env.is_arc_type(owner) &&
             (name.equals("retain") || name.equals("release"))
     return false
 
-priv fn infer_pending_bodies(c: Sema_ctx$@, checked: Map<|Sz, Bool|>$@): Bool //<
+priv fn infer_pending_bodies(ctx: Sema_ctx$@, checked: Map<|Sz, Bool|>$@): Bool //<
     //< It checks each queued instantiation's body, and returns whether one failed
     //< `checked` gets every body it checked. pending.len is re-read on every iteration: infer_fn
-    //< appends new instantiations to c.generics.pending, and a fixed length would drop them.
+    //< appends new instantiations to ctx.generics.pending, and a fixed length would drop them.
     $has_err: = false
     $more: = true
     for more
         more = false
         $pending_at: Sz = 0
-        for pending_at < c.generics.pending.len
-            pending: = c.generics.pending.get(pending_at)
+        for pending_at < ctx.generics.pending.len
+            pending: = ctx.generics.pending.get(pending_at)
             pending_at += 1
             if checked.get(Sz::pending.node).unwrap_or(false)
                 continue
             sym: = Sema_symbol$@::pending.node.sym_ptr
             if sym.flags.is_method && !sym.flags.is_used &&
-                !implicit_cleanup_method(c, pending.node)
+                !implicit_cleanup_method(ctx, pending.node)
                 continue
             checked.set(Sz::pending.node, true)
             more = true
@@ -156,168 +158,168 @@ priv fn infer_pending_bodies(c: Sema_ctx$@, checked: Map<|Sz, Bool|>$@): Bool //
             // the loop, a violation by an instantiation made inside some body would be known only
             // after its method body is checked.
             // **Drain the instantiations first**: they fill the conformance table the check reads.
-            c.drain_pending_instances() catch
+            ctx.drain_pending_instances() catch
                 has_err = true
-            c.drain_pending_constraints()
+            ctx.drain_pending_constraints()
             // A constraint-violating instantiation's body is not checked (for the same reason).
-            if c.has_failed_constraint(pending.impl_name)
+            if ctx.has_failed_constraint(pending.impl_name)
                 continue
-            if !infer_instance_body(c, pending, sym, pending_at - 1)
+            if !infer_instance_body(ctx, pending, sym, pending_at - 1)
                 has_err = true
     return has_err
 
-priv fn infer_instance_body(c: Sema_ctx$@, pending: Pending_inst, sym: Sema_symbol@, at: Sz): Bool //<
+priv fn infer_instance_body(ctx: Sema_ctx$@, pending: Pending_inst, sym: Sema_symbol@, at: Sz): Bool //<
     //< It checks one queued instantiation's body (`at` in the queue); false where it failed
-    c.set_current_file(pending.node.loc.file())
-    c.symtab.scope_stack.clear()
-    c.fn_ctx = sema_session_ctx.Fn_ctx::{ .name = "", .ret_id = 0, .impl_name = pending.impl_name,
-        .fallback_type = 0, .catch_depth = 0, .in_fallback_value = false, .in_defer = false,
-        .defer_boundary = 0 }
+    ctx.set_current_file(pending.node.loc.file())
+    ctx.symtab.scope_stack.clear()
+    ctx.fn_ctx = sema_session_ctx.Fn_ctx::{ .name = "", .ret_id = 0,
+        .impl_name = pending.impl_name, .fallback_type = 0, .catch_depth = 0,
+        .in_fallback_value = false, .in_defer = false, .defer_boundary = 0 }
 
     base_diag.ice_assert(pending.node.sym_ptr != null,
         "infer: pending instantiation node missing sym_ptr")
-    c.fn_ctx.name = sym.name
+    ctx.fn_ctx.name = sym.name
 
     // Restores the type-argument bindings as queued, then analyzes the body. Always restore the
     // previous ones afterwards (instantiations nest; see Pending_inst in sema/session/state.kspl).
-    saved_args_len: = c.generics.args.len
+    saved_args_len: = ctx.generics.args.len
     for j in Range.asc(pending.bound_args.len)
-        c.generics.args.push(pending.bound_args.get(j))
+        ctx.generics.args.push(pending.bound_args.get(j))
     // This body's depth in the chain; an instantiation made inside it is one deeper
     // (inst_chain_depth in sema/session/state.kspl).
-    c.generics.inst_chain_depth = pending.depth
+    ctx.generics.inst_chain_depth = pending.depth
     // What this body instantiates, and an error in it, name it (`Generic_state.analysing`).
-    c.generics.analysing = at
+    ctx.generics.analysing = at
     $ok: = true
-    pending.node.infer_fn(c) catch
+    pending.node.infer_fn(ctx) catch
         ok = false
-    c.generics.analysing = -1
-    c.generics.inst_chain_depth = 0
-    c.generics.args.truncate(saved_args_len)
+    ctx.generics.analysing = -1
+    ctx.generics.inst_chain_depth = 0
+    ctx.generics.args.truncate(saved_args_len)
     return ok
 
-fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
-    base_diag.ice_assert(r != null, "infer: file_node is null")
+fn run(root: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
+    base_diag.ice_assert(root != null, "infer: file_node is null")
     $has_err: = false
-    switch c.bodies
+    switch ctx.bodies
     case .mentioning(name)
-        c.body_names = wanted_names(r, name)
+        ctx.body_names = wanted_names(root, name)
     default {}
 
     // From here a constant's folded value is kept (`Static_state.epoch` in ../session/state.kspl).
-    c.statics.epoch = 1
+    ctx.statics.epoch = 1
     // The top-level initializers whose check failed; their error is already reported.
     $failed: = Map<|Sz, Bool|>(base_core.arena)
-    for child_node in r.children
+    for child_node in root.children
         // Report progress once per declaration (report_progress in base/core.kspl). Otherwise the
         // LSP's supervisor takes a silent but live worker for a hung one and kills it.
         base_core.report_progress()
         // Instances the previous declaration queued are created here.
-        c.drain_pending_instances() catch
+        ctx.drain_pending_instances() catch
             has_err = true
         child: = child_node.unwrap_top_level()
-        c.set_current_file(child.loc.file())
-        body_wanted: = wants_body(c, child)
+        ctx.set_current_file(child.loc.file())
+        body_wanted: = wants_body(ctx, child)
         if child.kind_id == .k_decl_fn
             if !child.is_generic_template() && body_wanted
-                child.infer_fn(c) catch
+                child.infer_fn(ctx) catch
                     has_err = true
         else if child.kind_id == .k_decl_impl
             if !child.is_generic_template() && body_wanted
-                child.infer_impl_decl(c) catch
+                child.infer_impl_decl(ctx) catch
                     has_err = true
         else if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
             // Caution: **A failed initializer ends only its own declaration**, as a failed body
             // does. Passed up, it ends the whole pass: every declaration after it goes unchecked,
             // their errors unreported, and the editor's workspace walk (one pass over every file)
             // answers "no callers" for each one that comes later in the walk.
-            child.infer_global(c) catch
+            child.infer_global(ctx) catch
                 has_err = true
                 failed.set(Sz::child, true)
     // Caution: **Check the top-level initializers once every one of them is typed.** A fold reads
     // the operands' types, and what the check records is what the backends write.
-    for child_node in r.children
+    for child_node in root.children
         child: = child_node.unwrap_top_level()
         if (child.kind_id == .k_decl_var || child.kind_id == .k_decl_const) &&
             !failed.get(Sz::child).unwrap_or(false)
             init: = child.get_var_decl_expr()
             if init != null && init.kind_id != .k_empty
-                c.set_current_file(child.loc.file())
-                init.check_static_initializer(c)
+                ctx.set_current_file(child.loc.file())
+                init.check_static_initializer(ctx)
 
     // From here on the bodies are monomorphized templates.
-    c.set_in_generic_instance(true)
-    defer c.set_in_generic_instance(false)
+    ctx.set_in_generic_instance(true)
+    defer ctx.set_in_generic_instance(false)
     $checked: = Map<|Sz, Bool|>(base_core.arena)
-    if infer_pending_bodies(c, checked@)
+    if infer_pending_bodies(ctx, checked@)
         has_err = true
 
-    for child_node in r.children
+    for child_node in root.children
         child: = child_node.unwrap_top_level()
-        c.set_current_file(child.loc.file())
+        ctx.set_current_file(child.loc.file())
         // **Only an assertion directive is evaluated** (check_directive in sema/decl/attrs.kspl
         // rejects the others; `##lint` has nothing to fold).
         if sema_decl_attrs.is_assertion_directive(child)
-            child.infer_compile_directive(c)
+            child.infer_compile_directive(ctx)
 
     // Caution: **Mark the written imports and names before discarding the template bodies.** An
     // uninstantiated body is never analyzed, so resolving never marks its imports, nor the `priv`
     // helpers it calls ([W0206]).
     if base_core.config.run_lint_checks
-        for child_node in r.children
-            child_node.mark_written_imports(c)
+        for child_node in root.children
+            child_node.mark_written_imports(ctx)
             child: = child_node.unwrap_top_level()
             if child.is_generic_template()
-                c.set_current_file(child.loc.file())
-                child.mark_template_symbols_used(c)
-        sema_body_lint_written.lint_written(r, c)
-        sema_flow_pointee.report_pointee_params(r, c)
+                ctx.set_current_file(child.loc.file())
+                child.mark_template_symbols_used(ctx)
+        sema_body_lint_written.lint_written(root, ctx)
+        sema_flow_pointee.report_pointee_params(root, ctx)
 
-    r.keep_checked_children(c, checked@)
+    root.keep_checked_children(ctx, checked@)
     // --- Final Pass: Post-Resolution for LSP and Linter ---
-    for child_node in r.children
+    for child_node in root.children
         child: = child_node.unwrap_top_level()
-        c.set_current_file(child.loc.file())
-        if base_core.config.is_lsp && wants_names(c, child)
+        ctx.set_current_file(child.loc.file())
+        if base_core.config.is_lsp && wants_names(ctx, child)
             // Caution: **Set the flag, then resolve.** These children include uninstantiated
             // templates, whose type arguments are unbound (Generic_state.resolving_template_types
             // in `../session/state.kspl`).
-            c.generics.resolving_template_types = true
-            child.resolve_all_types(c) catch {}
-            c.generics.resolving_template_types = false
-        child.mark_template_symbols_used(c)
+            ctx.generics.resolving_template_types = true
+            child.resolve_all_types(ctx) catch {}
+            ctx.generics.resolving_template_types = false
+        child.mark_template_symbols_used(ctx)
 
-    c.check_import_symbols()
-    c.check_redundant_import_alias()
-    c.check_unused_imports()
-    c.check_unused_symbols()
-    c.check_uncalled_in_suite_files()
-    c.check_unit_internal_pubs()
+    ctx.check_import_symbols()
+    ctx.check_redundant_import_alias()
+    ctx.check_unused_imports()
+    ctx.check_unused_symbols()
+    ctx.check_uncalled_in_suite_files()
+    ctx.check_unit_internal_pubs()
 
-    if c.has_error() || has_err
+    if ctx.has_error() || has_err
         throw .analysis_failed
 
 impl Ast_node
-    priv fn infer_global(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
+    priv fn infer_global(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error //<
         //< It checks a file-scope `var` or `const` and its initializer
         expr_node: = r.get_var_decl_expr()
         if expr_node == null || expr_node.kind_id == .k_empty
             return
         expected_id: = r.type_id
-        saved_raw_address: = c.fn_ctx.raw_address
-        c.fn_ctx.raw_address = r.has_attribute("raw_address")
-        defer c.fn_ctx.raw_address = saved_raw_address
-        expr_id: = expr_node.infer_expr(c, expected_id)!
+        saved_raw_address: = ctx.fn_ctx.raw_address
+        ctx.fn_ctx.raw_address = r.has_attribute("raw_address")
+        defer ctx.fn_ctx.raw_address = saved_raw_address
+        expr_id: = expr_node.infer_expr(ctx, expected_id)!
         // A top-level declaration writes its type, so the initializer's is the one to go.
-        sema_body_lint_stmt.lint_type_given(c, expr_node, expected_id,
+        sema_body_lint_stmt.lint_type_given(ctx, expr_node, expected_id,
             "The declared type already gives it.")
 
         type_node: = r.get_var_decl_type_node()
-        r.type_id = r.resolve_inferred_array(c, expected_id, expr_id, type_node, r)
+        r.type_id = r.resolve_inferred_array(ctx, expected_id, expr_id, type_node, r)
         // The initializer is typed now, so a value folded before it may differ.
-        c.statics.epoch += 1
+        ctx.statics.epoch += 1
 
-    priv fn keep_checked_children(r: Self$@, c: Sema_ctx$@, checked: Map<|Sz, Bool|>@) //<
+    priv fn keep_checked_children(r: Self$@, ctx: Sema_ctx$@, checked: Map<|Sz, Bool|>@) //<
         //< It drops each template (except in the editor) and each instance whose body was unchecked
         clean_children: = base_ast.new_ast_node_list()
         for child in r.children
@@ -326,15 +328,15 @@ impl Ast_node
                 continue
             clean_children.push(child)
 
-        for inst_node in c.env.instantiated_nodes_list
+        for inst_node in ctx.env.instantiated_nodes_list
             if inst_node.kind_id == .k_decl_fn && inst_node.find_child(.k_stmt_block) != null &&
                 !checked.get(Sz::inst_node).unwrap_or(false)
                 continue
             clean_children.push(inst_node)
-        c.env.instantiated_nodes_list.clear()
+        ctx.env.instantiated_nodes_list.clear()
         r.children = clean_children
 
-    priv fn infer_fn(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_fn(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error
         // Restarts the temporary variables' numbering per body. **It nests, so restore it** (the
         // reason is at enter_fn_serial in sema/body/for_in.kspl).
         saved_for_in_serial: = sema_body_for_in.enter_fn_serial()
@@ -346,29 +348,29 @@ impl Ast_node
         // Measures one body's elapsed time. **No body is inferred inside another** (`run` takes
         // them one after another), so the elapsed time is the body's own.
         prof_started: = sema_session_prof.prof.body_begin()
-        defer sema_session_prof.prof.body_end(c, fn_name, r.loc, prof_started)
+        defer sema_session_prof.prof.body_end(ctx, fn_name, r.loc, prof_started)
 
         // An instance's tree carries its template's file (prepare_inst_node in mono.kspl).
         def_file: = r.loc.file()
-        prev_file: = c.file_name
+        prev_file: = ctx.file_name
         if def_file.len > 0
-            c.set_current_file(def_file)
+            ctx.set_current_file(def_file)
 
         type_node: = r.get_decl_type_node()
         param_list: = r.get_fn_params()
 
         if name_node != null
-            c.fn_ctx.name = name_node.text
-        saved_decl: = c.fn_ctx.decl
-        c.fn_ctx.decl = r
-        defer c.fn_ctx.decl = saved_decl
-        saved_raw_address: = c.fn_ctx.raw_address
-        c.fn_ctx.raw_address = r.has_attribute("raw_address")
-        defer c.fn_ctx.raw_address = saved_raw_address
-        saved_errors_before: = c.fn_ctx.errors_before
-        c.fn_ctx.errors_before = c.error_mark()
-        defer c.fn_ctx.errors_before = saved_errors_before
-        c.fn_ctx.effective_vis = c.compute_effective_vis(r)
+            ctx.fn_ctx.name = name_node.text
+        saved_decl: = ctx.fn_ctx.decl
+        ctx.fn_ctx.decl = r
+        defer ctx.fn_ctx.decl = saved_decl
+        saved_raw_address: = ctx.fn_ctx.raw_address
+        ctx.fn_ctx.raw_address = r.has_attribute("raw_address")
+        defer ctx.fn_ctx.raw_address = saved_raw_address
+        saved_errors_before: = ctx.fn_ctx.errors_before
+        ctx.fn_ctx.errors_before = ctx.error_mark()
+        defer ctx.fn_ctx.errors_before = saved_errors_before
+        ctx.fn_ctx.effective_vis = ctx.compute_effective_vis(r)
 
         $is_export: = false
         if r.sym_ptr != null
@@ -377,34 +379,34 @@ impl Ast_node
                 is_export = true
 
         if type_node != null
-            c.fn_ctx.ret_id = type_node.resolve_type(c)!
+            ctx.fn_ctx.ret_id = type_node.resolve_type(ctx)!
             if is_export
-                c.check_ffi_safety(c.fn_ctx.ret_id, type_node)
+                ctx.check_ffi_safety(ctx.fn_ctx.ret_id, type_node)
         else
-            c.fn_ctx.ret_id = I32::sema_type_env.Builtin_type_id.void_type
+            ctx.fn_ctx.ret_id = I32::sema_type_env.Builtin_type_id.void_type
         // **`main`'s return reaches the start-up code alone**, which names no type, so a `priv`
         // error type leaks to no code (and `main` itself cannot be narrowed to `priv`).
-        if !c.is_entry_main(r)
-            c.check_type_vis_leak(type_node, c.fn_ctx.effective_vis, "return type", "function")
+        if !ctx.is_entry_main(r)
+            ctx.check_type_vis_leak(type_node, ctx.fn_ctx.effective_vis, "return type", "function")
 
-        c.symtab.enter_scope()
+        ctx.symtab.enter_scope()
         defer
-            c.symtab.exit_scope()
+            ctx.symtab.exit_scope()
             if prev_file.len > 0
-                c.set_current_file(prev_file)
-        c.fn_ctx.body_depth = I32::c.symtab.scope_stack.len + 1
+                ctx.set_current_file(prev_file)
+        ctx.fn_ctx.body_depth = I32::ctx.symtab.scope_stack.len + 1
         if param_list != null
             for item in base_ast_ext.Param_cursor(param_list, false)
-                item.declare_param(c, is_export)!
+                item.declare_param(ctx, is_export)!
 
         block: = r.find_child(.k_stmt_block)
         if base_core.config.run_lint_checks && block != null
-            r.lint_fn_length(c)
-            r.lint_nesting(block, c)
-        if block != null && !r.infer_body(c, block)
+            r.lint_fn_length(ctx)
+            r.lint_nesting(block, ctx)
+        if block != null && !r.infer_body(ctx, block)
             throw .analysis_failed
 
-    priv fn declare_param(r: Self$@, c: Sema_ctx$@, is_export: Bool): Void!Sema_error //<
+    priv fn declare_param(r: Self$@, ctx: Sema_ctx$@, is_export: Bool): Void!Sema_error //<
         //< It declares one parameter in the function's scope, with its written type
         p_name: = r.find_text(.k_identifier)
         r.ice_assert(p_name.len > 0, "Function parameter is missing an identifier")
@@ -420,27 +422,27 @@ impl Ast_node
         // instance**: its types are written in the internal form, which the check cannot read, and
         // the template's declaration was checked already.
         missing: =
-            !c.is_instantiating() && sema_decl_type_check.names_missing_type(c, t_node)
+            !ctx.is_instantiating() && sema_decl_type_check.names_missing_type(ctx, t_node)
         if t_node != null && !missing
-            t_id = t_node.resolve_type(c)!
+            t_id = t_node.resolve_type(ctx)!
             if is_export
-                c.check_ffi_safety(t_id, t_node)
+                ctx.check_ffi_safety(t_id, t_node)
         if missing
             t_id = I32::sema_type_env.Builtin_type_id.unknown
         else
-            c.check_param_type(r, t_id)
-        r.check_param_default(c, t_id)
+            ctx.check_param_type(r, t_id)
+        r.check_param_default(ctx, t_id)
         // **A `$` parameter holds a copy, as a `$` local does**, so an array's elements follow the
         // `$` (binding_value_type in `../decl/access.kspl`). Left at the written type, `$a: I32[3]`
         // could not write `a[0]`, which the spec's 4.2.2 allows.
-        sym.type_id = c.binding_value_type(t_id, sym.flags.is_mut)
+        sym.type_id = ctx.binding_value_type(t_id, sym.flags.is_mut)
         r.type_id = sym.type_id
-        c.declare_symbol(p_name, sym, false)
+        ctx.declare_symbol(p_name, sym, false)
         id_node: = r.find_child(.k_identifier)
         if id_node != null
             id_node.def_node = r
 
-    priv fn check_param_default(r: Self$@, c: Sema_ctx$@, t_id: I32) //<
+    priv fn check_param_default(r: Self$@, ctx: Sema_ctx$@, t_id: I32) //<
         //< Checks a parameter's default against its type here, at the declaration
         //< **A call that leaves the argument out checks a copy of it the same way**
         //< (`call_defaults.kspl`); without this, `v: U8 = 300` passes until some call uses it. The
@@ -449,35 +451,35 @@ impl Ast_node
         if d == null || d.caller_loc_kind().len > 0 || sema_type_env.is_unknown(t_id)
             return
         probe: = d.clone()
-        a_id: = probe.infer_expr(c, t_id) catch I32::sema_type_env.Builtin_type_id.unknown
+        a_id: = probe.infer_expr(ctx, t_id) catch I32::sema_type_env.Builtin_type_id.unknown
         if !sema_type_env.is_unknown(a_id)
-            probe.apply_type_coercion(c, a_id, t_id)
+            probe.apply_type_coercion(ctx, a_id, t_id)
 
-    priv fn infer_body(r: Self$@, c: Sema_ctx$@, block: Ast_node$@): Bool //<
+    priv fn infer_body(r: Self$@, ctx: Sema_ctx$@, block: Ast_node$@): Bool //<
         //< It analyzes a function's body; false where it found an error
         //< A body whose function returns nothing gets the `return` its writer left out.
-        block.infer_stmts(c) catch
+        block.infer_stmts(ctx) catch
             return false
-        sema_body_literal.check_settled_literals(c, block)
+        sema_body_literal.check_settled_literals(ctx, block)
         // A value that its `defer` frees, handed over all the same.
-        sema_body_defer_decl.refuse_handover(c, block)
+        sema_body_defer_decl.refuse_handover(ctx, block)
         // [W0109] A value made here and left unfreed on some way out; [H0303] its two-line free.
-        sema_body_lint_free.lint_unfreed(c, block)
-        if r.has_attribute("naked") && !block.holds_only_asm(c)
+        sema_body_lint_free.lint_unfreed(ctx, block)
+        if r.has_attribute("naked") && !block.holds_only_asm(ctx)
             return false
-        if c.has_error_in_fn()
+        if ctx.has_error_in_fn()
             return true
-        if !r.analyze_function_body(c, block)
+        if !r.analyze_function_body(ctx, block)
             return false
-        r.add_implicit_return(c, block)
+        r.add_implicit_return(ctx, block)
         return true
 
-    priv fn add_implicit_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@) //<
+    priv fn add_implicit_return(r: Self$@, ctx: Sema_ctx$@, block: Ast_node$@) //<
         //< It ends the body of a function returning nothing with `return`, where it does not end so
         //< Caution: **Do not add it to a function that declares `#noreturn`.** A `return;` under
         //< C's `__attribute__((noreturn))` triggers `-Winvalid-noreturn` (Principle 2). Nor to a
         //< `#naked` one: its assembly returns, and clang refuses any other statement.
-        base_ret_id: = c.env.strip_result(c.fn_ctx.ret_id)
+        base_ret_id: = ctx.env.strip_result(ctx.fn_ctx.ret_id)
         if !sema_type_env.is_void(base_ret_id) && !sema_type_env.is_unknown(base_ret_id)
             return
         if r.has_attribute("noreturn") || r.has_attribute("naked")
@@ -491,7 +493,7 @@ impl Ast_node
         implicit_ret.add_child(Ast_node(.k_keyword, "return", block.loc))
         block.add_child(implicit_ret)
 
-    priv fn holds_only_asm(r: Self@, c: Sema_ctx$@): Bool //<
+    priv fn holds_only_asm(r: Self@, ctx: Sema_ctx$@): Bool //<
         //< Whether a `#naked` function's body is `__kspl_asm_volatile(...)` statements alone
         //< It reports the first other statement.
         //< With no prologue there is no frame, so any other statement would use stack the function
@@ -506,7 +508,7 @@ impl Ast_node
             if stmt.kind_id == .k_stmt_expr && stmt.get_assign_right() == null && callee != null &&
                 callee.kind_id == .k_identifier && callee.text.equals("__kspl_asm_volatile")
                 continue
-            c.err(stmt,
+            ctx.err(stmt,
                 "a '#naked' function permits only '__kspl_asm_volatile(...)' statements. It has no \
                     prologue. Other statements would require a stack frame that does not exist")
             return false
@@ -523,25 +525,25 @@ impl Ast_node
                 max_end = child_end
         return max_end
 
-    priv fn lint_fn_length(r: Self$@, c: Sema_ctx$@) //<
+    priv fn lint_fn_length(r: Self$@, ctx: Sema_ctx$@) //<
         //< [H0803] Reports a function over the guideline of 300 lines
         //< The guideline is Principle 3 of docs/DESIGN-principles.md; as a guideline, it is a Hint,
         //< not an error.
-        src: = base_core.source_of(c.source_map, r.loc.file())
+        src: = base_core.source_of(ctx.source_map, r.loc.file())
         if src.len == 0
             return
-        starts: = c.line_starts_for(r.loc.file(), src)
+        starts: = ctx.line_starts_for(r.loc.file(), src)
         start_line: = base_lines.line_for_offset(starts, r.loc.offset)
         end_offset: = r.find_subtree_end_offset()
         end_line: = base_lines.line_for_offset(starts, end_offset)
         line_count: = end_line - start_line + 1
         max_fn_lines: Sz = 300
         if line_count > max_fn_lines
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("[H0803] This function spans \{line_count\} lines, over the \
                     ~\{max_fn_lines\}-line guideline (Principle 3 in docs/DESIGN-principles.md). \
                     Split it into smaller functions, each with one purpose.")
-            c.hint(r, c.scratch.slice())
+            ctx.hint(r, ctx.scratch.slice())
 
     priv fn deepest_block(r: Self@, depth: Sz): Sz //<
         //< How many blocks deep the subtree's deepest block sits, r's own counted as `depth`
@@ -552,48 +554,48 @@ impl Ast_node
                 best = d
         return best
 
-    priv fn lint_nesting(r: Self$@, body: Ast_node@, c: Sema_ctx$@) //<
+    priv fn lint_nesting(r: Self$@, body: Ast_node@, ctx: Sema_ctx$@) //<
         //< [H0805] Reports a function whose blocks nest past the guideline of 8 levels
         //< The body's own block is level 0, so an `if` in it opens level 1. The guideline is
         //< Principle 3 of docs/DESIGN-principles.md; as a guideline, it is a Hint, as [H0803] is.
-        if c.is_code_off(r, "H0805")
+        if ctx.is_code_off(r, "H0805")
             return
         depth: = body.deepest_block(0)
         max_depth: Sz = 8
         if depth > max_depth
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("[H0805] This function nests blocks \{depth\} levels deep, past the \
                     \{max_depth\}-level guideline (Principle 3 in docs/DESIGN-principles.md). Move \
                     the inner code into a helper, or return early to reduce nesting.")
-            c.hint(r, c.scratch.slice())
+            ctx.hint(r, ctx.scratch.slice())
 
-    priv fn infer_impl_decl(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+    priv fn infer_impl_decl(r: Self$@, ctx: Sema_ctx$@): Void!Sema_error
         $has_err: = false
         target_node: = r.get_decl_type_node()
         trait_node: = r.get_impl_trait_node().unwrap_or(null)
 
         if target_node != null
-            t_id: = target_node.resolve_type(c)!
-            target_type: = c.env.get_str(t_id)
+            t_id: = target_node.resolve_type(ctx)!
+            target_type: = ctx.env.get_str(t_id)
 
-            old_impl: = c.fn_ctx.impl_name
-            c.fn_ctx.impl_name = target_type
-            defer c.fn_ctx.impl_name = old_impl
+            old_impl: = ctx.fn_ctx.impl_name
+            ctx.fn_ctx.impl_name = target_type
+            defer ctx.fn_ctx.impl_name = old_impl
 
             for m in r.children
                 if m.kind_id == .k_decl_fn && !m.is_generic_template()
-                    m.infer_fn(c) catch
+                    m.infer_fn(ctx) catch
                         has_err = true
 
             if trait_node != null
-                trait_id: = trait_node.resolve_type(c)!
+                trait_id: = trait_node.resolve_type(ctx)!
                 if trait_id != 0 && !sema_type_env.is_unknown(trait_id)
-                    if !c.verify_trait_implementation(t_id, trait_id, trait_node)
+                    if !ctx.verify_trait_implementation(t_id, trait_id, trait_node)
                         has_err = true
         if has_err
             throw .analysis_failed
 
-    priv fn infer_compile_directive(r: Ast_node$@, c: Sema_ctx$@)
+    priv fn infer_compile_directive(r: Ast_node$@, ctx: Sema_ctx$@)
         $expr_node: Ast_node$@ = null
         $msg_node: Ast_node$@ = null
         for ch in r.children
@@ -610,7 +612,7 @@ impl Ast_node
         if expr_node != null
             // Caution: **A condition that does not fold is reported, not taken as false.** Folding
             // names why, and the file's own message would then claim a failure that did not happen.
-            val: = expr_node.eval_constexpr(c) catch
+            val: = expr_node.eval_constexpr(ctx) catch
                 return
             if val == 0
                 $msg_slice: U8[] = "Assertion failed"
@@ -620,4 +622,4 @@ impl Ast_node
                 // directly, it gets no position and is missing from the final count. No code is
                 // assigned: the words are the user's, and silencing them with `##lint` would void
                 // the assertion.
-                c.err(r, msg_slice)
+                ctx.err(r, msg_slice)

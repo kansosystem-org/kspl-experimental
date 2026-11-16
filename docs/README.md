@@ -19,6 +19,7 @@
 | [`DESIGN-programming-language.md`](DESIGN-programming-language.md) | The reasons for the language’s design: symbols, types, traits, ownership, concurrency, visibility, and the boundary with C. | Whoever changes the language or finds an ambiguity in its specification |
 | [`DESIGN-notation.md`](DESIGN-notation.md) | The reasons for the source notation: the indentation notation, names, keywords, line ends, long strings and documentation comments. | Whoever changes the language's notation or the formatter |
 | [`DESIGN-repository.md`](DESIGN-repository.md) | Why the documents, the packages, the one repository and the gates have their shape. | Whoever changes a document, a package's boundary or a gate |
+| [`DESIGN-quality.md`](DESIGN-quality.md) | The quality properties Kanso holds itself to, what checks each one, and where the checks are weakest. | Whoever changes Kanso, or judges how far to trust it |
 | [`SPEC-documents.md`](SPEC-documents.md) | Shared technical vocabulary, the six document kinds, wording and formatting, and reference direction. | Whoever adds or changes a document |
 | [`SPEC-plain-language.md`](SPEC-plain-language.md) | Reusable writing rules, followed by replaceable chapters for software and Kanso. | Whoever writes any text in the repository |
 | [`PLAN.md`](PLAN.md) | What is left, a section per package with work left. | Whoever changes Kanso and looks for the next step |

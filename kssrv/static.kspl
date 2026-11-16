@@ -167,22 +167,22 @@ priv fn under(root: U8[], rel: U8[], arena: Arena$@): Rel_path //< `rel` checked
             return .hidden if why == .hidden else .rejected
     return .ok(path)
 
-fn names_this_server(req: http.Request@, t: conn.Target): Bool //<
+fn names_this_server(req: http.Request@, target: conn.Target): Bool //<
     //< Whether the request names this machine's loopback as its host, as the token's URL does
     //< **The port is not compared**: a re-pointed page always sends its own name, so the name alone
     //< tells it apart. `http.parse_request` refuses a second `Host`, so the one found is the only
     //< one. Caution: **A target naming its host is judged by that host** (RFC 9112 §3.2.2 has the
     //< server ignore `Host` then). Judged by `Host`, it would be served for a name never checked.
-    host: = t.authority.unwrap_or(req.headers.find("Host").unwrap_or(""))
+    host: = target.authority.unwrap_or(req.headers.find("Host").unwrap_or(""))
     name: = host.sub(0, host.find_char(':').unwrap_or(host.len))
     return name.equals(LOCAL_HOST) || name.equals_ignore_case("localhost")
 
-fn takes_method(t: conn.Target, method: U8[], ctx: conn.Ctx@): Bool //<
+fn takes_method(target: conn.Target, method: U8[], ctx: conn.Ctx@): Bool //<
     //< Whether a request with that method and target would be taken, not refused for its method
     //< or as an endpoint that does not exist here. Read before a body is asked for
     //< (`waits_for_continue` in `kssrv/main.kspl`).
-    if t.path.starts_with(api.API_PREFIX)
-        return api.takes_method(t.path, method, ctx)
+    if target.path.starts_with(api.API_PREFIX)
+        return api.takes_method(target.path, method, ctx)
     return method.equals("GET") || method.equals("HEAD")
 
 // ==========================================
@@ -190,7 +190,7 @@ fn takes_method(t: conn.Target, method: U8[], ctx: conn.Ctx@): Bool //<
 // ==========================================
 
 fn queue_for_request( //< builds the response to one request
-    c: conn.Conn$@,
+    connection: conn.Conn$@,
     req: http.Request$@,
     ctx: conn.Ctx$@,
     // Whether the request was read whole, its body included. **False only for a refusal answered
@@ -209,17 +209,17 @@ fn queue_for_request( //< builds the response to one request
     // **Under `/api/` every answer is JSON, a refusal's included**: an API client reads one form.
     is_api: = t.path.starts_with(api.API_PREFIX)
     if is_api
-        api.queue_api(c, t, req, ctx, keep_alive)
+        api.queue_api(connection, t, req, ctx, keep_alive)
         return
     // Static serving is GET/HEAD only (the API's POST branched off before this).
     if !is_get && !is_head
-        conn.queue_error(c, 405, "GET, HEAD", keep_alive)
+        conn.queue_error(connection, 405, "GET, HEAD", keep_alive)
         return
 
     // **Use `decode_component`**, which keeps a `+`: a space written as `+` is a query's
     // convention, not a path's (see std/url.kspl). The decode happens only once.
-    decoded: = url.decode_component(t.path, c.arena) catch _e
-        conn.queue_error(c, 400)
+    decoded: = url.decode_component(t.path, connection.arena) catch _e
+        conn.queue_error(connection, 400)
         return
     // **Only the named page may be outside the root** (`--page`). Only `/` and `/index.html` are
     // replaced, and **the client cannot choose it with a string it wrote** (`path_to_rel` refuses a
@@ -233,50 +233,51 @@ fn queue_for_request( //< builds the response to one request
         // link standing at `index.html` in the root refused the page with a 403.
         target_path = ctx.page
     else
-        switch path_to_rel(decoded, ctx.root, is_page, c.arena)
+        switch path_to_rel(decoded, ctx.root, is_page, connection.arena)
         case .ok(path)
             target_path = path
         case .folder
             // **The raw path, not the decoded one**: it is sent back as the client wrote it, and
             // the query goes with it.
-            to: = c.arena.text().s(t.path).c('/')
+            to: = connection.arena.text().s(t.path).c('/')
             if t.query.len > 0
                 to.c('?').s(t.query)
-            conn.queue_redirect(c, to.take(), keep_alive)
+            conn.queue_redirect(connection, to.take(), keep_alive)
             return
         case .rejected
             // A path let through could return a file outside the root, or one Windows reads as
             // another name. A 403, not a 404: the form was refused, and whether the name exists is
             // not checked.
-            conn.queue_error(c, 403, "", keep_alive)
+            conn.queue_error(connection, 403, "", keep_alive)
             return
         case .hidden, .not_folder
-            conn.queue_error(c, 404, "", keep_alive)
+            conn.queue_error(connection, 404, "", keep_alive)
             return
-    queue_static_file(c, req, target_path, keep_alive)
+    queue_static_file(connection, req, target_path, keep_alive)
 
-priv fn queue_static_file(c: conn.Conn$@, req: http.Request@, path: U8[], keep: Bool) //<
+priv fn queue_static_file(connection: conn.Conn$@, req: http.Request@, path: U8[], keep: Bool) //<
     //< Answers a GET or a HEAD of the file at `path`: whole, in part, or "unchanged"
     $facts: conn.File_facts = ::{}
     if found: = conn.regular_file(path)
         facts = found
     else
-        conn.queue_error(c, 404, "", keep)
+        conn.queue_error(connection, 404, "", keep)
         return
     ctype: = content_type_for(path)
-    v: = cache.validators(facts, c.arena)
+    v: = cache.validators(facts, connection.arena)
     switch cache.judge(req, v)
     case .unchanged
-        conn.queue_unchanged(c, ctype, keep, cache.file_headers(v, c.arena).build())
+        conn.queue_unchanged(connection, ctype, keep,
+            cache.file_headers(v, connection.arena).build())
         return
     case .failed
-        conn.queue_error(c, 412, "", keep)
+        conn.queue_error(connection, 412, "", keep)
         return
     case .serve {}
     $status: I32 = 200
     $first: Sz = 0
     $length: = facts.size
-    $more: = cache.file_headers(v, c.arena)
+    $more: = cache.file_headers(v, connection.arena)
     switch cache.part_asked(req, facts.size, v, sys.wall_seconds())
     case .whole {}
     case .span(start, n)
@@ -284,17 +285,18 @@ priv fn queue_static_file(c: conn.Conn$@, req: http.Request@, path: U8[], keep: 
         first = start
         length = n
         more = more.add("Content-Range",
-            cache.content_range(start, n, facts.size, c.arena))
+            cache.content_range(start, n, facts.size, connection.arena))
     case .unsatisfiable
-        conn.queue_unsatisfiable(c, facts.size, keep)
+        conn.queue_unsatisfiable(connection, facts.size, keep)
         return
     // A HEAD's Content-Length names the real length; 0 would read as "an empty file". **No file is
     // opened for it**, so a HEAD cannot hold one open.
     if req.method.equals("HEAD")
-        conn.queue_file(c, status, ctype, io.File_stream::{}, first, length, keep, more.build())
+        conn.queue_file(connection, status, ctype, io.File_stream::{}, first, length, keep,
+            more.build())
         return
     // The stat found it, so an open that fails is the server's fault, not a missing name.
     file: = io.open(path, "rb") catch _e
-        conn.queue_error(c, 500)
+        conn.queue_error(connection, 500)
         return
-    conn.queue_file(c, status, ctype, file, first, length, keep, more.build())
+    conn.queue_file(connection, status, ctype, file, first, length, keep, more.build())

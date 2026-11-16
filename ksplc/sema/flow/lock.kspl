@@ -46,12 +46,12 @@ priv fn note(marks: List<|Lock_mark|>$@, node: Ast_node$@, guard: U8[]) //<
     if guard_of(marks, node).len == 0
         marks.push(Lock_mark::{ .node = node, .guard = guard })
 
-priv fn names_borrow(c: sema_flow_track.Df_ctx$@, value: Ast_node$@): Ast_node$@? //<
+priv fn names_borrow(df: sema_flow_track.Df_ctx$@, value: Ast_node$@): Ast_node$@? //<
     //< value itself where it is `g.lock()`, or the declaration of the borrow it names
-    if lock_call_guard(c.sema, value, "lock", true).len > 0
+    if lock_call_guard(df.sema, value, "lock", true).len > 0
         return .some(value)
     if value != null && value.is_path_or_ident() &&
-        guard_of(c.locks.borrows@, value.def_node).len > 0
+        guard_of(df.locks.borrows@, value.def_node).len > 0
         return .some(value.def_node)
     return .none
 
@@ -80,7 +80,7 @@ impl Lock_book
             if m.guard.equals(guard)
                 state.held.remove(m.node)
 
-priv fn lock_call_guard(c: Sema_ctx@, node: Ast_node$@, method_name: U8[], require_ptr: Bool):
+priv fn lock_call_guard(ctx: Sema_ctx@, node: Ast_node$@, method_name: U8[], require_ptr: Bool):
     U8[] //<
         //< The name of recv, where node is a method_name() call on a plain name recv (or `recv@`)
         //< require_ptr also requires a pointer return, as `Mutex<|T|>.lock()` gives. It checks
@@ -90,7 +90,7 @@ priv fn lock_call_guard(c: Sema_ctx@, node: Ast_node$@, method_name: U8[], requi
     op: = node.get_postfix_op()
     if op == null || !op.text.equals("(")
         return ""
-    if require_ptr && !c.env.is_pointer(node.type_id)
+    if require_ptr && !ctx.env.is_pointer(node.type_id)
         return ""
     // child[0] is `g.lock`, a method_access or an unmorphed expr_postfix; both getters accept
     // either.
@@ -109,13 +109,13 @@ priv fn lock_call_guard(c: Sema_ctx@, node: Ast_node$@, method_name: U8[], requi
     return recv.get_path_or_ident_name()
 
 impl Ast_node
-    fn df_lock_decl(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+    fn df_lock_decl(r: Self$@, df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< A declaration from `g.lock()` starts a borrow; one copying a borrow (`q: = p`) another
-        book: = c.locks
+        book: = df.locks
         if !book.active
             return
         expr: = r.get_var_decl_expr()
-        g: = lock_call_guard(c.sema, expr, "lock", true)
+        g: = lock_call_guard(df.sema, expr, "lock", true)
         if g.len > 0
             note(book.borrows@, r, g)
             book.on_lock(state, g, r)
@@ -132,23 +132,23 @@ impl Ast_node
         else
             state.unlocked.remove(r)
 
-    fn df_lock_stmt(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+    fn df_lock_stmt(r: Self$@, df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< A statement `g.lock()` or `g.unlock()`, or one storing a borrow beyond this function
-        book: = c.locks
+        book: = df.locks
         if !book.active
             return
         left: = r.get_assign_left()
         right: = r.get_assign_right()
         op: = r.get_assign_op()
         if right == null || op == null
-            g: = lock_call_guard(c.sema, left, "lock", true)
+            g: = lock_call_guard(df.sema, left, "lock", true)
             if g.len > 0
                 book.on_lock(state, g, r)
-            u: = lock_call_guard(c.sema, left, "unlock", false)
+            u: = lock_call_guard(df.sema, left, "unlock", false)
             if u.len > 0
                 book.on_unlock(state, u)
             return
-        if !op.text.equals("=") || names_borrow(c, right).is_none()
+        if !op.text.equals("=") || names_borrow(df, right).is_none()
             return
         // A store into a parameter's memory or into a global outlives the function, and the lock.
         // **A bare name is a store only where it is a global** (`gp = p`): a parameter or a local
@@ -156,11 +156,11 @@ impl Ast_node
         root: = left.get_assign_target_def().unwrap_or(null)
         if root == null
             return
-        global: = root.kind_id != .k_fn_param && !root.is_tracked_local(c)
+        global: = root.kind_id != .k_fn_param && !root.is_tracked_local(df)
         if !global && (root.kind_id != .k_fn_param || left.is_bare_name_target())
             return
         if book.first_report(r)
-            c.sema
+            df.sema
                 .warn(r,
                 "[W0105] This stores a pointer obtained from Mutex.lock() where it outlives this \
                     function. Code that reads it later uses the data with the lock released (a data \

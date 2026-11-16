@@ -16,32 +16,32 @@ import "ksplc/sema/flow/track" as sema_flow_track
 import "std/ds" { List }
 
 impl Ast_node
-    fn df_stmt_if(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
+    fn df_stmt_if(r: Self$@, df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
         cond: = r.get_if_cond()
-        cond.analyze_df_node(c, state)
+        cond.analyze_df_node(df, state)
         then_block: = r.get_if_then_block()
         else_block: = r.get_if_else_block()
 
         state_then: = state.clone()
-        then_block.analyze_df_node(c, state_then)
+        then_block.analyze_df_node(df, state_then)
 
         state_else: = state.clone()
         if else_block != null && else_block.kind_id != .k_empty
-            else_block.analyze_df_node(c, state_else)
+            else_block.analyze_df_node(df, state_else)
 
         // **If the condition is constant, take only the taken branch's state.** infer_if_stmt in
         // sema/body/stmt.kspl emptied the other branch; intersecting with it would wrongly reject
         // `if true { a = 0; } else { a = 1; }` as uninitialized.
-        if v: = c.sema.try_eval_constexpr(cond)
+        if v: = df.sema.try_eval_constexpr(cond)
             state.apply_merged_state(state_then if v != 0 else state_else)
             return
 
         state.apply_merged_state(sema_flow_track.intersect_states(state_then, state_else))
 
-    priv fn bind_pattern_payload(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    priv fn bind_pattern_payload(r: Self$@, df: sema_flow_track.Df_ctx$@,
         case_state: sema_flow_track.Df_state$@, bound_names: List<|U8[]|>$@, payload_start: Sz,
         written: Bool) //<
-            //< Registers the identifiers in `case .A(x)`'s payload as locals of this case.
+            //< Registers the identifiers in `case .A(x)`'s payload as locals of this case
             //< `written`: whether the user wrote the `switch` ([I0313] judges only such a payload).
             //< Caution: **Use `bound_names` to avoid registering twice**, or `case .A(x), .B(x)`
             //< gets the unused diagnostic twice.
@@ -62,10 +62,10 @@ impl Ast_node
             if is_dup
                 continue
             bound_names.push(pchild.text)
-            c.add_bound_local(pchild, judged)
+            df.add_bound_local(pchild, judged)
             case_state.bind(pchild, true)
 
-    priv fn process_df_switch_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    priv fn process_df_switch_case(r: Self$@, df: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@, start_idx: Sz): sema_flow_track.Df_state$@
         $block_node: Ast_node$@ = null
         case_state: = state.clone()
@@ -82,17 +82,18 @@ impl Ast_node
             if case_child.kind_id == .k_case_pattern
                 switch case_child.extract_case_variant()
                 case .variant(_v_node, payload_start)
-                    case_child.bind_pattern_payload(c, case_state, bound_names, payload_start,
+                    case_child.bind_pattern_payload(df, case_state, bound_names, payload_start,
                         r.synthesized_option_spelling().len == 0)
                 default {}
-            case_child.analyze_df_node(c, case_state)
+            case_child.analyze_df_node(df, case_state)
         if block_node != null
-            block_node.analyze_df_node(c, case_state)
+            block_node.analyze_df_node(df, case_state)
         return case_state
 
-    fn df_stmt_switch(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
+    fn df_stmt_switch(r: Self$@, df: sema_flow_track.Df_ctx$@,
+        state: sema_flow_track.Df_state$@)
         cond: = r.get_switch_cond()
-        cond.analyze_df_node(c, state)
+        cond.analyze_df_node(df, state)
         // **No path skips every case.** sema (process_switch_exhaustiveness in
         // sema/body/switch.kspl) accepts a switch without 'default' only if its cases cover every
         // value. So the state before the switch is not merged in, or `$x: I32` set in every
@@ -102,7 +103,7 @@ impl Ast_node
         for i in Range.asc(r.children.len)
             child: = r.get_child(i)
             if child.is_keyword("case") || child.is_keyword("default")
-                case_state: = r.process_df_switch_case(c, state, i + 1)
+                case_state: = r.process_df_switch_case(df, state, i + 1)
 
                 if merged_state == null
                     merged_state = case_state
@@ -111,7 +112,7 @@ impl Ast_node
         if merged_state != null
             state.apply_merged_state(merged_state)
 
-    fn df_stmt_for(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+    fn df_stmt_for(r: Self$@, df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< Walks a loop until the state at its head stops changing, then leaves by its exits
         //< **A pass starts from what the last one left at the back edge.** So the next pass sees a
         //< move or a release in the body. Moves and releases only grow and initializations only
@@ -119,16 +120,16 @@ impl Ast_node
         //< place, which `report_core` in sema/session/ctx.kspl drops.
         init_node: = r.get_for_init()
         if init_node != null
-            init_node.analyze_df_node(c, state)
-        target: = c.exit_targets.len - 1
-        known: = c.locals.len
+            init_node.analyze_df_node(df, state)
+        target: = df.exit_targets.len - 1
+        known: = df.locals.len
         // The locals an enclosing loop carries, which stay carried after this one.
         $outer_carried: = sema_flow_track.Df_set(false)
         outer_carried.copy_from(state.carried_vars@)
         $head: = state
         for
-            back: = r.df_loop_pass(c, head, target)
-            if !back.reachable || !back.adds_to(head, c, known)
+            back: = r.df_loop_pass(df, head, target)
+            if !back.reachable || !back.adds_to(head, df, known)
                 break
             next_head: = sema_flow_track.intersect_states(head, back)
             // What only the back edge moved or released is noted as such in a report.
@@ -141,7 +142,7 @@ impl Ast_node
             head = next_head
         // **What follows starts from the exits alone**: the condition's, and each `break`'s
         // (record_jump). A loop with no condition and no `break` leaves by none.
-        jumps: = c.exit_targets.get(target).jump_state
+        jumps: = df.exit_targets.get(target).jump_state
         if jumps != null
             state.apply_merged_state(jumps)
         // **After the loop, no pass of it lies around a use**, so what this loop carried is
@@ -154,67 +155,69 @@ impl Ast_node
         // missing-return check reads too.
         state.reachable = !r.is_endless_loop()
 
-    priv fn df_loop_pass(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    priv fn df_loop_pass(r: Self$@, df: sema_flow_track.Df_ctx$@,
         head: sema_flow_track.Df_state$@, target: Sz): sema_flow_track.Df_state$@ //<
             //< Walks the loop's condition, body and step once from `head`
             //< Returns the state at the back edge, unreachable where no path loops back. The
             //< exits of this pass are left in the target's `jump_state`, those of a pass before
             //< it dropped.
-        $t: = c.exit_targets.get(target)
+        $t: = df.exit_targets.get(target)
         t.jump_state = null
         t.continue_state = null
-        c.exit_targets.set(target, t)
+        df.exit_targets.set(target, t)
         cond_node: = r.get_loop_cond()
         step_node: = r.get_for_step()
         block_node: = r.get_loop_block()
         $loop_state: = head.clone()
         if cond_node != null && cond_node.kind_id != .k_empty
-            cond_node.analyze_df_node(c, loop_state)
+            cond_node.analyze_df_node(df, loop_state)
             // The condition is false: the exit by the condition, merged as a `break`'s is.
-            t = c.exit_targets.get(target)
+            t = df.exit_targets.get(target)
             t.jump_state = loop_state.clone()
-            c.exit_targets.set(target, t)
+            df.exit_targets.set(target, t)
         // step is reachable even if the body "returns or throws on every path": a break or continue
         // can reach it. So the reachability after cond is restored first.
         step_reachable: = loop_state.reachable
         if block_node != null
-            block_node.analyze_df_node(c, loop_state)
-        continues: = c.exit_targets.get(target).continue_state
+            block_node.analyze_df_node(df, loop_state)
+        continues: = df.exit_targets.get(target).continue_state
         if continues != null
             loop_state = sema_flow_track.intersect_states(loop_state, continues)
         back_reachable: = loop_state.reachable
         loop_state.reachable = step_reachable
         if step_node != null
-            step_node.analyze_df_node(c, loop_state)
+            step_node.analyze_df_node(df, loop_state)
         loop_state.reachable = back_reachable
         return loop_state
 
-    fn df_stmt_defer(r: Self$@, c: sema_flow_track.Df_ctx$@, _state: sema_flow_track.Df_state$@) //<
-        //< A defer body is not analyzed here, only registered
-        //< Caution: **It must not be analyzed against the state at registration.** It runs when the
-        //< scope is left, so `b.free();` after `defer b.free()` would pass with zero diagnostics.
+    fn df_stmt_defer(r: Self$@, df: sema_flow_track.Df_ctx$@,
+        _state: sema_flow_track.Df_state$@) //<
+            //< A defer body is not analyzed here, only registered
+            //< Caution: **It must not be analyzed against the state at registration.** It runs when
+            //< the scope is left, so `b.free();` after `defer b.free()` would pass with zero
+            //< diagnostics.
         if def_block: = r.get_defer_block()
-            c.pending_defers.push(def_block)
+            df.pending_defers.push(def_block)
 
-    fn df_stmt_block_scope(r: Self@, c: sema_flow_track.Df_ctx$@,
+    fn df_stmt_block_scope(r: Self@, df: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@) //<
             //< Walks the block, then analyzes its defer bodies LIFO against the state at its end
             //< That is the order they run in. `reachable` is set meanwhile (a defer runs even after
             //< a return). An early exit analyzes them against its own state as well
             //< (df_check_defers_on_exit).
-        mark: = c.pending_defers.len
+        mark: = df.pending_defers.len
         for child in r.children
-            child.analyze_df_node(c, state)
-        if c.pending_defers.len == mark
+            child.analyze_df_node(df, state)
+        if df.pending_defers.len == mark
             return
         was_reachable: = state.reachable
         state.reachable = true
-        for $i: = c.pending_defers.len; i > mark; i -= 1
-            c.pending_defers.get(i - 1).analyze_df_node(c, state)
-        c.pending_defers.truncate(mark)
+        for $i: = df.pending_defers.len; i > mark; i -= 1
+            df.pending_defers.get(i - 1).analyze_df_node(df, state)
+        df.pending_defers.truncate(mark)
         state.reachable = was_reachable
 
-    fn df_stmt_return_like(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    fn df_stmt_return_like(r: Self$@, df: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@)
         k: = r.kind_id
         expr: Ast_node$@ =
@@ -223,24 +226,24 @@ impl Ast_node
             else (r.get_fallback_expr() if k == .k_stmt_fallback else null)))
 
         if expr != null
-            expr.analyze_df_node(c, state)
-        after: = c.df_check_defers_on_exit(r, state, r.defers_left_behind(c))
+            expr.analyze_df_node(df, state)
+        after: = df.df_check_defers_on_exit(r, state, r.defers_left_behind(df))
         if k == .k_stmt_return || k == .k_stmt_throw
-            c.report_lock_exit(r, after)
-        c.record_jump(r, after)
+            df.report_lock_exit(r, after)
+        df.record_jump(r, after)
         state.reachable = false
 
-    priv fn defers_left_behind(r: Self$@, c: sema_flow_track.Df_ctx$@): Sz //<
+    priv fn defers_left_behind(r: Self$@, df: sema_flow_track.Df_ctx$@): Sz //<
         //< How many of the registered defer bodies stay registered when this jump leaves
         //< `return` and `throw` leave them all. A `break` or `continue` leaves the statement sema
         //< resolved it to (`def_node`, set by infer_stmt_break_continue in sema/body/stmt.kspl),
         //< and a `fallback` the innermost `catch`.
         if r.kind_id == .k_stmt_return || r.kind_id == .k_stmt_throw
             return 0
-        if idx: = c.find_exit_target(r)
-            return c.exit_targets.get(idx).defers_before
+        if idx: = df.find_exit_target(r)
+            return df.exit_targets.get(idx).defers_before
         // Not found (an erroneous jump sema already reported): only the block ends check them.
-        return c.pending_defers.len
+        return df.pending_defers.len
 
 impl sema_flow_track.Df_ctx
     fn df_check_defers_on_exit(r: Self$@, exit: Ast_node$@, state: sema_flow_track.Df_state$@,
@@ -301,11 +304,11 @@ impl sema_flow_track.Df_ctx
             r.exit_targets.set(idx, t)
 
 impl sema_flow_track.Df_state
-    priv fn adds_to(back: Self@, head: sema_flow_track.Df_state$@, c: sema_flow_track.Df_ctx$@,
+    priv fn adds_to(back: Self@, head: sema_flow_track.Df_state$@, df: sema_flow_track.Df_ctx$@,
         known: Sz): Bool //<
             //< Whether a loop's back edge brings what its head's state lacks
             //< Only the locals declared before the loop count (`known`, their number in
-            //< `c.locals`): one declared in the body starts afresh at its declaration on every
+            //< `df.locals`): one declared in the body starts afresh at its declaration on every
             //< pass (`bind`).
         for v in head.init_vars.items
             if !back.init_vars.contains(v)
@@ -313,12 +316,12 @@ impl sema_flow_track.Df_state
         for v in head.held.items
             if !back.held.contains(v)
                 return true
-        return back.freed_vars.adds_known_to(head.freed_vars@, c, known) ||
-            back.gone_vars.adds_known_to(head.gone_vars@, c, known) ||
-            back.moved_vars.adds_known_to(head.moved_vars@, c, known) ||
-            back.moved_fields.adds_known_to(head.moved_fields@, c, known) ||
-            back.unlocked.adds_known_to(head.unlocked@, c, known) ||
-            back.stale.adds_known_to(head.stale@, c, known) ||
+        return back.freed_vars.adds_known_to(head.freed_vars@, df, known) ||
+            back.gone_vars.adds_known_to(head.gone_vars@, df, known) ||
+            back.moved_vars.adds_known_to(head.moved_vars@, df, known) ||
+            back.moved_fields.adds_known_to(head.moved_fields@, df, known) ||
+            back.unlocked.adds_known_to(head.unlocked@, df, known) ||
+            back.stale.adds_known_to(head.stale@, df, known) ||
             back.viewing.adds_to_set(head.viewing@)
 
 impl sema_flow_track.Df_set
@@ -329,7 +332,7 @@ impl sema_flow_track.Df_set
                 return true
         return false
 
-    priv fn adds_known_to(r: Self@, other: sema_flow_track.Df_set@, c: sema_flow_track.Df_ctx@,
+    priv fn adds_known_to(r: Self@, other: sema_flow_track.Df_set@, df: sema_flow_track.Df_ctx@,
         known: Sz): Bool //<
             //< Whether r holds an item `other` lacks whose local is one of the first `known` locals
             //< An item of `moved_fields` counts by the local it is a field of.
@@ -339,7 +342,7 @@ impl sema_flow_track.Df_set
             $local: = v
             if v.kind_id == .k_expr_postfix
                 local = v.field_path_root().unwrap_or(null)
-            idx: = c.find_local(local)
+            idx: = df.find_local(local)
             if idx >= 0 && Sz::idx < known
                 return true
         return false

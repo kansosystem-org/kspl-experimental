@@ -19,27 +19,27 @@ import "std/ds"
 import "std/math"
 import "std/str" as _str // `text`
 
-priv fn is_arc_related(c: Sema_ctx$@, type_id: I32): Bool //<
+priv fn is_arc_related(ctx: Sema_ctx$@, type_id: I32): Bool //<
     //< Whether a declared type is ARC-managed itself or has an ARC-managed value field
     //< The type is a variable's or an argument's.
     //< One pointer is stripped at the top level only (`Rc<|T|>@`), not in the recursion (see
     //< Env.type_has_arc_content).
-    return c.env.type_is_managed(c.env.strip_ptr(type_id))
+    return ctx.env.type_is_managed(ctx.env.strip_ptr(type_id))
 
 priv const MAX_HOLDS_ARRAY_DEPTH: Sz = 16 //< how deep holds_fixed_array follows nested fields
 
-priv fn holds_fixed_array(c: Sema_ctx$@, type_id: I32, depth: Sz): Bool //<
+priv fn holds_fixed_array(ctx: Sema_ctx$@, type_id: I32, depth: Sz): Bool //<
     //< Whether the type is a fixed-length array or holds one in a field, at any depth
     //< `b.v.len` on a struct's array field folds as `a.len` does, so its note applies there too.
     if depth >= MAX_HOLDS_ARRAY_DEPTH
         return false
-    real_id: = c.env.get_clean_real_type(type_id)
-    if c.env.is_array(real_id)
+    real_id: = ctx.env.get_clean_real_type(type_id)
+    if ctx.env.is_array(real_id)
         return true
-    switch c.env.get_info(real_id)
+    switch ctx.env.get_info(real_id)
     case .struct_type(def)
         for f in def.fields_list
-            if holds_fixed_array(c, f.type_id, depth + 1)
+            if holds_fixed_array(ctx, f.type_id, depth + 1)
                 return true
     default {}
     return false
@@ -51,16 +51,16 @@ priv fn subtree_end(node: Ast_node@): Sz //< the furthest offset a node of the s
             end = math.max(end, subtree_end(ch))
     return end
 
-priv fn dropped_read_cfg(c: Sema_ctx$@, decl: Ast_node@, name: U8[]): U8[] //<
+priv fn dropped_read_cfg(ctx: Sema_ctx$@, decl: Ast_node@, name: U8[]): U8[] //<
     //< The `#cfg(…)` of a range this build left out that names the local, or empty where none does
     //< **Only ranges inside the declaring function count**, after the declaration. The text is
     //< searched for the name as a whole word, so a comment naming it counts too, erring toward the
     //< note, which changes only the advice.
-    fn_node: = c.fn_ctx.decl
+    fn_node: = ctx.fn_ctx.decl
     if fn_node == null || base_core.arena == null
         return ""
     file: = decl.loc.file()
-    src: = base_core.source_of(c.source_map, file)
+    src: = base_core.source_of(ctx.source_map, file)
     from: Sz = decl.loc.offset
     to: = subtree_end(fn_node)
     for region in base_cfg_inactive.cfg_inactive
@@ -83,16 +83,16 @@ priv fn dropped_read_cfg(c: Sema_ctx$@, decl: Ast_node@, name: U8[]): U8[] //<
             at = i + 1
     return ""
 
-fn report_unread_payload(c: Sema_ctx$@, pattern: Ast_node$@) //<
+fn report_unread_payload(ctx: Sema_ctx$@, pattern: Ast_node$@) //<
     //< One [I0313] on a `case` pattern whose payload binds only names nobody reads
     //< The rule is "Write the payload only when it is needed" in
     //< `docs/SPEC-programming-language.md`. A `_` name is a binding nobody reads, so `(_a, _b)` is
     //< reported too: to a reader it looks like an extraction.
-    c.information(pattern,
+    ctx.information(pattern,
         "[I0313] This case binds a payload that nothing reads. Write the variant alone ('.name'), \
             without the brackets. The switch still checks that every variant is handled.")
 
-fn check_local_usage(c: Sema_ctx$@, st: sema_flow_track.Local_state)
+fn check_local_usage(ctx: Sema_ctx$@, st: sema_flow_track.Local_state)
     decl: = st.node
     is_param: = decl.kind_id == .k_fn_param
     is_case_payload: = decl.kind_id == .k_identifier
@@ -116,116 +116,117 @@ fn check_local_usage(c: Sema_ctx$@, st: sema_flow_track.Local_state)
         return
     // **A binding whose type was refused is that error's cascade.** Nothing after it was typed, so
     // "nothing reads it" would only repeat the refusal as a warning.
-    if !is_case_payload && sema_type_env.is_unknown(c.env.get_real_type(decl.type_id))
+    if !is_case_payload &&
+        sema_type_env.is_unknown(ctx.env.get_real_type(decl.type_id))
         return
 
     // [W0601] ARC inserts hidden retain / release calls, a risk where execution must be
     // deterministic, so it warns at each use. Off by default (`##lint(W0601 = on)`), so
     // its level is asked first: walking every local's type costs as much as the rest of the check.
-    if !is_case_payload && !c.is_code_off(target_node, "W0601") &&
-        is_arc_related(c, decl.type_id)
-        c.clear_scratch()
+    if !is_case_payload && !ctx.is_code_off(target_node, "W0601") &&
+        is_arc_related(ctx, decl.type_id)
+        ctx.clear_scratch()
             .s("[W0601] Variable '\{var_name\}' has an ARC-managed type, which inserts hidden \
                 retain()/release() calls. Their timing is not visible at this declaration. This \
                 conflicts with deterministic-mode's goal of fully visible execution timing. \
                 Consider explicit ownership (arena/defer) instead, or accept this as an intentional \
                 exception.")
-        c.warn(target_node, c.scratch.slice())
+        ctx.warn(target_node, ctx.scratch.slice())
 
     if !st.is_read
         if st.is_mutated
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("[W0208] Variable '\{var_name\}' is assigned but never read. Prefix with '_' to \
                     ignore.")
         else
-            c.clear_scratch()
+            ctx.clear_scratch()
                 .s("[W0207] Nothing reads local variable or parameter '\{var_name\}'. Prefix with \
                     '_' to ignore.")
-            dropped: = dropped_read_cfg(c, decl, var_name)
+            dropped: = dropped_read_cfg(ctx, decl, var_name)
             if dropped.len > 0
-                c.scratch
+                ctx.scratch
                     .s(" Note: it is read under a '\{dropped\}' this build leaves out. Put the same \
                         '\{dropped\}' on its declaration.")
             // Caution: **Say "nobody reads it", not "unused".** A fixed-length array's `.len` folds
             // to a constant (sema/body/postfix.kspl), so `a.len` alone reads nothing. The reason
             // is added for an array only.
-            if holds_fixed_array(c, decl.type_id, 0)
-                c.scratch
+            if holds_fixed_array(ctx, decl.type_id, 0)
+                ctx.scratch
                     .s(" Note: a fixed array's '.len' folds at compile time, so it does not count \
                         as a read. Declare a 'const' if you only need the length.")
-        c.warn(target_node, c.scratch.slice())
+        ctx.warn(target_node, ctx.scratch.slice())
     else if is_param && !st.is_reassigned && decl.has_mut_binding_marker()
         // [I0601] The formal-parameter version: not normalized to `let` / `var`, so `$` is checked
         // directly (has_mut_binding_marker).
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("[I0601] Parameter '\{var_name\}' is never reassigned. Remove the '$' marker.")
-        c.information(target_node, c.scratch.slice())
+        ctx.information(target_node, ctx.scratch.slice())
     else if decl.kind_id == .k_decl_var && decl.text.equals("var") && !st.is_reassigned
         // [I0601] The local-variable version. "var_synth" (the for-in temporary, see desugar.kspl)
         // is excluded: no marker can be written there.
-        c.clear_scratch()
+        ctx.clear_scratch()
             .s("[I0601] Binding '\{var_name\}' is never mutated. Remove the '$' marker.")
-        c.information(target_node, c.scratch.slice())
+        ctx.information(target_node, ctx.scratch.slice())
 
 priv fn err_node_var_name(err_node: Ast_node$@): U8[] //<
     //< The variable's name, taken from the identifier node (or its first child) for a message
     return (err_node.text if err_node.kind_id == .k_identifier
         else (err_node.get_child(0).text if err_node.children.len > 0 else ""))
 
-priv fn report_scratch_at(c: sema_flow_track.Df_ctx$@, err_node: Ast_node$@) //<
+priv fn report_scratch_at(df: sema_flow_track.Df_ctx$@, err_node: Ast_node$@) //<
     //< Reports the message in scratch at err_node, naming the early exit where there is one
     //< A defer body is analyzed again at each early exit that leaves it (df_check_defers_on_exit in
     //< sema/flow/stmt.kspl). The note shows which path reaches the read. A read already reported at
     //< one exit is not reported again at the next, nor at the block's end.
-    if c.reported_in_defers.contains(err_node)
+    if df.reported_in_defers.contains(err_node)
         return
-    if c.exit_from != null
-        c.reported_in_defers.add(err_node)
-        c.sema.scratch
-            .s(" (this `defer` body runs when line \{c.sema.line_of(c.exit_from.loc)\} leaves the \
+    if df.exit_from != null
+        df.reported_in_defers.add(err_node)
+        df.sema.scratch
+            .s(" (this `defer` body runs when line \{df.sema.line_of(df.exit_from.loc)\} leaves the \
                 scope)")
-    c.sema.err(err_node, c.sema.scratch.slice())
-    c.has_error = true
+    df.sema.err(err_node, df.sema.scratch.slice())
+    df.has_error = true
 
-fn report_uninit_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+fn report_uninit_if_needed(df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
     def: Ast_node$@, err_node: Ast_node$@)
     if !state.contains(def)
         var_name: = err_node_var_name(err_node)
-        c.sema.clear_scratch().s("variable '\{var_name\}' may be used uninitialized here")
-        report_scratch_at(c, err_node)
+        df.sema.clear_scratch().s("variable '\{var_name\}' may be used uninitialized here")
+        report_scratch_at(df, err_node)
         state.add(def)
 
-fn report_freed_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+fn report_freed_if_needed(df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
     def: Ast_node$@, err_node: Ast_node$@) //<
         //< Reports a suspected use-after-free or double free
         //< Once reported, the freed state is cleared so later references do not cascade errors (as
         //< the uninit check does).
     if state.contains_freed(def)
         var_name: = err_node_var_name(err_node)
-        c.sema.clear_scratch()
+        df.sema.clear_scratch()
             .s("variable '\{var_name\}' may already be freed here (use-after-free or double free)")
         if state.carried_vars.contains(def)
-            c.sema.scratch.s(", by an earlier pass of the loop around this use")
-        report_scratch_at(c, err_node)
+            df.sema.scratch.s(", by an earlier pass of the loop around this use")
+        report_scratch_at(df, err_node)
         state.remove_freed(def)
 
-fn report_moved_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+fn report_moved_if_needed(df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
     def: Ast_node$@, err_node: Ast_node$@) //<
         //< Reports a Move_only binding used after being moved
         //< Once reported, the moved state is cleared (as for uninit and freed).
     if !state.moved_vars.contains(def)
         return
     var_name: = err_node_var_name(err_node)
-    c.sema.clear_scratch()
+    df.sema.clear_scratch()
         .s("variable '\{var_name\}' was moved out of and cannot be used again. Its type has unique \
             ownership, so copying it would duplicate an owned handle and free it twice. Borrow it \
             with '\{var_name\}@' instead of passing it by value, or re-assign it before this use.")
     if state.carried_vars.contains(def)
-        c.sema.scratch.s(" It was moved by an earlier pass of the loop around this use.")
-    report_scratch_at(c, err_node)
+        df.sema.scratch.s(" It was moved by an earlier pass of the loop around this use.")
+    report_scratch_at(df, err_node)
     state.remove_moved(def)
 
-fn report_moved_field_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+fn report_moved_field_if_needed(df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
     root: Ast_node@, read: Ast_node$@) //<
         //< Reports a read of a field moved out of a local, or of what holds that field
         //< `read` is the path read from `root` (a bare name reads the whole binding). A move of
@@ -243,13 +244,13 @@ fn report_moved_field_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_tr
             !sema_flow_field.path_is_within(path, moved)
             continue
         root_name: = root_name_of(m)
-        c.sema.clear_scratch()
+        df.sema.clear_scratch()
             .s("field '\{root_name\}.\{moved\}' was moved out of, so neither it nor what holds it \
                 can be used again. Its type has unique ownership, so copying it would duplicate an \
                 owned handle and free it twice. Borrow it with '\{root_name\}.\{moved\}@' instead \
                 of passing it by value, or assign '\{root_name\}.\{moved\}' a new value before this \
                 use.")
-        report_scratch_at(c, read)
+        report_scratch_at(df, read)
         state.moved_fields.remove(m)
         return
 

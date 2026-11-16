@@ -38,48 +38,48 @@ impl Line
         r.len = 0
         r.truncated = false
 
-    fn byte(r: Self$@, b: U8)
+    fn byte(r: Self$@, byte: U8)
         if r.len >= LINE_MAX
             r.truncated = true
             return
-        r.buf[r.len] = b
+        r.buf[r.len] = byte
         r.len += 1
 
-    fn str(r: Self$@, s: U8[])
-        for i in s
+    fn str(r: Self$@, text: U8[])
+        for i in text
             r.byte(i)
 
-    fn u32(r: Self$@, v: U32) //< appends in decimal
-        r.u32_pad(v, 0)
+    fn u32(r: Self$@, value: U32) //< appends in decimal
+        r.u32_pad(value, 0)
 
-    fn i32(r: Self$@, v: I32) //< appends in decimal, with a sign
+    fn i32(r: Self$@, value: I32) //< appends in decimal, with a sign
         //< Caution: **Pass values that can be negative through here**; through `u32`, `-45` comes
         //< out as `4294967251`.
         $digits: U8[11] = ::{}
         $w: = Buf_writer(U8$[]::digits)
-        r.str(w.s("\{v\}").slice())
+        r.str(w.s("\{value\}").slice())
 
-    fn u32_pad(r: Self$@, v: U32, width: Sz) //<
+    fn u32_pad(r: Self$@, value: U32, width: Sz) //<
         //< Appends right-aligned to width digits (padded with spaces)
         $digits: U8[10] = ::{}
         $w: = Buf_writer(U8$[]::digits)
-        w.s("\{v\}")
+        w.s("\{value\}")
         for $i: Sz = w.len; i < width; i += 1
             r.byte(' ')
         r.str(w.slice())
 
-    fn hex2(r: Self$@, v: U32) //< appends the low byte as two hex digits
+    fn hex2(r: Self$@, value: U32) //< appends the low byte as two hex digits
         //< For a value **conventionally written in hex** (an I2C address), to match the documents.
         $digits: U8[2] = ::{}
         $w: = Buf_writer(U8$[]::digits)
-        r.str(w.s("\{v & 0xff:02x\}").slice())
+        r.str(w.s("\{value & 0xff:02x\}").slice())
 
-    fn u32_milli(r: Self$@, v: U32) //<
+    fn u32_milli(r: Self$@, value: U32) //<
         //< Appends a value in thousandths as `12.345` (integers only)
         //< For example: u32_milli(6774) → `6.774`
         $digits: U8[14] = ::{}
         $w: = Buf_writer(U8$[]::digits)
-        r.str(w.s("\{v / 1000\}.\{v % 1000:03\}").slice())
+        r.str(w.s("\{value / 1000\}.\{value % 1000:03\}").slice())
 
     fn flush(r: Self$@): Bool //< adds CR LF at the end and queues the line for sending
         //< Caution: Use CR LF (the Arduino Serial Monitor runs LF lines together). **false means

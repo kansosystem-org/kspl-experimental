@@ -125,8 +125,9 @@ priv struct Cursor //< reads the file front to back, each read checked against t
     at: Sz
 
 impl Cursor
-    priv fn need(r: Self@, n: Sz, what: U8[]): Void!Gguf_error //< `n` more bytes, or `truncated`
-        if n < 0 || n > r.raw.len - r.at
+    priv fn need(r: Self@, count: Sz, what: U8[]): Void!Gguf_error //<
+        //< `count` more bytes, or `truncated`
+        if count < 0 || count > r.raw.len - r.at
             throw .truncated(what)
 
     priv fn u32(r: Self$@, what: U8[]): U32!Gguf_error
@@ -162,9 +163,9 @@ impl Cursor
         r.at += n
         return s
 
-    priv fn skip(r: Self$@, n: Sz, what: U8[]): Void!Gguf_error
-        r.need(n, what)!
-        r.at += n
+    priv fn skip(r: Self$@, count: Sz, what: U8[]): Void!Gguf_error
+        r.need(count, what)!
+        r.at += count
 
 priv const TYPES: Gguf_type[13] = ::{ Gguf_type.u8, Gguf_type.i8, Gguf_type.u16, Gguf_type.i16,
     Gguf_type.u32, Gguf_type.i32, Gguf_type.f32, Gguf_type.bool, Gguf_type.string, Gguf_type.array,
@@ -213,8 +214,9 @@ priv fn format_of(id: U32): Quant_format? //<
     default
         return .none
 
-priv fn padded(n: Sz, align: Sz): Sz //< `n` raised to a multiple of `align`; `n` is checked first
-    return (n + align - 1) / align * align
+priv fn padded(count: Sz, align: Sz): Sz //<
+    //< `count` raised to a multiple of `align`; `count` is checked first
+    return (count + align - 1) / align * align
 
 impl Gguf
     pub fn parse( //< reads a GGUF file the caller holds in memory
@@ -257,31 +259,31 @@ impl Gguf
         g.place_data()!
         return g
 
-    priv fn read_kv(r: Self$@, c: Cursor$@): Void!Gguf_error //< one key and its value
-        key: = c.text("a key")!
-        id: = c.u32(key)!
+    priv fn read_kv(r: Self$@, cursor: Cursor$@): Void!Gguf_error //< one key and its value
+        key: = cursor.text("a key")!
+        id: = cursor.u32(key)!
         kind: = type_of(id) catch
             throw .bad_value_type(key)
         $elem: = kind
         $count: Sz = 1
         if kind == Gguf_type.array
-            elem_id: = c.u32(key)!
+            elem_id: = cursor.u32(key)!
             elem = type_of(elem_id) catch
                 throw .bad_value_type(key)
             if elem == Gguf_type.array
                 throw .bad_value_type(key)
-            count = c.size(key)!
-        at: = c.at
+            count = cursor.size(key)!
+        at: = cursor.at
         w: = elem.width()
         if w == 0
             for _k in Range.asc(count)
-                _s: = c.text(key)!
+                _s: = cursor.text(key)!
         else
             // **The product is checked.** `count` is at most the bytes left, but times a width of
             // up to 8 it can pass a 32-bit `Sz`. A product past `Sz` is past the file's end too.
             n: = count.checked_mul(w) catch
                 throw .truncated(key)
-            c.skip(n, key)!
+            cursor.skip(n, key)!
         if r.kv_index.get(key).is_some()
             throw .duplicate(key)
         r.kv_index.set(key, r.kvs.len)
@@ -298,23 +300,24 @@ impl Gguf
             throw .bad_alignment
         return Sz::a
 
-    priv fn read_info(r: Self$@, c: Cursor$@): Void!Gguf_error //< one tensor's name, shape, type
-        name: = c.text("a tensor's name")!
-        n_dims: = Sz::c.u32(name)!
+    priv fn read_info(r: Self$@, cursor: Cursor$@): Void!Gguf_error //<
+        //< one tensor's name, shape, type
+        name: = cursor.text("a tensor's name")!
+        n_dims: = Sz::cursor.u32(name)!
         if n_dims < 1 || n_dims > MAX_DIMS
             throw .bad_tensor(name)
         $t: = Gguf_tensor::{ .name = name, .dims = ::{ 1, 1, 1, 1 }, .n_dims = n_dims }
         for d in Range.asc(n_dims)
-            v: = c.u64(name)!
+            v: = cursor.u64(name)!
             // A dimension past the file's size cannot fit in it, whatever the format.
-            if v > U64::c.raw.len
+            if v > U64::cursor.raw.len
                 throw .bad_tensor(name)
             t.dims[d] = Sz::v
-        t.type_id = c.u32(name)!
+        t.type_id = cursor.u32(name)!
         t.format = format_of(t.type_id) catch
             throw .unsupported_format(name)
-        off: = c.u64(name)!
-        if off > U64::c.raw.len
+        off: = cursor.u64(name)!
+        if off > U64::cursor.raw.len
             throw .bad_offset(name)
         t.offset = Sz::off
         if r.tensor_index.get(name).is_some()
@@ -477,14 +480,14 @@ impl Gguf_tensor
             mem.copy(Void$@::data, Void$@::r.data.ptr, n * 4)
         return Tensor<|F32|>.from_raw_parts(data, shape, 1, n, arena)
 
-priv fn tensor_bytes(t: Gguf_tensor): Sz!checked_int.Checked_error //< the bytes its data takes
+priv fn tensor_bytes(info: Gguf_tensor): Sz!checked_int.Checked_error //< the bytes its data takes
     //< A first dimension that is no whole number of blocks is refused as an overflow is.
-    block: = t.format.block_len()
-    if t.dims[0] < 1 || t.dims[0] % block != 0
+    block: = info.format.block_len()
+    if info.dims[0] < 1 || info.dims[0] % block != 0
         throw .overflow
-    $n: = (t.dims[0] / block).checked_mul(t.format.block_bytes())!
+    $n: = (info.dims[0] / block).checked_mul(info.format.block_bytes())!
     for d in Range(1, MAX_DIMS, 1)
-        n = n.checked_mul(t.dims[d])!
+        n = n.checked_mul(info.dims[d])!
     return n
 
 priv fn f32_at(raw: U8[], at: Sz): F32 //< the F32 whose little-endian bits start at `at`

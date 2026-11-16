@@ -4,6 +4,8 @@
 
 **You need `ksplc` with its `std/` folder beside it, and `clang` on the PATH.** The last section needs more, as it says. The commands are written for the unpacked folder (`./ksplc`); with `ksplc` on the PATH, drop the `./`.
 
+**A compiler built with `make` alone is `out/ksplc_stage1.exe`, and it has no `std/` beside it.** It finds the repository's `std/` only when run from the repository's top folder. To use it elsewhere, run `make install`, or set the environment variable `KSPLC_STD_DIR` to that `std/` folder. `ksplc info std-dir` names the folder it takes.
+
 ## Running a program
 
 **`ksplc run` turns a `.kspl` file into a program and runs it, in one command.**

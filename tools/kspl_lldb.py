@@ -838,7 +838,7 @@ def check_c(rep, c_text):
         rep.check("the panic stop %s is a function in the C" % stop,
                   re.search(r'\bvoid %s\(' % stop, c_text) is not None)
     rep.check("the sample's stop %s is a function in the C" % SAMPLE_STOP,
-              re.search(r'\b%s\(I32 x\) \{' % SAMPLE_STOP, c_text) is not None)
+              re.search(r'\b%s\(I32 value\) \{' % SAMPLE_STOP, c_text) is not None)
 
 
 # `kspl_ast_node_summary` reads the compiler's own node, which the sample cannot hold.

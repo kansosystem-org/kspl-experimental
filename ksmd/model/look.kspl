@@ -49,15 +49,16 @@ fn plain_look(): Look //< no formatting
     return Look::{ .color = "", .fill = "", .size = 0, .align = .none, .wrap = false,
         .format = no_format() }
 
-fn is_plain(l: Look): Bool
-    return l.color.len == 0 && l.fill.len == 0 && l.size == 0 && l.align == .none && !l.wrap &&
-        l.format.kind == .none
+fn is_plain(look: Look): Bool
+    return look.color.len == 0 && look.fill.len == 0 && look.size == 0 && look.align == .none &&
+        !look.wrap && look.format.kind == .none
 
-fn same_look(a: Look, b: Look): Bool
+fn same_look(left: Look, right: Look): Bool
     // A colour's hex digits may be written in either case; the writer writes lower case.
-    return a.color.equals_ignore_case(b.color) && a.fill.equals_ignore_case(b.fill) &&
-        a.size == b.size && a.align == b.align && a.wrap == b.wrap &&
-        same_format(a.format, b.format)
+    return left.color.equals_ignore_case(right.color) &&
+        left.fill.equals_ignore_case(right.fill) && left.size == right.size &&
+        left.align == right.align && left.wrap == right.wrap &&
+        same_format(left.format, right.format)
 
 fn look_of(src: Source@, attributes: List<|Attribute|>@, at: Sz): Look!Diagnostic //<
     //< The look the attributes in one pair of braces give; `at` is where the braces open
@@ -119,32 +120,32 @@ fn is_note(text: U8[]): Bool //< whether a note can be saved
             return false
     return true
 
-fn write_braces(l: Look, note: U8[], link: U8[], out: Str_builder$@) //<
+fn write_braces(look: Look, note: U8[], link: U8[], out: Str_builder$@) //<
     //< `{...}`: the look's parts in a fixed order, then the note and the link
     out.c('{')
     $first: = true
-    if l.color.len > 0
+    if look.color.len > 0
         out.s("color=")
-        write_colour(l.color, out)
+        write_colour(look.color, out)
         first = false
-    if l.fill.len > 0
+    if look.fill.len > 0
         out.s("" if first else " ").s("fill=")
-        write_colour(l.fill, out)
+        write_colour(look.fill, out)
         first = false
-    if l.size > 0
-        out.s("" if first else " ").s("size=\{l.size / 2\}")
-        if l.size % 2 == 1
+    if look.size > 0
+        out.s("" if first else " ").s("size=\{look.size / 2\}")
+        if look.size % 2 == 1
             out.s(".5")
         first = false
-    if l.align != .none
-        out.s("" if first else " ").s("align=\"").s(l.align.name()).c('"')
+    if look.align != .none
+        out.s("" if first else " ").s("align=\"").s(look.align.name()).c('"')
         first = false
-    if l.wrap
+    if look.wrap
         out.s("" if first else " ").s("wrap=\"on\"")
         first = false
-    if l.format.kind != .none
+    if look.format.kind != .none
         out.s("" if first else " ").s("format=\"")
-        write_format(l.format, out)
+        write_format(look.format, out)
         out.c('"')
         first = false
     if note.len > 0
@@ -154,42 +155,42 @@ fn write_braces(l: Look, note: U8[], link: U8[], out: Str_builder$@) //<
         out.s("" if first else " ").s("link=\"").escape_and_append(link).c('"')
     out.c('}')
 
-fn with_part($l: Look, part: Look_part, value: U8[]): Look? //<
+fn with_part($look: Look, part: Look_part, value: U8[]): Look? //<
     //< The look with one part set as a page gives it, or cleared by an empty value; none if invalid
     switch part
     case .color
         if value.len > 0 && !is_colour(value)
             return .none
-        l.color = value
+        look.color = value
     case .fill
         if value.len > 0 && !is_colour(value)
             return .none
-        l.fill = value
+        look.fill = value
     case .size
-        l.size = 0 if value.len == 0 else half_points(value)
-        if value.len > 0 && l.size == 0
+        look.size = 0 if value.len == 0 else half_points(value)
+        if value.len > 0 && look.size == 0
             return .none
     case .align
-        l.align = .none if value.len == 0 else align_of(value)
-        if value.len > 0 && l.align == .none
+        look.align = .none if value.len == 0 else align_of(value)
+        if value.len > 0 && look.align == .none
             return .none
     case .wrap
         if value.len > 0 && !value.equals("on")
             return .none
-        l.wrap = value.len > 0
+        look.wrap = value.len > 0
     case .format
-        l.format = format_of(value) catch
+        look.format = format_of(value) catch
             return .none
     case .all
         if value.len > 0
             return .none
         return .some(plain_look())
-    return .some(l)
+    return .some(look)
 
 impl Align
-    fn name(a: Self): U8[] //<
+    fn name(r: Self): U8[] //<
         //< as `align` writes it: `left`, `center`, `right` or `across`; empty for none
-        switch a
+        switch r
         case .left
             return "left"
         case .center
