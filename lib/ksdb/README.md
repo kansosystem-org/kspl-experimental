@@ -8,6 +8,8 @@ Use ksdb for a small, durable log, especially on a microcontroller with flash me
 
 Run `make test` from this folder with `ksplc` ([`lib/ksdb/Makefile`](Makefile)). [`lib/ksdb/ksplc.cfg`](ksplc.cfg) declares the package name, so a copy of this folder runs the same tests independently.
 
+`make test-ksdb-fuzz` from the root, or `make test-fuzz` here, opens damaged media on a fixed seed ([`lib/ksdb/tests/fuzz_main.kspl`](tests/fuzz_main.kspl)). Each one is read, appended to and kept through `reset_keeping`, and no record that read back may be lost. It wants a C compiler, and the address sanitizer's runtime where it holds one.
+
 This example appends one record, reads the records from oldest to newest, then asks for the newest record of one `kind`:
 
 ```kspl

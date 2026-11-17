@@ -1,4 +1,4 @@
-//< The self-driving car's stop decisions, with no hardware
+//< The car's stop decisions, with no hardware
 //< **Each function here takes readings and counts, and returns what to do.** The firmware reads
 //< the sensors, calls these, and turns the wheels. So `lib/ksos/tests/stops_test.kspl` checks every
 //< decision on the host, while the car checks only the sensors and the wiring.
@@ -10,6 +10,7 @@
 //   if stops.too_close(raw) { back off }
 //   if stops.out_of_time(rounds) { stop }
 //   switch stops.remote.look(seen, halted, needs_remote) case .stop { … } case .rearm { … } default {}
+//   if stops.stop_key(cmd) || stops.hold.ended(now_us) { stop }   // the remote-only firmware
 // ==========================================
 
 const EMERGENCY_MM: U32 = 100 //<
@@ -114,3 +115,44 @@ impl Remote
         if held < IR_REARM_ROUNDS
             return .hold // a short press does not bring it back
         return .rearm
+
+// --- the remote-only firmware (`car-ir`). **A key drives only while it is held**, and only two
+// keys stop it, so changing the face or the light does not ---
+const KEY_STOP: U32 = 0x15 //< ▶ (table EA15FF00): stops it, back to manual
+const KEY_MANUAL: U32 = 0x4A //< 9 (table B54AFF00): the same as ▶
+    //< **Two keys on purpose**: someone wanting to stop can look for either.
+const HOLD_TIMEOUT_US: U32 = 250000 //< how long until a held press counts as released [us]
+    //< **About twice the repeat interval (108ms)**: shorter judders between repeats, longer keeps
+    //< running after the finger comes off.
+
+fn stop_key(cmd: U32): Bool //< whether the key `cmd` stops the remote-only car
+    return cmd == KEY_STOP || cmd == KEY_MANUAL
+
+struct Hold //< the remote-only car's held press, which drives it
+    priv held: Bool //< whether a press is driving the wheels
+    priv seen_us: U32 //< when its signal was last seen [the timer's us]
+
+// One per machine, like `remote`.
+$hold: Hold = ::{}
+
+impl Hold
+    fn new(): Hold //< no press held
+        return ::{ .held = false, .seen_us = 0 }
+
+    fn press(r: Self$@, now_us: U32) //< a key that drives was pressed at `now_us`
+        r.held = true
+        r.seen_us = now_us
+
+    fn repeat(r: Self$@, now_us: U32) //< a repeat came at `now_us`: the press is still held
+        //< **A repeat carries no cmd**, so it extends whatever was pressed.
+        r.seen_us = now_us
+
+    fn ended(r: Self$@, now_us: U32): Bool //<
+        //< Whether the press counts as released at `now_us`; the caller then stops the wheels
+        //< **It answers true once**: the car then stays stopped until the next press. It is right
+        //< across the timer's wrap (U32 subtraction). Caution: **Call it every tick**, or the car
+        //< runs on after the finger comes off.
+        if !r.held || now_us - r.seen_us < HOLD_TIMEOUT_US
+            return false
+        r.held = false
+        return true

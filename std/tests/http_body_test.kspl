@@ -288,3 +288,46 @@ fn test_http_line_scanned_once(arena: Arena$@) //<
         panic("a bare LF before the resume point is not looked at")
     assert(unseen.is_none() && past == 5, "the search resumes at the point given, and moves on")
     verdict.pass("a line arriving a byte at a time is searched once")
+
+priv fn unended(head: U8[], count: Sz, arena: Arena$@): U8[] //< `head`, then `count` bytes of `a`
+    b: = arena.text().s(head)
+    for _i in Range.asc(count)
+        b.c('a')
+    return b.take()
+
+priv fn check_refusals(cases: U8[][], piece: Sz, arena: Arena$@) //<
+    //< Each even entry is a chunked body; the odd entry after it is the reason it is refused for
+    for i in Range(0, cases.len, 2)
+        got: = read_whole(chunked(cases[i], arena), piece, 1024, arena)
+        want: = arena.text().s("refused: ").s(cases[i + 1]).take()
+        assert(got.equals(want),
+            arena.text().s("case \{i / 2\}: want '").s(want).s("', got '").s(got).s("'").take())
+
+fn test_http_chunked_refused_while_arriving(arena: Arena$@) //<
+    //< A size line or trailers past their cap are refused before their line ends
+    //< **The cap must hold while no line end has come**, or a peer that never sends one fills the
+    //< memory. No case below ends its line.
+    verdict.start("[HTTP body] a line past its cap is refused before it ends")
+    check_refusals(U8[][]::{ unended("5;", 2 * http_body.MAX_CHUNK_LINE, arena),
+        "a chunk's size line is longer than 4 KiB",
+        unended("0\r\nX-Pad: ", http.MAX_HEAD_BYTES + 4096, arena),
+        "the trailers are larger than 64 KiB" }, 4096, arena)
+    verdict.pass("a size line and trailers past their cap are refused before their line ends")
+
+fn test_http_chunked_refused_bytes(arena: Arena$@) //<
+    //< A quoted extension value, and a trailer's name and value, are checked byte by byte
+    verdict.start("[HTTP body] a bad byte in an extension's quotes or in a trailer is refused")
+    check_refusals(U8[][]::{ "5;a=\"x\\\u0001\"\r\nhello\r\n0\r\n\r\n",
+        "a chunk extension's quoted value holds a bad escape",
+        "5;a=\"x\u0001\"\r\nhello\r\n0\r\n\r\n",
+        "a chunk extension's quoted value holds a control byte",
+        "5;a=\"x\u007F\"\r\nhello\r\n0\r\n\r\n",
+        "a chunk extension's quoted value holds a control byte", "0\r\nBad Name: v\r\n\r\n",
+        "a trailer line is not a header field", "0\r\nX-Ok: a\u0001b\r\n\r\n",
+        "a trailer line is not a header field" }, 0, arena)
+    // A quoted tab and an escaped quote are allowed.
+    fine: =
+        read_whole(chunked("5;a=\"x\ty\\\"\"\r\nhello\r\n0\r\n\r\n", arena), 0, 1024, arena)
+    assert(fine.equals("hello"),
+        arena.text().s("a tab and an escaped quote read as: ").s(fine).take())
+    verdict.pass("a control byte, a bad escape and a trailer that is no field line are refused")

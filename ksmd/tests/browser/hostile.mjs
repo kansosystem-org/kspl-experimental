@@ -2,12 +2,14 @@
 // link or an image: `<script>`, `onerror=` and `onload=` attributes, SVG holding a script, and
 // `javascript:` and `data:` links. The page must show the markup as text, and the reader must
 // refuse a link to any other kind of address. Nothing may run, and no dialog may open.
-// **The page's policy (`page.html`) is the second wall, not the first**: it lets the page's own
-// inline scripts run, so an `onerror=` that reached the page as markup would run. So the checks
-// look for script that ran, not only for what the policy refused.
+// **The page's policy (`page.html`) is the second wall**: it lets only the page's own scripts run,
+// each named by its hash. So markup that got past the first wall runs nothing either, and the
+// checks put such markup in the page themselves to show it. They look for script that ran, not
+// only for what the policy refused.
 // Served by the local server, the same document is opened from a file of the workspace
 // (`served.mjs`), where an image is shown as its pixels.
 import { H, check } from "./drive.mjs";
+import { markupRunsNothing } from "./policy.mjs";
 
 // What each attempt sets, or opens, where it runs.
 const SCRIPT = (n) => `<script>window.pwned=${n}</script>`;
@@ -126,6 +128,8 @@ export function hostile({ page, browser, js, settle, load }) {
       // These were the test's own; any other a later check counts against the page.
       browser.blocked.splice(before);
       await js("document.querySelectorAll('body > img').forEach((img) => img.remove())");
+      await markupRunsNothing(js, page, browser);
     },
   };
 }
+

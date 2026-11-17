@@ -1,0 +1,134 @@
+//< Writes the handshake bytes `fuzz_main.kspl` mutates, from a real handshake in memory
+//< **The seeds are OpenSSL's own bytes**, committed so every run fuzzes the same: a new capture
+//< holds new random numbers and a new key. Run it again only when kstls's client changes what it
+//< offers: `ksplc run tests/make_fuzz_seeds.kspl tests/fuzz_seeds`. It writes the client's hello
+//< offering TLS 1.3 (`client_hello.tls`), the same held to TLS 1.2 (`client_hello_tls12.tls`), and
+//< a TLS 1.2 server's answer to the first (`server_flight_tls12.tls`). **TLS 1.2 sends the chain
+//< in the clear**, so a replay reaches the X.509 reader: a leaf and its CA, with v3 extensions.
+//< Caution: **Name the client's host as `read_prog.kspl` connects (`127.0.0.1`)**: a server answers
+//< a host name with an extension, which a client that sent no name refuses.
+import "kstls/tests/cert"
+import "kstls/tls"
+import "kstls/tls_server"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/sys"
+
+priv const SSL_CTRL_SET_MAX_PROTO_VERSION: I32 = 124 //< SSL_CTRL_SET_MAX_PROTO_VERSION
+priv const SSL_CTRL_CHAIN_CERT: I32 = 89 //< SSL_CTRL_CHAIN_CERT, behind SSL_CTX_add0_chain_cert
+priv const X509_VERSION_3: Sz = 2 //< X509_VERSION_3
+priv const MBSTRING_ASC: I32 = 0x1001 //< MBSTRING_ASC
+priv const NID_KEY_USAGE: I32 = 83 //< NID_key_usage
+priv const NID_SUBJECT_ALT_NAME: I32 = 85 //< NID_subject_alt_name
+priv const NID_BASIC_CONSTRAINTS: I32 = 87 //< NID_basic_constraints
+priv const NID_EXT_KEY_USAGE: I32 = 126 //< NID_ext_key_usage
+
+##link("ssl", "crypto")
+extern fn X509_set_version(cert: tls.X509$@, version: Sz): I32
+
+priv fn add_ext(x: tls.X509$@, nid: I32, value: U8[]) //< one extension, from OpenSSL's text form
+    //< `value` ends in a NUL.
+    ex: = cert.X509V3_EXT_conf_nid(null, null, nid, Void@::value.ptr)
+    assert(ex != null && cert.X509_add_ext(x, ex, -1) == 1, "the extension should go in")
+    cert.X509_EXTENSION_free(ex)
+
+priv fn v3_cert(key: tls.EVP_PKEY$@, cn: U8[], serial: Sz, issuer: tls.X509$@,
+    signer: tls.EVP_PKEY$@): tls.X509$@ //<
+        //< A version 3 certificate for `key`: a CA's where `issuer` is null, else a server's
+    x: = cert.X509_new()
+    assert(x != null, "a certificate should be made")
+    name: = tls_server.X509_get_subject_name(x)
+    issuer_name: = name if issuer == null else tls_server.X509_get_subject_name(issuer)
+    ok: =
+        X509_set_version(x, X509_VERSION_3) == 1 &&
+        cert.ASN1_INTEGER_set(cert.X509_get_serialNumber(x), serial) == 1 &&
+        cert.X509_time_adj_ex(cert.X509_getm_notBefore(x), -1, 0, null) != null &&
+        cert.X509_time_adj_ex(cert.X509_getm_notAfter(x), 30, 0, null) != null &&
+        cert.X509_set_pubkey(x, key) == 1 &&
+        cert.X509_NAME_add_entry_by_txt(name, "O", MBSTRING_ASC, Void@::"Kanso test".ptr, 10, -1, 0)
+        == 1 &&
+        cert.X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, Void@::cn.ptr, I32::cn.len, -1, 0)
+        == 1 && cert.X509_set_issuer_name(x, issuer_name) == 1
+    assert(ok, "the certificate should be filled in")
+    if issuer == null
+        add_ext(x, NID_BASIC_CONSTRAINTS, "critical,CA:TRUE,pathlen:0\0")
+        add_ext(x, NID_KEY_USAGE, "critical,keyCertSign,cRLSign\0")
+    else
+        add_ext(x, NID_BASIC_CONSTRAINTS, "critical,CA:FALSE\0")
+        add_ext(x, NID_KEY_USAGE, "critical,digitalSignature\0")
+        add_ext(x, NID_EXT_KEY_USAGE, "serverAuth\0")
+        add_ext(x, NID_SUBJECT_ALT_NAME, "IP:127.0.0.1,DNS:localhost\0")
+    assert(cert.X509_sign(x, signer, null) > 0, "the certificate should be signed")
+    return x
+
+priv fn chain_ctx(): tls.SSL_CTX$@ //< a server answering with a leaf and the CA that issued it
+    ca_key: = cert.new_key()
+    defer tls_server.EVP_PKEY_free(ca_key)
+    ca: = v3_cert(ca_key, "Kanso test CA", 1, null, ca_key)
+    key: = cert.new_key()
+    defer tls_server.EVP_PKEY_free(key)
+    leaf: = v3_cert(key, "127.0.0.1", 2, ca, ca_key)
+    defer tls_server.X509_free(leaf)
+    ctx: = cert.server_ctx(leaf, key)
+    // `add0` takes the CA's reference over, and the context frees it with itself.
+    assert(tls.SSL_CTX_ctrl(ctx, SSL_CTRL_CHAIN_CERT, 0, Void$@::ca) == 1,
+        "the server should take the CA as its chain")
+    return ctx
+
+priv fn drain(bio: tls.BIO$@, arena: Arena$@): U8[] //< everything a memory BIO holds
+    n: = tls.BIO_ctrl_pending(bio)
+    buf: = U8$@::arena.alloc(n + 1)
+    got: = tls.BIO_read(bio, Void$@::buf, I32::n)
+    assert(got >= 0 && Sz::got == n, "a memory BIO should give back what it holds")
+    return U8[]::{ .ptr = buf, .len = n }
+
+priv fn client_hello(max_tls12: Bool, arena: Arena$@): U8[] //< kstls's client's first flight
+    ctx: = tls.client_ctx() catch panic("a client context should be made")
+    defer tls.SSL_CTX_free(ctx)
+    if max_tls12
+        assert(tls.SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MAX_PROTO_VERSION, tls.TLS1_2_VERSION, null) == 1,
+            "the client should be held to TLS 1.2")
+    ssl: = tls.client_ssl(ctx, "127.0.0.1") catch panic("a client should be made")
+    defer tls.SSL_free(ssl)
+    assert(tls.SSL_connect(ssl) != 1, "a handshake in memory should wait for the server")
+    return drain(tls.SSL_get_wbio(ssl), arena)
+
+priv fn server_flight(hello: U8[], arena: Arena$@): U8[] //<
+    //< What a server held to TLS 1.2 answers `hello` with, on a leaf and its CA
+    ctx: = chain_ctx()
+    defer tls.SSL_CTX_free(ctx)
+    assert(tls.SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MAX_PROTO_VERSION, tls.TLS1_2_VERSION, null) == 1,
+        "the server should be held to TLS 1.2")
+    ssl: = tls.SSL_new(ctx)
+    assert(ssl != null, "a server should be made")
+    defer tls.SSL_free(ssl)
+    rbio: = tls.BIO_new(tls.BIO_s_mem())
+    wbio: = tls.BIO_new(tls.BIO_s_mem())
+    assert(rbio != null && wbio != null, "the server's memory should be made")
+    tls.SSL_set_bio(ssl, rbio, wbio)
+    tls_server.SSL_set_accept_state(ssl)
+    assert(tls.BIO_write(rbio, Void@::hello.ptr, I32::hello.len) == I32::hello.len,
+        "the server should take the hello")
+    $buf: U8[16] = ::{}
+    n: = tls.SSL_read(ssl, Void$@::buf@, 16)
+    assert(n <= 0 && tls.SSL_get_error(ssl, n) == tls.SSL_ERROR_WANT_READ,
+        "the server should answer and wait for the client's next flight")
+    return drain(wbio, arena)
+
+priv fn write(dir: U8[], name: U8[], bytes: U8[], arena: Arena$@)
+    path: = fs.join(dir, name, arena)
+    io.write_file(path, bytes) catch panic("a seed file should be written")
+    io.out().s(path).s("\n")
+
+fn main(): I32
+    args: = sys.args()
+    if args.len != 2
+        io.err().s("usage: ksplc run tests/make_fuzz_seeds.kspl <folder>\n")
+        return 2
+    defer arena: = Arena(1024 * 1024)
+    hello: = client_hello(false, arena)
+    write(args[1], "client_hello.tls", hello, arena)
+    write(args[1], "client_hello_tls12.tls", client_hello(true, arena), arena)
+    write(args[1], "server_flight_tls12.tls", server_flight(hello, arena), arena)
+    return 0

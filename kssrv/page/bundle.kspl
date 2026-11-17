@@ -5,6 +5,8 @@
 //< `<link rel="stylesheet" href="NAME">` that style. `NAME` stands in the page's folder or in a
 //< folder given with `--from`, such as this one, which holds the protocol's client (`client.js`).
 //< `__MARK__` in the page takes a file as base64, given as `--base64=MARK=<file>`.
+//< `__SCRIPT_HASHES__`, in the page's Content-Security-Policy, takes the hash of each script the
+//< built page holds, so that policy lets those scripts run and no other.
 
 // ==========================================
 // Usage:
@@ -17,6 +19,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
+import "std/sha256"
 import "std/str" + { Str_builder }
 import "std/sys"
 
@@ -26,6 +29,10 @@ priv const STYLE_HEAD: U8[] = "<link rel=\"stylesheet\" href=\""
 priv const STYLE_TAIL: U8[] = "\">"
 priv const FROM: U8[] = "--from="
 priv const BASE64: U8[] = "--base64="
+priv const HASHES: U8[] = "__SCRIPT_HASHES__"
+priv const OPEN: U8[] = "<script"
+priv const OPENED: U8[] = "<script>"
+priv const CLOSE: U8[] = "</script>"
 
 priv enum Stopped //< the bundle is not written; the reason is printed
     stopped
@@ -65,7 +72,15 @@ fn main(): I32
                 return 1
         else
             built.s(line).c('\n')
-    io.write_file(args.get(2), built.slice()) catch
+    $out: U8[] = built.slice()
+    if out.count_str(HASHES) > 1
+        io.err().s("bundle: the page must hold \{HASHES\} once at most: \{args.get(1)\}\n")
+        return 1
+    if out.count_str(HASHES) == 1
+        hashes: = script_hashes(out, arena) catch
+            return 1
+        out = out.replace(HASHES, hashes, arena)
+    io.write_file(args.get(2), out) catch
         io.err().s("bundle: cannot write: \{args.get(2)\}\n")
         return 1
     return 0
@@ -111,3 +126,39 @@ priv fn inline(built: Str_builder$@, tag: U8[], folders: U8[][], name: U8[], are
         io.err().s("bundle: \{name\} holds the text that would end its <\{tag\}>\n")
         throw .stopped
     built.c('<').s(tag).s(">\n").s(text).s("</").s(tag).s(">\n")
+
+priv fn script_hashes(page: U8[], arena: Arena$@): U8[]!Stopped //<
+    //< The sources that let exactly the page's scripts run: `'sha256-…'` for each, in page order
+    //< Caution: **Hash the text as the browser reads it.** Its parser turns `\r\n` and a lone
+    //< `\r` into `\n` before a script sees its text. A script with CR line ends, hashed as
+    //< stored, would be refused.
+    list: = arena.text()
+    $sep: U8[] = ""
+    $at: Sz = 0
+    for
+        found: = page.sub_from(at).find_str(OPEN) catch
+            break
+        start: = at + found
+        if !page.starts_with(OPENED, start)
+            io.err().s("bundle: a <script> with attributes cannot be listed by its hash\n")
+            throw .stopped
+        from: = start + OPENED.len
+        len: Sz = page.sub_from(from).find_str(CLOSE) catch
+            io.err().s("bundle: a <script> is never closed\n")
+            throw .stopped
+        digest: = sha256.hash(as_parsed(page.sub(from, len), arena))
+        list.s(sep).s("'sha256-").s(base64.encode(U8[]::digest, arena)).c('\'')
+        sep = " "
+        at = from + len + CLOSE.len
+    return list.take()
+
+priv fn as_parsed(text: U8[], arena: Arena$@): U8[] //< the text with each line end as `\n`
+    if text.find_char('\r').is_none()
+        return text
+    out: = arena.text()
+    for i in Range(0, text.len, 1)
+        if text[i] != '\r'
+            out.c(text[i])
+        else if i + 1 >= text.len || text[i + 1] != '\n'
+            out.c('\n')
+    return out.take()

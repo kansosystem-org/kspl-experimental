@@ -40,6 +40,7 @@ How the token is made, passed on and compared is "How the token gets across" in 
 * **Why one copy**: the token is handled there. Two copies drifted apart before: one rewrote the address without guarding against a browser that refuses.
 * **Why in kssrv**: kssrv owns the protocol, and both pages already depend on its server. A page cannot import across packages at run time, so the client stands beside the step that builds a page.
 * **A page is still one file.** [`kssrv/page/bundle.kspl`](../page/bundle.kspl) puts each script a page names, from the page's folder or from `kssrv/page/`, inside that page. The server hands out the page alone, so it can fetch nothing beside it.
+* **The step also writes the page's script hashes.** Where a page's policy holds `__SCRIPT_HASHES__`, the step puts the SHA-256 of each script there. That policy then lets those scripts run and no other, opened from a file or served.
 
 ## HTTPS
 

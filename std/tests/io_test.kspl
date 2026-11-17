@@ -42,6 +42,44 @@ fn test_io_read_edges() //< a directory is refused; a file under-reporting its s
         dealloc(Void$@::text.ptr)
     verdict.pass("a directory is refused on both entry points, and a size is only a first guess.")
 
+priv fn open_reason(path: U8[], mode: U8[]): U8[] //< why `open` refused, by name; `opened` if not
+    $file: = io.open(path, mode) catch e
+        return error_reason(e, path)
+    file.free()
+    return "opened"
+
+priv fn error_reason(error: io.Io_error, path: U8[]): U8[] //< the error's name, checking its path
+    switch error
+    case .file_not_found(p)
+        return "file_not_found" if p.equals(path) else "file_not_found, another path"
+    case .write_failed(p)
+        return "write_failed" if p.equals(path) else "write_failed, another path"
+    default
+        return "another error"
+
+fn test_io_open_missing() //< a file not there is told apart for reading and for writing
+    //< **Reading names it not found; writing names the write**, since a write fails as well where
+    //< the file stands but cannot be opened. Each error carries the path it was given.
+    verdict.start("[Io] open and read_file on a path that is not there...")
+    dir: = "out/tmp/kspl_test_io_missing"
+    fs.mkdir_all(dir) catch panic("mkdir_all should succeed under out/tmp")
+    missing: = "out/tmp/kspl_test_io_missing/absent.txt"
+    under_missing: = "out/tmp/kspl_test_io_missing/absent/new.txt"
+    verdict.check("reading a missing file is file_not_found",
+        open_reason(missing, "rb").equals("file_not_found"), open_reason(missing, "rb"))
+    verdict.check("writing under a missing folder is write_failed",
+        open_reason(under_missing, "wb").equals("write_failed"),
+        open_reason(under_missing, "wb"))
+    verdict.check("a path holding a NUL is not opened",
+        open_reason("out/tmp/a\0b", "rb").equals("file_not_found"), "")
+    $read_why: U8[] = "read"
+    text: = io.read_file(missing, null) catch e
+        read_why = error_reason(e, missing)
+        fallback ""
+    verdict.check("read_file on a missing file is file_not_found",
+        read_why.equals("file_not_found") && text.len == 0, read_why)
+    verdict.pass("A missing file is not found for reading and a failed write for writing.")
+
 priv const BIG_SIZE: U8[] = "3221225472" //< 3 GiB: past what a 32-bit `long` can hold as a size
 
 fn test_io_read_past_2gib(arena: Arena$@) //<

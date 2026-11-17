@@ -47,7 +47,7 @@
 | Flexibility | both backends self-host, `test-ksos-qemu`, `test-ksos-link`, `test-freestanding-math`, `install-check` | Strong |
 | Safety | ksos's kernel checks, `motor_test.kspl`, `stops_test.kspl`, the car checked by hand | Partial |
 | Readability | `test-fmt-tree`, the sentence and comment caps | Strong for length, review for meaning |
-| Testability and verifiability | stage1 equal to stage2, `test-seed-sum`, a failure case per gate, `make coverage` by hand | Strong; no coverage gated |
+| Testability and verifiability | stage1 equal to stage2, `test-seed-sum`, a failure case per gate, `make coverage` by hand when the tests are surveyed | Strong; no coverage gated |
 | Determinism | fixed seeds, no time bound in a test, byte-equal stages | Strong |
 | Observability | the round's verdict and causes, per-gate logs, panic positions | Strong |
 | Documentation | `test-docref`, `test-docsnippet`, `test-spec-claims`, `test-docs` | Strong for references and code, partial for prose |
@@ -87,7 +87,7 @@
 
 **A model is a user too** ("The reader can be a model" in [`DESIGN-repository.md`](DESIGN-repository.md)). `ksplc doc` prints what a file publishes, and the language tutorial is generated from a program that the gates run.
 
-**Both pages are checked for keyboard use, names and focus** by `test-ksmd-browser` and `test-ksagent-chat`, in Chromium on Linux. `test-conventions` holds every colour pair of both pages, in light and dark, to a contrast of 4.5:1.
+**Both pages are checked for keyboard use, names and focus** by `test-ksmd-browser` and `test-ksagent-chat`, in Chromium on Linux. `test-conventions` holds every colour pair of both pages, in light and dark, to a contrast of 4.5:1. It refuses a colour written in a page's `.html`, where that measure would miss it.
 
 **What is not covered**: no browser gate runs off Linux, and no screen reader is driven. The wording of a diagnostic is reviewed; only its spelling of names is checked.
 
@@ -97,19 +97,19 @@
 
 **The tools that run long recover or refuse in a bounded way.** The language server restarts its worker after a crash or a hang (`test-lsp`; [`SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). kssrv bounds each connection's time and the number of connections, and counts its own heap ([`DESIGN-server.md`](../kssrv/docs/DESIGN-server.md)). ksdb's tests cut the power at each write in turn, and check that every finished record reads back.
 
-**The memory and thread gates run on Linux.** `test-sanitize` runs the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls under the address, leak and undefined-behaviour sanitizers, on both backends. `test-race` runs the threaded programs once under ThreadSanitizer. `test-holes` checks that each known way to break memory or threads keeps its verdict. `test-fuzz` fuzzes ksplc, std's readers, kssrv's paths, ksai, ksos's network receive path and ksmd's document reader on a fixed seed, and `make fuzz-long` goes deeper by hand.
+**The memory and thread gates run on Linux.** `test-sanitize` runs the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls under the address, leak and undefined-behaviour sanitizers, on both backends. `test-race` runs the threaded programs once under ThreadSanitizer. `test-holes` checks that each known way to break memory or threads keeps its verdict. `test-fuzz` fuzzes ksplc, std's readers, kssrv's paths, ksai and ksos's network receive path on a fixed seed. It also fuzzes ksmd's document reader, kspeg's grammar reader and engine, ksdb's log on a damaged medium, and both halves of kstls. `make fuzz-long` goes deeper by hand.
 
-**What is not covered**: kstls, kspeg and ksdb are not fuzzed. `test-race` sees one schedule per run (its note in "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md)). A panic ends kssrv, and nothing in the repository starts it again.
+**What is not covered**: `test-race` sees one schedule per run (its note in "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md)). A panic ends kssrv, and nothing in the repository starts it again.
 
 ### Security
 
 **The language closes some holes and leaves others open, and says which.** Every access to a slice by index is checked at run time. A pointer into a function's frame cannot leave it by `return` or `throw`. A global, or a value handed to a new thread, cannot hold an `Rc`. KSPL has no borrow check, so a use after free is undefined ("8.4 Memory management" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Lints such as [W0109] and [W0601] report part of what remains.
 
-**The inputs from outside are checked where they arrive.** ksagent's Word and Excel readers are tested on zip bombs and damaged copies, under the sanitizers. The local server's rules are [`SPEC-local-server.md`](SPEC-local-server.md): the loopback, a token checked before any path, and headers that refuse framing. kssrv refuses a key file that others can read, on POSIX systems. ksmd's page shows a document's markup as text, and its Content-Security-Policy refuses any load from outside. `test-ksmd-browser` opens a crafted document and checks that nothing in it runs ([What a document cannot do in the page](../ksmd/docs/DESIGN-page.md#what-a-document-cannot-do-in-the-page)).
+**The inputs from outside are checked where they arrive.** ksagent's Word and Excel readers are tested on zip bombs and damaged copies, under the sanitizers. The local server's rules are [`SPEC-local-server.md`](SPEC-local-server.md): the loopback, a token checked before any path, and headers that refuse framing. kssrv refuses a key file that others can read, on POSIX systems. ksmd's page and ksagent's chat page show a file's markup as text. Each page's Content-Security-Policy lets only its own scripts run, each named by its hash, and refuses any load from outside. `test-ksmd-browser` opens a crafted document and checks that nothing in it runs. It and `test-ksagent-chat` also put markup straight into their page, and check that the policy refuses it ([What a document cannot do in the page](../ksmd/docs/DESIGN-page.md#what-a-document-cannot-do-in-the-page)).
 
 **The supply chain is pinned where it is fetched.** The workflows name each outside action by its hash, the Linux image's base by its digest, and the Chromium build by its SHA-256. `test-conventions` refuses an action or a base image named any other way. Each release carries `SHA256SUMS` over its files. Dependabot proposes updates. [`SECURITY.md`](SECURITY.md) says where to report a vulnerability and what counts as one.
 
-**What is not covered**: ksmd's policy lets its inline scripts run, so an `onerror=` that reached the page as markup would run. Only the page's own escaping stops it. On Windows, `secret_trust` in `std/fs.kspl` returns `unchecked`, since an ACL decides there.
+**What is not covered**: on Windows, `secret_trust` in `std/fs.kspl` returns `unchecked`, since an ACL decides there.
 
 ### Maintainability
 
@@ -133,7 +133,7 @@
 
 **ksos guards its own kernel under test.** A stack canary, a heap guard and the refusal of a wait with interrupts off run in `test-ksos-posix` and `test-ksos-qemu`. `lib/ksos/tests/motor_test.kspl` checks that every wheel command is scaled to the speed cap. `watchdog_test.kspl` in the same folder checks the watchdog's register values.
 
-**The car's stop decisions are checked on the host; their sensors and wiring are checked on the car.** QEMU has no RP2040 model, so `test-ksos-link` only links that firmware. So each stop decision is a function with no hardware access. `lib/ksos/tests/stops_test.kspl` checks the battery, distance, remote and run-time stops, and that a panic's stop gives every wheel zero. Which parts still need the car is in ksos's bring-up tutorial, under [The safety timeouts of each firmware](../lib/ksos/docs/TUTORIAL-bring-up.md#the-safety-timeouts-of-each-firmware).
+**The car's stop decisions are checked on the host; their sensors and wiring are checked on the car.** QEMU has no RP2040 model, so `test-ksos-link` only links that firmware. So each stop decision is a function with no hardware access. `lib/ksos/tests/stops_test.kspl` checks the battery, distance, remote and run-time stops of both car firmwares. It also checks that a panic's stop gives every wheel zero. Which parts still need the car is in ksos's bring-up tutorial, under [The safety timeouts of each firmware](../lib/ksos/docs/TUTORIAL-bring-up.md#the-safety-timeouts-of-each-firmware).
 
 ## The properties builders add
 
@@ -145,7 +145,7 @@
 
 **A verdict must be earned.** Each row of the gate table names a failure case that its check must reject ("Every gate shows that it can fail" in [`SPEC-gates.md`](SPEC-gates.md)). A gate that prints no verdict fails, and so does a SKIP that its platform does not expect. stage1 and stage2 must agree byte for byte.
 
-**What is not covered**: no gate measures code coverage. `make coverage` measures it by hand, for ksplc and std, by `.kspl` line. It holds no number, so a path that no test takes is still found only by review, the fuzzers or the sanitizers.
+**What is not covered**: no gate measures code coverage. `make coverage` measures it by hand, by `.kspl` line. It counts the compiler over all of ksplc's tests, its suites included, and std over std's tests. A file of counts that cannot be read is left out, and the run says how many were. The LSP worker's counts are lost, since the server kills it and a killed process writes none. So the LSP files read lower than the tests reach. It is run when the tests are surveyed for the paths they miss, not in a round. It holds no number, so a path that no test takes is still found only by review, the fuzzers or the sanitizers.
 
 ### Determinism
 
@@ -181,11 +181,9 @@
 
 | Gap | Why it matters |
 | :-- | :-- |
-| The car's sensors, wiring and panic hook, and the remote-only firmware's stops, are checked only on the car | A wrong stop harms people or things, and QEMU has no RP2040 model |
-| ksmd's page lets its own inline scripts run | Only the page's escaping keeps an `onerror=` in a document from running; `test-ksmd-browser` checks that escaping |
+| The car's sensors, wiring and panic hook are checked only on the car | A wrong stop harms people or things, and QEMU has no RP2040 model |
 | No gate holds a coverage figure | `make coverage` measures it by hand, so a path that no test takes is found only by chance |
 | Only memory is gated for performance | A slower compiler, server or generated program passes every gate |
-| kstls, kspeg and ksdb are not fuzzed | A fault on input their tests do not reach stays unseen |
 | Only the language specification has a claims gate | The other specifications can drift from their code |
 
 **Some gaps are decisions, with their reasons in the canonical source.** CI runs weekly ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `test-race` sees one schedule (its note in "What each platform runs" there). ksagent speaks plain http to its model ([The model server](../ksagent/docs/DESIGN-agent.md#the-model-server) in ksagent's design).

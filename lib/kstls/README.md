@@ -8,6 +8,8 @@ Use kstls for encrypted connections. The library is not part of the toolchain (K
 
 Run `make test` from this folder with `ksplc`, a C compiler, and the library installed ([`lib/kstls/Makefile`](Makefile)). If a library cannot link, the tests report `SKIPPED` and name it. [`lib/kstls/ksplc.cfg`](ksplc.cfg) declares the package name. A copy of this folder runs the same tests independently.
 
+`make test-kstls-fuzz` from the root, or `make test-fuzz` here, sends broken handshakes to both halves over the loopback, on a fixed seed ([`lib/kstls/tests/fuzz_main.kspl`](tests/fuzz_main.kspl)). The seeds are a real handshake's bytes, which [`lib/kstls/tests/make_fuzz_seeds.kspl`](tests/make_fuzz_seeds.kspl) captured. It skips as the tests do without the libraries, and uses the address sanitizer's runtime where the C compiler holds one.
+
 ## What is here
 
 | File | Content | What it needs installed |

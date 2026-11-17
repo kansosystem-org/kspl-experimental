@@ -33,6 +33,7 @@ import { statusBar } from "./status.mjs";
 import { formulaBar } from "./bar.mjs";
 import { keyboard } from "./keyboard.mjs";
 import { hostile } from "./hostile.mjs";
+import { policyListsItsScripts } from "./policy.mjs";
 import { SPEC, written } from "../../port/web/reference.mjs";
 
 const [binary, pageFile, work, kssrv, builder] = process.argv.slice(2);
@@ -714,6 +715,7 @@ try {
   // The page's policy (`page.html`) is strict enough to hold off a crafted document
   // (`hostile.mjs`), and loose enough for every section's own work, opened from a file or served.
   verdict.part = "policy";
+  policyListsItsScripts(pageFile, ["'wasm-unsafe-eval'"]);
   for (const [scheme, how] of [["file", "opened from a file"], ["http", "served"]]) {
     const hit = browser.blocked.filter((b) => b.startsWith(`${scheme} `));
     check(hit.length === 0, `the page ${how} does nothing its Content-Security-Policy refuses`,

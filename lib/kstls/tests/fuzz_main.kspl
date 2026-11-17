@@ -1,0 +1,59 @@
+//< Feeds broken handshakes to both halves of kstls (`make test-fuzz`)
+//< **A TLS peer is not kstls's to trust**: a client reaches the server half from anywhere, and a
+//< server answers the client half with any bytes. The program under test
+//< ([`read_prog.kspl`](read_prog.kspl)) sends each mutated flight over the loopback to the half
+//< that reads it. The Makefile builds it with the address sanitizer where the C compiler has its
+//< runtime, and says so (`fuzz.Sanitized`). So an out-of-range read stops where it happens.
+//< Usage: `ksplc run tests/fuzz_main.kspl <reader> <work folder> [--asan] [--require-asan]`,
+//< with `--trials` and `--seed`.
+import "std/ds" { List }
+import "std/fuzz"
+import "std/mem" { Arena }
+
+priv const DEFAULT_SEED: I64 = 20261116
+priv const DEFAULT_TRIALS: I64 = 200 //< how many rounds CI scatters, some 100 a kind
+    //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
+    //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
+
+priv const TRIAL_TIMEOUT_MS: I32 = 20000 //<
+    //< How long to wait before treating a trial as a loop that never ends
+    //< Past the reader's own wait on the loopback (`WAIT_MS` in `read_prog.kspl`).
+
+priv const REACH_FLOOR_DIV: Sz = 10 //<
+    //< The fewest broken flights that must go past their first message, as trials / this
+    //< **A check only that it does not crash can pass having tried nothing** (Principle 5 in
+    //< `docs/DESIGN-principles.md`). **Do not raise it**: it only shows that fuzzing works; the
+    //< proportion itself means nothing.
+
+priv const KINDS: fuzz.Input_kind[2] = ::{ //<
+    //< The kinds of input that are fuzzed, and their files' endings
+    //< **This is the canonical source**: the names the program under test accepts follow it.
+    fuzz.Input_kind::{ .name = "client", .ext = ".client.tls" },
+    fuzz.Input_kind::{ .name = "server", .ext = ".server.tls" },
+}
+
+// Captured from a real handshake by `make_fuzz_seeds.kspl`, which says how to write them again.
+embed "kstls/tests/fuzz_seeds/client_hello.tls" as client_hello
+embed "kstls/tests/fuzz_seeds/client_hello_tls12.tls" as client_hello_tls12
+embed "kstls/tests/fuzz_seeds/server_flight_tls12.tls" as server_flight_tls12
+
+priv fn collect_seeds(_dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
+    //< Two client hellos, and a server's flight that carries a chain; kstls takes no seed folder
+    //< **They must all go past their first message**, being OpenSSL's own, so they count as built.
+    $out: = List<|fuzz.Sample|>(arena)
+    out
+        .push(fuzz.Sample::{ .kind = "client", .name = "a hello offering TLS 1.3",
+        .data = client_hello, .built = true })
+    out
+        .push(fuzz.Sample::{ .kind = "client", .name = "a hello held to TLS 1.2",
+        .data = client_hello_tls12, .built = true })
+    out
+        .push(fuzz.Sample::{ .kind = "server", .name = "a TLS 1.2 flight with a chain of two",
+        .data = server_flight_tls12, .built = true })
+    return out
+
+fn main(): I32
+    return fuzz.run_main("kstls", "scatters broken handshakes at both halves of kstls",
+        fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED },
+        fuzz.Input_kind[]::KINDS, TRIAL_TIMEOUT_MS, REACH_FLOOR_DIV, false, collect_seeds,
+        16 * 1024 * 1024)

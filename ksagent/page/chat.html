@@ -12,14 +12,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src __SCRIPT_HASHES__; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'">
 <title>ksagent</title>
 <link rel="stylesheet" href="chat.css">
 </head>
 <body>
 <nav id="side" aria-label="Conversations">
   <button id="new" type="button">New conversation</button>
-  <ul id="chats"></ul>
+  <!-- **The list says it is one** (`role="list"`): Safari drops a list's role once its bullets are
+    styled away, and a screen reader then reads the conversations as loose links. -->
+  <ul id="chats" role="list"></ul>
 </nav>
 <main>
   <div id="log" role="log" aria-live="polite"><button id="latest" type="button">Latest</button></div>
@@ -90,6 +92,7 @@
     $("send").textContent = "聞く";
     $("text").placeholder = "このフォルダーのファイルについて聞く";
     $("text").setAttribute("aria-label", $("text").placeholder);
+    $("side").setAttribute("aria-label", "会話");
   }
 
   // **A slow model does not make a request slow**: ksagent writes the answer into files, and the
@@ -180,7 +183,7 @@
   // by this page's clock.
   const S = { name: "", ask: null, chat: null, live: null, refused: "", stamps: {},
     askedAt: new Map(), shown: new Map(), problem: "", late: "", unsure: null, stopUnsure: null,
-    ready: false, liveStamp: null, liveSeen: 0 };
+    ready: false, liveStamp: null, liveSeen: 0, framed: 0 };
   const path = (kind) => `${S.name}.${kind}`;
 
   // Reads one of the conversation's files again where it changed. Caution: **Drop what comes
@@ -319,10 +322,14 @@
 
   // A turn's frame: its question, then its answer box, which holds the text part and the
   // actions. **Only the text part is built again**; the frame and the button stay.
+  // **A turn is an article named by its question**, so a screen reader can go from turn to turn;
+  // a `<section>` without a name is no region.
   function frame(t) {
-    const turn = el("section", "turn");
+    const turn = el("article", "turn");
     turn.dataset.id = t.id;
-    turn.appendChild(el("div", "q")).appendChild(el("div", "bubble", t.text));
+    const q = turn.appendChild(el("div", "q")).appendChild(el("div", "bubble", t.text));
+    q.id = `question-${++S.framed}`;
+    turn.setAttribute("aria-labelledby", q.id);
     const a = turn.appendChild(el("div", "a"));
     a.appendChild(el("div", "part"));
     a.appendChild(el("div", "actions")).dataset.act = "";

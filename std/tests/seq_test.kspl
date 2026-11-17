@@ -561,6 +561,42 @@ priv fn churn_counted_values() //< sets and removes ARC values past several in-p
     kept: = m.get(39).unwrap_or(Rc<|I32|>(-1))
     assert(kept.get()$ == 39 && m.cap == 256, "a kept value survives the rehashes in place")
 
+priv fn same_bucket_keys(): I32[2] //< two keys that land in the same one of 32 buckets
+    first: I32 = 1
+    want: = ds.fmix32(U32::first) & 31
+    for $k: I32 = 2; k < 100000; k += 1
+        if (ds.fmix32(U32::k) & 31) == want
+            return ::{ first, k }
+    panic("no second key shares the first one's bucket")
+
+fn test_map_rehash_moves_a_pair() //< dropping the tombstones moves a pair back to its bucket
+    //< **The pair that moves must leave nothing behind.** A copy left live at the old slot would
+    //< outlive its removal, and its ARC value would be freed twice or never.
+    verdict.start("[Map] a pair moved by dropping the tombstones test...")
+    before: = mem.heap_used_bytes()
+    keys: = same_bucket_keys()
+    moved_ok: = check_moved_pair(keys[0], keys[1])
+    verdict.check("the second key of a bucket moves into the first's slot and stays one pair",
+        moved_ok, "")
+    back_to(before, "a moved ARC value is neither leaked nor freed twice")
+    verdict.pass("A moved pair is found once, replaced in place, and gone once removed.")
+
+priv fn check_moved_pair(first: I32, second: I32): Bool //<
+    //< Sets both keys, removes the first, and churns until the tombstones are dropped in place
+    defer $m: = Map<|I32, Rc<|I32|>|>(null)
+    m.set(first, Rc<|I32|>(1))
+    m.set(second, Rc<|I32|>(2))
+    _r: = m.remove(first)
+    for $i: I32 = 1000; i < 1200; i += 1
+        m.set(i, Rc<|I32|>(i))
+        _c: = m.remove(i)
+    found: = m.get(second).unwrap_or(Rc<|I32|>(-1)).get()$ == 2
+    m.set(second, Rc<|I32|>(3))
+    replaced: =
+        m.len == 1 && m.get(second).unwrap_or(Rc<|I32|>(-1)).get()$ == 3
+    removed: = m.remove(second) && m.get(second).is_none() && m.len == 0
+    return found && replaced && removed && m.cap == 32
+
 fn test_map_odd_cap() //< a capacity that is not a power of two
     verdict.start("[Map] new_with_cap with a count that is not a power of two test...")
     // Caution: **Check the slots before inserting.** Taken as it is, 3 leaves a slot no probe

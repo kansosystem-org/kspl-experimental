@@ -47,6 +47,12 @@ priv const WIDE_IN_CLASS: U8[] = //<
 priv const PAIR_LEFT_REC: U8[] = //< the message for rule `pair` entering itself first
     "Rule 'pair' can enter itself before reading a character (left recursion), so it never ends"
 
+priv const EMPTY_CLASS: U8[] = "A character class must hold one byte at least" //<
+    //< The message for `[]` (parse_primary in lib/kspeg/notation.kspl)
+
+priv const NO_RULE: U8[] = "A grammar must define one rule at least" //<
+    //< The message for a grammar that defines no rule (parse_grammar in lib/kspeg/notation.kspl)
+
 priv const NOPE_UNDEFINED: U8[] = "Undefined rule 'Nope' referenced from 'pair'" //<
     //< The message for the undefined rule `Nope`
 
@@ -391,6 +397,10 @@ priv fn first_byte_skips(arena: Arena$@) //<
         "pair = \"x\"? pair \"y\" | \"z\"\n", PAIR_LEFT_REC, arena)
     expect_bad_grammar("left recursion through a lookahead is rejected",
         "pair = !pair \"y\" | \"z\"\n", PAIR_LEFT_REC, arena)
+    // **The notation's own grammar takes one definition at least** (`definition+`), so the reader
+    // does too: a file holding only comments is not a grammar.
+    expect_bad_grammar("a grammar with no rule is rejected", "", NO_RULE, arena)
+    expect_bad_grammar("a grammar holding only a comment is rejected", "// J", NO_RULE, arena)
 
 priv fn doc_examples(arena: Arena$@) //<
     //< The example grammars in lib/kspeg/docs (SPEC-notation.md points at them)
@@ -560,6 +570,22 @@ priv fn peg_termination(arena: Arena$@) //<
         "Expected '=' in rule definition", arena)
     expect_bad_grammar("an unclosed character class is rejected", "pair = [a-z\n",
         "Unterminated character class", arena)
+    // **A literal, a class and a stopping-byte set each end on their own line**, as the notation's
+    // own grammar reads them (`!_New_line`): a line end inside one leaves it unterminated.
+    expect_bad_grammar("a line feed inside a string is rejected", "pair = \"a\nb\"\n",
+        "Unterminated literal", arena)
+    expect_bad_grammar("a carriage return inside a keyword is rejected", "pair = 'a\rb'\n",
+        "Unterminated literal", arena)
+    expect_bad_grammar("a line feed inside a character class is rejected", "pair = [a\nb]\n",
+        "Unterminated character class", arena)
+    // `_New_line` takes a carriage return alone too, so a comment ends there.
+    expect("a carriage return alone ends a comment", "// note\rpair = \"x\"\n", "x", "pair", true,
+        arena)
+    // `Char_class = "[" ( … )+ "]"`: a class holds one byte at least, and `[]` would match none.
+    expect_bad_grammar("an empty character class is rejected", "pair = ![] \"x\"\n", EMPTY_CLASS,
+        arena)
+    expect_bad_grammar("a line feed inside a stopping-byte set is rejected",
+        "pair = ~\"a\nb\" \"x\"\n", "Unterminated stopping-byte set", arena)
     // The control: plain recursion (not left recursion) must pass however deeply nested.
     expect("plain recursion handles a deeply nested input", "pair = \"(\" pair \")\" | \"x\"\n",
         "((((((((((((((((x))))))))))))))))", "pair", true, arena)

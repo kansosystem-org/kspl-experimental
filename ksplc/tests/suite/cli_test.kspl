@@ -314,6 +314,17 @@ priv fn case_build(arena: Arena$@) //<
     ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
     ng_case("build: one operand alone is turned away, saying why", U8[][]::{ "build", src },
         "ksplc build: it takes an input and an output. It was given:")
+    // **A missing input and an output folder that cannot be made are named**, and nothing is
+    // written: a build that went on would leave a C file with no program.
+    absent: = fs.join(dir, "absent.kspl", arena)
+    ng_case("build: a missing input is named",
+        U8[][]::{ "build", std_flag(), absent, fs.join(dir, "absent.exe", arena) },
+        "ksplc build: no such file: ")
+    blocked: = fs.join(dir, "prog.kspl/bin/prog.exe", arena)
+    ng_case("build: an output folder behind a file is named, not written",
+        U8[][]::{ "build", std_flag(), src, blocked }, "ksplc build: cannot make the folder ")
+    verdict.check("build: a missing input leaves no C behind",
+        !fs.exists(fs.join(dir, "absent.c", arena)), "")
     // **[W0110] is printed by a build, not by `ksplc lint` alone** ("5.2 The diagnostics' four
     // weights" in `../../docs/SPEC-tools.md`): what it warns of reads freed memory at run time.
     io.write_file(src,

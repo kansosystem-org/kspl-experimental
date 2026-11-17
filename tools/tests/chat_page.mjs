@@ -8,18 +8,21 @@
 // with an Excel source placed by its sheet and row;
 // a save that meets another tab's write; a reload; a turn the reader cannot show; a question whose
 // save is never answered, or answered late; lines ksagent
-// refuses; an answer ksagent could not record; and an ask file past its cap. The browser and its
-// driver are ksmd's (`ksmd/tests/browser/`).
+// refuses; an answer ksagent could not record; and an ask file past its cap. Last, markup put
+// into the page runs nothing, the built page's policy lists the hash of each of its scripts, and
+// the page did nothing that policy refuses. The browser and its driver are ksmd's
+// (`ksmd/tests/browser/`).
 // A real input method is not driven: Enter during a Japanese composition is checked by review only.
-// Usage: node tools/tests/chat_page.mjs <browser> <ksagent_chat.exe> <work folder>
+// Usage: node tools/tests/chat_page.mjs <browser> <ksagent_chat.exe> <work folder> <chat.html>
 import { spawn, spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { launch } from "../../ksmd/tests/browser/cdp.mjs";
 import { SHIFT, driver, verdict, wait, waitFor } from "../../ksmd/tests/browser/drive.mjs";
+import { markupRunsNothing, policyListsItsScripts } from "../../ksmd/tests/browser/policy.mjs";
 import { place, standIn } from "./chat_support.mjs";
 
-const [browserBin, opener, work] = process.argv.slice(2);
+const [browserBin, opener, work, pageFile] = process.argv.slice(2);
 const check = (ok, what, detail = "") => verdict.check(ok, what, detail);
 
 const LEAVE = "# Leave\n\nA new employee receives 10 days of paid leave\nafter six months of work.\n";
@@ -162,6 +165,14 @@ async function unnamed(page) {
     .map((n) => `${n.role ? n.role.value : "?"}:${n.name ? n.name.value : ""}`);
 }
 
+// The nodes of the given roles, as `role:name`. A list styled without bullets, and a turn, are
+// found by these roles: **a `<section>` without a name is no region**, so a turn needs its own.
+async function withRoles(page, roles) {
+  const { nodes } = await page("Accessibility.getFullAXTree");
+  return nodes.filter((n) => !n.ignored && n.role && roles.includes(n.role.value))
+    .map((n) => `${n.role.value}:${n.name ? n.name.value : ""}`);
+}
+
 // The landmarks and live regions a screen reader can go to, as `role:name:live`.
 async function regions(page) {
   const { nodes } = await page("Accessibility.getFullAXTree");
@@ -211,6 +222,9 @@ async function main() {
       .every((r) => found.includes(r)),
       "the conversations, the main part, the log of turns and the notice are each a region",
       found.join(" "));
+    const lists = await withRoles(browser.page, ["list"]);
+    check(lists.length === 1, "the conversations are a list",
+      lists.join(" "));
     // Tab from the page's first control reaches the box to ask in, then Ask, in that order.
     await d.js("document.getElementById('new').focus()");
     const stops = ["new"];
@@ -276,6 +290,9 @@ async function main() {
         t.querySelector('.sources code').textContent === 'rules/leave.md' &&
         t.querySelector('.unchecked') === null && t.querySelector('.badge').textContent === 'Sources checked'; })()`,
       15000), "it shows bold text, a list, a table and its checked source, and nothing unchecked");
+    const turns = await withRoles(browser.page, ["article"]);
+    check(turns.includes("article:How much paid leave does a new employee get?"),
+      "a turn is an article, named by its question", turns.join(" "));
     const ask0 = disk(`${name}.ask.jsonl`);
     check(/"type":"question","id":"[0-9a-f-]{36}","text":"How much paid leave/.test(ask0),
       "the question stands in the ask file the page wrote", ask0);
@@ -678,6 +695,11 @@ async function main() {
       "a live file written again takes the line away", await d.js(`${quietTurn}.textContent`));
     await d.js("Date.now = window.realNow");
     check(browser.page.errors.length === 0, "the page threw nothing", browser.page.errors.join("; "));
+    verdict.part = "policy";
+    await markupRunsNothing(d.js, browser.page, browser);
+    policyListsItsScripts(pageFile, []);
+    check(browser.blocked.length === 0, "the page does nothing its Content-Security-Policy refuses",
+      browser.blocked.slice(0, 5).join(" | "));
   } finally {
     if (browser) await browser.close();
     stopTree(child);

@@ -1,0 +1,125 @@
+//< Hands one byte sequence from the network to kstls, as a peer on the loopback sends it
+//< `make test-fuzz` runs its mutated sequences through this program.
+//< **Both halves of kstls read what a peer sends.** The server half reads a client's first flight
+//< (`Tls_session`), and the client half reads a server's (`Tls_stream.connect`). OpenSSL parses
+//< the records, the handshake and the certificates; kstls moves the bytes and reads the answer.
+//< Both are fed here, each on a real socket, as a program meets them.
+//< **The exit code is the only answer**: 0 where the peer's bytes went past their first message
+//< (the server answered with its hello, or the client checked the certificate), 1 where they were
+//< refused before. **A broken promise stops with `assert`**, counted as an announced stop.
+//< Usage: `read_prog <client|server> <file>`, the kinds `tests/fuzz_main.kspl` names.
+import "kstls/tests/cert"
+import "kstls/tls"
+import "kstls/tls_server" { Tls_server, Tls_session, Tls_session_error }
+import "std/ds"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/net"
+import "std/reactor" { READABLE, WRITABLE }
+import "std/sys"
+import "std/thread"
+
+priv const WAIT_MS: I32 = 5000 //< how long either side waits on the loopback
+    //< **The peer ends its side once it has sent its bytes**, so no wait here runs out.
+priv const TLS_RECORD_HANDSHAKE: U8 = 22 //< the first byte of a handshake record
+
+priv fn listen_on(): net.Tcp_listener$@ //< a listener on a port of the loopback the OS chose
+    return net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free port")
+
+priv fn read_as_server(input: U8[], arena: Arena$@): I32 //<
+    //< Sends `input` as a client's first flight, and runs the server half on it to its end
+    test_cert: = cert.self_signed("127.0.0.1", arena)
+    defer server: =
+        Tls_server.load(test_cert.cert_pem, test_cert.key_pem, arena)
+        catch panic("a certificate and its own key should load")
+    defer listener: = listen_on()
+    port: = listener.port() catch panic("a bound socket knows its port")
+    defer client: = net.Tcp_stream.connect("127.0.0.1", port)
+        catch panic("the loopback should take a connection")
+    defer conn: = listener.accept() catch panic("accept should succeed once a client connects")
+    conn.set_nonblocking() catch panic("the server's socket should stop blocking")
+    // A flight of a few KiB fits the socket's buffer, so it is written before the server reads.
+    client.write_all(input) catch panic("the client's flight should be sent")
+    client.shut_write() catch panic("the client's side should close")
+    defer session: = Tls_session.start(server) catch panic("a session should start")
+    deadline: = sys.deadline_after_ms(WAIT_MS)
+    $buf: U8[4096] = ::{}
+    $ended: Tls_session_error? = .none
+    for
+        n: = session.read(conn, U8$[]::buf) catch e
+            if e == Tls_session_error.would_block &&
+                tls.wait_before(conn, WRITABLE if session.pending() else READABLE, deadline)
+                continue
+            ended = .some(e)
+            break
+        assert(n <= buf.len, "kstls: the server half read more than its buffer holds")
+        // **A first flight alone never finishes a handshake**: the client's Finished needs keys.
+        assert(n == 0, "kstls: the server half gave plaintext before any handshake finished")
+        break
+    if input.len > 0
+        not_tls: = ended.unwrap_or(.io_failed) == Tls_session_error.not_tls
+        assert(not_tls == (input[0] != TLS_RECORD_HANDSHAKE),
+            "kstls: not_tls is said for other than a first byte that opens no handshake")
+    session.close(conn)
+    // Caution: **End the server's side**, or a server that answered nothing keeps the read below
+    // waiting its whole time.
+    conn.shut_write() catch {}
+    // The server's answer: its hello where it took the client's, an alert or nothing where not.
+    $first: U8[1] = ::{}
+    got: = client.read_for(U8$[]::first, WAIT_MS) catch 0
+    return 0 if got == 1 && first[0] == TLS_RECORD_HANDSHAKE else 1
+
+priv struct Peer //< what the peer's thread is handed
+    listener: net.Tcp_listener$@
+    bytes: U8[] //< what it sends as its first flight
+
+extern fn kstls_fuzz_peer(peer: Peer$@): Void$@ //<
+    //< Sends the bytes as a server's first flight, closes its side, and reads until the client ends
+    conn: = peer.listener.accept() catch panic("accept should succeed once a client connects")
+    conn.write_all(peer.bytes) catch {}
+    conn.shut_write() catch {}
+    // Reading to the end keeps the client's close from turning into a reset.
+    $buf: U8[4096] = ::{}
+    for
+        n: = conn.read_for(U8$[]::buf, WAIT_MS) catch 0
+        if n == 0
+            break
+    conn.free()
+    return null
+
+priv fn read_as_client(input: U8[]): I32 //<
+    //< Sends `input` as a server's first flight, to kstls's client connecting by address
+    defer listener: = listen_on()
+    port: = listener.port() catch panic("a bound socket knows its port")
+    $peer: = Peer::{ .listener = listener, .bytes = input }
+    defer $t: = thread.Thread.spawn<|Peer|>(kstls_fuzz_peer, peer@)
+        catch panic("thread spawn failed")
+    $code: I32 = 1
+    s: = tls.Tls_stream.connect("127.0.0.1", port, WAIT_MS) catch e
+        // **The peer ends its side**, so the handshake ends on what it sent, never on the time.
+        assert(e != tls.Tls_error.handshake_timed_out,
+            "kstls: a handshake ran out of time with the peer's side already closed")
+        if e == tls.Tls_error.cert_verify_failed
+            code = 0
+        fallback null
+    // No CA in the default store issued the seed's chain, so no handshake can be finished.
+    assert(s == null, "kstls: the client trusted a chain no CA it trusts issued")
+    return code
+
+fn main(): I32
+    args: = sys.args()
+    if args.len < 3
+        io.err().s("usage: read_prog <client|server> <file>\n")
+        return 2
+    input: = io.read_file(args[2], null) catch
+        io.err().s("cannot read: \{args[2]\}\n")
+        return 2
+    // The address sanitizer's leak check counts a buffer still held at the exit as a finding.
+    defer dealloc(Void$@::input.ptr)
+    defer arena: = Arena(1024 * 1024)
+    if args[1].equals("client")
+        return read_as_server(input, arena)
+    if args[1].equals("server")
+        return read_as_client(input)
+    io.err().s("unknown kind\n")
+    return 2

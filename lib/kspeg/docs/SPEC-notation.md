@@ -103,9 +103,11 @@ A `.kspeg` file must be encoded in **UTF-8**. Its tokens are these.
 | **Identifier** | `rule_name`, `_Void` | Letters, digits and `_`, beginning with a letter or `_`. **The first character sets the mode** (section 4). |
 | **String** | `"text"` | Matches the text's **UTF-8 byte sequence** exactly. In syntax mode it always builds a `Literal` node (section 10). |
 | **Keyword** | `'text'` | Matches the text, then confirms that what follows does not match `_Boundary` ([section 5](#5-the-automatic-rules-_space--_boundary--_keyword)). In syntax mode it always builds a `Keyword` node. |
-| **Character class** | `[a-z0-9]` | A set of bytes, ranges (`a-z`) included. There is no negation (`^`) inside `[]`; use the `!` lookahead. |
+| **Character class** | `[a-z0-9]` | A set of bytes, ranges (`a-z`) included. It holds one byte at least: an empty `[]` is refused. There is no negation (`^`) inside `[]`; use the `!` lookahead. |
 | **Wildcard** | `.` | Matches any one byte, a newline included, except at end of file. A multi-byte character is consumed one byte at a time. |
-| **Comment** | `// text` | From `//` to the line's end is ignored. |
+| **Comment** | `// text` | From `//` to the line's end is ignored. A line ends at a line feed, a carriage return, or the two together. |
+
+**A string, a keyword, a character class and a `~"…"` set each end on the line they start on.** A line feed or a carriage return before the closing mark leaves it unterminated; write `\n` or `\r` instead.
 
 #### 3.1 Escape sequences
 
@@ -302,8 +304,9 @@ The engine refuses **a bad grammar, and input that does not fit the grammar**. T
 | A reference to a rule that is not defined | `stmt = Nope ";"` with no rule `Nope` |
 | A rule defined twice | `a = "x"` and later `a = "y"` |
 | A left-recursive rule: one that can enter itself again before reading a character, directly, through rules that can match nothing, or through a lookahead | `a = a "x"`, `a = b? a "x"`, `a = !a "x"` |
+| A grammar that defines no rule, as `definition+` in [Appendix A](#appendix-a-kspegs-own-grammar-definition-the-normative-grammar) requires one | An empty file, or one holding only `//` comments |
 
-* **The requirement**: every reference to a rule by name must be confirmed defined as soon as the grammar has been read. Each of the three is refused, naming the rule at fault (for a missing rule, the missing name).
+* **The requirement**: every reference to a rule by name must be confirmed defined as soon as the grammar has been read. Each of the first three is refused, naming the rule at fault (for a missing rule, the missing name).
 * **Where the confirmation goes**: after the engine has added the rules it synthesizes (section 5), or references to them look undefined.
 * **The granularity of the report**: the undefined name and the name of the rule referring to it. A line and column inside the `.kspeg` are not required.
 

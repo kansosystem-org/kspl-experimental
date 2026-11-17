@@ -32,6 +32,11 @@ priv const BITS: U8[8] = ::{ 1U8, 2U8, 4U8, 8U8, 16U8, 32U8, 64U8, 128U8 } //<
     //< Caution: **Not `1 << n`**, which puts a value of undecided width into a `U8`, so what
     //< happens at the eighth bit depends on the type in use.
 
+priv const SANITIZER_EXIT: U8[] = "exitcode=86" //<
+    //< What the address sanitizer is told before each trial: the exit code it ends with
+    //< **Its own default is 1, the program's "refused"** (`classify`). A read past the end that the
+    //< sanitizer stopped then counted as an answer. 86 is neither answer, and no signal's code.
+
 priv const CONFIRM_TIMES: I32 = 5 //<
     //< How many times longer the timeout is when a trial that timed out is run again
     //< **A program that never stops does not stop at any multiple**, and only those trials pay.
@@ -322,11 +327,26 @@ fn run_trial( //< runs one trial, in the caller's working directory
     ms: I32, //< the first timeout
     arena: Arena$@, //< where the output is stored
 ): Trial!subproc.Spawn_error //< the run, and whether it ended only within the longer timeout
+    sanitizer_exits_apart(arena)
     first: = subproc.run_capture(argv, "", ms, CAPTURE_CAP, arena)!
     if first.exit_code.is_some()
         return Trial::{ .got = first, .slow = false }
     again: = subproc.run_capture(argv, "", ms * CONFIRM_TIMES, CAPTURE_CAP, arena)!
     return Trial::{ .got = again, .slow = again.exit_code.is_some() }
+
+priv fn sanitizer_exits_apart(arena: Arena$@) //<
+    //< Tells the address sanitizer of the trials to end with `SANITIZER_EXIT`
+    //< **What `ASAN_OPTIONS` already holds is kept**; the sanitizer takes the last setting of a
+    //< name, so this one goes at the end. A program built without the sanitizer reads none of it.
+    have: = sys.get_env("ASAN_OPTIONS").unwrap_or("")
+    if have.ends_with(SANITIZER_EXIT)
+        return
+    // Caution: **Build the new value before setting it**: setting can free what `get_env` gave.
+    want: =
+        (SANITIZER_EXIT if have.len == 0
+        else arena.text().s(have).s(":").s(SANITIZER_EXIT).take())
+    sys.set_env("ASAN_OPTIONS", want) catch
+        panic("fuzz: ASAN_OPTIONS cannot be set, so a sanitizer's stop would read as a refusal")
 
 // ==========================================
 // A fuzz run

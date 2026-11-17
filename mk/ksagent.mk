@@ -46,7 +46,8 @@ test-ksagent-chat: $(KSAGENT_EXE) $(KSSRV_EXE) $(KSAGENT_PAGE) $(KSAGENT_CHAT_EX
 	$(MAKE) -s --no-print-directory -C ksmd browser-verdict || exit 1; \
 	b="$$($(MAKE) -s --no-print-directory -C ksmd browser-path)"; \
 	[ -n "$$b" ] || exit 0; \
-	node tools/tests/chat_page.mjs "$$b" "$(KSAGENT_CHAT_EXE)" "$(KSAGENT_CHAT_WORK)/page"
+	node tools/tests/chat_page.mjs "$$b" "$(KSAGENT_CHAT_EXE)" "$(KSAGENT_CHAT_WORK)/page" \
+	  "$(KSAGENT_PAGE)"
 # Where the browser's whole log is copied when it never answers (`launch` in ksmd/tests/browser/cdp.mjs).
 test-ksagent-chat: export KANSO_BROWSER_LOG := $(abspath $(LOG_DIR))/browser/test-ksagent-chat.log
 

@@ -154,23 +154,30 @@
 The policy is:
 
 ```text
-default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; worker-src blob:;
+default-src 'none'; script-src 'sha256-…' … 'wasm-unsafe-eval'; worker-src blob:;
 style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; form-action 'none'
 ```
 
 | Part | What the page needs it for |
 | :-- | :-- |
-| `script-src 'unsafe-inline'` | The page is one file, so its scripts stand inline. Text run as code (`eval`) stays refused |
+| `script-src 'sha256-…'` | One hash for each of the page's own scripts, and nothing else runs. A script the page did not ship, an `onerror=` attribute and a `javascript:` link are refused. Text run as code (`eval`) stays refused |
 | `'wasm-unsafe-eval'` | The editor is wasm, and so is a person's own functions file, built by the local server |
 | `worker-src blob:` | A person's own functions run in a worker made from a `blob:` URL ("Your own functions" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)) |
-| `style-src 'unsafe-inline'` | The style stands inline, as the scripts do |
-| `img-src blob:` | Served, an image's bytes come through the local server's API and show from a `blob:` URL. No image loads from an address |
+| `style-src 'unsafe-inline'` | The style stands inline, and the print's frame writes its style as text. A style cannot run code, and with every load refused it cannot send what it shows elsewhere |
+| `img-src blob:` | Served, an image's bytes come through the local server's API and show from a `blob:` URL. No image loads from an address, a `data:` one included |
 | `connect-src 'self'` | Served, the page calls the local server's API. Opened as a file, the page calls nothing |
 
-* **The first wall carries the weight.** The policy lets the page's own inline scripts run, so it would also run an `onerror=` that reached the page as markup. What the policy adds: nothing loads from outside the page, so a document cannot send what it shows elsewhere, and no text runs as code.
-* **Framing is the local server's to refuse.** A `<meta>` policy cannot hold `frame-ancestors`, so `kssrv` sends `frame-ancestors 'none'` in its header ("What guards the page in the browser" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md#what-guards-the-page-in-the-browser)). A page opened as a file holds no token, so a frame around it reaches no file.
+**The build writes the hashes.** `page.html` holds `__SCRIPT_HASHES__` where they go. `kssrv/page/bundle.kspl` puts each script inside the page, then writes the SHA-256 of each one there.
+
+* **A hash, not a nonce.** A nonce must be new in each answer, so it needs a server. The page opens from a file as often as it is served, and a fixed nonce is known to anyone who reads the file.
+* **The hash is over the text as the browser reads it**, with each `\r\n` as `\n`. So a script saved with Windows line ends still runs.
+* **A `<script>` with attributes stops the build.** A hash cannot name a script loaded from a file, and the page loads none.
+* **No Trusted Types yet.** Only two places put markup into the page. The icons are the page's own text, and the print copy goes into a frame that runs no script. A Trusted Types policy for each would pass the same text through.
+
+* **Each wall holds alone.** Markup that got past the first wall runs nothing, since its handler and its script carry no hash. Nothing loads from outside the page, so a document cannot send what it shows elsewhere.
+* **Framing is the local server's to refuse.** A `<meta>` policy cannot hold `frame-ancestors`, so `kssrv` sends `frame-ancestors 'none'` in its header ("What guards the page in the browser" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md#what-guards-the-page-in-the-browser)). A page opened as a file holds no token, so a frame around it reaches no file. The server sends no second policy for the scripts: only the page knows them.
 * **The print's hidden frame runs nothing either** (`pages.js`): it is sandboxed without `allow-scripts`, and it takes the page's policy.
-* **`test-ksmd-browser` checks both walls** (`ksmd/tests/browser/hostile.mjs`). A document holds such markup in every construct that shows text, a link or an image. Opened as a file and served, nothing runs, no dialog opens, and the markup shows as text. Over all its sections, the run also checks that the page does nothing its policy refuses. So a rule too strict for the page's own work fails there.
+* **`test-ksmd-browser` checks both walls** (`ksmd/tests/browser/hostile.mjs` and `policy.mjs`, which ksagent's chat page shares). A document holds such markup in every construct that shows text, a link or an image. Opened as a file and served, nothing runs, no dialog opens, and the markup shows as text. Markup the test puts straight into the page runs nothing, and the policy is what refuses it. The run also checks that the built page's policy lists the hash of each of its scripts, and no other source. Over all its sections, the run checks that the page does nothing its policy refuses. So a rule too strict for the page's own work fails there.
 
 ## How the page's scripts fit together
 

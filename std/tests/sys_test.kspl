@@ -84,6 +84,38 @@ fn test_env_set_unset()
         .pass("an empty value was refused and nothing changed, and unset_env is the only route for \
             deleting.")
 
+priv fn set_refusal(name: U8[], value: U8[]): U8[] //< why `set_env` refused, by name; `set` if not
+    sys.set_env(name, value) catch e
+        switch e
+        case .empty_value
+            return "empty_value"
+        case .bad_name
+            return "bad_name"
+        case .bad_value
+            return "bad_value"
+        case .refused
+            return "refused"
+    return "set"
+
+fn test_env_refuses_what_c_cannot_hold() //< a NUL or an empty name is refused before the OS sees it
+    //< **C ends a text at its first NUL**, so a name or value holding one would set a shorter
+    //< variable than the one asked for. Each is refused by name, and nothing is set.
+    verdict.start("[Sys] set_env and unset_env refuse a NUL and an empty name...")
+    name: = "KSPL_TEST_ENV_NUL"
+    verdict.check("a value holding a NUL is bad_value",
+        set_refusal(name, "a\0b").equals("bad_value"), "")
+    verdict.check("nothing is set after a refused value", sys.get_env(name).is_none(), "")
+    verdict.check("a name holding a NUL is bad_name",
+        set_refusal("KSPL_TEST\0ENV", "v").equals("bad_name"), "")
+    verdict.check("nothing is set under the name's head",
+        sys.get_env("KSPL_TEST").is_none(), "")
+    verdict.check("an empty name is bad_name", set_refusal("", "v").equals("bad_name"), "")
+    $unset_refused: = false
+    sys.unset_env("") catch e
+        unset_refused = e == sys.Env_error.bad_name
+    verdict.check("unset_env refuses an empty name as bad_name", unset_refused, "")
+    verdict.pass("A NUL in a name or value, and an empty name, are refused and set nothing.")
+
 // ==========================================
 // std/sys: a variable set to the empty text reads as that text, not as unset, on every OS.
 // Windows's API answers 0 for both, so a reader that looks at the count alone loses the variable.

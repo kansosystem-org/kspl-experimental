@@ -207,14 +207,18 @@ fuzz-long: $(STAGE1_EXE) $(SEED_EXE)
 
 # --- How much of the source the tests reach, measured by hand ---
 # **Not a gate**: it shows where no test goes, and holds no number. Each program is built with
-# clang's source-based coverage and run once:
-# * ksplc: the compiler, built so, runs ksplc's tests (`make test` in `ksplc/` without its suites)
-#   and translates std's. ksplc's suites, which start a compiler from outside, are not counted.
+# clang's source-based coverage and run:
+# * ksplc: the compiler, built so, runs ksplc's tests and translates std's. It is also the
+#   compiler that ksplc's suites inspect (`UNDER`), so all of `make test` in `ksplc/` is counted.
 # * std: std's tests (`make test` in `std/`), built so.
+# **The LSP worker's counts are lost**: the server kills it (`stop_worker`), and a process that
+# does not exit writes no counts. The LSP files therefore read lower than the tests reach.
 # **clang counts the generated C and does not follow `#line`.** So `cov_by_source_prog` counts
-# each C line back to the `.kspl` line its last `#line` names. A `.kspl` line counts as reached
-# when any of its C lines ran. The tools come from beside `$(CC)`, as a profile's format follows
-# the clang that wrote it.
+# each C line back to the `.kspl` line its last `#line` names: that line itself, as one `.kspl`
+# line can become many C lines, and a `}` after a `return` belongs to the `return`. A runtime `.c`
+# file has one `#line` at its top, so its lines count on from there. A `.kspl` line counts as
+# reached when any of its C lines ran. The tools come from beside `$(CC)`, as a profile's format
+# follows the clang that wrote it.
 COV_DIR := $(OUT_DIR)/coverage
 COV_ABS = $(abspath $(COV_DIR))
 COV_CFLAGS := -O0 -fprofile-instr-generate -fcoverage-mapping
@@ -224,8 +228,9 @@ LLVM_COV ?= $(shell $(CC) -print-prog-name=llvm-cov)
 # source file, then one a group: a package, its `tests/`, a library, and the C runtime. `root` is
 # the top folder, cut from a path that names it whole (a library found by its absolute path).
 cov_by_source_prog := FNR == NR { if ($$0 ~ /^\#line [0-9]+ "/) { split($$0, q, "\""); \
-      f = q[2]; if (index(f, root) == 1) f = substr(f, length(root) + 1); n = $$2 - 1 } \
-    else { n++; at[FNR] = f SUBSEP n }; next } \
+      f = q[2]; if (index(f, root) == 1) f = substr(f, length(root) + 1); \
+      step = f ~ /\.kspl$$/ ? 0 : 1; n = $$2 - step } \
+    else { n += step; at[FNR] = f SUBSEP n }; next } \
   /^DA:/ { split(substr($$0, 4), d, ","); k = at[d[1]]; if (k == "" || k ~ "^" SUBSEP) next; \
     if (!(k in cnt) || d[2] + 0 > cnt[k]) cnt[k] = d[2] + 0 } \
   END { for (k in cnt) { split(k, p, SUBSEP); all[p[1]]++; if (cnt[k] > 0) hit[p[1]]++ } \
@@ -251,8 +256,20 @@ coverage_env = LLVM_PROFILE_FILE="$(COV_ABS)/$(1)-%p.profraw" KSPLC_STD_DIR="$(a
 
 # $(1): the name the counts were written under. Merges them, then prints llvm-cov's summary of the
 # C and the table by source file, which `$(COV_DIR)/<name>-by-source.txt` keeps.
+# **A file of counts that is empty or cannot be read is left out, and how many is printed.** A
+# process killed while it wrote its counts leaves such a file, and it must not cost the rest.
+# `<name>-merge.log` names each unreadable one.
 define coverage_report
-	"$(LLVM_PROFDATA)" merge -sparse -o "$(COV_DIR)/$(1).profdata" "$(COV_DIR)/$(1)"-*.profraw
+	find "$(COV_DIR)" -maxdepth 1 -name "$(1)-*.profraw" > "$(COV_DIR)/$(1)-profiles.txt"
+	"$(LLVM_PROFDATA)" merge -sparse --failure-mode=all -f "$(COV_DIR)/$(1)-profiles.txt" \
+		-o "$(COV_DIR)/$(1).profdata" 2> "$(COV_DIR)/$(1)-merge.log" \
+		|| { cat "$(COV_DIR)/$(1)-merge.log"; exit 1; }
+	@all=$$(wc -l < "$(COV_DIR)/$(1)-profiles.txt"); \
+		find "$(COV_DIR)" -maxdepth 1 -name "$(1)-*.profraw" -empty > "$(COV_DIR)/$(1)-empty.txt" \
+			&& empty=$$(wc -l < "$(COV_DIR)/$(1)-empty.txt"); \
+		bad=$$(grep -c 'profraw' "$(COV_DIR)/$(1)-merge.log"); \
+		echo "# $(1): $$all files of counts; left out: $$empty empty, $$bad unreadable" \
+			"($(COV_DIR)/$(1)-merge.log)"
 	"$(LLVM_COV)" report "$(COV_DIR)/$(1)_cov.exe" -instr-profile="$(COV_DIR)/$(1).profdata"
 	"$(LLVM_COV)" export -format=lcov "$(COV_DIR)/$(1)_cov.exe" \
 		-instr-profile="$(COV_DIR)/$(1).profdata" > "$(COV_DIR)/$(1).lcov"
@@ -265,14 +282,17 @@ endef
 cov_failed = || echo "\# $(1) failed; the counts cover the run so far ($(2))"
 
 ## Measure-and-inspect|coverage|Measure which `.kspl` lines ksplc's and std's tests reach, with clang's coverage (under `out/coverage/`)
-coverage: $(STAGE1_EXE)
+coverage: $(STAGE1_EXE) $(SEED_EXE)
 	rm -rf "$(COV_DIR)"
 	@mkdir -p "$(COV_DIR)"
-	@echo "# COVERAGE: the compiler, over ksplc's tests and std's"
+	@echo "# COVERAGE: the compiler, over ksplc's tests, its suites and std's tests"
 	$(call coverage_build,ksplc,ksplc/main.kspl)
 	cd ksplc && $(call coverage_env,ksplc) "$(COV_ABS)/ksplc_cov.exe" run \
 		"$(abspath ksplc/tests/main.kspl)" > "$(COV_ABS)/ksplc_tests.log" 2>&1 \
 		$(call cov_failed,ksplc's tests,$(COV_DIR)/ksplc_tests.log)
+	$(call pkg_make,ksplc) test-suites UNDER="$(COV_ABS)/ksplc_cov.exe" \
+		LLVM_PROFILE_FILE="$(COV_ABS)/ksplc-%p.profraw" > "$(COV_ABS)/ksplc_suites.log" 2>&1 \
+		$(call cov_failed,ksplc's suites,$(COV_DIR)/ksplc_suites.log)
 	$(call coverage_env,ksplc) "$(COV_ABS)/ksplc_cov.exe" std/tests/main.kspl \
 		"$(COV_DIR)/std_tests_translated.c"
 	$(call coverage_report,ksplc)

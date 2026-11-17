@@ -512,7 +512,7 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 | No policy received, and none in the record | Never moves | ✅ | — | Receive one from kssrv (stage 9) |
 | A remote button while it runs | Stops | ✅ any button | ✅ ▶ or 9 only | `car-pilot`: hold a key about a second, then let go ("How to stop it when it drives itself" in stage 9) |
 | 60 seconds of driving (`MAX_DRIVING_ROUNDS`) | Stops. The only one that works while nobody watches | ✅ | — | As for the remote |
-| A held key let go | Stops | — | ✅ | Press the key again ("It runs only while a key is held" in stage 12) |
+| A held key let go: no repeat for `HOLD_TIMEOUT_US` (250ms, `lib/ksos/demo/rp2040/common/stops.kspl`) | Stops | — | ✅ | Press the key again ("It runs only while a key is held" in stage 12) |
 | A panic in the firmware | Stops every wheel (the panic hook that `boot.motors_up` sets) | ✅ | ✅ | Restart the car |
 | Every instruction to the wheels | Scales it down to the speed cap, `motor.CAP` (it does not stop) | ✅ | ✅ | — |
 
@@ -524,7 +524,8 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 | The distance | A raw reading under `EMERGENCY_MM` backs off, and 0 (no echo) does not (`stops_test.kspl`) | The ultrasonic's readings, and the wheels backing off |
 | No policy | Which policy files are refused, and why (`lib/ksos/tests/pilot_policy_test.kspl`) | The download, the record, and the wheels staying put |
 | The remote (`car-pilot`) | A press stops it; only a held press, let go, re-arms it (`stops_test.kspl`) | The IR receiver, and the press lengths in seconds |
-| The remote (`car-ir`) and a held key let go | Nothing | Every row |
+| The remote (`car-ir`) | ▶ and 9 stop it, and no other key does (`stops_test.kspl`) | The IR receiver, and the keys' codes on the remote |
+| A held key let go (`car-ir`) | A press quiet for `HOLD_TIMEOUT_US` stops it once, a repeat extends it, and the timer's wrap does not matter (`stops_test.kspl`) | The repeats arriving, and the wheels stopping |
 | The driving limit | `MAX_DRIVING_ROUNDS` rounds stop it, and fewer do not (`stops_test.kspl`) | That one round lasts 100ms |
 | A panic | Speed 0 gives 0 on both pins of every wheel (`stops_test.kspl`) | That the hook is set, and the PWM reaching the wheels |
 | The speed cap | No wheel goes over `motor.CAP` (`lib/ksos/tests/motor_test.kspl`) | The wheels' real speed |

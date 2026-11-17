@@ -338,6 +338,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 | `lib/ksai/tests/qwen_data/tiny_qwen3.gguf` | Made here: seeded random weights of Qwen3's shape (2 blocks, 32 wide), written by [`lib/ksai/tools/make_qwen_fixtures.py`](lib/ksai/tools/make_qwen_fixtures.py) through llama.cpp's Python package `gguf`. It carries Qwen3-4B-Instruct-2507's chat template (its section above) | This repository's; the chat template Apache-2.0 |
 | `lib/ksai/tests/qwen_data/tiny_qwen35.gguf` | Made here: seeded random weights of Qwen3.5's shape (4 blocks, 32 wide, two of them delta nets), written by [`lib/ksai/tools/make_qwen35_fixtures.py`](lib/ksai/tools/make_qwen35_fixtures.py) through llama.cpp's Python package `gguf`. It carries Qwen3.5-9B's chat template (its section above) | This repository's; the chat template Apache-2.0 |
 | `lib/ksos/demo/cortex_m/pilot_policy.safetensors` | Made here: the Edge AI car's piloting policy, trained on a PC by this repository's own code | This repository's |
+| `lib/kstls/tests/fuzz_seeds/client_hello.tls` | Made here: the first flight kstls's client sends, offering TLS 1.3, captured from a handshake in memory by [`lib/kstls/tests/make_fuzz_seeds.kspl`](lib/kstls/tests/make_fuzz_seeds.kspl) | This repository's |
+| `lib/kstls/tests/fuzz_seeds/client_hello_tls12.tls` | Made here: the same client's first flight, held to TLS 1.2, captured by [`lib/kstls/tests/make_fuzz_seeds.kspl`](lib/kstls/tests/make_fuzz_seeds.kspl) | This repository's |
+| `lib/kstls/tests/fuzz_seeds/server_flight_tls12.tls` | Made here: a server's TLS 1.2 answer to the first, with a test chain made at that run, captured by [`lib/kstls/tests/make_fuzz_seeds.kspl`](lib/kstls/tests/make_fuzz_seeds.kspl) | This repository's |
 | `ksplc/tests/prog/embed_data/raw.bin` | Made here: sample bytes for the `embed` tests | This repository's |
 
 ## Further reading

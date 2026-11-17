@@ -8,6 +8,7 @@
 //< **This test uses a cache directory of its own** (`KSPLC_CACHE_DIR`).
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/lsp_client"
+import "std/bytes"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -111,6 +112,84 @@ priv fn break_entries(cache: U8[], arena: Arena$@): Sz //<
                 continue
         broken += 1
     return broken
+
+priv const COUNTS_AT: Sz = KEY_AT + 64 //< where the four counts start, behind the key's 64 digits
+
+priv enum Damage //< how `damage_entries` breaks an entry whose key still matches
+    node_count //< the node count far past what an entry may hold
+    kind //< the first node's kind past this ksplc's kinds
+    text_id //< the first node's text past the string table
+    child_count //< the first node's children past the node count
+    extra_byte //< one byte left over after the entry's end
+
+priv fn body_at(text: U8[]): Sz //< where the first node starts: past the counts and the strings
+    $at: Sz = COUNTS_AT + 16
+    // An entry an earlier check cut short has no counts to read.
+    if at > text.len
+        return text.len
+    n_strs: = text.get_u32_le(COUNTS_AT + 8)
+    for $i: U32 = 0; i < n_strs; i += 1
+        if at + 4 > text.len
+            return text.len
+        at += 4 + Sz::text.get_u32_le(at)
+    return at
+
+priv fn damaged(text: U8[], damage: Damage, arena: Arena$@): U8[] //< the entry broken so
+    //< **The magic, the version and the key are kept**, so only the checks of what follows can
+    //< turn the entry away. Each damaged field is written as `FF FF FF 7F`.
+    $at: Sz = COUNTS_AT
+    switch damage
+    case .node_count
+        at = COUNTS_AT
+    case .kind
+        at = body_at(text)
+    case .text_id
+        at = body_at(text) + 12
+    case .child_count
+        at = body_at(text) + 16
+    case .extra_byte
+        return arena.text().s(text).c('x').take()
+    if at + 4 > text.len
+        return text
+    return arena.text().s(text.sub(0, at)).c(0xFFU8).c(0xFFU8).c(0xFFU8).c(0x7FU8)
+        .s(text.sub_from(at + 4)).take()
+
+priv fn damage_entries(cache: U8[], damage: Damage, arena: Arena$@): Sz //<
+    //< It damages every entry the same way, and how many it damaged
+    files: = fs.walk_files(cache, fs.skip_none, arena) catch
+        return 0
+    $count: Sz = 0
+    for path in files
+        if !path.ends_with(".ksast")
+            continue
+        text: = io.read_file(path, arena) catch
+            continue
+        broken: = damaged(text, damage, arena)
+        if broken.equals(text)
+            continue
+        io.write_file(path, broken) catch
+            continue
+        count += 1
+    return count
+
+priv fn damaged_entries_are_misses(work: U8[], cache: U8[], cold: Built@, arena: Arena$@) //<
+    //< An entry whose key matches but whose content is broken is a miss, never a wrong tree
+    //< **The key alone does not vouch for the rest**: a crash or a full disk can cut or garble an
+    //< entry after its key. Each count and each node read is checked against what was read.
+    names: = U8[][]::{ "a node count past the limit", "a node kind past this ksplc's kinds",
+        "a node text past the string table", "a child count past the node count",
+        "a byte left over at the end" }
+    damages: = Damage[]::{ .node_count, .kind, .text_id, .child_count, .extra_byte }
+    for i in Range.asc(damages.len)
+        count: = damage_entries(cache, damages[i], arena)
+        got: =
+            build(work, cache, arena.text().s("ac_damaged_\{i\}").take(), FIXTURE, U8[][]::{},
+            arena)
+        verdict.check(arena.text().s("an entry with ").s(names[i])
+            .s(" is a miss, and the C is the same").take(),
+            count > 0 && got.ok && got.gen.equals(cold.gen) && got.counts.misses > 0 &&
+            got.counts.hits == 0,
+            arena.text().s("\{count\} damaged\n").s(got.out).take())
 
 priv fn failed_writes_leave_nothing(work: U8[], cold_stores: Sz, arena: Arena$@) //<
     //< Entries whose write is cut short leave no temporary file behind
@@ -315,6 +394,7 @@ fn main(): I32
             arena.text().s("broken version \{broken.gen.len\} bytes").take())
         verdict.check("a broken entry is counted as a miss",
             broken.counts.ok && broken.counts.misses > 0, broken.out)
+    damaged_entries_are_misses(work, cache, cold@, arena)
 
     // --- the generations do not keep growing ---
     // Rebuilding ksplc changes the key and wastes a generation at once, so generations over the cap

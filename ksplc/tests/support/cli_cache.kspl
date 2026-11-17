@@ -185,8 +185,35 @@ priv fn case_cache_inner_folder_others_can_write(arena: Arena$@) //<
         !theirs.exited_with(0) &&
         theirs.out.find_str("belongs to another user").is_some(), theirs.out)
 
+priv fn case_cache_cannot_be_made(arena: Arena$@) //<
+    //< A cache folder behind a file stops `ksplc run`, naming the level, and a compile goes on
+    //< **`ksplc run` needs its slot**, since the program it runs is built there, so it stops and
+    //< names the level it could not make. A compile needs no cache, so it goes on without one.
+    name_run: = "cache: ksplc run names the cache folder it cannot make"
+    name_cc: = "cache: a compile goes on where the cache folder cannot be made"
+    dir: = harness.sandbox("cli_unmade")
+    src: = fs.join(dir, "hi.kspl", arena)
+    io.write_file(src, "fn main(): I32\n  return 0\n") catch
+        verdict.check(name_run, false, "the program cannot be written")
+        return
+    // The cache folder would stand inside a file, where no folder can be made.
+    sys.set_env(CACHE_ENV, fs.join(src, "cache", arena)) catch
+        verdict.check(name_run, false, "the cache cannot be pointed at the folder")
+        return
+    ran: = harness.ksplc(U8[][]::{ "run", src })
+    out_c: = fs.join(dir, "hi.c", arena)
+    built: = harness.ksplc(U8[][]::{ src, out_c })
+    // Caution: **Point it back before checking**, or every case after this one runs without it.
+    sys.set_env(CACHE_ENV, cache_root(arena)) catch panic("the cache cannot be pointed back")
+    verdict.check(name_run,
+        ran.exited_with(1) &&
+        ran.out.find_str("ksplc run: cannot create the cache directory").is_some() &&
+        ran.out.find_str("failed at: ").is_some(), ran.out)
+    verdict.check(name_cc, built.exited_with(0) && fs.exists(out_c), built.out)
+
 fn run(arena: Arena$@) //< it runs every case here
     case_clean(arena)
+    case_cache_cannot_be_made(arena)
     case_clean_keeps_link_targets(arena)
     case_cache_others_can_write(arena)
     case_cache_inner_folder_others_can_write(arena)

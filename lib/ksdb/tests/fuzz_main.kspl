@@ -1,0 +1,130 @@
+//< Feeds damaged media to ksdb's log (`make test-fuzz`)
+//< **A device opens whatever its flash holds after a restart**: a record a power cut tore, a worn
+//< cell, an image another program wrote. The program under test
+//< ([`read_prog.kspl`](read_prog.kspl)) opens such a medium, reads it, appends to it and keeps a
+//< few kinds through an erase. The Makefile builds it with the address sanitizer where the C
+//< compiler has its runtime, and says so (`fuzz.Sanitized`). So an out-of-range read stops where it
+//< happens. Usage: `ksplc run tests/fuzz_main.kspl <reader> <work folder> [--asan]
+//< [--require-asan]`, with `--trials` and `--seed`.
+import "ksdb/log" as ksdblog
+import "ksdb/ram_store" as ram
+import "ksdb/store" { Store }
+import "std/ds" { List }
+import "std/fuzz"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+
+priv const DEFAULT_SEED: I64 = 20261116
+priv const DEFAULT_TRIALS: I64 = 1000 //< how many rounds CI scatters
+    //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
+    //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
+
+priv const TRIAL_TIMEOUT_MS: I32 = 10000 //<
+    //< How long to wait before treating a trial as a loop that never ends
+    //< Shorter than ksplc's: the medium is 1 KiB, scanned in microseconds.
+
+priv const REACH_FLOOR_DIV: Sz = 10 //<
+    //< The fewest damaged media from which a record must read back, as trials / this
+    //< **A check only that it does not crash can pass having tried nothing** (Principle 5 in
+    //< `docs/DESIGN-principles.md`). **Do not raise it**: it only shows that fuzzing works; the
+    //< proportion itself means nothing.
+
+priv const KINDS: fuzz.Input_kind[1] = ::{ //<
+    //< The kind of input that is fuzzed, and its files' ending
+    //< **This is the canonical source**: the name the program under test accepts follows it.
+    fuzz.Input_kind::{ .name = "medium", .ext = ".img" },
+}
+
+// The medium's layout. Caution: **Keep it in step with the reader** (`read_prog.kspl`).
+priv const SECTOR: Sz = 256
+priv $medium: U8[1024]
+
+priv const KIND_SAMPLE: U16 = 1
+priv const KIND_POLICY: U16 = 2
+priv const KIND_MARK: U16 = 3
+
+priv fn add(lg: ksdblog.Log$@, kind: U16, data: U8[]) //< appends one record a seed needs
+    lg.append(kind, data) catch panic("a seed's record must fit its medium")
+
+priv fn fill(lg: ksdblog.Log$@, arena: Arena$@) //<
+    //< The records each seed starts from: two kinds, an empty one, and one sent to the next sector
+    add(lg, KIND_MARK, "")
+    add(lg, KIND_SAMPLE, "21.5C")
+    add(lg, KIND_POLICY, "policy: wake every 60 s")
+    add(lg, KIND_SAMPLE, "21.7C")
+    // Too long for what is left of the first sector, so it starts the second.
+    long: = arena.text()
+    for i in Range.asc(18)
+        long.s("sample \{i\} ")
+    add(lg, KIND_SAMPLE, long.take())
+    add(lg, KIND_POLICY, "policy: wake every 30 s")
+
+priv fn image(arena: Arena$@): U8[] //< the medium as it stands
+    return arena.dup_str(U8[]::medium)
+
+priv fn collect_seeds(_dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
+    //< Media ksdb itself wrote, each left as a step of its life leaves it; ksdb takes no seed folder
+    //< Caution: **Include each state a power cut leaves.** Mutation cannot reach a state that no
+    //< seed holds: a torn record, a cut write, a kept set after an erase, a full medium.
+    $out: = List<|fuzz.Sample|>(arena)
+    $store: Store = ram.make(U8$[]::medium, SECTOR)
+    $lg: = ksdblog.Log.open(store)
+    fill(lg@, arena)
+    out
+        .push(fuzz.Sample::{ .kind = "medium", .name = "a log of samples and policies",
+        .data = image(arena), .built = true })
+
+    store = ram.make(U8$[]::medium, SECTOR)
+    lg = ksdblog.Log.open(store)
+    fill(lg@, arena)
+    torn_at: = lg.used()
+    add(lg@, KIND_POLICY, "policy: torn")
+    ram.tear(torn_at, ksdblog.HEADER_SIZE)
+    lg = ksdblog.Log.open(store)
+    add(lg@, KIND_SAMPLE, "after the tear")
+    out
+        .push(fuzz.Sample::{ .kind = "medium", .name = "a log with a torn record",
+        .data = image(arena), .built = true })
+
+    store = ram.make(U8$[]::medium, SECTOR)
+    lg = ksdblog.Log.open(store)
+    fill(lg@, arena)
+    // The content's write is cut after three bytes, so the header is never written.
+    ram.arm_cut(1, 3)
+    $failed: = false
+    lg.append(KIND_POLICY, "policy: cut") catch e
+        failed = e == ksdblog.Ksdb_error.write_failed
+    assert(failed, "an armed cut must fail the append as write_failed")
+    lg = ksdblog.Log.open(store)
+    add(lg@, KIND_SAMPLE, "after the cut")
+    add(lg@, KIND_SAMPLE, "and one more")
+    out
+        .push(fuzz.Sample::{ .kind = "medium", .name = "a log a write was cut in",
+        .data = image(arena), .built = true })
+
+    store = ram.make(U8$[]::medium, SECTOR)
+    lg = ksdblog.Log.open(store)
+    fill(lg@, arena)
+    lg.reset_keeping(U16[]::{ KIND_MARK, KIND_POLICY }) catch panic("the kept records must fit")
+    add(lg@, KIND_SAMPLE, "after the erase")
+    out
+        .push(fuzz.Sample::{ .kind = "medium", .name = "a log kept through an erase",
+        .data = image(arena), .built = true })
+
+    store = ram.make(U8$[]::medium, SECTOR)
+    lg = ksdblog.Log.open(store)
+    $n: Sz = 0
+    for
+        lg.append(KIND_SAMPLE, arena.text().s("reading \{n\}").take()) catch
+            break
+        n += 1
+    out
+        .push(fuzz.Sample::{ .kind = "medium", .name = "a full log", .data = image(arena),
+        .built = true })
+    return out
+
+fn main(): I32
+    return fuzz.run_main("ksdb", "scatters damaged media at ksdb's log",
+        fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED },
+        fuzz.Input_kind[]::KINDS, TRIAL_TIMEOUT_MS, REACH_FLOOR_DIV, false, collect_seeds,
+        64 * 1024 * 1024)

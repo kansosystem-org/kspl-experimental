@@ -44,6 +44,8 @@ node: = t.parse_rule("program")!
 
 **`make test` runs the tests from this folder** with only a `ksplc` ([`lib/kspeg/Makefile`](Makefile)). kspeg names itself in [`lib/kspeg/ksplc.cfg`](ksplc.cfg), so a copy of this folder alone runs them the same way.
 
+**`make test-fuzz` feeds broken grammars and broken input on a fixed seed** ([`lib/kspeg/tests/fuzz_main.kspl`](tests/fuzz_main.kspl)); `make test-kspeg-fuzz` runs it from the root. A grammar that loads is run on three inputs, and the JSON and scripting examples parse broken input. It wants a C compiler, and the address sanitizer's runtime where it holds one.
+
 The engine's two default rules, `_Space` and `_Boundary`, never run under a grammar that defines its own, so only [`lib/kspeg/tests/engine_test.kspl`](tests/engine_test.kspl) tests them.
 
 Three complete grammars sit in `lib/kspeg/docs/`: [`json.kspeg`](docs/json.kspeg) (the shortest; read it first), [`script.kspeg`](docs/script.kspeg) (a small scripting language), and [`kspeg.kspeg`](docs/kspeg.kspeg) (the notation written in itself, the normative grammar).

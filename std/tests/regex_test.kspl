@@ -144,6 +144,20 @@ priv fn group_count_of(pattern: U8[], text: U8[]): Sz //<
         return n
     return -1
 
+fn test_regex_lazy_optional_group() //< `(…)??` prefers to leave the group out
+    //< **The lazy form puts the empty way first**, so the group takes part only where the rest of
+    //< the pattern needs it. A greedy `?` takes the group wherever it can.
+    verdict.start("[Regex] a lazy optional group test...")
+    verdict.check("a lazy group is left out where the rest can take the text",
+        group_of("(ab)??(ab)?", "ab", 1).equals("-") &&
+        group_of("(ab)??(ab)?", "ab", 2).equals("ab"), "")
+    verdict.check("a lazy group takes part where the rest needs it",
+        group_of("(ab)??c", "abc", 1).equals("ab"), "")
+    verdict.check("a greedy group takes the text first",
+        group_of("(ab)?(ab)?", "ab", 1).equals("ab") &&
+        group_of("(ab)?(ab)?", "ab", 2).equals("-"), "")
+    verdict.pass("A lazy optional group is left out unless needed; a greedy one is taken first.")
+
 // ==========================================
 // std/regex: capture groups.
 // Caution: **Always check that a group of an alternative that failed keeps no value.** The
@@ -467,6 +481,9 @@ fn test_regex_bounds()
     assert(rejected_with("a{3,2}", .invalid_repeat), "a lower bound above the upper one is refused")
     assert(rejected_with("a{1001}", .invalid_repeat), "a count above max_repeat_count is refused")
     assert(rejected_with("a{x}", .invalid_repeat), "a count that is not digits is refused")
+    assert(rejected_with("a{1,x}", .invalid_repeat), "an upper bound that is not digits is refused")
+    assert(rejected_with("a{1,1001}", .invalid_repeat),
+        "an upper bound above max_repeat_count is refused")
     // A count is written out round by round, so the program's size, not the count, is the limit.
     assert(!compile_is_rejected("[a-z]{1,1000}"), "one count up to max_repeat_count compiles")
     assert(!compile_is_rejected("(ab){1000}"), "a group's count up to max_repeat_count compiles")

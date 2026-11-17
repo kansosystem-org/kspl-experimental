@@ -149,7 +149,7 @@ Why a walk that walked nothing fails is at `check_list` in `std/verdict.kspl`. W
 
 **Why**: in another process, a crash is seen; inside the fuzzer's, it would take the tally down with it. With nothing built in, the same fuzzing runs on all three platforms with the C compiler as it is. `std/prng` is KSPL, so the same seed, seeds and count give the same rounds everywhere. A developer reproduces a gate's failure from the two numbers it prints.
 
-**The program under test is built with the address sanitizer where the C compiler holds its runtime** (`fuzz.Sanitized`). Built plain, a read past an allocation's end that stays inside a mapped page returns a stale byte, and the round ends well. With the sanitizer, the read stops at its line. `report_asan` prints a check where the sanitizer is in or required, and a skip where the toolchain holds no runtime.
+**The program under test is built with the address sanitizer where the C compiler holds its runtime** (`fuzz.Sanitized`). Built plain, a read past an allocation's end that stays inside a mapped page returns a stale byte, and the round ends well. With the sanitizer, the read stops at its line. **The driver tells the sanitizer to end with a code of its own** (`exitcode=86` in `ASAN_OPTIONS`). Its default, 1, is the program's own refusal, so a stop it made would count as an answer. `report_asan` prints a check where the sanitizer is in or required, and a skip where the toolchain holds no runtime.
 
 **A round past its wait runs again with five times the wait** before it counts as not ending. A crowded machine slows a finite round. `check_reach` keeps a run that tried nothing from passing. Without it, a mutation that broke every seed at the parser's entry would go green.
 

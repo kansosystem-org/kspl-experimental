@@ -23,6 +23,7 @@ import "ksos/demo/rp2040/common/bringup" as boot
 import "ksos/demo/rp2040/common/buzzer"
 import "ksos/demo/rp2040/common/console" as con
 import "ksos/demo/rp2040/common/records"
+import "ksos/demo/rp2040/common/stops"
 import "ksos/demo/rp2040/common/store"
 import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/adc"
@@ -65,7 +66,6 @@ const KEY_FORWARD: U32 = 0x40 // ✚     (table BF40FF00)
 const KEY_BACK: U32 = 0x19 // ➖     (table E619FF00)
 const KEY_LEFT: U32 = 0x07 // ⏪     (table F807FF00)
 const KEY_RIGHT: U32 = 0x09 // ⏩     (table F609FF00)
-const KEY_STOP: U32 = 0x15 // ▶      (table EA15FF00)
 const KEY_SERVO_LEFT: U32 = 0x16 // 0      (table E916FF00)
 const KEY_SERVO_RIGHT: U32 = 0x0C // 1      (table F30CFF00)
 const KEY_SERVO_CENTER: U32 = 0x08 // 4      (table F708FF00)
@@ -77,7 +77,7 @@ const KEY_WS2812_OFF: U32 = 0x52 // 8      (table AD52FF00)
 const KEY_MODE_LIGHT: U32 = 0x0D // C      (table F20DFF00)
 const KEY_MODE_LINE: U32 = 0x5E // 3      (table A15EFF00)
 const KEY_MODE_SONAR: U32 = 0x5A // 6      (table A55AFF00)
-const KEY_MODE_MANUAL: U32 = 0x4A // 9      (table B54AFF00)
+// ▶ and 9, the keys that stop it, are `stops.KEY_STOP` and `stops.KEY_MANUAL`.
 
 enum Mode //< the car's driving mode
     //< **In every mode but `manual` the car decides itself** (the direction keys do nothing).
@@ -105,10 +105,6 @@ impl Mode
         case .line
             return "line"
 
-const HOLD_TIMEOUT_US: U32 = 250000 //< how long until a held press counts as released [us]
-    //< **About twice the repeat interval (108ms)**: shorter judders between repeats, longer keeps
-    //< running after the finger comes off.
-
 const LINE_INTERVAL_US: U32 = 10000 //< the interval for reading the line again [us]
     //< **Read on this interval, not on the period (100ms)**, which steers only after the line has
     //< crossed the sensor and loses it on a bend.
@@ -134,12 +130,9 @@ $last_lat: I32 = 0
 $last_rot: I32 = 0
 $loops: U32 = 0
 $keys: U32 = 0
-// The command a held press keeps sending, and the moment its signal was last seen.
-// Caution: **Always stop once the signal ends**, or it keeps driving after the remote is put down.
+// The command a held press keeps sending. When its signal ends is `stops.hold`'s to decide.
 $hold_lon: I32 = 0
 $hold_rot: I32 = 0
-$holding: Bool = false
-$hold_seen_us: U32 = 0
 // The three line bits read most recently. Kept **so it steers again only when they change**.
 $last_line: U32 = 0
 // How many times it steered again partway through a round: **the evidence that line following
@@ -275,19 +268,23 @@ priv fn manual_hold(lon: I32, rot: I32) //< drives by hand for one press
     Mode.manual.set_mode()
     hold_lon = lon
     hold_rot = rot
-    holding = true
-    hold_seen_us = timer.now_us()
+    stops.hold.press(timer.now_us())
     apply(lon, 0, rot)
 
 priv fn hold_expire() //< stops once the held press has ended
     //< **It may be called every tick.**
-    if !holding || timer.elapsed_us(hold_seen_us) < HOLD_TIMEOUT_US
-        return
-    holding = false
-    apply(0, 0, 0)
+    //< Caution: **Always stop once the signal ends**, or it keeps driving after the remote is put
+    //< down.
+    if stops.hold.ended(timer.now_us())
+        apply(0, 0, 0)
 
 priv fn handle_key(ln: con.Line$@, cmd: U32)
     keys += 1
+    if stops.stop_key(cmd)
+        // **▶ and 9 acting the same (to manual) is on purpose**: two keys to reach for, one path
+        // (`set_mode`).
+        Mode.manual.set_mode()
+        return
     switch cmd
     case KEY_FORWARD
         manual_hold(motor.CAP, 0)
@@ -297,10 +294,6 @@ priv fn handle_key(ln: con.Line$@, cmd: U32)
         manual_hold(0, 0 - motor.CAP)
     case KEY_RIGHT
         manual_hold(0, motor.CAP)
-    case KEY_STOP
-        // **Acting the same as `9` (to manual) is on purpose**: two keys to reach for, one path
-        // (`set_mode`).
-        Mode.manual.set_mode()
     case KEY_SERVO_LEFT
         look_at(servo_angle + SERVO_STEP_DEG)
     case KEY_SERVO_RIGHT
@@ -327,8 +320,6 @@ priv fn handle_key(ln: con.Line$@, cmd: U32)
         // reason.
         refuse()
         con.say(ln, "[car]", "no ultrasonic - it shares GPIO 4/5 with the LED matrix")
-    case KEY_MODE_MANUAL
-        Mode.manual.set_mode()
     case KEY_FACE_NEXT
         if face.available()
             face.next()
@@ -371,7 +362,7 @@ priv fn pump(ln: con.Line$@, arena: Arena$@, ms: U32)
             if f.repeat
                 ir_repeat += 1
                 // **Extend it on a repeat**, the only signal of a held press.
-                hold_seen_us = timer.now_us()
+                stops.hold.repeat(timer.now_us())
             else
                 ir_ok += 1
                 last_addr = f.addr

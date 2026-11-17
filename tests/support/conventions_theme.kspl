@@ -56,9 +56,31 @@ priv fn check_theme_roles(arena: Arena$@)
             if holds_color(code, arena)
                 bad
                     .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+    // **A page's `.html` writes no colour in its style**: a `<style>` block, a `style=` attribute
+    // or a script's `.style.`. The contrast check reads only CSS files, so a colour written there
+    // would go unmeasured.
+    // Caution: **Read only the style**, not the page's text: a heading such as "Canvas drawing"
+    // holds a system colour's name.
+    for rel in harness.tracked_matching(U8[][]::{ "*.html" })
+        $in_style: = false
+        $i: Sz = 0
+        for line in harness.read_under_root(rel).lines(arena)
+            seen += 1
+            i += 1
+            if line.find_str("<style").is_some()
+                in_style = true
+            styled: =
+                in_style || line.find_str("style=").is_some() ||
+                line.find_str(".style.").is_some()
+            if line.find_str("</style>").is_some()
+                in_style = false
+            if styled && holds_color(line, arena)
+                bad
+                    .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
     verdict.check_list("the look's colours are held by the roles alone (no colour outside `:root`)",
         seen, "lines", bad@,
-        "add one more role and point at it with `var(--…)` (ksmd/port/web/page.css)")
+        "move it into the page's CSS file, as one more role in `:root`, and point at it with \
+            `var(--…)` (ksmd/port/web/page.css)")
 
 priv const LUM_WEIGHT: F64[_] = ::{ 0.2126, 0.7152, 0.0722 } //< the contrast's luminance weights
     //< **A pair is measured only where both roles hold a written colour.** A role set from the
@@ -107,7 +129,7 @@ priv const THEME_PAIR: U8[][_] = ::{ "--ink", "--paper", "--ink", "--soft", "--i
     "--muted", "--paper", "--muted", "--soft", "--error", "--paper", "--paper", "--mark", "--text",
     "--bg", "--text", "--side", "--text", "--bubble", "--text", "--code", "--muted", "--bg",
     "--accent", "--bg", "--ok", "--bg", "--warn", "--bg", "--bad", "--bg", "--on-accent",
-    "--accent" }
+    "--accent", "--accent", "--code" }
 
 priv fn value_of(names: List<|U8[]|>@, vals: List<|U8[]|>@, want: U8[]): U8[] //<
     //< The value the role holds last

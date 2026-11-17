@@ -101,6 +101,53 @@ fn test_stops_remote() //<
         "after the time limit, a held press re-arms")
     verdict.pass("any press stops the car, and only a held press brings it back.")
 
+fn test_stops_remote_only_keys() //<
+    //< On the remote-only car, ▶ and 9 stop it, and no other key does
+    //< **The other keys must not stop it**, or each change of the face or the light would.
+    verdict.start("[ksos/stops] the remote-only car's stop keys test...")
+    // The remote's own codes, as stage 12 of the bring-up tutorial lists them.
+    assert(stops.stop_key(0x15), "▶ stops it")
+    assert(stops.stop_key(0x4A), "9 stops it")
+    $count: U32 = 0
+    for $cmd: U32 = 0; cmd < 256; cmd += 1
+        if stops.stop_key(cmd)
+            count += 1
+    assert(count == 2, "no other key stops it")
+    verdict.pass("only ▶ and 9 stop the remote-only car.")
+
+priv fn ends_after(start_us: U32, quiet_us: U32): Bool //<
+    //< Whether a press at `start_us`, quiet for `quiet_us`, counts as released then
+    $h: = stops.Hold()
+    h.press(start_us)
+    return h.ended(start_us + quiet_us)
+
+fn test_stops_remote_only_hold() //<
+    //< On the remote-only car, a press quiet for `HOLD_TIMEOUT_US` stops it, once; a repeat extends it
+    verdict.start("[ksos/stops] the remote-only car's held press test...")
+    assert(stops.HOLD_TIMEOUT_US > 108000, "one repeat interval (108ms) does not end a press")
+    assert(!ends_after(1000, stops.HOLD_TIMEOUT_US - 1), "just under the timeout drives")
+    assert(ends_after(1000, stops.HOLD_TIMEOUT_US), "exactly the timeout stops it")
+    // The timer wraps about every 71.6 minutes; a press across the wrap still ends on time.
+    late: U32 = 0xFFFFFFFF - 1000
+    assert(!ends_after(late, stops.HOLD_TIMEOUT_US - 1), "across the wrap, just under drives")
+    assert(ends_after(late, stops.HOLD_TIMEOUT_US), "across the wrap, the timeout stops it")
+
+    // A repeat counts the quiet again from its own moment.
+    $h: = stops.Hold()
+    h.press(0)
+    h.repeat(200000)
+    assert(!h.ended(200000 + stops.HOLD_TIMEOUT_US - 1), "a repeat extends the press")
+    assert(h.ended(200000 + stops.HOLD_TIMEOUT_US), "the timeout after the repeat stops it")
+    // The stop latches: nothing drives again until the next press.
+    assert(!h.ended(200000 + 2 * stops.HOLD_TIMEOUT_US), "it stops only once")
+    h.repeat(900000)
+    assert(!h.ended(900000 + stops.HOLD_TIMEOUT_US), "a repeat after the stop does not drive")
+
+    // With no press, there is nothing to stop.
+    $idle: = stops.Hold()
+    assert(!idle.ended(stops.HOLD_TIMEOUT_US), "no press, no stop")
+    verdict.pass("a held press stops the car once its signal is quiet for the timeout.")
+
 fn test_stops_panic_stops_every_wheel() //<
     //< The panic hook's `motor.stop` sends speed 0, which gives 0 on both pins of every wheel
     //< Caution: **The raise to `WHEEL_MIN_PERCENT` must leave 0 alone**, or a panic leaves the

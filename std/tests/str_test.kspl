@@ -307,6 +307,28 @@ fn test_strnum_roundtrip() //<
         .pass("Integers round-trip to their smallest and largest, floats at 17 digits, and what is \
             out of range or not a number is refused.")
 
+fn test_fixed_digits_at_the_cut() //< `.N` where the first digit lies at or past the last place
+    //< **The value can round up into the last place, or to nothing.** `0.0006` at `.3` has no
+    //< digit down to 10^-3 but rounds up to it; `0.00004` rounds to 0. A tie goes to the even
+    //< digit, as `printf` does. The answers are `printf("%.Nf")`'s.
+    verdict.start("[strfmt] fixed digits where the value meets the last place test...")
+    defer $b: = Str_builder()
+    small: F64 = 0.0006
+    below: F64 = 0.0004
+    far: F64 = 0.00004
+    carry: F64 = 0.9996
+    neg: F64 = -0.0006
+    tie: F64 = 0.5
+    b.s("\{small:.3\}|\{below:.3\}|\{far:.3\}|\{carry:.3\}|\{neg:.3\}|\{tie:.0\}")
+    verdict.check("each rounds as printf does",
+        b.slice().equals("0.001|0.000|0.000|1.000|-0.001|0"), b.slice())
+    tenth: F32 = 0.1F32
+    b.clear().s("\{tenth:.10\}|\{tenth:.1\}")
+    verdict.check("an F32 at .N shows the digits of the value it holds",
+        b.slice().equals("0.1000000015|0.1"), b.slice())
+    verdict
+        .pass("A value that rounds into the last place, or to 0, is written as printf writes it.")
+
 fn test_float_bits() //< reading an F32's bits is a copy, not a conversion
     //< **Include the patterns arithmetic would change**: -0 and infinity survive only if the bits
     //< are copied.

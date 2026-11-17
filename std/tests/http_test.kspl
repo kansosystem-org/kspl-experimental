@@ -532,9 +532,43 @@ priv fn response_error(src: U8[], arena: Arena$@): U8[] //<
             return "unsupported_close_delimited"
         case .incomplete
             return "incomplete"
+        case .invalid_status_line
+            return "invalid_status_line"
+        case .invalid_header
+            return "invalid_header"
+        case .unsupported_version
+            return "unsupported_version"
         default
             return "another error"
     return "accepted"
+
+fn test_http_response_head_refused() //< a response whose first line or a header is malformed
+    //< **A peer's status line is read only in its one shape**, `VERSION status reason`, and each
+    //< header line must hold a `:`. Anything else is refused by name, never read as a guess.
+    verdict.start("[Http] a malformed status line or header in a response test...")
+    defer arena: = Arena(4096)
+    cases: = U8[][]::{ "HTTP/1.1\r\n\r\n", "invalid_status_line", "HTTP/1.1 2000 OK\r\n\r\n",
+        "invalid_status_line", "HTTP/1.1 20x OK\r\n\r\n", "invalid_status_line",
+        "HTTP/1.1 099 Low\r\n\r\n", "invalid_status_line", "HTTP/1.1 600 High\r\n\r\n",
+        "invalid_status_line", "HTTP/1.1 200 O\u0001K\r\n\r\n", "invalid_status_line",
+        "HTTP/1.x 200 OK\r\n\r\n", "unsupported_version",
+        "HTTP/1.1 204 No Content\r\nno colon here\r\n\r\n", "invalid_header",
+        "HTTP/1.1 204 No Content\r\n\r\n", "accepted" }
+    for i in Range(0, cases.len, 2)
+        got: = response_error(cases[i], arena)
+        verdict.check(arena.text().s("'").s(cases[i]).s("' reads as ").s(cases[i + 1]).take(),
+            got.equals(cases[i + 1]), got)
+    // The writer refuses a status outside 100 to 599 before it writes anything.
+    defer $out: = Str_builder()
+    for status in I32[]::{ 99, 600 }
+        $refused: = false
+        http.format_response(out@, status, http.headers(arena).build(), "") catch
+            refused = true
+        verdict.check(arena.text().s("format_response refuses status \{status\}").take(),
+            refused && out.len == 0, out.slice())
+    verdict
+        .pass("Each malformed status line and header is refused by name, and so is a status out of \
+            range on writing.")
 
 // ==========================================
 // std/http: the round trip of reading and writing a request and a response over a real TCP socket.

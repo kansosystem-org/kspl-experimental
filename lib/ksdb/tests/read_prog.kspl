@@ -1,0 +1,144 @@
+//< Opens one medium image through ksdb's log, as a device does after a restart, and uses it
+//< `make test-fuzz` runs its damaged images through this program.
+//< **What ksdb reads back is a medium a power cut, a worn cell or another program left behind.**
+//< The image is laid on a RAM store of four 256-byte sectors (`ksdb/ram_store`); a shorter image
+//< leaves the rest erased, and a longer one is cut.
+//< Caution: **Do not stop at the scan.** A damaged medium's faults show where the log is used, so
+//< it appends, opens again, and keeps a few kinds through `reset_keeping`.
+//< **The exit code is the only answer**: 0 where a record read back, 1 where none did. **A broken
+//< promise stops with `assert`**, counted as an announced stop: a record read once and lost by an
+//< append, the newest record of a kind read otherwise, or a kept one lost.
+//< Usage: `read_prog medium <file>` (the one kind `tests/fuzz_main.kspl` names).
+import "ksdb/log" as ksdblog
+import "ksdb/ram_store" as ram
+import "ksdb/store" { Store }
+import "std/bytes"
+import "std/chars" // `sub`
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/strfmt" as _strfmt
+import "std/sys"
+
+priv const SECTOR: Sz = 256 //< as ksdb's own tests lay it out; keep in step with `fuzz_main.kspl`
+priv const CAPACITY: Sz = 1024 //< four sectors
+priv $medium: U8[CAPACITY]
+
+priv const KIND_ADDED: U16 = 0x7777 //< the kind the appended record takes
+priv const ADDED: U8[] = "appended after the damage" //< what it holds
+
+priv struct Rec //< one record as a walk read it
+    kind: U16
+    data: U8[]
+
+// The value that what was read is mixed into.
+priv $used: U64 = 0
+
+priv const MIX: U64 = 0x100000001B3U64 //< the multiplier; it wraps on overflow, used only to mix
+
+priv fn use_bytes(data: U8[])
+    for b in data
+        used = (used ^ U64::b) * MIX
+
+priv fn walk(store: Store, arena: Arena$@): List<|Rec|> //<
+    //< Opens the log and reads every record, checking each lies inside what the log uses
+    lg: = ksdblog.Log.open(store)
+    assert(lg.used() <= CAPACITY, "ksdb: the log uses more than the medium holds")
+    $out: = List<|Rec|>(arena)
+    $buf: U8[CAPACITY] = ::{}
+    $it: = lg.iter()
+    for it.next()
+        assert(it.payload_at() + Sz::it.len <= lg.used(),
+            "ksdb: a record runs past where the log ends")
+        n: = it.read(U8$[]::buf) catch
+            panic("ksdb: a record no longer than the medium does not fit a buffer that long")
+        assert(n == Sz::it.len, "ksdb: a record reads back at another length")
+        data: = arena.dup_str((U8[]::buf).sub(0, n))
+        use_bytes(data)
+        out.push(Rec::{ .kind = it.kind, .data = data })
+    return out
+
+priv fn newest(recs: List<|Rec|>@, kind: U16): Rec? //< the last record of `kind` a walk read
+    $found: Rec? = .none
+    for r in recs
+        if r.kind == kind
+            found = .some(r)
+    return found
+
+priv fn check_last(store: Store, recs: List<|Rec|>@, kind: U16) //<
+    //< `last` and `last_equals` answer the newest record of `kind` the walk read
+    lg: = ksdblog.Log.open(store)
+    want: Rec = newest(recs, kind) catch
+        panic("ksdb: a kind is asked for that the walk never read")
+    $buf: U8[CAPACITY] = ::{}
+    n: = lg.last(kind, U8$[]::buf) catch
+        panic("ksdb: last finds no record of a kind the walk read")
+    assert((U8[]::buf).sub(0, n).equals(want.data),
+        "ksdb: last answers another record than the walk's newest")
+    assert(lg.last_equals(kind, want.data), "ksdb: last_equals refuses the newest record's bytes")
+
+priv fn read_medium(image: U8[], arena: Arena$@): I32 //<
+    //< Opens the image, appends to it, and keeps two kinds through an erase
+    store: = ram.make(U8$[]::medium, SECTOR)
+    n: = image.len if image.len < CAPACITY else CAPACITY
+    (U8$[]::medium).copy_from(0, image.sub(0, n))
+    before: = walk(store, arena)
+    for r in before
+        check_last(store, before@, r.kind)
+    // **An append never takes a record that read back before** (`lib/ksdb/docs/DESIGN-storage.md`).
+    $lg: = ksdblog.Log.open(store)
+    $added: = true
+    lg.append(KIND_ADDED, ADDED) catch e
+        assert(e == ksdblog.Ksdb_error.full, "ksdb: an append fails other than as full")
+        added = false
+    after: = walk(store, arena)
+    assert(after.len == before.len + (1 if added else 0),
+        "ksdb: an append changes how many records read back by other than its own")
+    for i in Range.asc(before.len)
+        assert(after.get(i).kind == before.get(i).kind &&
+            after.get(i).data.equals(before.get(i).data),
+            "ksdb: a record that read back before an append reads otherwise after it")
+    if added
+        check_last(store, after@, KIND_ADDED)
+    // **The newest record of each kind kept survives the erase**, as it read before.
+    $kinds: = List<|U16|>(arena)
+    for r in after
+        $listed: = r.kind == KIND_ADDED
+        for k in kinds
+            listed = listed || k == r.kind
+        if kinds.len < 2 && !listed
+            kinds.push(r.kind)
+    $keeping: = ksdblog.Log.open(store)
+    $kept: = true
+    keeping.reset_keeping(kinds.slice()) catch e
+        assert(e == ksdblog.Ksdb_error.too_large,
+            "ksdb: reset_keeping fails other than as too_large")
+        kept = false
+    if kept
+        left: = walk(store, arena)
+        assert(left.len == kinds.len, "ksdb: reset_keeping leaves other than one record a kind")
+        for k in kinds
+            check_last(store, left@, k)
+            was: Rec = newest(after@, k) catch
+                panic("ksdb: a kind kept was never read")
+            now: Rec = newest(left@, k) catch
+                panic("ksdb: reset_keeping loses the newest record of a kind it keeps")
+            assert(now.data.equals(was.data),
+                "ksdb: reset_keeping keeps another record than the newest of its kind")
+    return 0 if before.len > 0 else 1
+
+fn main(): I32
+    args: = sys.args()
+    if args.len < 3 || !args[1].equals("medium")
+        io.err().s("usage: read_prog medium <file>\n")
+        return 2
+    image: = io.read_file(args[2], null) catch
+        io.err().s("cannot read: \{args[2]\}\n")
+        return 2
+    // The address sanitizer's leak check counts a buffer still held at the exit as a finding.
+    defer dealloc(Void$@::image.ptr)
+    defer arena: = Arena(16 * 1024 * 1024)
+    code: = read_medium(image, arena)
+    // Caution: **Print the mixed value**, or the reading above could be optimized away entirely.
+    io.out().s("used=\{used\}\n")
+    return code
