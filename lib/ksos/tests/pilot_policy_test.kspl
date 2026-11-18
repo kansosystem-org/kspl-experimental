@@ -29,7 +29,12 @@ priv fn add(writer: st.Safetensors_writer$@, name: U8[], shape: Sz[], swap: U8[]
     s: = swap_shape if name.equals(swap) else shape
     // An empty shape leaves the tensor out.
     if s.len > 0
-        writer.add(name, Tensor<|F32|>(s, arena))
+        // Caution: **Write the zeros.** A new tensor's elements are whatever its memory held, and
+        // `load` refuses a manoeuvre value that is out of range or NaN, so a file meant to load
+        // was refused on one runner's LLVM build alone.
+        t: = Tensor<|F32|>(s, arena)
+        t.fill(0.0F32)
+        writer.add(name, t)
 
 priv fn write( //< a policy file, all zeros, with one tensor's shape changed
     swap: U8[], //< the tensor whose shape changes; "" changes none

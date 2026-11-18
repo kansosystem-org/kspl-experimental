@@ -151,6 +151,8 @@ $(KSAGENT_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/ksagent)
 	$(call kspl_dep_rules,$@,$(GEN_DIR)/ksagent)
 	@echo "# built -> $(KSAGENT_EXE) (try: ./$(KSAGENT_EXE) ask docs \"What is KSPL?\")"
 -include $(GEN_DIR)/ksagent.d
+# `make debug` runs ksagent's tests, which start the program to hold it to its specification.
+debug: $(KSAGENT_EXE)
 
 # --- Kanso OS (RTOS): `lib/ksos/Makefile`'s own targets, called here by the same names ---
 # That file stands alone (a copy of the folder is tested by it), so what the root adds is only

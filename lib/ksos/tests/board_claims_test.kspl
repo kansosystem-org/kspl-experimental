@@ -1,0 +1,554 @@
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/head"
+import "ksos/boards/freenove_4wd_pico/motor"
+import "ksos/boards/freenove_4wd_pico/range"
+import "ksos/drivers/rp2040/adc"
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/hcsr04"
+import "ksos/drivers/rp2040/pwm"
+import "ksos/drivers/rp2040/servo"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strnum"
+import "std/verdict"
+
+// ==========================================
+// ksos/boards/freenove_4wd_pico: the board's code against the facts of its specification.
+//
+// **Each fact is read from the specification's text**, and its answer from the code. A failure
+// names the specification's line, so a change on one side alone points at the other. The forms
+// are "How the code is held to these facts" in lib/ksos/docs/SPEC-board.md.
+// **The gate checks itself too**: each form must hold rows, and each form's first row, judged
+// again with its answer changed, must fail on its line.
+// ==========================================
+
+embed "../docs/SPEC-board.md" as spec
+
+priv const SPEC_NAME: U8[] = "lib/ksos/docs/SPEC-board.md" //< what a failure calls the text
+
+priv const PINS_HEAD: U8[] = "| GPIO | What it is for | The official name |" //<
+    //< the pin assignment's heading row: numbers first, the official names last
+priv const SIDES_HEAD: U8[] = "| The definition | GPIO |" //< the sides': names first, numbers last
+priv const SHARED_START: U8[] = "| The module plugged in |" //<
+    //< the shared connector's heading row starts so; each further cell is `GPIO N`
+priv const GROUPS_HEAD: U8[] = "| The pin group | The real wheel |" //< the motors' pin groups
+priv const SPEEDS_HEAD: U8[] = "| The speed | The first pin | The second pin | The motor |" //<
+    //< which pin carries the duty for a speed's sign
+priv const DUTY_WORDS: U8[] = "The duty" //< a speeds' cell for the pin that carries the duty
+priv const TEN_BIT_MAX: U32 = 1023 //< the largest reading at the vendor's 10 bits
+    //< The text states it, and a `says` row holds this constant to that sentence.
+
+priv enum Form //< what a row asks, and how its answer is checked
+    named //< a vendor's name on a GPIO: the pin assignment's, the shared connector's or the sides'
+    group //< a motor's pin group, and the wheel it turns
+    speed //< which of a motor's pins carries the duty for a speed's sign
+    says //< a number or word in a sentence, found by the words around it
+
+priv const FORMS: Form[4] = ::{ .named, .group, .speed, .says } //< every form
+
+priv struct Row //< one fact of the text, and the answer it names
+    line: Sz //< its line, from 1
+    form: Form
+    key: U8[] //< the name, the wheel's cell, the speed's cell, or the words before the answer
+    want: U8[] //< the GPIO, the pin group, the first pin's cell, or the text found
+    also: U8[] //< the second pin's cell, or the words after the answer
+    said: Sz //< a `says` row's place in `sayings`
+
+priv struct Bound //< which board constant stands for an official name
+    name: U8[] //< as the text writes it
+    pin: U32 //< the constant's value
+    code: U8[] //< the constant, as a failure names it
+
+priv struct Said //< a sentence's answer, and how the test finds it in the text
+    before: U8[] //< the words before it; they occur once in the text
+    after: U8[] //< the words after it, on the same line
+    shown: U8[] //< the answer the code gives, as the text writes it (case is not compared)
+
+priv struct Reading //< the rows the text holds, and what in it is meant as a row but is not one
+    rows: List<|Row|>
+    problems: List<|U8[]|> //< each `<name>:<line>: what`
+
+fn test_board_claims() //< every fact of the board's specification that the host reaches holds
+    verdict.start("[ksos/board] the specification's facts against the code test...")
+    defer arena: = Arena(256 * 1024)
+    bound: = bindings(arena)
+    said: = sayings(arena)
+    reading: = read_rows(spec, said@, arena)
+    $ok: = verdict.check_list("the board's specification reads as rows of the forms",
+        reading.rows.len, "rows", reading.problems@,
+        "write the row as its form does, or the heading as no form's")
+    for form in FORMS
+        $n: Sz = 0
+        $bad: = List<|U8[]|>(arena)
+        for row in reading.rows
+            if row.form == form
+                n += 1
+                broke: = judged(row@, bound@, said@, arena)
+                if broke.len > 0
+                    bad
+                        .push(arena.text().s(row_name(row@, arena)).s(": ").s(broke).take())
+        held: = verdict.check_list(arena.text().s("the board's ").s(form.written()).s(" rows hold")
+            .take(), n, "rows", bad@, "change the code or the text, whichever the board contradicts")
+        ok = ok && held
+    ok = used(reading@, bound@, arena) && ok
+    ok = changed_cases(reading@, bound@, said@, arena) && ok
+    // The checks above go on past a failure, so each one is named; this stops the run after them.
+    assert(ok, "a fact of the board's specification does not hold: a FAIL line above names it")
+    verdict.pass("Each fact the host reaches holds, and a changed answer fails on its line.")
+
+priv fn used(reading: Reading@, bound: List<|Bound|>@, arena: Arena$@): Bool //<
+    //< Each official name the test binds is one a row names, so a renamed pin cannot pass unseen
+    $bad: = List<|U8[]|>(arena)
+    for b in bound
+        $found: = false
+        for row in reading.rows
+            if row.form == .named && row.key.equals(b.name)
+                found = true
+        if !found
+            bad
+                .push(arena.text().s("no row names `").s(b.name).s("`, bound to ").s(b.code).take())
+    return verdict.check_list("each official name the test binds is one the text names", bound.len,
+        "names", bad@, "bind each name the text uses, and drop a binding it no longer names")
+
+priv fn changed_cases(reading: Reading@, bound: List<|Bound|>@, said: List<|Said|>@,
+    arena: Arena$@): Bool //<
+        //< The first row of each form, judged again with its answer changed, fails naming its line
+    $ok: = true
+    for form in FORMS
+        for row in reading.rows
+            if row.form == form
+                other: = changed(row@, arena)
+                name: = row_name(other@, arena)
+                at: = arena.text().c(':').s("\{row.line\}").s(": ").take()
+                failed: = judged(other@, bound, said, arena).len > 0
+                held: = verdict.check(arena.text().s("its answer changed, it fails: ").s(name)
+                    .take(), failed && name.find_str(at).is_some(),
+                    "a wrong answer holds, or its failure does not name the line")
+                ok = ok && held
+                break
+    return ok
+
+priv fn changed(row: Row@, arena: Arena$@): Row //< the row with a wrong answer of its own form
+    $other: = row$
+    switch row.form
+    case .named
+        n: = number(row.want) catch
+            other.want = arena.text().s(row.want).c('x').take()
+            return other
+        other.want = arena.text().s("\{n + 1\}").take()
+    case .group
+        // The pair swapped: the same pins, with the duty on the wrong one.
+        pins: = pieces(row.want, arena)
+        if pins.len == 2
+            other.want = arena.text().s(pins.get(1)).s(" / ").s(pins.get(0)).take()
+    case .speed
+        other.want = row.also
+        other.also = row.want
+    case .says
+        other.want = arena.text().s(row.want).c('1').take()
+    return other
+
+impl Form
+    fn written(r: Self): U8[] //< the form as a check's name writes it
+        switch r
+        case .named
+            return "pin-name"
+        case .group
+            return "pin-group"
+        case .speed
+            return "speed"
+        case .says
+            return "sentence"
+
+priv fn row_name(row: Row@, arena: Arena$@): U8[] //< `<name>:<line>: ` and the row, in short
+    b: = arena.text().s(SPEC_NAME).c(':').s("\{row.line\}").s(": ")
+    switch row.form
+    case .named
+        b.s("`").s(row.key).s("` is GPIO ").s(row.want)
+    case .group
+        b.s("GPIO ").s(row.want).s(" turn the wheel '").s(row.key).c('\'')
+    case .speed
+        b.s(row.key).s(" speed: the first pin ").s(row.want).s(", the second ").s(row.also)
+    case .says
+        b.s("'").s(row.key).s(row.want).s(row.also).c('\'')
+    return b.take()
+
+// ==========================================
+// What the code gives
+// ==========================================
+
+priv fn bindings(arena: Arena$@): List<|Bound|> //< the board constant for each official name
+    //< **This list is the one link from the vendor's names to the code's.** Its values are the
+    //< code's own, so the list holds no fact; `used` fails on a name no row names.
+    $out: = List<|Bound|>(arena)
+    a: = board.MOTOR_PIN_A
+    b: = board.MOTOR_PIN_B
+    fl: = board.WHEEL_FRONT_LEFT
+    bl: = board.WHEEL_BACK_LEFT
+    br: = board.WHEEL_BACK_RIGHT
+    fr: = board.WHEEL_FRONT_RIGHT
+    out.push(bind("M1_IN1", a[fl], "MOTOR_PIN_A[WHEEL_FRONT_LEFT]"))
+    out.push(bind("M1_IN2", b[fl], "MOTOR_PIN_B[WHEEL_FRONT_LEFT]"))
+    out.push(bind("M2_IN1", b[bl], "MOTOR_PIN_B[WHEEL_BACK_LEFT]"))
+    out.push(bind("M2_IN2", a[bl], "MOTOR_PIN_A[WHEEL_BACK_LEFT]"))
+    out.push(bind("M3_IN1", b[br], "MOTOR_PIN_B[WHEEL_BACK_RIGHT]"))
+    out.push(bind("M3_IN2", a[br], "MOTOR_PIN_A[WHEEL_BACK_RIGHT]"))
+    out.push(bind("M4_IN1", b[fr], "MOTOR_PIN_B[WHEEL_FRONT_RIGHT]"))
+    out.push(bind("M4_IN2", a[fr], "MOTOR_PIN_A[WHEEL_FRONT_RIGHT]"))
+    out.push(bind("Servo1", board.SERVO_HEAD_PIN, "SERVO_HEAD_PIN"))
+    out.push(bind("Track1", board.LINE_SENSOR_RIGHT, "LINE_SENSOR_RIGHT"))
+    out.push(bind("Track2", board.LINE_SENSOR_MID, "LINE_SENSOR_MID"))
+    out.push(bind("Track3", board.LINE_SENSOR_LEFT, "LINE_SENSOR_LEFT"))
+    out.push(bind("SDA/Trig", board.I2C_SDA, "I2C_SDA"))
+    out.push(bind("SDA/Trig", board.ULTRASONIC_TRIG, "ULTRASONIC_TRIG"))
+    out.push(bind("SCL/Echo", board.I2C_SCL, "I2C_SCL"))
+    out.push(bind("SCL/Echo", board.ULTRASONIC_ECHO, "ULTRASONIC_ECHO"))
+    out.push(bind("WS2812", board.WS2812_PIN, "WS2812_PIN"))
+    out.push(bind("A0", board.BATTERY_PIN, "BATTERY_PIN"))
+    out.push(bind("A1", board.LIGHT_SENSOR_RIGHT, "LIGHT_SENSOR_RIGHT"))
+    out.push(bind("A2", board.LIGHT_SENSOR_LEFT, "LIGHT_SENSOR_LEFT"))
+    out.push(bind("IR", board.IR_RECEIVER, "IR_RECEIVER"))
+    out.push(bind("Buzzer", board.BUZZER_PIN, "BUZZER_PIN"))
+    out.push(bind("TRIG", board.ULTRASONIC_TRIG, "ULTRASONIC_TRIG"))
+    out.push(bind("ECHO", board.ULTRASONIC_ECHO, "ULTRASONIC_ECHO"))
+    out.push(bind("SDA", board.I2C_SDA, "I2C_SDA"))
+    out.push(bind("SCL", board.I2C_SCL, "I2C_SCL"))
+    out.push(bind("Left_PHOTOSENSITIVE_PIN", board.LIGHT_SENSOR_LEFT, "LIGHT_SENSOR_LEFT"))
+    out
+        .push(bind("Right_PHOTOSENSITIVE_PIN", board.LIGHT_SENSOR_RIGHT, "LIGHT_SENSOR_RIGHT"))
+    out.push(bind("PIN_TRACKING_LEFT", board.LINE_SENSOR_LEFT, "LINE_SENSOR_LEFT"))
+    out.push(bind("PIN_TRACKING_CENTER", board.LINE_SENSOR_MID, "LINE_SENSOR_MID"))
+    out.push(bind("PIN_TRACKING_RIGHT", board.LINE_SENSOR_RIGHT, "LINE_SENSOR_RIGHT"))
+    return out
+
+priv fn bind(name: U8[], pin: U32, code: U8[]): Bound
+    return Bound::{ .name = name, .pin = pin, .code = code }
+
+priv fn sayings(arena: Arena$@): List<|Said|> //< each sentence's answer, as the code gives it
+    $out: = List<|Said|>(arena)
+    motor_hz: = clocks.SYS_HZ / (board.MOTOR_PWM_DIV_INT * (board.MOTOR_PWM_TOP + 1))
+    out.push(number_said("**PWM runs at ", " Hz**", motor_hz, arena))
+    out.push(number_said("A speed is given as -", " to ", U64::motor.SPEED_MAX, arena))
+    $reversed: Sz = 0
+    for polarity in board.WHEEL_POLARITY
+        if polarity < 0
+            reversed += 1
+    out.push(said_as("on the unit here, all ", " are reversed", word(reversed)))
+    // The servo's duty under TOP 999 counts tenths of a percent.
+    out.push(number_said("mapping 0–", "° linearly", U64::servo.ANGLE_MAX, arena))
+    narrowest: = servo.level_for_angle(0, 999)
+    out.push(said_as("onto a duty of ", "% to ", tenths(narrowest, arena)))
+    widest: = servo.level_for_angle(servo.ANGLE_MAX, 999)
+    out.push(said_as("% to ", "% (", tenths(widest, arena)))
+    lowest: = head.clamp_angle(0)
+    out.push(number_said("limits it to **", "° to ", U64::lowest, arena))
+    highest: = head.clamp_angle(servo.ANGLE_MAX)
+    out.push(number_said("° to ", "°**", U64::highest, arena))
+    // The battery: the vendor's 10-bit reading, scaled to the RP2040's 12 bits.
+    full_mv: = board.battery_mv(adc.MAX_VALUE)
+    example_mv: = board.battery_mv(640 * adc.MAX_VALUE / TEN_BIT_MAX)
+    example_v: = hundredths(example_mv, arena)
+    out.push(said_as("an ADC value of 640 gives about ", "V", example_v))
+    out.push(number_said("12 bits, divide by ", " instead", adc.MAX_VALUE, arena))
+    out.push(number_said("reads the ADC at 10 bits (0 to ", ")", TEN_BIT_MAX, arena))
+    out.push(said_as("**reads the ADC ", " times", word(Sz::board.BATTERY_SAMPLES)))
+    low: = board.BATTERY_LOW_MV
+    low_10: = (low * TEN_BIT_MAX + full_mv / 2) / full_mv
+    out.push(number_said("against **", "**", low_10, arena))
+    out.push(said_as("(525 is about ", "V", tenths((low + 50) / 100, arena)))
+    low_12: = (low * adc.MAX_VALUE + full_mv / 2) / full_mv
+    out.push(number_said("and about ", " at 12 bits", (low_12 + 50) / 100 * 100, arena))
+    // The ultrasonic sensor.
+    out.push(number_said("It sends a **", "µs**", hcsr04.TRIGGER_PULSE_US, arena))
+    width_cm: = hcsr04.echo_us_to_mm(1000) / 10
+    out.push(number_said("A width of 1000µs is ", "cm", width_cm, arena))
+    out.push(number_said("= **", "µs**", hcsr04.ECHO_TIMEOUT_US, arena))
+    max_cm: = hcsr04.MAX_DISTANCE_MM / 10
+    out.push(number_said("a maximum distance of ", "cm", max_cm, arena))
+    out.push(number_said("cm × ", "`", hcsr04.ECHO_TIMEOUT_US / max_cm, arena))
+    far_cm: = range.OUT_OF_RANGE_MM / 10
+    out.push(number_said("the distance is taken as ", "cm", far_cm, arena))
+    // The WS2812 LEDs.
+    out.push(said_as("| 16 | ", " WS2812", word(board.WS2812_COUNT)))
+    out.push(number_said("are chained on GPIO ", ".", board.WS2812_PIN, arena))
+    channel: = "B" if pwm.is_channel_b(board.WS2812_PIN) else "A"
+    slice: = pwm.slice_of(board.WS2812_PIN)
+    on: = arena.text().s("\{slice\} channel ").s(channel).take()
+    out.push(said_as("also usable as PWM slice ", ")", on))
+    return out
+
+priv fn said_as(before: U8[], after: U8[], shown: U8[]): Said //< a sentence's row
+    return Said::{ .before = before, .after = after, .shown = shown }
+
+priv fn number_said(before: U8[], after: U8[], value: U64, arena: Arena$@): Said //<
+    //< a sentence's row whose answer is a number in digits
+    return said_as(before, after, arena.text().s("\{value\}").take())
+
+priv const WORDS: U8[][11] = ::{ "zero", "one", "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten" } //< a count as the text spells it
+
+priv fn word(count: Sz): U8[] //< a count as a word, or a mark that cannot match past ten
+    if count < WORDS.len
+        return WORDS[count]
+    return "(more than ten)"
+
+priv fn tenths(value: U32, arena: Arena$@): U8[] //< `value` tenths, as `2.5`
+    return arena.text().s("\{value / 10\}.\{value % 10\}").take()
+
+priv fn hundredths(mv: U32, arena: Arena$@): U8[] //< millivolts as volts to two places, rounded
+    v: = (mv + 5) / 10
+    return arena.text().s("\{v / 100\}.").s("0" if v % 100 < 10 else "").s("\{v % 100\}").take()
+
+// ==========================================
+// Judging a row
+// ==========================================
+
+priv fn judged(row: Row@, bound: List<|Bound|>@, said: List<|Said|>@, arena: Arena$@): U8[] //<
+    //< What is wrong with the row, against the code; empty where it holds
+    switch row.form
+    case .named
+        return judge_named(row, bound, arena)
+    case .group
+        return judge_group(row, arena)
+    case .speed
+        return judge_speed(row, arena)
+    case .says
+        s: = said.get(row.said)
+        if row.want.equals_ignore_case(s.shown)
+            return ""
+        return arena.text().s("the code gives ").s(s.shown).take()
+
+priv fn judge_named(row: Row@, bound: List<|Bound|>@, arena: Arena$@): U8[] //<
+    //< A bound name's constant holds the GPIO; a name the code leaves out has no constant there
+    n: = number(row.want) catch
+        return "the GPIO is not a number"
+    b: = arena.text()
+    $known: = false
+    for x in bound
+        if x.name.equals(row.key)
+            known = true
+            if U64::x.pin != n
+                b.s(x.code).s(" is GPIO \{x.pin\}; ")
+    if !known
+        for x in bound
+            if U64::x.pin == n
+                return arena.text().s("the code puts ").s(x.code)
+                    .s(" on it, yet binds no constant to this name").take()
+    return b.take()
+
+priv fn judge_group(row: Row@, arena: Arena$@): U8[] //<
+    //< The wheel's pin A (the duty for forward) is the first pin, and its pin B the second
+    w: = wheel_of(row.key) catch
+        return "the cell names no one wheel: front or rear, left or right"
+    pins: = pieces(row.want, arena)
+    if pins.len != 2
+        return "the pin group is not two numbers"
+    first: = number(pins.get(0)) catch
+        return "the first pin is not a number"
+    second: = number(pins.get(1)) catch
+        return "the second pin is not a number"
+    a: = board.MOTOR_PIN_A[w]
+    b: = board.MOTOR_PIN_B[w]
+    if U64::a == first && U64::b == second
+        return ""
+    return arena.text().s("the code's pins A / B for this wheel are \{a\} / \{b\}").take()
+
+priv fn judge_speed(row: Row@, arena: Arena$@): U8[] //<
+    //< `motor.duty` gives each pin its cell, on every wheel, from the starting duty to the top
+    //< The wheel's polarity is applied first: the text describes a motor turning "one way".
+    $sign: I32 = 0
+    if row.key.equals("Positive")
+        sign = 1
+    else if row.key.equals("Negative")
+        sign = -1
+    else if !row.key.equals("0")
+        return "the speed is not Positive, Negative or 0"
+    for w in Range.asc(board.WHEEL_COUNT)
+        $s: I32 = board.WHEEL_MIN_PERCENT
+        for s <= motor.SPEED_MAX
+            want_a: = pin_duty(row.want, s) catch
+                return "the first pin's cell is not 'The duty' or '0'"
+            want_b: = pin_duty(row.also, s) catch
+                return "the second pin's cell is not 'The duty' or '0'"
+            d: = motor.duty(w, sign * s * board.WHEEL_POLARITY[w])
+            if d.a != want_a || d.b != want_b
+                return arena.text().s("wheel \{w\} at \{sign * s\} gets \{d.a\} / \{d.b\}").take()
+            s += 1
+    return ""
+
+priv fn pin_duty(cell: U8[], speed: I32): U32? //< what a speeds' cell asks of a pin at `speed`
+    if cell.equals(DUTY_WORDS)
+        return .some(U32::speed)
+    if cell.equals("0")
+        return .some(0)
+    return .none
+
+priv fn wheel_of(cell: U8[]): Sz? //< the wheel a pin groups' cell names, its `**` dropped
+    front: = cell.find_str("front").is_some()
+    rear: = cell.find_str("rear").is_some()
+    left: = cell.find_str(" left").is_some()
+    right: = cell.find_str(" right").is_some()
+    if front == rear || left == right
+        return .none
+    if front
+        return .some(board.WHEEL_FRONT_LEFT if left else board.WHEEL_FRONT_RIGHT)
+    return .some(board.WHEEL_BACK_LEFT if left else board.WHEEL_BACK_RIGHT)
+
+priv fn number(text: U8[]): U64? //< a GPIO number written in digits alone
+    if text.len == 0
+        return .none
+    for ch in text
+        if !ch.is_digit()
+            return .none
+    n: = text.to_i64() catch
+        return .none
+    return .some(U64::n)
+
+// ==========================================
+// Reading the rows
+// ==========================================
+
+priv fn read_rows(text: U8[], said: List<|Said|>@, arena: Arena$@): Reading //<
+    //< The rows of the four table forms, in the text's order, then one row for each sentence
+    lines: = text.lines(arena)
+    $reading: = Reading::{ .rows = List<|Row|>(arena), .problems = List<|U8[]|>(arena) }
+    $i: Sz = 0
+    for i < lines.len
+        if !lines.get(i).starts_with("|")
+            i += 1
+            continue
+        $end: = i
+        for end < lines.len && lines.get(end).starts_with("|")
+            end += 1
+        table(reading@, lines@, i, end, arena)
+        i = end
+    for k in Range.asc(said.len)
+        sentence(reading@, text, k, said.get(k), arena)
+    return reading
+
+priv fn problem(reading: Reading$@, line: Sz, what: U8[], arena: Arena$@) //< notes one, at a line
+    reading.problems
+        .push(arena.text().s(SPEC_NAME).c(':').s("\{line\}").s(": ").s(what).take())
+
+priv fn table(reading: Reading$@, lines: List<|U8[]|>@, top: Sz, end: Sz, arena: Arena$@) //<
+    //< Reads the rows of the table from `top` to `end`, where its heading row is one of the forms
+    heading: = lines.get(top).trim_spaces()
+    known: =
+        heading.equals(PINS_HEAD) || heading.equals(SIDES_HEAD) ||
+        heading.starts_with(SHARED_START) || heading.equals(GROUPS_HEAD) ||
+        heading.equals(SPEEDS_HEAD)
+    if !known
+        return
+    heads: = cells_of(heading, arena)
+    for i in Range(top + 2, end, 1)
+        cells: = cells_of(lines.get(i), arena)
+        if cells.len != heads.len
+            problem(reading, i + 1, "the row's cells do not match its heading's", arena)
+            continue
+        if heading.equals(PINS_HEAD)
+            named(reading, i + 1, cells.get(2), cells.get(0), arena)
+        else if heading.equals(SIDES_HEAD)
+            named(reading, i + 1, cells.get(0), cells.get(1), arena)
+        else if heading.starts_with(SHARED_START)
+            for c in Range(1, cells.len, 1)
+                gpio: = heads.get(c)
+                if !gpio.starts_with("GPIO ")
+                    problem(reading, top + 1, "a cell of the heading is not `GPIO N`", arena)
+                    return
+                word_end: = cells.get(c).find_char(' ').unwrap_or(cells.get(c).len)
+                reading.rows
+                    .push(Row::{ .line = i + 1, .form = .named,
+                    .key = cells.get(c).sub(0, word_end), .want = gpio.sub_from(5), .also = "",
+                    .said = 0 })
+        else if heading.equals(GROUPS_HEAD)
+            reading.rows
+                .push(Row::{ .line = i + 1, .form = .group,
+                .key = without(cells.get(1), '*', arena), .want = cells.get(0), .also = "",
+                .said = 0 })
+        else
+            reading.rows
+                .push(Row::{ .line = i + 1, .form = .speed, .key = cells.get(0),
+                .want = cells.get(1), .also = cells.get(2), .said = 0 })
+
+priv fn named(reading: Reading$@, line: Sz, names_cell: U8[], gpio_cell: U8[], arena: Arena$@) //<
+    //< One row per name: each name with its own number, or one name with every number
+    //< A name written `_CENTER` takes the name before it up to its last `_`.
+    names: = pieces(without(names_cell, '`', arena), arena)
+    numbers: = pieces(without(gpio_cell, '*', arena), arena)
+    if names.len != numbers.len && names.len != 1
+        problem(reading, line, "the names and the GPIOs do not pair up", arena)
+        return
+    $previous: U8[] = ""
+    for k in Range.asc(numbers.len)
+        $name: = names.get(k if names.len > 1 else 0)
+        if name.starts_with("_") && previous.len > 0
+            name = arena.text().s(previous.sub(0, last_underscore(previous))).s(name).take()
+        previous = name
+        reading.rows
+            .push(Row::{ .line = line, .form = .named, .key = name, .want = numbers.get(k),
+            .also = "", .said = 0 })
+
+priv fn sentence(reading: Reading$@, text: U8[], place: Sz, said: Said, arena: Arena$@) //<
+    //< The row of the sentence at `place` in `sayings`: the text between its words, where the words before occur once
+    $count: Sz = 0
+    $at: Sz = 0
+    $from: Sz = 0
+    for from < text.len
+        found: = text.sub_from(from).find_str(said.before) catch
+            break
+        if count == 0
+            at = from + found
+        count += 1
+        from = from + found + 1
+    if count != 1
+        problem(reading, 0,
+            arena.text().s("'").s(said.before).s("' occurs \{count\} times").take(), arena)
+        return
+    $line: Sz = 1
+    for ch in text.sub(0, at)
+        if ch == '\n'
+            line += 1
+    rest: = text.sub_from(at + said.before.len)
+    stop: = rest.find_char('\n').unwrap_or(rest.len)
+    on_line: = rest.sub(0, stop)
+    end: = on_line.find_str(said.after) catch
+        problem(reading, line,
+            arena.text().s("no '").s(said.after).s("' follows '").s(said.before).s("' on this line")
+            .take(), arena)
+        return
+    reading.rows
+        .push(Row::{ .line = line, .form = .says, .key = said.before,
+        .want = on_line.sub(0, end), .also = said.after, .said = place })
+
+priv fn cells_of(line: U8[], arena: Arena$@): List<|U8[]|> //< a table row's cells, trimmed
+    parts: = line.trim_spaces().split('|', arena)
+    $out: = List<|U8[]|>(arena)
+    for k in Range(1, parts.len - 1, 1)
+        out.push(parts.get(k).trim_spaces())
+    return out
+
+priv fn pieces(cell: U8[], arena: Arena$@): List<|U8[]|> //< the parts of `a / b / c`, trimmed
+    $out: = List<|U8[]|>(arena)
+    $rest: = cell
+    for rest.find_str(" / ").is_some()
+        at: = rest.find_str(" / ").unwrap_or(0)
+        out.push(rest.sub(0, at).trim_spaces())
+        rest = rest.sub_from(at + 3)
+    out.push(rest.trim_spaces())
+    return out
+
+priv fn without(text: U8[], drop: U8, arena: Arena$@): U8[] //< `text` with every `drop` taken out
+    b: = arena.text()
+    for ch in text
+        if ch != drop
+            b.c(ch)
+    return b.take()
+
+priv fn last_underscore(name: U8[]): Sz //< where the last `_` stands, or the length if none
+    $at: = name.len
+    for k in Range.asc(name.len)
+        if name[k] == '_'
+            at = k
+    return at

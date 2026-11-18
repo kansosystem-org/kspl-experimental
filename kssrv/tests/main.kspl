@@ -14,7 +14,7 @@ import "kssrv/tests/kept"
 import "kssrv/tests/local"
 import "kssrv/tests/memory"
 import "kssrv/tests/paths"
-import "kssrv/tests/start" { Running, bring_up, refused }
+import "kssrv/tests/start" { Running, bring_up, refused, token_from }
 import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
@@ -35,18 +35,17 @@ priv const USAGE: U8[] =
         //< the arguments, in order (`make test` in `kssrv/Makefile` passes them)
         //< With a run's name, only that run goes, to reproduce one by hand. `--RUNS` prints the
         //< names, one a line. So whoever picks one does not have to read them out of this file.
-        //< `--spec=` names `docs/SPEC-local-server.md` for the run `SPEC_RUN`, which goes only
-        //< then. `--seed=N` and `--trials=N` set the generated cases of the run `paths`
-        //< (`fuzz.declare`). `--asan` and `--require-asan` say how the server was built
-        //< (`fuzz.declare_asan`).
+        //< `--spec=` names a specification with tables of requests for the run `SPEC_RUN`.
+        //< `--seed=N` and `--trials=N` set the run `paths` (`fuzz.declare`). `--asan` and
+        //< `--require-asan` say how the server was built (`fuzz.declare_asan`).
 
 priv const RUNS: U8[][9] = ::{ "outward", "https", "local", "linked", "page", "idle", "stop",
     "memory", "paths" } //<
         //< The server runs, each a process of its own on a free port the system chose
 
 priv const SPEC_RUN: U8[] = "claims" //< the run that holds the server to its specification
-    //< **It goes only when named, with `--spec=`**: the specification stands outside this folder,
-    //< so a copy of the folder alone has none (`kssrv/tests/claims.kspl`).
+    //< **It goes only when named, with `--spec=`**: the local server's specification stands outside
+    //< this folder, so a copy of the folder alone has none (`kssrv/tests/claims.kspl`).
 priv const PAGE_REL: U8[] = "ui/app.html" //< the page placed outside the root
     //< **Not under the root** (that is the case being tested).
 priv const PAGE_BODY: U8[] = "<title>outside page</title>\n"
@@ -99,7 +98,7 @@ fn main(): I32
     $a: = fuzz.Sanitized::{ .asan = false, .required = false }
     fuzz.declare_asan(p, a@)
     $spec: U8[] = ""
-    p.str_opt("--spec", spec@, "the local server's specification, for the run `claims`")
+    p.str_opt("--spec", spec@, "a specification with tables of requests, for the run `claims`")
     p.parse() catch e
         panic(arena.dup_str(arena.text().s("\{e\}\n").s(USAGE).take()))
     if p.rest.len != 2 && p.rest.len != 3
@@ -262,20 +261,37 @@ priv fn serve_paths_and_check(at: Placed, arena: Arena$@) //<
     paths.after_cases(sc, arena)
 
 priv fn serve_claims_and_check(at: Placed, spec_path: U8[], arena: Arena$@) //<
-    //< Holds a `--local` server to the specification's rows and sentences (`kssrv/tests/claims.kspl`)
-    //< **On a root of its own**, holding only what the rows start from.
+    //< Holds a server to the specification's rows and sentences (`kssrv/tests/claims.kspl`)
+    //< **In the mode its rows start from, on a root of its own** that holds only what they start
+    //< from.
     if spec: = claims.read(spec_path, arena)
-        claims_on(at, spec, arena)
+        if mode: = claims.mode_of(spec@, arena)
+            dir: = fs.join(at.tmp, "claims", arena)
+            if !verdict.check("the root the specification's rows start from is placed",
+                claims.place(dir, mode, arena), dir)
+                return
+            through: = Placed::{ .exe = at.exe, .root = fs.join(dir, "www", arena), .tmp = at.tmp,
+                .cases = at.cases }
+            if mode == .outward
+                claims_outward(through, spec, arena)
+            else
+                claims_local(through, spec, arena)
         return
     verdict.check("the specification can be read", false, spec_path)
 
-priv fn claims_on(at: Placed, spec: claims.Spec, arena: Arena$@) //< `serve_claims_and_check`'s work
-    dir: = fs.join(at.tmp, "claims", arena)
-    if !verdict.check("the root the specification's rows start from is placed",
-        claims.place(dir, arena), dir)
-        return
-    through: = Placed::{ .exe = at.exe, .root = fs.join(dir, "www", arena), .tmp = at.tmp,
-        .cases = at.cases }
+priv fn claims_outward(through: Placed, spec: claims.Spec, arena: Arena$@) //<
+    //< The rows, and who reaches it, on a server facing outward
+    started: =
+        bring_up(through.exe, through.root, through.tmp, "kssrv-claims", U8[][]::{},
+        "it comes into a state where it can answer the specification's rows", arena)
+    if got: = started
+        $srv: = got
+        claims.wide_case(spec@, srv.port, arena)
+        claims.row_cases(spec@, srv.port, "", arena)
+        srv.stop()
+
+priv fn claims_local(through: Placed, spec: claims.Spec, arena: Arena$@) //<
+    //< The rows, the printed line, the token and the address, on a server for local use
     started: =
         bring_up_local(through, "kssrv-claims", U8[][]::{},
         "it comes into a state where it can answer the specification's rows",
@@ -289,7 +305,7 @@ priv fn claims_on(at: Placed, spec: claims.Spec, arena: Arena$@) //< `serve_clai
         srv.stop()
     // The listen check's failure case: the same root, served to every address.
     wide: =
-        bring_up(at.exe, through.root, at.tmp, "kssrv-claims-wide", U8[][]::{},
+        bring_up(through.exe, through.root, through.tmp, "kssrv-claims-wide", U8[][]::{},
         "a server for every address comes up, for the listen check's failure case", arena)
     if w: = wide
         $srv_w: = w
@@ -656,22 +672,6 @@ priv fn linked_cases(port: I32, token: U8[], arena: Arena$@): Void!client.Http_e
     one: = client.get(port, "/sub/one.txt", auth, arena)!
     verdict.check("a file under a root that is a link is served",
         one.status == 200 && one.body.equals("one\n"), client.shown(one, arena))
-
-priv const TOKEN_LINE: U8[] = "#t=" //< the marker before the token in the output
-    //< Caution: **Keep it matching kssrv's output** (`kssrv/main.kspl`): the token is the URL's
-    //< fragment, from `#t=` to the line's end.
-
-priv fn token_from(out_log: U8[], arena: Arena$@): U8[] //< extracts the token from the output
-    //< Empty if there is none.
-    //< Caution: **Do not read only the end.** Other lines follow the token, so taking the log's
-    //< tail drops it.
-    text: = io.read_file(out_log, arena) catch
-        return ""
-    // `lines` drops the `\r` at a line's end, which a child's output on Windows has.
-    for line in text.lines(arena)
-        if at: = line.find_str(TOKEN_LINE)
-            return line.sub_from(at + TOKEN_LINE.len)
-    return ""
 
 priv fn run_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end
     serve_cases(port, arena)!

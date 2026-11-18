@@ -772,6 +772,8 @@ A summary is its run's first line, so it runs past the width instead of being cu
 * **The other documents' diagnostics stay on screen**, and are replaced one document at a time as each is analysed again, while the editor sends nothing.
 * **A document whose analysis brings the analysis process down again is set aside.** It answers nothing until it is edited, and the server's log (its standard error) names it.
 
+**An analysis process that sends nothing for 10 s counts as hung.** Its log line then says how much it sent, and for how long, before it fell silent. The environment variable `KSPLC_LSP_SILENCE_MS` sets another limit, in whole milliseconds from 1 to 600,000. It is meant for a test that runs the server in a slow build, such as one under a sanitizer; an editor sets none.
+
 **Quick edits are analysed as one.** Where the editor sends a change while an earlier one is still waiting, only the newest text of that document is analysed. A request sent between two changes is answered against the text the editor had when it asked. The diagnostics end matching the final text.
 
 **An edit to one open document refreshes the diagnostics of the others** too, one document at a time, while the editor sends nothing. An edit can break or mend a file that imports the edited one. **So do a close and a change on disk.** A closed document is read from the disk again, which may differ from the text discarded. A file changed on disk (a checkout, `make fmt`) is told by the editor's watcher (`workspace/didChangeWatchedFiles`). **A closed document's diagnostics are cleared.**

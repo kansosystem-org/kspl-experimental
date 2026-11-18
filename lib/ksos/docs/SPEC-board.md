@@ -30,6 +30,22 @@ Every number is read off `Mecanum_wheels/Sketches/06.2_Multi_Functional_Car/` in
 
 **The vendor's material itself is not copied into this repository.** Freenove distributes it under CC BY-NC-SA 3.0 (non-commercial only), which cannot mix into this MIT tree. A hardware fact is not copyrightable, so it is written here in our own words.
 
+## How the code is held to these facts
+
+**ksos's host tests read this file and check the board's code against it** (`lib/ksos/tests/board_claims_test.kspl`). A failure names the line here, and what the code gives instead.
+
+| What the test reads | What it checks |
+| :-- | :-- |
+| A row of the pin assignment, the shared connector's or the sides' table | The board's constant for that official name is that GPIO. A name the code leaves out has no constant on its GPIO |
+| A row of the pin groups' table | The wheel's two motor pins are that pair, the pin that carries the duty forward first |
+| A row of the speeds' table | `motor.duty` puts the duty on that pin, for every wheel, at every speed from `board.WHEEL_MIN_PERCENT` to 100 |
+| A number or count in a sentence | It equals what the code gives. The test finds it by the words before and after it |
+
+* **The test holds which constant stands for which official name.** Each one must be named by a row, so a renamed pin fails.
+* **The speeds start at `board.WHEEL_MIN_PERCENT`.** Below it, ksos raises the duty to the one at which the wheel starts turning.
+* **The wheel's polarity is applied first.** The table describes a motor turning "one way", which differs from unit to unit.
+* **What the host cannot reach is checked on the car.** That is the mecanum formulae's signs, the servo's 50 Hz and the sensors. So are the currents, the flash and the USB.
+
 ## The pin assignment (GPIO numbers)
 
 The source is the `#define`s of Freenove's shared header `Freenove_4WD_Car_For_Pico_W.h`, not the sketch, together with Tutorial.pdf's "Pins of the Car" table.
@@ -82,6 +98,8 @@ Each wheel has its own motor, driven by an H bridge from two PWM pins. **PWM run
 | Positive | The duty | 0 | Turns one way |
 | Negative | 0 | The duty | Turns the other way |
 | 0 | 0 | 0 | Stops |
+
+**A duty from 1 to 17 is raised to 18**, the least at which a wheel starts turning (`WHEEL_MIN_PERCENT`). A duty of 0 stays 0.
 
 ### The right side reverses pin names and forward/back
 

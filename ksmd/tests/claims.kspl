@@ -1,0 +1,934 @@
+//< Holds ksmd to the rows of its file format's specification, read from the specification's text
+//< **Nothing here copies a rule**: each row's question and answer are read from the text, and run
+//< in this process through ksmd's reader, writer and calculator. A failure names the row's line,
+//< and says what the code gave against what the text says.
+//< The rows take nine forms: five table headings (`TABLE_FORMS`), three sentences after a `ksmd`
+//< block (`SAVES_SAYS`, `REFUSED_SAYS`, `READS_SAYS`), and `OPENED_HEAD`, which opens a workspace
+//< of file blocks (`FILE_LABEL`). A `ksmd` block that no sentence follows is an example.
+//< **The gate checks itself too**: a text with no rows, a form with none, or a malformed row fails
+//< the reading. The fixture's rows that must fail, and one row of each form judged again with its
+//< answer changed, must fail on their line: a gate that cannot fail stays green as things break.
+import "ksmd/base/source" { Source }
+import "ksmd/calc/calc"
+import "ksmd/calc/formula" { Positions, from_version_1, write_formula }
+import "ksmd/calc/reason" { write_reason }
+import "ksmd/files/files" { resolve_text }
+import "ksmd/model/format" { Number_format, format_of, show, show_plain, shows_numbers }
+import "ksmd/model/model" { Block, Document, Table }
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
+import "ksmd/tests/claims_view" { Named, opened, shown }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/str"
+import "std/strnum"
+import "std/verdict"
+
+// The text the rows are read from: the specification of the file format itself.
+embed "ksmd/docs/SPEC-file-format.md" as spec
+// The gate's own rows: one of each form that holds, then under `FAILING` one of each that fails.
+embed "ksmd/tests/claims_fixture.txt" as fixture
+
+priv const SPEC_NAME: U8[] = "ksmd/docs/SPEC-file-format.md" //< what a failure calls `spec`
+priv const FIXTURE_NAME: U8[] = "ksmd/tests/claims_fixture.txt" //< and what it calls the fixture
+priv const FAILING: U8[] = "## Rows that must fail" //<
+    //< In the fixture, the heading after which every row must fail; a row after it is no claim
+
+// ==========================================
+// The start state, as "The rows, and what they start from" in the specification says it
+// ==========================================
+
+// The sentence that states the start state. The text must hold it as written, so a change to it
+// fails here until the constants below follow it.
+priv const START_SAYS: U8[] =
+    "**The rows calculate in a table named `t`, in a document opened on 2026-10-23.** Its cell A1 \
+        holds 2, A2 holds 3, B1 holds `\"Pens\"` and B2 holds `\"Ink\"`."
+priv const TODAY: U8[] = "2026-10-23" //< the date the document was opened on
+priv const TABLE_HEAD: U8[] =
+    "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 2 | \"Pens\" | " //<
+        //< Table `t` up to the cell that holds a row's formula, C1: A1 holds 2 and B1 `"Pens"`
+priv const TABLE_TAIL: U8[] = " |\n| 3 | \"Ink\" | |\n:::\n" //< then A2 holds 3, B2 `"Ink"`
+priv const FORMULA_ROW: Sz = 0 //< C1's data row, from 0
+priv const FORMULA_COLUMN: Sz = 2 //< and its column
+priv const FOLDER: U8[] = "plans" //< the folder of the file a written path stands in
+
+// ==========================================
+// The forms
+// ==========================================
+
+priv enum Form //< what a row asks, and how its answer is checked
+    shows //< the text a formula's cell shows
+    reason //< what the reason of a formula's error says
+    format //< how a format entry shows 1234.5 and -0.125
+    version_1 //< what a `%ksmd 1` formula reads as
+    path //< the path a written one resolves to, or a refusal
+    saves //< what the writer saves a `ksmd` block as
+    refused //< where the reader refuses a `ksmd` block
+    reads //< the outline of the model a `ksmd` block reads into
+    opened //< what the view of a workspace's file shows, and its problem
+
+priv const FORMS: Form[9] = ::{ .shows, .reason, .format, .version_1, .path, .saves, .refused,
+    .reads, .opened } //< every form, in the order a missing one is named
+
+priv struct Table_form //< a table form's heading row, and the form of its rows
+    head: U8[] //< as `heading_of` writes it: `| A | B |`
+    form: Form
+    spans: Sz //< how many of its first cells hold one text in backticks; the rest hold plain text
+
+priv const TABLE_FORMS: Table_form[5] = ::{
+    Table_form::{ .head = "| Formula | Shows |", .form = .shows, .spans = 2 },
+    Table_form::{ .head = "| Formula | The reason says |", .form = .reason, .spans = 1 },
+    Table_form::{ .head = "| Entry | Shows 1234.5 as | Shows -0.125 as |", .form = .format,
+        .spans = 3 },
+    Table_form::{ .head = "| Version 1 formula | Reads as |", .form = .version_1, .spans = 2 },
+    Table_form::{ .head = "| Written | Answer |", .form = .path, .spans = 1 },
+} //< the five table headings
+
+priv const ROW_STARTS: U8[][5] = ::{ "| Formula |", "| Entry |", "| Version 1 formula |",
+    "| Written |", "| Opened |" } //<
+        //< The first cells of the table forms: a heading starting so is meant as one
+
+priv const OPENED_HEAD: U8[] = "| Opened | Shows | Problem at | The reason says |" //<
+    //< The heading of the table that opens files of the workspace above it
+priv const FILE_LABEL: U8[] = "ksmd " //< a fence's label, then a path: a file of the workspace
+priv const NO_PROBLEM: U8[] = "none" //< an `Opened` row's place where the file opens with none
+
+priv const REFUSED_WORD: U8[] = "refused" //< a `Written` row's answer for a path refused
+priv const SAVES_SAYS: U8[] = "It saves as:" //< after a block: the next `ksmd` block is its save
+priv const READS_SAYS: U8[] = "It reads as:" //< after a block: the next `text` block, its outline
+priv const REFUSED_SAYS: U8[] = "It is refused at line " //< after a block: where it is refused
+priv const COLUMN_SAYS: U8[] = ", column " //< between that sentence's line and its column
+priv const REFUSED_FORM: U8[] = "It is refused at line L, column C." //< that sentence's form
+priv const SENTENCE_STARTS: U8[][3] = ::{ "It saves as", "It reads as", "It is refused" } //<
+    //< A line after a `ksmd` block starting so is meant as a row's sentence, and must be one
+
+priv struct Row //< one row of the specification, and the answer it names
+    line: Sz //< its line, from 1: the table row's, or the line opening its first block
+    form: Form
+    given: U8[] //< the formula, entry, written path, or the first block's source
+    want: U8[] //< the answer: the shown text, the reason's words, the path, the saved source
+    also: U8[] //< a format row's second answer, for -0.125
+    at_line: Sz //< where a refused block is refused, from 1
+    at_column: Sz
+    says: U8[] //< an `Opened` row's words of its problem's message; empty where it has none
+    files: List<|Named|> //< an `Opened` row's workspace
+
+priv struct Reading //< the rows a text holds, and what in it is not a row as the forms write one
+    name: U8[]
+    rows: List<|Row|>
+    problems: List<|U8[]|> //< each `<name>:<line>: what`
+    end: Sz //< the line of `FAILING`, from 1; past the last line where the text has none
+    states_start: Bool //< whether a line holds `START_SAYS`
+    files: List<|Named|> //< the workspace now: the file blocks since the last heading or `Opened`
+        //< table
+
+// ==========================================
+// The run
+// ==========================================
+
+fn run() //< the reading's own cases, then the rows of `spec`, then those that must fail
+    defer arena: = Arena(256 * 1024)
+    reading_cases(arena)
+    name: = FIXTURE_NAME if spec.equals(fixture) else SPEC_NAME
+    claims: = read_rows(name, spec, arena)
+    holds(claims@, arena)
+    changed_cases(claims@, arena)
+    own: = read_rows(FIXTURE_NAME, fixture, arena)
+    failing_cases(own@, arena)
+
+priv fn holds(reading: Reading@, arena: Arena$@) //<
+    //< The text reads as rows alone, holds rows of every form, and each row before `FAILING` holds
+    verdict.check(arena.text().s(reading.name).s(" states the start state the rows calculate in")
+        .take(), reading.states_start,
+        arena.text().s("no line holds: ").s(START_SAYS).take())
+    verdict.check(arena.text().s(reading.name).s(" reads as rows of the forms").take(),
+        reading.problems.len == 0, joined(reading.problems@, arena))
+    for form in FORMS
+        verdict.check(arena.text().s(reading.name).s(" holds rows of the form ")
+            .s(form.written()).take(), count(reading, form) > 0, "")
+    for row in reading.rows
+        if row.line < reading.end
+            broke: = judged(row@, arena)
+            verdict.check(row_name(reading, row@, arena), broke.len == 0, broke)
+
+priv fn changed_cases(reading: Reading@, arena: Arena$@) //<
+    //< The first row of each form, judged again with its answer changed, fails naming its line
+    for form in FORMS
+        for row in reading.rows
+            if row.line < reading.end && row.form == form
+                $other: = row
+                other.want = arena.text().s(row.want).c('x').take()
+                other.at_line = row.at_line + 1
+                name: = row_name(reading, other@, arena)
+                at: = arena.text().c(':').s("\{row.line\}").s(": ").take()
+                verdict.check(arena.text().s("its answer changed, it fails: ").s(name).take(),
+                    judged(other@, arena).len > 0 && name.find_str(at).is_some(),
+                    "a wrong answer holds, or its failure does not name the line")
+                break
+
+priv fn failing_cases(reading: Reading@, arena: Arena$@) //<
+    //< Each row after the fixture's `FAILING` fails, and every form has one there
+    for form in FORMS
+        $n: Sz = 0
+        for row in reading.rows
+            if row.line > reading.end && row.form == form
+                n += 1
+                verdict.check(arena.text().s("fails, as it must: ")
+                    .s(row_name(reading, row@, arena)).take(), judged(row@, arena).len > 0,
+                    "the row holds, so the gate cannot tell it is wrong")
+        verdict.check(arena.text().s(reading.name).s(" holds a row of the form ")
+            .s(form.written()).s(" that must fail").take(), n > 0, "")
+
+priv fn count(reading: Reading@, form: Form): Sz //< how many rows of `form` stand before `FAILING`
+    $n: Sz = 0
+    for row in reading.rows
+        if row.form == form && row.line < reading.end
+            n += 1
+    return n
+
+priv fn missing(reading: Reading@): Sz //< how many forms have no row
+    $n: Sz = 0
+    for form in FORMS
+        if count(reading, form) == 0
+            n += 1
+    return n
+
+priv fn joined(list: List<|U8[]|>@, arena: Arena$@): U8[] //< the entries, one to a line
+    b: = arena.text()
+    for i in Range.asc(list.len)
+        if i > 0
+            b.s("\n    ")
+        b.s(list.get(i))
+    return b.take()
+
+impl Form
+    fn written(r: Self): U8[] //< the form as the text writes it
+        switch r
+        case .shows
+            return TABLE_FORMS[0].head
+        case .reason
+            return TABLE_FORMS[1].head
+        case .format
+            return TABLE_FORMS[2].head
+        case .version_1
+            return TABLE_FORMS[3].head
+        case .path
+            return TABLE_FORMS[4].head
+        case .saves
+            return SAVES_SAYS
+        case .refused
+            return REFUSED_FORM
+        case .reads
+            return READS_SAYS
+        case .opened
+            return OPENED_HEAD
+
+priv fn row_name(reading: Reading@, row: Row@, arena: Arena$@): U8[] //<
+    //< `<name>:<line>: ` and the row's question and answer, in short
+    b: = arena.text().s(reading.name).c(':').s("\{row.line\}").s(": ")
+    switch row.form
+    case .shows
+        b.s("`").s(row.given).s("` shows `").s(row.want).c('`')
+    case .reason
+        b.s("the reason of `").s(row.given).s("` says \"").s(row.want).c('"')
+    case .format
+        b.s("`").s(row.given).s("` shows `").s(row.want).s("` and `").s(row.also).c('`')
+    case .version_1
+        b.s("version 1's `").s(row.given).s("` reads as `").s(row.want).c('`')
+    case .path
+        b.s("`").s(row.given).s("` resolves to ").s(row.want)
+    case .saves
+        b.s("the ksmd block saves as the block after it")
+    case .refused
+        b.s("the ksmd block is refused at line \{row.at_line\}, column \{row.at_column\}")
+    case .reads
+        b.s("the ksmd block reads as the outline after it")
+    case .opened
+        b.s("opening `").s(row.given).s("` shows ").s(row.want).s(", its problem at ").s(row.also)
+    return b.take()
+
+// ==========================================
+// Reading the rows
+// ==========================================
+
+priv fn read_rows(name: U8[], text: U8[], arena: Arena$@): Reading //<
+    //< The rows `text` holds, in its order, and each place that is meant as a row but is not one
+    lines: = text.lines(arena)
+    $reading: = Reading::{ .name = name, .rows = List<|Row|>(arena),
+        .problems = List<|U8[]|>(arena), .end = lines.len + 1,
+        .states_start = text.find_str(START_SAYS).is_some(), .files = List<|Named|>(arena) }
+    $i: Sz = 0
+    for i < lines.len
+        line: = lines.get(i)
+        if line.equals(FAILING) && reading.end > lines.len
+            reading.end = i + 1
+        if line.starts_with("#")
+            reading.files = List<|Named|>(arena)
+        if ticks: = fence_of(line)
+            label: = line.sub_from(ticks).trim_spaces()
+            if label.equals("ksmd")
+                i = block_row(reading@, lines@, i, ticks, arena)
+            else if label.starts_with(FILE_LABEL)
+                i =
+                    file_block(reading@, lines@, i, ticks, label.sub_from(FILE_LABEL.len), arena)
+            else
+                close: = fence_close(lines@, i, ticks)
+                if close == lines.len
+                    problem(reading@, i, "this block is never closed", arena)
+                i = close + 1
+            continue
+        if line.starts_with("|")
+            i = table_rows(reading@, lines@, i, arena)
+            continue
+        i += 1
+    if reading.rows.len == 0
+        problem(reading@, lines.len, "the text holds no row of any form", arena)
+    return reading
+
+priv fn problem(reading: Reading$@, index: Sz, what: U8[], arena: Arena$@) //<
+    //< notes one, at a line's index
+    reading.problems
+        .push(arena.text().s(reading.name).c(':').s("\{index + 1\}").s(": ").s(what).take())
+
+priv fn fence_of(line: U8[]): Sz? //< the backticks that open a fence on this line, or none
+    $n: Sz = 0
+    for n < line.len && line[n] == '`'
+        n += 1
+    if n < 3 || line.sub_from(n).find_char('`').is_some()
+        return .none
+    return .some(n)
+
+priv fn fence_close(lines: List<|U8[]|>@, open: Sz, ticks: Sz): Sz //<
+    //< The index of the line that closes the fence opened at `open`, or the count of lines
+    for i in Range(open + 1, lines.len, 1)
+        line: = lines.get(i).trim_end()
+        if line.len >= ticks && ticks_at(line, 0) == line.len
+            return i
+    return lines.len
+
+priv fn ticks_at(text: U8[], from: Sz): Sz //< how many backticks stand in a row from `from`
+    $n: Sz = 0
+    for from + n < text.len && text[from + n] == '`'
+        n += 1
+    return n
+
+priv fn block_text(lines: List<|U8[]|>@, open: Sz, close: Sz, arena: Arena$@): U8[] //<
+    //< The lines between a fence's opening and closing lines, each ending in a newline
+    b: = arena.text()
+    for i in Range(open + 1, close, 1)
+        b.s(lines.get(i)).c('\n')
+    return b.take()
+
+priv fn next_line(lines: List<|U8[]|>@, from: Sz): Sz //< the first line from `from` not blank
+    $i: = from
+    for i < lines.len && lines.get(i).trim_spaces().len == 0
+        i += 1
+    return i
+
+priv fn block_row(reading: Reading$@, lines: List<|U8[]|>@, open: Sz, ticks: Sz, arena: Arena$@): Sz //<
+    //< Reads the row a `ksmd` block at `open` starts, if a sentence follows it; returns the index
+    //< of the line after it
+    close: = fence_close(lines, open, ticks)
+    if close == lines.len
+        problem(reading, open, "this ksmd block is never closed", arena)
+        return lines.len
+    $row: = Row::{ .line = open + 1, .form = .saves,
+        .given = block_text(lines, open, close, arena), .want = "", .also = "", .at_line = 0,
+        .at_column = 0, .says = "", .files = reading.files }
+    at: = next_line(lines, close + 1)
+    said: = lines.get(at).trim_spaces() if at < lines.len else ""
+    if said.equals(SAVES_SAYS) || said.equals(READS_SAYS)
+        row.form = .saves if said.equals(SAVES_SAYS) else .reads
+        label: = "ksmd" if row.form == .saves else "text"
+        second: = next_line(lines, at + 1)
+        if second == lines.len
+            problem(reading, at,
+                arena.text().s("no ```").s(label).s(" block follows this").take(), arena)
+            return at + 1
+        line: = lines.get(second)
+        after: = fence_of(line) catch
+            problem(reading, at,
+                arena.text().s("no ```").s(label).s(" block follows this").take(), arena)
+            return at + 1
+        if !line.sub_from(after).trim_spaces().equals(label)
+            problem(reading, at,
+                arena.text().s("no ```").s(label).s(" block follows this").take(), arena)
+            return at + 1
+        end: = fence_close(lines, second, after)
+        row.want = block_text(lines, second, end, arena)
+        reading.rows.push(row)
+        return end + 1
+    if said.starts_with(REFUSED_SAYS)
+        if where: = refused_at(said)
+            row.form = .refused
+            row.at_line = where.line
+            row.at_column = where.column
+            reading.rows.push(row)
+            return at + 1
+    for start in SENTENCE_STARTS
+        if said.starts_with(start)
+            problem(reading, at,
+                arena.text().s("this is not one of the sentences a row takes: '").s(SAVES_SAYS)
+                .s("', '").s(READS_SAYS).s("' or '").s(REFUSED_FORM).c('\'').take(), arena)
+            return at + 1
+    return close + 1
+
+priv fn file_block(reading: Reading$@, lines: List<|U8[]|>@, open: Sz, ticks: Sz, path: U8[],
+    arena: Arena$@): Sz //<
+        //< Adds the file a block labelled `ksmd <path>` at `open` holds to the workspace; returns the
+        //< index of the line after it
+    close: = fence_close(lines, open, ticks)
+    if close == lines.len
+        problem(reading, open, "this file block is never closed", arena)
+        return lines.len
+    $taken: = path.len == 0 || path.find_char(' ').is_some()
+    for named in reading.files
+        if named.path.equals(path)
+            taken = true
+    if taken
+        problem(reading, open,
+            arena.text().s("a file block names one path, once in its workspace: ").s(path).take(),
+            arena)
+        return close + 1
+    reading.files
+        .push(Named::{ .path = path, .text = block_text(lines, open, close, arena) })
+    return close + 1
+
+priv struct Place //< a line and a column, from 1
+    line: Sz
+    column: Sz
+
+priv fn refused_at(said: U8[]): Place? //< the place `It is refused at line L, column C.` names
+    rest: = said.sub_from(REFUSED_SAYS.len)
+    line_end: = digits(rest, 0)
+    if line_end == 0 || !rest.starts_with(COLUMN_SAYS, line_end)
+        return .none
+    from: = line_end + COLUMN_SAYS.len
+    column_end: = digits(rest, from)
+    if column_end == from || !rest.sub_from(column_end).equals(".")
+        return .none
+    line: = rest.sub(0, line_end).to_i64() catch
+        return .none
+    column: = rest.sub(from, column_end - from).to_i64() catch
+        return .none
+    if line < 1 || column < 1
+        return .none
+    return .some(Place::{ .line = Sz::line, .column = Sz::column })
+
+priv fn digits(text: U8[], from: Sz): Sz //< where the run of digits from `from` ends
+    $i: = from
+    for i < text.len && text[i].is_digit()
+        i += 1
+    return i
+
+priv fn table_rows(reading: Reading$@, lines: List<|U8[]|>@, head: Sz, arena: Arena$@): Sz //<
+    //< Reads the rows of the table whose heading row is at `head`, where it is one of the forms;
+    //< returns the index of the line after the table
+    $end: = head
+    for end < lines.len && lines.get(end).starts_with("|")
+        end += 1
+    cells: = cells_of(lines.get(head), arena) catch
+        return end
+    heading: = heading_of(cells@, arena)
+    if heading.equals(OPENED_HEAD)
+        return opened_rows(reading, lines, head, end, arena)
+    $form: Table_form? = .none
+    for f in TABLE_FORMS
+        if heading.equals(f.head)
+            form = .some(f)
+    the: = form catch
+        for start in ROW_STARTS
+            if heading.starts_with(start)
+                problem(reading, head,
+                    arena.text().s("this heading row starts as a form's but is none: ").s(heading)
+                    .take(), arena)
+        return end
+    if head + 1 >= end || !is_rule(lines.get(head + 1))
+        problem(reading, head, "this heading row has no line of dashes under it", arena)
+        return end
+    for i in Range(head + 2, end, 1)
+        table_row(reading, lines.get(i), i, the, arena)
+    return end
+
+priv fn table_row(reading: Reading$@, line: U8[], index: Sz, form: Table_form, arena: Arena$@) //<
+    //< Reads one row of a table of `form`, or notes why it is not one
+    cells: = cells_of(line, arena) catch
+        problem(reading, index, "a table row starts and ends with '|'", arena)
+        return
+    width: = form.head.split('|', arena).len - 2
+    if cells.len != width
+        problem(reading, index,
+            arena.text().s("this row has \{cells.len\} cells; its heading, ").s("\{width\}").take(),
+            arena)
+        return
+    $texts: = List<|U8[]|>(arena)
+    for k in Range.asc(cells.len)
+        cell: = cells.get(k)
+        if k < form.spans || form.form == .path && !cell.equals(REFUSED_WORD)
+            got: = span_of(cell) catch
+                problem(reading, index,
+                    arena.text().s("cell \{k + 1\} is not one text in backticks: ").s(cell).take(),
+                    arena)
+                return
+            texts.push(got)
+        else
+            if cell.len == 0
+                problem(reading, index, "this row's last cell is empty", arena)
+                return
+            texts.push(cell)
+    if (form.form == .shows || form.form == .reason) && !texts.get(0).starts_with("=")
+        problem(reading, index, "a formula starts with '='", arena)
+        return
+    reading.rows
+        .push(Row::{ .line = index + 1, .form = form.form, .given = texts.get(0),
+        .want = texts.get(1), .also = texts.get(2) if texts.len > 2 else "", .at_line = 0,
+        .at_column = 0, .says = "", .files = reading.files })
+
+priv fn opened_rows(reading: Reading$@, lines: List<|U8[]|>@, head: Sz, end: Sz, arena: Arena$@): Sz //<
+    //< Reads the rows of an `Opened` table at `head`, over the workspace above it, which it ends;
+    //< returns `end`, the index of the line after the table
+    if reading.files.len == 0
+        problem(reading, head, "no file block stands above this table, under its heading", arena)
+        return end
+    if head + 1 >= end || !is_rule(lines.get(head + 1))
+        problem(reading, head, "this heading row has no line of dashes under it", arena)
+        return end
+    for i in Range(head + 2, end, 1)
+        opened_row(reading, lines.get(i), i, arena)
+    reading.files = List<|Named|>(arena)
+    return end
+
+priv fn opened_row(reading: Reading$@, line: U8[], index: Sz, arena: Arena$@) //<
+    //< Reads one `Opened` row: a path, then `refused` or a view's text, then `none` or a place, then
+    //< words of the problem's message, empty under `none`
+    cells: = cells_of(line, arena) catch
+        problem(reading, index, "a table row starts and ends with '|'", arena)
+        return
+    if cells.len != 4
+        problem(reading, index,
+            arena.text().s("this row has \{cells.len\} cells; its heading, 4").take(), arena)
+        return
+    $texts: = List<|U8[]|>(arena)
+    for k in Range.asc(3)
+        cell: = cells.get(k)
+        if k == 1 && cell.equals(REFUSED_WORD) || k == 2 && cell.equals(NO_PROBLEM)
+            texts.push(cell)
+            continue
+        got: = span_of(cell) catch
+            problem(reading, index,
+                arena.text().s("cell \{k + 1\} is not one text in backticks: ").s(cell).take(),
+                arena)
+            return
+        texts.push(got)
+    says: = cells.get(3)
+    if texts.get(2).equals(NO_PROBLEM) != (says.len == 0)
+        problem(reading, index, "the reason's words stand where a problem does, and only there",
+            arena)
+        return
+    reading.rows
+        .push(Row::{ .line = index + 1, .form = .opened, .given = texts.get(0),
+        .want = texts.get(1), .also = texts.get(2), .at_line = 0, .at_column = 0, .says = says,
+        .files = reading.files })
+
+priv fn is_rule(line: U8[]): Bool //< whether a table's line under its heading holds dashes alone
+    $dashes: = false
+    for ch in line
+        if ch == '-'
+            dashes = true
+        else if ch != '|' && ch != ':' && ch != ' '
+            return false
+    return dashes
+
+priv fn cells_of(line: U8[], arena: Arena$@): List<|U8[]|>? //<
+    //< A table row's cells, trimmed, each `\|` in them read as `|`; none where the row does not
+    //< start and end with '|'
+    text: = line.trim_spaces()
+    if text.len < 2 || text[0] != '|' || text[text.len - 1] != '|' ||
+        text[text.len - 2] == '\\'
+        return .none
+    $out: = List<|U8[]|>(arena)
+    $cell: = arena.text()
+    for $i: Sz = 1; i < text.len; i += 1
+        if text[i] == '\\' && i + 1 < text.len && text[i + 1] == '|'
+            cell.c('|')
+            i += 1
+        else if text[i] == '|'
+            out.push(cell.take().trim_spaces())
+            cell = arena.text()
+        else
+            cell.c(text[i])
+    return .some(out)
+
+priv fn heading_of(cells: List<|U8[]|>@, arena: Arena$@): U8[] //< `| A | B |`, from the cells
+    b: = arena.text().c('|')
+    for cell in cells
+        b.c(' ').s(cell).s(" |")
+    return b.take()
+
+priv fn span_of(cell: U8[]): U8[]? //<
+    //< The text of the one span in backticks that the cell is, as Markdown reads it; none where the
+    //< cell is anything else
+    ticks: = ticks_at(cell, 0)
+    if ticks == 0 || cell.len <= 2 * ticks || ticks_at(cell, cell.len - ticks) != ticks ||
+        cell[cell.len - ticks - 1] == '`'
+        return .none
+    $inner: = cell.sub(ticks, cell.len - 2 * ticks)
+    $i: Sz = 0
+    for i < inner.len
+        n: = ticks_at(inner, i)
+        if n == ticks
+            return .none
+        i += n if n > 0 else 1
+    if inner.len >= 2 && inner[0] == ' ' && inner[inner.len - 1] == ' ' &&
+        inner.trim_spaces().len > 0
+        inner = inner.sub(1, inner.len - 2)
+    return .some(inner)
+
+// ==========================================
+// Judging a row
+// ==========================================
+
+priv fn judged(row: Row@, arena: Arena$@): U8[] //<
+    //< What the code gives against what the row says; empty where it gives that
+    switch row.form
+    case .shows, .reason
+        return calculated(row, arena)
+    case .format
+        entry: = format_of(row.given) catch
+            return "it is not a format entry: `format_of` refuses it"
+        first: = shown_number(1234.5, entry, arena)
+        second: = shown_number(-0.125, entry, arena)
+        if first.equals(row.want) && second.equals(row.also)
+            return ""
+        return arena.text().s("the code shows `").s(first).s("` and `").s(second)
+            .s("`; the text says `").s(row.want).s("` and `").s(row.also).s("`").take()
+    case .version_1
+        got: = from_version_1(row.given, arena)
+        return "" if got.equals(row.want) else gave(got, row.want, arena)
+    case .path
+        resolved: = resolve_text(FOLDER, row.given, arena) catch why
+            if row.want.equals(REFUSED_WORD)
+                return ""
+            return gave(arena.text().s(REFUSED_WORD).s(" (").s(why.variant_name()).c(')').take(),
+                row.want, arena)
+        return "" if resolved.equals(row.want) else gave(resolved, row.want, arena)
+    case .saves
+        doc: = read_block(row.given, arena) catch why
+            return why
+        defer $out: = Str_builder()
+        writer.write(doc@, out@)
+        return ("" if out.slice().equals(row.want)
+            else gave_block(out.slice(), row.want, arena))
+    case .refused
+        return refusal(row, arena)
+    case .reads
+        doc: = read_block(row.given, arena) catch why
+            return why
+        got: = outline(doc@, arena)
+        return "" if got.equals(row.want) else gave_block(got, row.want, arena)
+    case .opened
+        return opening(row, arena)
+
+priv fn gave(got: U8[], want: U8[], arena: Arena$@): U8[] //< what the code gave, and the text said
+    return arena.text().s("the code gives `").s(got).s("`; the text says `").s(want).s("`").take()
+
+priv fn gave_block(got: U8[], want: U8[], arena: Arena$@): U8[] //< the same, for lines of text
+    return arena.text().s("the code gives:\n").s(got).s("the text says:\n").s(want).take()
+
+priv fn read_block(given: U8[], arena: Arena$@): Document!U8[] //< a block's model, or the refusal
+    src: = Source("row.ksmd", given) catch e
+        throw arena.text().s("the reader refuses it at line \{e.line\}, column \{e.column\}: ")
+            .s(e.message).take()
+    return reader.read(src@, arena) catch e
+        throw arena.text().s("the reader refuses it at line \{e.line\}, column \{e.column\}: ")
+            .s(e.message).take()
+
+priv fn refusal(row: Row@, arena: Arena$@): U8[] //<
+    //< where the reader refuses the block, against the row
+    src: = Source("row.ksmd", row.given) catch e
+        return placed(e.line, e.column, e.message, row, arena)
+    _doc: = reader.read(src@, arena) catch e
+        return placed(e.line, e.column, e.message, row, arena)
+    return "the reader takes it"
+
+priv fn placed(line: Sz, column: Sz, message: U8[], row: Row@, arena: Arena$@): U8[] //<
+    //< Empty where the refusal stands where the row says; else both places, and what it says
+    if line == row.at_line && column == row.at_column
+        return ""
+    return arena.text().s("the reader refuses it at line \{line\}, column \{column\} (").s(message)
+        .s("); the text says line \{row.at_line\}, column \{row.at_column\}").take()
+
+priv fn calculated(row: Row@, arena: Arena$@): U8[] //<
+    //< A formula row, its formula in C1 of the start state: what its cell shows, or its reason
+    doc: =
+        read_block(arena.text().s(TABLE_HEAD).s(row.given).s(TABLE_TAIL).take(), arena) catch why
+            return why
+    results: = calc.calculate(doc@, TODAY, arena)
+    value: = results.at(0, FORMULA_ROW, FORMULA_COLUMN)
+    got: = shown(value, arena)
+    if row.form == .shows
+        return "" if got.equals(row.want) else gave(got, row.want, arena)
+    if value.kind != .error
+        return arena.text().s("the cell shows `").s(got).s("`, which is no error").take()
+    defer $why: = Str_builder()
+    write_reason(value, 0, doc@, results@, why@)
+    if why.slice().find_str(row.want).is_some()
+        return ""
+    return arena.text().s("the reason says \"").s(why.slice()).s("\"; the text says it holds \"")
+        .s(row.want).s("\"").take()
+
+priv fn shown_number(number: F64, entry: Number_format, arena: Arena$@): U8[] //<
+    //< What a cell of a column with the format `entry` shows of a number
+    defer $out: = Str_builder()
+    if shows_numbers(entry)
+        show(number, entry, out@)
+    else
+        show_plain(number, out@)
+    return arena.dup_str(out.slice())
+
+// ==========================================
+// Opening a file of a workspace, for `Opened`
+// ==========================================
+
+priv fn opening(row: Row@, arena: Arena$@): U8[] //<
+    //< What opening the row's file gives, against the row: its view's text, then its problem
+    got: = opened(row.files, row.given, TODAY, arena)
+    if got.problems > 1
+        return arena.text().s("the code gives \{got.problems\} problems, and a row states one")
+            .take()
+    shows: = REFUSED_WORD if got.refused else got.shows
+    at: = got.at if got.problems > 0 else NO_PROBLEM
+    if shows.equals(row.want) && at.equals(row.also) &&
+        got.says.find_str(row.says).is_some()
+        return ""
+    return arena.text().s("the code shows `").s(shows).s("`, a problem at ").s(at).s(": ")
+        .s(got.says).s("; the text says `").s(row.want).s("`, at ").s(row.also).s(": ")
+        .s(row.says).take()
+
+// ==========================================
+// The outline of a model, for "It reads as"
+// ==========================================
+
+priv fn outline(doc: Document@, arena: Arena$@): U8[] //<
+    //< One node of the model to a line, each child two spaces in from its parent
+    //< The words: `heading N`, `paragraph`, `quote`, `list`, `item`, `numbered item`,
+    //< `ticked item`, `unticked item`, `code block "language"`, `divider`, `blank`,
+    //< `table "name"`, `caption "…"`, `row`, `cell …`, `image "path"`, `alt "…"`, `include "path"`,
+    //< `functions "path"`, `chart`, `diagram`, `document`; within a line of text, `text "…"`,
+    //< `code "…"`, `break`, `strong`, `emphasis`, `link "target"` and `colour "#rrggbb"`; and
+    //< `note "…"`. A text in quotes writes `"`, `\` and a newline as `\"`, `\\` and `\n`.
+    defer $out: = Str_builder()
+    for i in Range.asc(doc.blocks.len)
+        block_outline(doc, doc.blocks.get(i), out@, arena)
+    return arena.dup_str(out.slice())
+
+priv fn node(depth: Sz, word: U8[], out: Str_builder$@) //< starts a node's line at `depth`
+    for _ in Range.asc(depth)
+        out.s("  ")
+    out.s(word)
+
+priv fn quoted(text: U8[], out: Str_builder$@) //< ` "text"`, with its escapes
+    out.s(" \"")
+    for ch in text
+        if ch == '"' || ch == '\\'
+            out.c('\\').c(ch)
+        else if ch == '\n'
+            out.s("\\n")
+        else
+            out.c(ch)
+    out.c('"')
+
+priv fn leaf(depth: Sz, word: U8[], text: U8[], out: Str_builder$@) //< `word "text"` on its line
+    node(depth, word, out)
+    quoted(text, out)
+    out.c('\n')
+
+priv fn block_outline(doc: Document@, block: Block, out: Str_builder$@, arena: Arena$@) //<
+    //< One block and what it holds, from the outline's left edge
+    switch block.kind
+    case .paragraph, .quote
+        node(0, "paragraph" if block.kind == .paragraph else "quote", out)
+        out.c('\n')
+        inline_outline(doc, block.first, block.count, 1, out)
+    case .heading
+        node(0, "heading", out)
+        out.s(" \{block.level\}\n")
+        inline_outline(doc, block.first, block.count, 1, out)
+    case .code
+        node(0, "code block", out)
+        if block.label.len > 0
+            quoted(block.label, out)
+        out.c('\n')
+        leaf(1, "text", block.text, out)
+    case .list
+        node(0, "list\n", out)
+        for i in Range.asc(block.count)
+            item: = doc.items.get(block.first + i)
+            $word: = "numbered item" if item.ordered else "item"
+            if item.check == .open
+                word = "unticked item"
+            else if item.check == .done
+                word = "ticked item"
+            node(1 + item.depth, word, out)
+            out.c('\n')
+            inline_outline(doc, item.first, item.count, 2 + item.depth, out)
+    case .divider
+        node(0, "divider\n", out)
+    case .blank
+        node(0, "blank\n", out)
+    case .table
+        table_outline(doc, doc.tables[block.first]@, out, arena)
+    case .include
+        leaf(0, "include", block.text, out)
+    case .functions
+        leaf(0, "functions", block.text, out)
+    case .image
+        image: = doc.images.get(block.first)
+        leaf(0, "image", image.src, out)
+        if image.alt.len > 0
+            leaf(1, "alt", image.alt, out)
+        if image.caption.len > 0
+            leaf(1, "caption", image.caption, out)
+    case .chart
+        node(0, "chart\n", out)
+    case .document
+        node(0, "document\n", out)
+    case .diagram
+        node(0, "diagram\n", out)
+    if block.note.len > 0
+        leaf(1, "note", block.note, out)
+
+priv fn inline_outline(doc: Document@, first: Sz, count: Sz, from: Sz, out: Str_builder$@) //<
+    //< A run of inline nodes from depth `from`; a mark's nodes stand one deeper than it
+    $depth: = from
+    for i in Range.asc(count)
+        n: = doc.inlines.get(first + i)
+        switch n.kind
+        case .text
+            leaf(depth, "text", n.text, out)
+        case .code
+            leaf(depth, "code", n.text, out)
+        case .hard_break
+            node(depth, "break\n", out)
+        case .emphasis_start, .strong_start
+            node(depth, "emphasis\n" if n.kind == .emphasis_start else "strong\n", out)
+            depth += 1
+        case .link_start
+            if n.text.len > 0
+                node(depth, "link", out)
+                quoted(n.text, out)
+                if n.color.len > 0
+                    out.s(" colour")
+                    quoted(n.color, out)
+            else
+                node(depth, "colour", out)
+                quoted(n.color, out)
+            out.c('\n')
+            depth += 1
+        case .emphasis_end, .strong_end, .link_end
+            depth -= 1
+
+priv fn table_outline(doc: Document@, table: Table@, out: Str_builder$@, arena: Arena$@) //<
+    //< A table: its caption, then its heading row and each data row, with their cells
+    leaf(0, "table", table.name, out)
+    if table.caption.len > 0
+        leaf(1, "caption", table.caption, out)
+    width: = table.columns.len
+    at: = Positions(doc, arena)
+    for row in Range.asc(table.rows.len + 1)
+        node(1, "row\n", out)
+        for column in Range.asc(width)
+            cell: = table.cells[row * width + column]
+            node(2, "cell", out)
+            if cell.kind == .text
+                quoted(cell.text, out)
+            else if cell.kind == .number || cell.kind == .date
+                out.c(' ').s(cell.text)
+            else if cell.kind == .formula
+                out.s(" =")
+                write_formula(doc, table, cell, at@, 0, 0, out)
+            out.c('\n')
+            if cell.link.len > 0
+                leaf(3, "link", cell.link, out)
+            if cell.note.len > 0
+                leaf(3, "note", cell.note, out)
+
+// ==========================================
+// The reading's own cases
+// ==========================================
+
+priv const ONE_FORM: U8[] = "| Formula | Shows |\n| :-- | :-- |\n| `=A1` | `2` |\n" //<
+    //< A text whose rows are of one form alone
+
+// A `ksmd` block that no sentence follows, then one row.
+priv const EXAMPLE: U8[] =
+    "```ksmd\n%ksmd 2\n```\n\nWords.\n\n| Formula | Shows |\n| :-- | :-- |\n| `=A1` | `2` |\n"
+
+priv const OPENED_TABLE: U8[] =
+    "| Opened | Shows | Problem at | The reason says |\n| :-- | :-- | :-- | :-- |\n| `a.ksmd` | `A` \
+        | none | |\n" //< an `Opened` table, which opens a file of the workspace above it
+
+priv const FILE_A: U8[] = "```ksmd a.ksmd\n%ksmd 2\n\nA\n```\n\n" //<
+    //< A file block: the workspace of the `Opened` table after it
+
+priv struct Bad //< a text that must not read as rows alone, and what is wrong with it
+    what: U8[]
+    text: U8[]
+
+priv const BAD: Bad[7] = ::{
+    Bad::{ .what = "a heading row that starts as a form's but is none",
+        .text = "| Formula | Show |\n| :-- | :-- |\n| `=A1` | `2` |\n" },
+    Bad::{ .what = "a row whose cell is not one text in backticks",
+        .text = "| Formula | Shows |\n| :-- | :-- |\n| =A1 | `2` |\n" },
+    Bad::{ .what = "a row with a cell too few",
+        .text = "| Version 1 formula | Reads as |\n| :-- | :-- |\n| `=1` |\n" },
+    Bad::{ .what = "a sentence after a block that is not one of the three",
+        .text = "```ksmd\n%ksmd 2\n```\n\nIt is refused at line one.\n" },
+    Bad::{ .what = "\"It saves as:\" with no ksmd block after it",
+        .text = "```ksmd\n%ksmd 2\n```\n\nIt saves as:\n\n```text\nparagraph\n```\n" },
+    Bad::{ .what = "an `Opened` table with no file block above it", .text = OPENED_TABLE },
+    Bad::{ .what = "an `Opened` row with words of a reason under `none`",
+        .text =
+        "```ksmd a.ksmd\n%ksmd 2\n```\n\n| Opened | Shows | Problem at | The reason says |\n| :-- | \
+            :-- | :-- | :-- |\n| `a.ksmd` | `A` | none | a cycle |\n" },
+} //< one of each malformed row or heading the reading must refuse
+
+priv fn reading_cases(arena: Arena$@) //<
+    //< The reading fails where the text holds no rows, a form has none, or a row is malformed;
+    //< and a `ksmd` block followed by no sentence is skipped
+    none: = read_rows("empty", "# A title\n\nWords alone.\n", arena)
+    verdict.check("a text with no rows fails, naming every form, and states no start state",
+        none.problems.len > 0 && missing(none@) == FORMS.len && !none.states_start,
+        joined(none.problems@, arena))
+    one: = read_rows("one form", ONE_FORM, arena)
+    verdict.check("a text with rows of one form misses the other eight",
+        one.problems.len == 0 && one.rows.len == 1 && missing(one@) == FORMS.len - 1,
+        joined(one.problems@, arena))
+    for bad in BAD
+        reading: = read_rows("bad", bad.text, arena)
+        verdict.check(arena.text().s("the reading refuses ").s(bad.what).take(),
+            reading.problems.len > 0 && reading.rows.len == 0, "it read it as a row")
+    twice: =
+        read_rows("twice",
+        arena.text().s("```ksmd a.ksmd\n%ksmd 2\n```\n\n```ksmd a.ksmd\n%ksmd 2\n```\n\n")
+        .s(OPENED_TABLE).take(), arena)
+    verdict.check("the reading refuses a file block whose path stands twice in its workspace",
+        twice.problems.len == 1 &&
+        twice.problems.get(0).find_str("once in its workspace").is_some(),
+        joined(twice.problems@, arena))
+    one_table: =
+        read_rows("one table", arena.text().s(FILE_A).s(OPENED_TABLE).take(), arena)
+    verdict.check("an `Opened` row opens a file of the workspace above it",
+        one_table.rows.len == 1 && one_table.problems.len == 0 &&
+        one_table.rows.get(0).files.len == 1, joined(one_table.problems@, arena))
+    over: =
+        read_rows("over",
+        arena.text().s(FILE_A).s(OPENED_TABLE).c('\n').s(OPENED_TABLE).take(), arena)
+    verdict.check("an `Opened` table ends its workspace, so a second one has none",
+        over.rows.len == 1 && over.problems.len == 1, joined(over.problems@, arena))
+    example: = read_rows("example", EXAMPLE, arena)
+    verdict.check("a ksmd block with no sentence after it is an example, not a row",
+        example.problems.len == 0 && example.rows.len == 1 &&
+        example.rows.get(0).form == .shows, joined(example.problems@, arena))

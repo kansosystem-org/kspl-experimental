@@ -93,10 +93,12 @@ fn write_reason(value: Value, home: Sz, doc: Document@, results: Results@, out: 
     case .digit_literal
         digit_literal(value, out)
     case .bad_token
-        if value.text.len > 0
+        if value.text.len == 0
+            out.s("a quote is not closed")
+        else if value.text[0].is_digit()
             out.s(value.text).s(" does not read as a number")
         else
-            out.s("a character here starts nothing a formula reads, or a quote is not closed")
+            out.s(value.text).s(" starts nothing a formula reads")
     case .range_alone
         out.s("a range stands only in a function, as sum(A1:A9), or in a condition")
     case .missing
@@ -108,6 +110,11 @@ fn write_reason(value: Value, home: Sz, doc: Document@, results: Results@, out: 
             out.s(value.text).s(" stands where a value is needed")
     case .two_comparisons
         out.s("two comparisons in a row do not read. Join them with and, as A1 < B1 and B1 < C1")
+    case .minus_power
+        out.s("a - right before a value raised by ^ reads two ways. ")
+            .s("Bracket the one meant, as (-2)^2 or -(2^2)")
+    case .two_powers
+        out.s("two ^ in a row read two ways. Bracket the one meant, as (2^3)^2 or 2^(3^2)")
     case .too_deep
         out.s("the formula nests more than 64 levels")
     case .trailing

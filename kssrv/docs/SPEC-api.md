@@ -66,7 +66,7 @@ The `Content-Type` is looked up from the extension, whatever its letter case (`P
 
 ### Headers on every answer
 
-**Every answer carries `X-Content-Type-Options: nosniff`**, an error and an API answer included. A browser then reads a file only as the type named, and never runs a text file as a script.
+**Every final answer carries `X-Content-Type-Options: nosniff`**, an error and an API answer included. The interim `100 Continue` is a status line alone. A browser then reads a file only as the type named, and never runs a text file as a script.
 
 | Header | Facing outward | Local use (`--local`) |
 | :-- | :-- | :-- |
@@ -94,7 +94,7 @@ The `Content-Type` is looked up from the extension, whatever its letter case (`P
 | `Range: bytes=a-b`, `bytes=a-` or `bytes=-n` (the last `n` bytes), on a `GET` | a 206 holding that part, `Content-Range: bytes <first>-<last>/<size>` |
 | A range holding no byte of the file | a 416 with `Content-Range: bytes */<size>` |
 | Several ranges, another unit, a range ending before it starts, or a range on a `HEAD` | the whole file, a 200 |
-| `If-Range` naming another tag, or a date not the `Last-Modified` | the whole file, a 200 |
+| `If-Range` naming another tag, a date not the `Last-Modified`, or the `Last-Modified` of a file changed within the last second (RFC 9110 §8.8.2.2) | the whole file, a 200 |
 
 **Facing outward, framing and the referrer stay the site's own choice.** A public file has no action to steal by framing, and some sites rely on being framed. The reasons for local use are "What guards the page in the browser" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
@@ -209,3 +209,195 @@ These are the places where the server does less than a client can expect.
 * **Only a regular file is served.** A FIFO or a device in the root answers 404, as if absent, since its read can go on forever.
 * **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception (RFC 8615). In `path=`, `GET /api/file` reads a dot name, and `PUT /api/file` and `GET /api/list` refuse one with 403.
 * **A path in a form that Windows reads as another name is refused** (403) on every OS, both here and in `path=`. These are a `\`, an empty segment (`/a//b`), a `:`, a name ending in `.` or a space, and a device name (`CON`). So are a name shaped like a short name (`GIT~1`, `A~1.TXT`) and a wildcard (`*`, `?`). One `/` at the end names a folder: `/sub/` is its index, `/sub` is sent there, and a file named so (`/sub/f.txt/`) is a 404. So a file whose name holds one of these forms is not served, and `GET /api/list` leaves it out.
+
+## The answers, request by request
+
+**Each row below is a request, and the answer kssrv gives it facing outward.** The rows show the rules above at work. `make test-server-claims` sends every row to kssrv, in order, and fails on any other answer.
+
+**The rows start from this state.** The server runs facing outward, as `kssrv.exe <port> <root>`, with no `--cert`. The file `outside.txt` stands beside the root, outside it. The root holds these files:
+
+| File | It holds |
+| :-- | :-- |
+| `index.html` | `home` |
+| `note.txt` | `note` |
+| `sub/index.html` | `sub home` |
+| `sub/deep.txt` | `deep` |
+| `sub/.hidden` | `hidden` |
+| `.env` | `dot` |
+| `.well-known/x.txt` | `known` |
+| `PHOTO.JPG` | `jpg` |
+| `model.safetensors` | `weights` |
+| `a b.txt` | `space` |
+| `a+b.txt` | `plus` |
+| `%2e` | `pct` |
+| `api/status` | `a file` |
+| `style.css` | `p{}` |
+
+The columns read as follows:
+
+* **Request**: the method and the target. A version written after the target replaces `HTTP/1.1`.
+* **Token**: what `Authorization: Bearer` carries. Facing outward no request needs one, so every row here says `none`. The column keeps the form of the tables in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
+* **Headers**: other header lines the request sends. A row that names no `Host` sends `Host: 127.0.0.1`.
+* **Body**: the body sent, as text or as a count of bytes. A row that names a `Content-Length` or a `Transfer-Encoding` sends that header and no body.
+* **Answer**: the status, then the whole body where the row names one. After `holding`, each text is a part the body holds. After `with`, each `Name: value` is a header the answer carries. After `without`, each name is a header it does not carry.
+
+Three more points tell how a row reads:
+
+* **`<N bytes>`**, in a target or a header, stands for that many bytes of `x`.
+* **`<the ETag>` and `<the Last-Modified>`** stand for that header of the answer to a plain `GET` of the same target, sent just before.
+* **An answer to a `HEAD` is read as a head alone**, so its row names no body.
+
+**Every answer in these tables keeps two rules besides its own row.**
+
+* It carries the headers of "Headers on every answer".
+* A refusal (a status of 400 or more) says what happened in its body, unless it answers a `HEAD`.
+
+### Nothing outside the root
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /../outside.txt` | none | — | — | 403 with `Connection: keep-alive` |
+| `GET /%2e%2e/outside.txt` | none | — | — | 403 |
+| `GET /%2E%2E/outside.txt` | none | — | — | 403 |
+| `GET /..%2Foutside.txt` | none | — | — | 403 |
+| `GET /%2e%2e%2Foutside.txt` | none | — | — | 403 |
+| `GET /sub/../../outside.txt` | none | — | — | 403 |
+| `GET http://127.0.0.1/../outside.txt` | none | — | — | 403 |
+| `HEAD /../outside.txt` | none | — | — | 403 |
+
+### Names that Windows reads as another
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /sub%5Cdeep.txt` | none | — | — | 403 |
+| `GET /sub//deep.txt` | none | — | — | 403 |
+| `GET /note.txt:x` | none | — | — | 403 |
+| `GET /note.txt.` | none | — | — | 403 |
+| `GET /note.txt%20` | none | — | — | 403 |
+| `GET /CON` | none | — | — | 403 |
+| `GET /sub/NUL.txt` | none | — | — | 403 |
+| `GET /NOTE~1.TXT` | none | — | — | 403 |
+| `GET /*` | none | — | — | 403 |
+| `GET /note%3F` | none | — | — | 403 |
+
+### Names starting with a dot
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /.env` | none | — | — | 404 |
+| `GET /sub/.hidden` | none | — | — | 404 |
+| `HEAD /.env` | none | — | — | 404 |
+| `GET /.well-known/x.txt` | none | — | — | 200 `known` |
+
+### Files and folders
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /` | none | — | — | 200 `home` with `Content-Type: text/html; charset=utf-8` without `Content-Security-Policy` `Referrer-Policy` |
+| `GET /index.html` | none | — | — | 200 `home` |
+| `GET /note.txt` | none | — | — | 200 `note` with `Cache-Control: no-cache` `Accept-Ranges: bytes` `Connection: keep-alive` |
+| `GET /sub/` | none | — | — | 200 `sub home` |
+| `GET /sub/deep.txt` | none | — | — | 200 `deep` |
+| `GET /note.txt/` | none | — | — | 404 |
+| `GET /sub` | none | — | — | 301 with `Location: /sub/` |
+| `GET /sub?x=1` | none | — | — | 301 with `Location: /sub/?x=1` |
+| `GET http://127.0.0.1/note.txt` | none | — | — | 200 `note` |
+| `GET /missing.txt` | none | — | — | 404 with `Connection: keep-alive` without `Content-Security-Policy` `Referrer-Policy` |
+| `HEAD /note.txt` | none | — | — | 200 with `Content-Length: 4` |
+| `HEAD /missing.txt` | none | — | — | 404 |
+| `GET /<300 bytes>` | none | — | — | 404 |
+
+### Names as sent
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /a%20b.txt` | none | — | — | 200 `space` |
+| `GET /a+b.txt` | none | — | — | 200 `plus` |
+| `GET /%252e` | none | — | — | 200 `pct` |
+| `GET /sub%2Fdeep.txt` | none | — | — | 200 `deep` |
+
+### Types
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /note.txt` | none | — | — | 200 `note` with `Content-Type: text/plain; charset=utf-8` |
+| `GET /PHOTO.JPG` | none | — | — | 200 `jpg` with `Content-Type: image/jpeg` |
+| `GET /style.css` | none | — | — | 200 `p{}` with `Content-Type: text/css; charset=utf-8` |
+| `GET /model.safetensors` | none | — | — | 200 `weights` with `Content-Type: application/octet-stream` |
+
+### Methods
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `POST /note.txt` | none | — | — | 405 with `Allow: GET, HEAD` `Connection: keep-alive` |
+| `PUT /note.txt` | none | — | `abc` | 405 with `Allow: GET, HEAD` |
+| `DELETE /note.txt` | none | — | — | 405 with `Allow: GET, HEAD` |
+| `OPTIONS /note.txt` | none | — | — | 405 with `Allow: GET, HEAD` |
+| `PUT /note.txt` | none | `Expect: 100-continue` `Content-Length: 5` | — | 405 with `Connection: close` |
+
+### Requests that cannot be read
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /a%zz` | none | — | — | 400 with `Connection: close` `Content-Type: text/plain; charset=utf-8` |
+| `GET /note.txt` | none | `Transfer-Encoding: gzip` | — | 400 with `Connection: close` |
+| `GET /api/status` | none | `Transfer-Encoding: gzip` | — | 400 with `Content-Type: text/plain; charset=utf-8` |
+| `PUT /note.txt` | none | `Transfer-Encoding: chunked` | — | 411 holding `Content-Length` with `Connection: close` |
+| `POST /note.txt` | none | — | 65,536 bytes | 405 |
+| `POST /note.txt` | none | — | 65,537 bytes | 413 with `Connection: close` |
+| `GET /note.txt` | none | `Content-Length: 70000` | — | 413 |
+| `GET /note.txt` | none | `X-Fill: <65,000 bytes>` | — | 200 `note` |
+| `GET /note.txt` | none | `X-Fill: <66,000 bytes>` | — | 431 with `Connection: close` |
+| `GET / HTTP/2.0` | none | — | — | 505 with `Connection: close` |
+
+### The connection
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /note.txt` | none | `Connection: close` | — | 200 `note` with `Connection: close` |
+| `GET /note.txt HTTP/1.0` | none | — | — | 200 `note` with `Connection: close` |
+| `GET /note.txt HTTP/1.0` | none | `Connection: keep-alive` | — | 200 `note` with `Connection: keep-alive` |
+
+### Parts and copies kept, at work
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /note.txt` | none | `If-None-Match: <the ETag>` | — | 304 |
+| `GET /note.txt` | none | `If-None-Match: W/<the ETag>` | — | 304 |
+| `GET /note.txt` | none | `If-None-Match: *` | — | 304 |
+| `HEAD /note.txt` | none | `If-None-Match: <the ETag>` | — | 304 |
+| `GET /note.txt` | none | `If-None-Match: "other"` | — | 200 `note` |
+| `GET /note.txt` | none | `If-Modified-Since: <the Last-Modified>` | — | 304 |
+| `GET /note.txt` | none | `If-Modified-Since: Thu, 01 Jan 2099 00:00:00 GMT` | — | 200 `note` |
+| `GET /note.txt` | none | `If-Match: "other"` | — | 412 with `Connection: keep-alive` |
+| `GET /note.txt` | none | `If-Match: <the ETag>` | — | 200 `note` |
+| `GET /note.txt` | none | `If-Unmodified-Since: Thu, 01 Jan 1970 00:00:00 GMT` | — | 200 `note` |
+| `GET /note.txt` | none | `Range: bytes=1-2` | — | 206 `ot` with `Content-Range: bytes 1-2/4` |
+| `GET /note.txt` | none | `Range: bytes=1-` | — | 206 `ote` with `Content-Range: bytes 1-3/4` |
+| `GET /note.txt` | none | `Range: bytes=-2` | — | 206 `te` with `Content-Range: bytes 2-3/4` |
+| `GET /note.txt` | none | `Range: bytes=9-` | — | 416 with `Content-Range: bytes */4` `Connection: keep-alive` |
+| `GET /note.txt` | none | `Range: bytes=0-0,2-3` | — | 200 `note` |
+| `GET /note.txt` | none | `Range: lines=1-2` | — | 200 `note` |
+| `GET /note.txt` | none | `Range: bytes=3-1` | — | 200 `note` |
+| `HEAD /note.txt` | none | `Range: bytes=1-2` | — | 200 with `Content-Length: 4` |
+| `GET /note.txt` | none | `Range: bytes=1-2` `If-Range: <the ETag>` | — | 206 `ot` |
+| `GET /note.txt` | none | `Range: bytes=1-2` `If-Range: "other"` | — | 200 `note` |
+| `GET /note.txt` | none | `Range: bytes=1-2` `If-Range: Thu, 01 Jan 2099 00:00:00 GMT` | — | 200 `note` |
+
+### The JSON API, at work
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /api/status` | none | — | — | 200 holding `"local":false` and `"conditional_writes":false` and `"root":""` and `"max_connections":128` with `Content-Type: application/json` |
+| `GET /api/status` | none | — | — | 200 holding `"uptime_s":` and `"requests":` and `"connections_total":` and `"connections_open":` and `"connections_refused":` and `"writes":` and `"heap_bytes":` |
+| `HEAD /api/status` | none | — | — | 405 with `Content-Type: application/json` `Content-Length: 43` `Allow: GET` |
+| `POST /api/status` | none | — | — | 405 `{"error":"Method Not Allowed","status":405}` with `Allow: GET` |
+| `GET /api/missing` | none | — | — | 404 `{"error":"Not Found","status":404}` with `Content-Type: application/json` |
+| `GET /api/file?path=note.txt` | none | — | — | 404 `{"error":"Not Found","status":404}` |
+| `PUT /api/file?path=note.txt` | none | — | `abc` | 404 `{"error":"Not Found","status":404}` |
+| `GET /api/stat?path=note.txt` | none | — | — | 404 `{"error":"Not Found","status":404}` |
+| `GET /api/list?path=sub` | none | — | — | 404 `{"error":"Not Found","status":404}` |
+| `GET /api/here` | none | — | — | 404 `{"error":"Not Found","status":404}` |
+| `POST /api/stop` | none | — | — | 404 `{"error":"Not Found","status":404}` |
+| `GET /api/allow` | none | — | — | 404 `{"error":"Not Found","status":404}` |
+| `POST /api/build` | none | — | — | 404 `{"error":"Not Found","status":404}` |

@@ -11,15 +11,17 @@ import "ksmd/calc/args" { Raw_arg, Raw_args }
 import "ksmd/calc/bases" { READ_DIGITS, literal }
 import "ksmd/calc/forms" // `lookup`, `sum_product`, `column_name`, `conditional`, `area_of`
 import "ksmd/calc/forms" { parser_row }
-import "ksmd/calc/formula" { Cursor, Positions, Token, Token_kind, next, spelled, unquoted }
+import "ksmd/calc/formula" { Cursor, Positions, Token, Token_kind, literal_decimal, next, spelled,
+    unquoted }
+import "ksmd/calc/functions" { power }
 import "ksmd/calc/functions_table" as functions
 import "ksmd/calc/help" { FORMS }
 import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, Why, arithmetic, boolean, compare,
-    date_value, empty, is_comparison, joined, number, number_of, text, truth }
+    date_value, empty, is_comparison, joined, number, number_of, operand, text, truth }
 import "ksmd/model/model" { Cell, Document, Table }
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" // `text`, for the key of a call kept
+import "std/str" { Str_builder } // and `text`, for the key of a call kept
 
 const MAX_LEVELS: Sz = 64 //< how deeply one formula nests: brackets, functions, unary minus and
     //< `not`
@@ -253,7 +255,7 @@ priv fn cell_value(calc: Calc$@, spot: Spot): Value //< what a cell holds, a for
             .shaped = true } }
         p.advance()
         v: = p.expression()
-        if p.tok.kind != .end
+        if p.tok.kind != .end && !p.stray()
             p.fail(.trailing, spelled(p.tok), -1)
         if p.wrong
             return p.why
@@ -286,6 +288,23 @@ struct Row_reading //< a condition of `sum_if`, read once for each row of its va
     ranged: Bool //< a range was read in the condition
     shaped: Bool //< every range read was one column wide and `count` rows tall
 
+priv fn raised_to(base: Value, exponent: Value): Value //< `base ^ exponent`, by `power`'s rules
+    //< `0^-1` is `#DIV/0!`, and `(-1)^0.5` is `#NUM!`, as `power(0, -1)` and `power(-1, 0.5)` are.
+    //< The left error comes first, and a value of another kind is `#VALUE!`, as in `*`.
+    if base.kind == .error
+        return base
+    if exponent.kind == .error
+        return exponent
+    a: = operand(base)
+    if a.kind == .error
+        return a
+    b: = operand(exponent)
+    if b.kind == .error
+        return b
+    r: = power(a.number, b.number) catch e
+        return Value.because(e, .in_function, "^", -1)
+    return number(r)
+
 priv fn parser_cells(ctx: Void$@, piece: Sz): Value[] //<
     //< `Cells_fn` for the parser: the cells a reference alone names, taken when a function reads
     //< them; nothing while not calculating
@@ -316,28 +335,33 @@ impl Parser
             r.why = Value.because(.syntax, why, detail, at)
         r.wrong = true
 
-    priv fn blame(r: Self$@, value: Value, left: Value, lo: Sz, ro: Sz): Value //<
+    priv fn blame(r: Self$@, value: Value, left: Value, right: Value, lo: Sz, ro: Sz): Value //<
         //< An operator's result; a wrong kind or a divisor of 0 names the cell it was read from
         //< `lo` and `ro` are the places of the cells the left and the right operands were read
-        //< from alone, or -1.
+        //< from alone, or -1. **An error an operand already held is carried as it is**: the
+        //< operator did not make it, so `A1/0+B1` must not name B1 as the divisor.
         r.origin = -1
-        if value.kind != .error || value.at() >= 0
+        if value.kind != .error || value.at() >= 0 || left.kind == .error
             return value
-        $at: = ro
+        $on_left: = false
         switch value.why
         case .text_in_arithmetic, .truth_in_arithmetic
-            at = lo if left.kind == .text || left.kind == .boolean else ro
+            on_left = left.kind == .text || left.kind == .boolean
         case .joined_kind
-            at =
-                ro if left.kind == .text || left.kind == .empty || left.kind == .error else lo
+            on_left = left.kind != .text && left.kind != .empty
         case .divide_by_zero, .not_a_condition {}
         default
             return value
+        // The left operand is checked first, so an error about it stands even where the right
+        // one holds an error.
+        if !on_left && right.kind == .error
+            return value
+        at: = lo if on_left else ro
         return (value if at < 0
             else Value.because(value.error, value.why, value.text, at))
 
     fn condition(r: Self$@, value: Value): Value //< a value as a condition (`truth`), named
-        return r.blame(truth(value), empty(), -1, r.origin)
+        return r.blame(truth(value), empty(), value, -1, r.origin)
 
     priv fn enter(r: Self$@): Bool //< goes one level deeper; false past `MAX_LEVELS`
         if r.levels == MAX_LEVELS
@@ -405,7 +429,7 @@ impl Parser
         right: = r.join()
         if is_comparison(r.tok.kind)
             r.fail(.two_comparisons, "", -1)
-        return r.blame(compare(left, right, op), left, -1, -1)
+        return r.blame(compare(left, right, op), left, right, -1, -1)
 
     priv fn is_word(r: Self@, word: U8[]): Bool //< whether the next token is this word
         return r.tok.kind == .name && r.tok.text.equals(word)
@@ -416,7 +440,7 @@ impl Parser
             r.advance()
             lo: = r.origin
             right: = r.sum()
-            left = r.blame(joined(left, right, r.c.arena), left, lo, r.origin)
+            left = r.blame(joined(left, right, r.c.arena), left, right, lo, r.origin)
         return left
 
     priv fn sum(r: Self$@): Value //< terms joined by `+` and `-`, from the left
@@ -426,18 +450,47 @@ impl Parser
             r.advance()
             lo: = r.origin
             right: = r.product()
-            left = r.blame(arithmetic(left, right, .plus if plus else .minus), left, lo, r.origin)
+            left = r.blame(arithmetic(left, right, .plus if plus else .minus), left, right, lo,
+                r.origin)
         return left
 
-    priv fn product(r: Self$@): Value //< factors joined by `*` and `/`, from the left
-        $left: = r.unary()
+    priv fn product(r: Self$@): Value //< powers joined by `*` and `/`, from the left
+        $left: = r.raised()
         for r.tok.kind == .times || r.tok.kind == .divide
             kind: = r.tok.kind
             r.advance()
             lo: = r.origin
-            right: = r.unary()
-            left = r.blame(arithmetic(left, right, kind), left, lo, r.origin)
+            right: = r.raised()
+            left = r.blame(arithmetic(left, right, kind), left, right, lo, r.origin)
         return left
+
+    priv fn raised(r: Self$@): Value //< a percentage, or two joined by `^`
+        //< **`-2^2` and `2^3^2` do not read**: Excel's answers, 4 and 64, are not those of
+        //< mathematics, -4 and 512. Either answer would surprise someone, so brackets must say.
+        //< A minus on the power reads: `2^-1`.
+        minus: = r.tok.kind == .minus
+        $left: = r.percentage()
+        $first: = true
+        for r.tok.kind == .power
+            if !first
+                r.fail(.two_powers, "", -1)
+            else if minus
+                r.fail(.minus_power, "", -1)
+            first = false
+            r.advance()
+            lo: = r.origin
+            right: = r.percentage()
+            left = r.blame(raised_to(left, right), left, right, lo, r.origin)
+        return left
+
+    priv fn percentage(r: Self$@): Value //< a factor and each `%` after it, which divides by 100
+        //< Unary minus binds tighter than `%`, as in Excel: `-5%` is `(-5)%`.
+        $v: = r.unary()
+        for r.tok.kind == .percent
+            r.advance()
+            lo: = r.origin
+            v = r.blame(arithmetic(v, number(100.0), .divide), v, empty(), lo, -1)
+        return v
 
     priv fn unary(r: Self$@): Value //< `-` before a factor, or a factor
         if r.tok.kind != .minus
@@ -447,7 +500,7 @@ impl Parser
             return Value.failed(.syntax)
         v: = r.unary()
         r.leave()
-        return r.blame(arithmetic(number(0.0), v, .minus), empty(), -1, r.origin)
+        return r.blame(arithmetic(number(0.0), v, .minus), empty(), v, -1, r.origin)
 
     priv fn primary(r: Self$@): Value //< a number, text, a word, a cell, a bracket or a function
         //< Only the fields needed are taken from the token: a whole token is large to copy.
@@ -461,7 +514,8 @@ impl Parser
                 if r.digits
                     r.fail(.digit_literal, written, r.reads)
                 return number(F64::v)
-            return number_of(written)
+            defer $plain: = Str_builder()
+            return number_of(literal_decimal(written, plain@))
         case .text
             quoted: = r.tok.text
             r.advance()
@@ -502,8 +556,8 @@ impl Parser
         case .bad
             r.fail(.bad_token, r.tok.text, -1)
             return Value.failed(.syntax)
-        case .plus, .minus, .times, .divide, .join, .equal, .unequal, .less, .less_equal, .greater,
-            .greater_equal, .close, .comma, .end
+        case .plus, .minus, .times, .divide, .power, .percent, .join, .equal, .unequal, .less,
+            .less_equal, .greater, .greater_equal, .close, .comma, .end
             r.fail(.unexpected, spelled(r.tok), -1)
             return Value.failed(.syntax)
 
@@ -728,9 +782,20 @@ impl Parser
             return v
         return Value.because(v.error, .from_cell, "", slot(r.c, spot))
 
+    fn stray(r: Self$@): Bool //<
+        //< Whether the next token starts nothing, marking the formula wrong for it
+        //< **The token is the fault, not what was wanted in its place**: `=2~3` stops at `~`, and
+        //< no operator is missing before it.
+        if r.tok.kind != .bad
+            return false
+        r.fail(.bad_token, r.tok.text, -1)
+        return true
+
     fn expect(r: Self$@, kind: Token_kind) //< takes a token of this kind, or marks it wrong
-        if r.tok.kind != kind
-            stood: = r.tok.kind == .comma || r.tok.kind == .close
-            r.fail(.missing, spelled(Token(kind, 0, 0)), 1 if stood else 0)
+        if r.tok.kind == kind
+            r.advance()
             return
-        r.advance()
+        if r.stray()
+            return
+        stood: = r.tok.kind == .comma || r.tok.kind == .close
+        r.fail(.missing, spelled(Token(kind, 0, 0)), 1 if stood else 0)

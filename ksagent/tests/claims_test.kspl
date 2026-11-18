@@ -1,0 +1,538 @@
+//< Holds ksagent to the rows of its specification, read from the specification's text
+//< **Nothing here copies a rule**: each row's command and what it must give are read from the
+//< text, and the command runs through the real program, `out/ksagent.exe`, as a child. A failure
+//< names the line of the row, and says what the program gave against what the text says. So a
+//< change on one side alone points at the other.
+//< The rows take two forms (`FORMS`): a refusal, which needs no model, and an answer, which a
+//< stand-in model server (`ksagent/tests/stub.kspl`) gives in this process.
+//< **The gate checks itself too**: a text with no rows, a form with none, or a malformed row fails
+//< the reading, and the first row of each form, judged again with its answer changed, must fail on
+//< its line. A gate that cannot fail stays green as things break.
+import "ksagent/tests/stub" + { Stub }
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/subproc"
+import "std/verdict"
+
+// The text the rows are read from: ksagent's specification itself.
+embed "ksagent/docs/SPEC-commands.md" as spec
+
+priv const SPEC_NAME: U8[] = "ksagent/docs/SPEC-commands.md" //< what a failure calls `spec`
+priv const PROGRAM: U8[] = "ksagent" //< how a row's command names the program
+priv const RUN_CAP_MS: I32 = 120000 //< how long one row's command may run
+priv const OUTPUT_CAP: Sz = 1024 * 1024 //< how much of each output is kept
+priv const REPLIES: Sz = 8 //< how many requests a stand-in answers; it stops once the child ends
+
+// ==========================================
+// The start state, as "The rows, and what they start from" in the specification says it
+// ==========================================
+
+// The sentence that states the folders the rows run in. The text must hold it as written, so a
+// change to it fails here until `start_folder` follows it.
+priv const START_SAYS: U8[] =
+    "**The rows run in a folder that holds two folders, `team` and `old`.** `team` holds \
+        `rules/leave.md`, whose lines 3–4 read \"A new employee receives 10 days of paid leave\" \
+        and \"after six months of work.\" It also holds `questions.md`, the questions file that \
+        \"Testing models on your own documents\" shows. `old` holds `team.chat.ksmd`, a chat file \
+        of the old form."
+priv const QUESTIONS_START: U8[] = "## Question" //< the first line of the questions file's block
+
+// The stand-in's answers, as the table of models in the specification names them.
+priv const ANSWER_TEXT: U8[] =
+    "New employees receive 10 days of paid leave after six months of work." //<
+        //< what the stand-in answers, as the specification's example of `ask` prints it
+priv const RIGHT_QUOTE: U8[] =
+    "A new employee receives 10 days of paid leave after six months of work." //<
+        //< the quote that stands at lines 3–4 of `rules/leave.md`
+priv const WRONG_QUOTE: U8[] = "A new employee receives 20 days of paid leave at once." //<
+    //< a quote that does not stand there
+priv const THINKING: U8[] = "The rules folder should say how much leave there is." //<
+    //< what the stand-in thinks before it answers
+
+priv enum Model //< what the stand-in model gives, as an answer row's first cell names it
+    cites_lines //< the answer, citing lines 3–4 of `rules/leave.md` with the quote that stands
+    cites_wrongly //< the same answer, citing those lines with a quote that does not stand
+    cites_nothing //< the same answer, with no source
+    finds_nothing //< it lists the folder, then says the files do not hold the answer
+
+priv const MODELS: Model[4] = ::{ .cites_lines, .cites_wrongly, .cites_nothing, .finds_nothing } //<
+    //< every model, in the order the specification's table names them
+
+impl Model
+    fn written(r: Self): U8[] //< the name the specification gives it
+        switch r
+        case .cites_lines
+            return "cites lines 3–4"
+        case .cites_wrongly
+            return "cites a wrong quote"
+        case .cites_nothing
+            return "cites nothing"
+        case .finds_nothing
+            return "finds nothing"
+
+    fn reply(r: Self, arena: Arena$@): U8[] //< the raw reply the stand-in gives each request
+        switch r
+        case .cites_lines
+            return cited(RIGHT_QUOTE, arena)
+        case .cites_wrongly
+            return cited(WRONG_QUOTE, arena)
+        case .cites_nothing
+            return stub.streamed_call(THINKING, "answer",
+                stub.answer_args(ANSWER_TEXT, "[]", arena), arena)
+        case .finds_nothing
+            return stub.not_found(arena)
+
+priv fn cited(quote: U8[], arena: Arena$@): U8[] //<
+    //< A streamed answer, after its thinking, citing lines 3–4 of `rules/leave.md` with `quote`
+    sources: = stub.list_of(U8[][]::{ stub.source("rules/leave.md", 3, 4, quote, arena) }, arena)
+    return stub.streamed_call(THINKING, "answer",
+        stub.answer_args(ANSWER_TEXT, sources, arena), arena)
+
+// ==========================================
+// The forms
+// ==========================================
+
+priv enum Form //< what a row asks
+    refusal //< a command that ends before it asks a model
+    answer //< a command that asks the stand-in
+
+priv const FORMS: Form[2] = ::{ .refusal, .answer } //< every form, in the order one is named
+
+priv const REFUSAL_HEAD: U8[] = "| Command | Exit code | Standard error holds |" //<
+    //< A refusal row: it prints nothing to standard output
+priv const ANSWER_HEAD: U8[] = //< An answer row: the stand-in gives the answer its first cell names
+    "| The stand-in model | Command | Exit code | Standard output holds | Standard error holds |"
+priv const MODELS_HEAD: U8[] = "| Name | What the stand-in model gives |" //<
+    //< The table that names the stand-in's answers
+priv const ROW_STARTS: U8[][3] = ::{ "| Command |", "| The stand-in model |", "| Name |" } //<
+    //< The first cells of the forms: a heading starting so is meant as one
+
+impl Form
+    fn written(r: Self): U8[] //< the form's heading row, as the text writes it
+        switch r
+        case .refusal
+            return REFUSAL_HEAD
+        case .answer
+            return ANSWER_HEAD
+
+priv struct Row //< one row of the specification, and what it says the command gives
+    line: Sz //< its line, from 1
+    form: Form
+    model: Model //< the stand-in's answer; an answer row's alone
+    command: U8[] //< as the row writes it
+    code: I32 //< the exit code
+    out_holds: U8[][] //< the texts standard output holds
+    err_holds: U8[][] //< the texts standard error holds
+
+priv struct Reading //< the rows a text holds, and what in it is not a row as the forms write one
+    rows: List<|Row|>
+    named: List<|U8[]|> //< the models the table of models names
+    problems: List<|U8[]|> //< each `<name>:<line>: what`
+
+// ==========================================
+// The run
+// ==========================================
+
+fn test_the_specification_holds(ksagent: U8[], work: U8[], arena: Arena$@) //<
+    //< The text reads as rows alone, each row holds, and each form's first row, changed, fails
+    verdict.start("[ksagent] each row of the specification holds")
+    exe: = fs.absolute(ksagent, arena) catch
+        verdict.check("the program's path can be made absolute", false, ksagent)
+        return
+    root: = start_folder(work, arena) catch why
+        verdict.check("the folder the rows run in can be made", false, why)
+        return
+    reading: = read_rows(spec, arena)
+    verdict.check("ksagent's specification states the folders the rows run in",
+        spec.find_str(START_SAYS).is_some(),
+        arena.text().s("no line holds: ").s(START_SAYS).take())
+    verdict.check("ksagent's specification reads as rows of the forms",
+        reading.problems.len == 0, joined(reading.problems@, arena))
+    for form in FORMS
+        verdict.check(arena.text().s("ksagent's specification holds rows of the form ")
+            .s(form.written()).take(), count(reading@, form) > 0, "")
+    for row in reading.rows
+        broke: = judged(row@, exe, root, arena)
+        verdict.check(row_name(row@, arena), broke.len == 0, broke)
+    changed_cases(reading@, exe, root, arena)
+
+priv const MALFORMED: U8[] =
+    """
+| Command | Exit |
+| :-- | :-- |
+| `ksagent ask team` | 2 |
+
+| Command | Exit code | Standard error holds |
+| :-- | :-- | :-- |
+| `ksagent ask team` | two | `usage:` |
+| `ask team` | 2 | `usage:` |
+| `ksagent ask team` | 2 | usage: |
+""" //< a heading meant as a form's, then three rows that are not rows; each line is named
+
+fn test_a_malformed_row_is_named(arena: Arena$@)
+    verdict.start("[ksagent] the specification's reading names each place that is no row")
+    reading: = read_rows(MALFORMED, arena)
+    $named: = true
+    for line in Sz[]::{ 1, 7, 8, 9 }
+        at: = arena.text().s(SPEC_NAME).c(':').s("\{line\}").s(": ").take()
+        $found: = false
+        for p in reading.problems
+            found = found || p.starts_with(at)
+        named = named && found
+    verdict.check("a heading and three rows that are no rows are each named on their line",
+        named && reading.rows.len == 0, joined(reading.problems@, arena))
+
+priv fn changed_cases(reading: Reading@, exe: U8[], root: U8[], arena: Arena$@) //<
+    //< The first row of each form, judged again with its exit code or a text changed, fails
+    //< naming its line
+    for form in FORMS
+        for row in reading.rows
+            if row.form != form
+                continue
+            at: = arena.text().c(':').s("\{row.line\}").s(": ").take()
+            $code: = row
+            code.code = row.code + 1
+            $text: = row
+            text.err_holds = changed(row.err_holds, arena)
+            text.out_holds = changed(row.out_holds, arena)
+            for other in Row[]::{ code, text }
+                name: = row_name(other@, arena)
+                verdict.check(arena.text().s("its answer changed, it fails: ").s(name).take(),
+                    judged(other@, exe, root, arena).len > 0 && name.find_str(at).is_some(),
+                    "a wrong answer holds, or its failure does not name the line")
+            break
+
+priv fn changed(texts: U8[][], arena: Arena$@): U8[][] //< the texts, the last with an `x` added
+    if texts.len == 0
+        return texts
+    $out: = List<|U8[]|>(arena)
+    for t in texts
+        out.push(t)
+    out.set(out.len - 1, arena.text().s(texts[texts.len - 1]).c('x').take())
+    return out.slice()
+
+priv fn count(reading: Reading@, form: Form): Sz //< how many rows of `form` the text holds
+    $n: Sz = 0
+    for row in reading.rows
+        if row.form == form
+            n += 1
+    return n
+
+priv fn joined(list: List<|U8[]|>@, arena: Arena$@): U8[] //< the entries, one to a line
+    b: = arena.text()
+    for i in Range.asc(list.len)
+        if i > 0
+            b.s("\n    ")
+        b.s(list.get(i))
+    return b.take()
+
+priv fn row_name(row: Row@, arena: Arena$@): U8[] //<
+    //< `<name>:<line>: ` and the row's command and exit code, in short
+    b: = arena.text().s(SPEC_NAME).c(':').s("\{row.line\}").s(": `").s(row.command).s("`")
+    if row.form == .answer
+        b.s(" with a stand-in that ").s(row.model.written())
+    b.s(" ends with \{row.code\}")
+    return b.take()
+
+// ==========================================
+// The folder the rows run in
+// ==========================================
+
+priv fn start_folder(work: U8[], arena: Arena$@): U8[]!U8[] //<
+    //< A fresh folder under `work` holding what "The rows, and what they start from" says
+    questions: = questions_block(spec, arena) catch
+        throw "the specification shows no questions file opening with \"## Question\""
+    root: = fs.mkdir_unique(work, "claims-", arena) catch
+        throw "the folder cannot be made"
+    rels: = U8[][]::{ "team/rules/leave.md", "team/questions.md", "old/team.chat.ksmd" }
+    bodies: = U8[][]::{ stub.LEAVE, questions, "## Question\n\nHow many days?\n" }
+    fs.write_tree(root, rels, bodies, arena) catch
+        throw "its files cannot be written"
+    return root
+
+priv fn questions_block(text: U8[], arena: Arena$@): U8[]? //<
+    //< The first fenced block whose first line is `QUESTIONS_START`, each line ending in a newline
+    lines: = text.lines(arena)
+    for i in Range.asc(lines.len)
+        if !lines.get(i).equals("```") || i + 1 >= lines.len ||
+            !lines.get(i + 1).equals(QUESTIONS_START)
+            continue
+        b: = arena.text()
+        for k in Range(i + 1, lines.len, 1)
+            if lines.get(k).equals("```")
+                return .some(b.take())
+            b.s(lines.get(k)).c('\n')
+        return .none
+    return .none
+
+// ==========================================
+// Reading the rows
+// ==========================================
+
+priv fn read_rows(text: U8[], arena: Arena$@): Reading //<
+    //< The rows `text` holds, in its order, and each place that is meant as a row but is not one
+    lines: = text.lines(arena)
+    $reading: = Reading::{ .rows = List<|Row|>(arena), .named = List<|U8[]|>(arena),
+        .problems = List<|U8[]|>(arena) }
+    $fenced: = false
+    $i: Sz = 0
+    for i < lines.len
+        line: = lines.get(i)
+        if line.starts_with("```")
+            fenced = !fenced
+        if fenced || !line.starts_with("|")
+            i += 1
+            continue
+        i = table_rows(reading@, lines@, i, arena)
+    if reading.rows.len == 0
+        problem(reading@, lines.len, "the text holds no row of any form", arena)
+    for m in MODELS
+        if !reading.named.contains(m.written())
+            problem(reading@, lines.len,
+                arena.text().s("the table of models names no `").s(m.written()).s("`").take(),
+                arena)
+    return reading
+
+priv fn problem(reading: Reading$@, index: Sz, what: U8[], arena: Arena$@) //<
+    //< notes one, at a line's index
+    reading.problems
+        .push(arena.text().s(SPEC_NAME).c(':').s("\{index + 1\}").s(": ").s(what).take())
+
+priv fn table_rows(reading: Reading$@, lines: List<|U8[]|>@, head: Sz, arena: Arena$@): Sz //<
+    //< Reads the rows of the table whose heading row is at `head`, where it is one of the forms;
+    //< returns the index of the line after the table
+    $end: = head
+    for end < lines.len && lines.get(end).starts_with("|")
+        end += 1
+    cells: = cells_of(lines.get(head), arena) catch
+        return end
+    heading: = heading_of(cells@, arena)
+    known: =
+        heading.equals(REFUSAL_HEAD) || heading.equals(ANSWER_HEAD) ||
+        heading.equals(MODELS_HEAD)
+    if !known
+        for start in ROW_STARTS
+            if heading.starts_with(start)
+                problem(reading, head,
+                    arena.text().s("this heading row starts as a form's but is none: ").s(heading)
+                    .take(), arena)
+        return end
+    if head + 1 >= end || !is_rule(lines.get(head + 1))
+        problem(reading, head, "this heading row has no line of dashes under it", arena)
+        return end
+    for i in Range(head + 2, end, 1)
+        if heading.equals(MODELS_HEAD)
+            model_row(reading, lines.get(i), i, arena)
+        else
+            table_row(reading, lines.get(i), i,
+                .refusal if heading.equals(REFUSAL_HEAD) else .answer, arena)
+    return end
+
+priv fn model_row(reading: Reading$@, line: U8[], index: Sz, arena: Arena$@) //<
+    //< Reads one row of the table of models: a name the stand-in knows, and what it gives
+    cells: = cells_of(line, arena) catch
+        problem(reading, index, "a table row starts and ends with '|'", arena)
+        return
+    if cells.len != 2
+        problem(reading, index, "a row of the table of models has 2 cells", arena)
+        return
+    name: = span_of(cells.get(0)) catch
+        problem(reading, index, "the first cell is not one name in backticks", arena)
+        return
+    model_named(name) catch
+        problem(reading, index,
+            arena.text().s("the stand-in gives no answer named `").s(name).s("`").take(), arena)
+        return
+    reading.named.push(name)
+
+priv fn model_named(name: U8[]): Model? //< the stand-in's answer of that name
+    for m in MODELS
+        if m.written().equals(name)
+            return .some(m)
+    return .none
+
+priv fn table_row(reading: Reading$@, line: U8[], index: Sz, form: Form, arena: Arena$@) //<
+    //< Reads one row of a table of `form`, or notes why it is not one
+    cells: = cells_of(line, arena) catch
+        problem(reading, index, "a table row starts and ends with '|'", arena)
+        return
+    width: = form.written().split('|', arena).len - 2
+    if cells.len != width
+        problem(reading, index,
+            arena.text().s("this row has \{cells.len\} cells; its heading, ").s("\{width\}").take(),
+            arena)
+        return
+    $at: Sz = 0
+    $model: = Model.cites_lines
+    if form == .answer
+        name: = span_of(cells.get(0)) catch
+            problem(reading, index, "the first cell is not one name in backticks", arena)
+            return
+        model = model_named(name) catch
+            problem(reading, index,
+                arena.text().s("the table of models names no `").s(name).s("`").take(), arena)
+            return
+        at = 1
+    command: = span_of(cells.get(at)) catch
+        problem(reading, index, "the command is not one text in backticks", arena)
+        return
+    if !command.starts_with(arena.text().s(PROGRAM).c(' ').take())
+        problem(reading, index, "the command does not start with `ksagent `", arena)
+        return
+    code: = cells.get(at + 1).to_i64() catch
+        problem(reading, index, "the exit code is not a number", arena)
+        return
+    out_cell: = cells.get(at + 2) if form == .answer else ""
+    out_holds: = spans_of(out_cell, arena) catch
+        problem(reading, index, "standard output's cell is not texts in backticks", arena)
+        return
+    err_holds: = spans_of(cells.get(cells.len - 1), arena) catch
+        problem(reading, index, "standard error's cell is not texts in backticks", arena)
+        return
+    if out_holds.len + err_holds.len == 0
+        problem(reading, index, "the row says no text the output holds", arena)
+        return
+    reading.rows
+        .push(Row::{ .line = index + 1, .form = form, .model = model, .command = command,
+        .code = I32::code, .out_holds = out_holds, .err_holds = err_holds })
+
+priv fn is_rule(line: U8[]): Bool //< whether a table's line under its heading holds dashes alone
+    $dashes: = false
+    for ch in line
+        if ch == '-'
+            dashes = true
+        else if ch != '|' && ch != ':' && ch != ' '
+            return false
+    return dashes
+
+priv fn cells_of(line: U8[], arena: Arena$@): List<|U8[]|>? //<
+    //< A table row's cells, trimmed, each `\|` in them read as `|`; none where the row does not
+    //< start and end with '|'
+    text: = line.trim_spaces()
+    if text.len < 2 || text[0] != '|' || text[text.len - 1] != '|' ||
+        text[text.len - 2] == '\\'
+        return .none
+    $out: = List<|U8[]|>(arena)
+    $cell: = arena.text()
+    for $i: Sz = 1; i < text.len; i += 1
+        if text[i] == '\\' && i + 1 < text.len && text[i + 1] == '|'
+            cell.c('|')
+            i += 1
+        else if text[i] == '|'
+            out.push(cell.take().trim_spaces())
+            cell = arena.text()
+        else
+            cell.c(text[i])
+    return .some(out)
+
+priv fn heading_of(cells: List<|U8[]|>@, arena: Arena$@): U8[] //< `| A | B |`, from the cells
+    b: = arena.text().c('|')
+    for cell in cells
+        b.c(' ').s(cell).s(" |")
+    return b.take()
+
+priv fn span_of(cell: U8[]): U8[]? //< the text of the one span in backticks the cell is, or none
+    if cell.len < 3 || cell[0] != '`' || cell[cell.len - 1] != '`'
+        return .none
+    inner: = cell.sub(1, cell.len - 2)
+    if inner.find_char('`').is_some()
+        return .none
+    return .some(inner)
+
+priv fn spans_of(cell: U8[], arena: Arena$@): U8[][]? //<
+    //< The texts of the spans in backticks the cell holds, with `, ` between them; none where it
+    //< holds anything else. An empty cell holds none.
+    $out: = List<|U8[]|>(arena)
+    $rest: = cell
+    for rest.len > 0
+        if rest[0] != '`'
+            return .none
+        close: = rest.sub_from(1).find_char('`') catch
+            return .none
+        if close == 0
+            return .none
+        out.push(rest.sub(1, close))
+        rest = rest.sub_from(close + 2)
+        if rest.len > 0
+            if !rest.starts_with(", ")
+                return .none
+            rest = rest.sub_from(2)
+    return .some(out.slice())
+
+// ==========================================
+// Judging a row
+// ==========================================
+
+priv fn judged(row: Row@, exe: U8[], root: U8[], arena: Arena$@): U8[] //<
+    //< What the program gives against what the row says; empty where it gives that
+    words: = words_of(row.command.sub_from(PROGRAM.len + 1), arena) catch
+        return "a double quote in the command is not closed"
+    $argv: = List<|U8[]|>(arena)
+    argv.push(exe)
+    $server: Stub$@ = null
+    for i in Range.asc(words.len)
+        argv.push(words.get(i))
+        if i == 0 && row.form == .answer
+            $replies: = List<|U8[]|>(arena)
+            for _k in Range.asc(REPLIES)
+                replies.push(row.model.reply(arena))
+            server = stub.start(replies.slice(), arena)
+            argv
+                .push(arena.text().s("--model-url=http://127.0.0.1:\{server.port\}").take())
+    got: = subproc.run_capture(argv.slice(), root, RUN_CAP_MS, OUTPUT_CAP, arena)
+    if server != null
+        stub.done_asking(server)
+        stub.release(server)
+    r: = got catch
+        return "the program could not be started"
+    out: U8[] = r.stdout_data
+    err: U8[] = r.stderr_data
+    $wrong: = List<|U8[]|>(arena)
+    if code: = r.exit_code
+        if code != row.code
+            wrong.push(arena.text().s("it ended with \{code\}").take())
+    else
+        wrong.push("it was killed at its limit")
+    if row.form == .refusal && out.len > 0
+        wrong.push("it printed to standard output")
+    for t in row.out_holds
+        if out.find_str(t).is_none()
+            wrong
+                .push(arena.text().s("standard output lacks `").s(t).c('`').take())
+    for t in row.err_holds
+        if err.find_str(t).is_none()
+            wrong
+                .push(arena.text().s("standard error lacks `").s(t).c('`').take())
+    if wrong.len == 0
+        return ""
+    return arena.text().s(joined(wrong@, arena)).s("\n  standard output: ").s(out)
+        .s("\n  standard error: ").s(err).take()
+
+priv fn words_of(text: U8[], arena: Arena$@): List<|U8[]|>? //<
+    //< The words a command holds, split at spaces; a part in double quotes keeps its spaces
+    $out: = List<|U8[]|>(arena)
+    $word: = arena.text()
+    $quoted: = false
+    $started: = false
+    for c in text
+        if c == '"'
+            quoted = !quoted
+            started = true
+        else if c == ' ' && !quoted
+            if started
+                out.push(word.take())
+                word = arena.text()
+                started = false
+        else
+            word.c(c)
+            started = true
+    if quoted
+        return .none
+    if started
+        out.push(word.take())
+    return .some(out)

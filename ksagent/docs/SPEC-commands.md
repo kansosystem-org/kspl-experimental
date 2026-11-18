@@ -2,6 +2,31 @@
 
 **This document is the agreement between ksagent and whoever runs it, writes questions for it, or chooses a model for it.** It sets each command's options, what each prints, the files it reads and writes, and its limits. How to start it is in [`ksagent/README.md`](../README.md). The steps from installing llama.cpp to the first answer are [`ksagent/docs/TUTORIAL-ask-about-your-files.md`](TUTORIAL-ask-about-your-files.md).
 
+## The rows, and what they start from
+
+**Many rules carry rows: a command, and what ksagent does with it.** ksagent's own tests run each row's command through `out/ksagent.exe`, so a row is a promise.
+
+**A row is a row of a table whose header is one of these:**
+
+| Header | What it promises |
+| :-- | :-- |
+| `\| Command \| Exit code \| Standard error holds \|` | ksagent ends with that code before it asks a model. It prints nothing to standard output, and standard error holds each text |
+| `\| The stand-in model \| Command \| Exit code \| Standard output holds \| Standard error holds \|` | A stand-in model server gives the answer that the first cell names. ksagent ends with that code, and each output holds each text in its cell |
+
+* **Each text stands in backticks.** A cell can hold several, with a comma between two of them, or none.
+* **The tests add `--model-url` after the command word of an answer row.** It names the stand-in, which gives the same answer to each request.
+
+**The stand-in model gives one of these answers:**
+
+| Name | What the stand-in model gives |
+| :-- | :-- |
+| `cites lines 3–4` | It thinks, then answers "New employees receive 10 days of paid leave after six months of work." It cites lines 3–4 of `rules/leave.md`, with the quote that stands there |
+| `cites a wrong quote` | The same, but its quote does not stand at those lines |
+| `cites nothing` | The same answer, with no source |
+| `finds nothing` | It lists the folder, then says that the files do not hold the answer |
+
+**The rows run in a folder that holds two folders, `team` and `old`.** `team` holds `rules/leave.md`, whose lines 3–4 read "A new employee receives 10 days of paid leave" and "after six months of work." It also holds `questions.md`, the questions file that "Testing models on your own documents" shows. `old` holds `team.chat.ksmd`, a chat file of the old form.
+
 ## The model server
 
 **ksagent asks a model server that answers `POST /v1/chat/completions` with tool calls**, such as llama.cpp's `llama-server`, vLLM or ksai's `chat_server`. **It asks for the reply as a stream, and shows it as it is written.** A server that does not stream works too: ksagent then asks it for whole replies. Which model to use, and where to download it, are in [`data/README.md`](../../data/README.md).
@@ -20,8 +45,32 @@
 | :-- | :-- |
 | `--model-url=<url>` | The model server. The default is `http://127.0.0.1:8081`. Only `http://` works. Leave out `/v1`: ksagent adds `/v1/chat/completions` itself |
 | `--model=<name>` | The model name each request carries. The default is `local`; a server that holds one model needs no other |
-| `--timeout=<seconds>` | How long one reply from the model may take, from the request to its last piece. The default is 600 |
+| `--timeout=<seconds>` | How long one reply from the model may take, from the request to its last piece: 1 to 86,400 seconds. The default is 600 |
 | `--out=<file>` | `eval` only: also writes the table to this file under the folder, as `.md` or `.ksmd` |
+
+**The exit code says how a command ended:**
+
+| Code | When |
+| :-- | :-- |
+| 0 | The command ran to its end. An answer with no checked source ends with 0 too, since it says so itself |
+| 1 | It was refused, or an answer stopped or failed before it was finished |
+| 2 | Its command line cannot be read: a missing or extra argument, or an option `ask` does not take |
+
+**A command that cannot run is refused before ksagent asks a model:**
+
+| Command | Exit code | Standard error holds |
+| :-- | :-- | :-- |
+| `ksagent ask team` | 2 | `usage: ksagent ask [options...] <folder> "<question>"` |
+| `ksagent watch team team` | 2 | `usage: ksagent watch [options...] <folder>` |
+| `ksagent eval team` | 2 | `usage: ksagent eval [options...] <folder> <questions file>` |
+| `ksagent ask nowhere "How many days?"` | 1 | `not a folder: nowhere` |
+| `ksagent ask --timeout=0 team "How many days?"` | 1 | `--timeout must be from 1 to 86400 seconds` |
+| `ksagent ask --model-url=https://127.0.0.1:8081 team "How many days?"` | 1 | `https is not supported yet` |
+| `ksagent ask --model-url=ftp://127.0.0.1:8081 team "How many days?"` | 1 | `must start with http://` |
+| `ksagent ask --model-url=http://127.0.0.1:8081/v1 team "How many days?"` | 1 | `must leave out /v1` |
+| `ksagent ask --out=table.md team "How many days?"` | 2 | `'--out' does not take effect on the subcommand 'ask'` |
+| `ksagent eval --out=table.txt team team/questions.md` | 1 | `--out must name a .md or a .ksmd file` |
+| `ksagent eval --out=/table.md team team/questions.md` | 1 | `--out: the path must stay inside the folder` |
 
 ### What `ask` prints
 
@@ -39,6 +88,12 @@ Sources:
 
 **An answer with no checked source says so** in a line of its own ("Unverified"). A source whose quote does not stand at its lines is removed, and a line says how many were removed.
 
+| The stand-in model | Command | Exit code | Standard output holds | Standard error holds |
+| :-- | :-- | :-- | :-- | :-- |
+| `cites lines 3–4` | `ksagent ask team "How many days of paid leave does a new employee get?"` | 0 | `New employees receive 10 days of paid leave after six months of work.`, `Sources:`, `- rules/leave.md lines 3–4`, `> A new employee receives 10 days of paid leave after six months of work.` | |
+| `cites a wrong quote` | `ksagent ask team "How many days of paid leave does a new employee get?"` | 0 | `Removed 1 cited source`, `Unverified` | |
+| `cites nothing` | `ksagent ask team "How many days of paid leave does a new employee get?"` | 0 | `Unverified` | |
+
 ### What standard error shows
 
 **While the model works, standard error shows what it does**: its thinking, each tool call, and the answer as it is written. A local model can take minutes, so you see that it works, and can stop it with Ctrl+C. **The answer that grows there is not checked yet**, and a line before it says so:
@@ -52,6 +107,10 @@ A new employee gets 10 days of paid leave, and unused days carry over for one ye
 ```
 
 A model that thinks first (Qwen3.5) shows its thinking after `thinking:`. Neither the answer nor a chat file holds the thinking.
+
+| The stand-in model | Command | Exit code | Standard output holds | Standard error holds |
+| :-- | :-- | :-- | :-- | :-- |
+| `cites lines 3–4` | `ksagent ask team "How many days of paid leave does a new employee get?"` | 0 | | `thinking: `, `writing (sources not checked yet):`, `answer {"text": "New employees receive 10 days` |
 
 ## Word and Excel files
 
@@ -100,6 +159,10 @@ A model that thinks first (Qwen3.5) shows its thinking after `thinking:`. Neithe
 * **A line that cannot be read is named on the console and on the page**, with its number and the reason. In a chat file, ksagent answers no further question until the line is repaired, and answers again within 2 seconds once it is.
 * **ksagent starts nothing where an old `.chat.ksmd` or `.live.ksmd` file stands**, and names the file. Delete it, or ask its questions again on the page.
 
+| Command | Exit code | Standard error holds |
+| :-- | :-- | :-- |
+| `ksagent ask old "How many days?"` | 1 | `old/team.chat.ksmd is a chat file of the old form` |
+
 ## Testing models on your own documents
 
 **`ksagent eval` asks a list of questions whose answers you know, and scores each answer.** A model that does well elsewhere can still miss your terms or invent a rule. So test each candidate model on your own documents before you trust its answers.
@@ -129,12 +192,19 @@ Expect: none
 
 | Column | What it holds |
 | :-- | :-- |
+| # | The question's number in the file, from 1 |
 | Question | The question, on one line |
 | Expected | The place from the `Expect:` line, or `none` |
 | Result | `pass`, or `fail:` and why. A checked source passes when its lines overlap the expected ones in the expected file. `Expect: none` passes only on the not-found answer |
 | Seconds | How long the question took, model time included |
 
 A last line gives the totals: questions passed and failed, answers with no checked source, and the average seconds per question. Run every candidate model on the same questions file, and compare these totals.
+
+| The stand-in model | Command | Exit code | Standard output holds | Standard error holds |
+| :-- | :-- | :-- | :-- | :-- |
+| `cites lines 3–4` | `ksagent eval team team/questions.md` | 0 | `rules/leave.md 3-4 \| pass`, `none \| fail:`, `Passed: 1. Failed: 1. Answers with no checked source: 0. Average:` | |
+| `finds nothing` | `ksagent eval team team/questions.md` | 0 | `rules/leave.md 3-4 \| fail:`, `none \| pass` | |
+| `cites lines 3–4` | `ksagent eval --out=table.md team team/questions.md` | 0 | `Passed: 1. Failed: 1.` | `wrote team/table.md` |
 
 ## Limits
 

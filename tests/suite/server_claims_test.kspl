@@ -1,8 +1,9 @@
 #!/usr/bin/env -S ksplc run
-//< Holds kssrv to `docs/SPEC-local-server.md`: its tables of requests, and its checkable sentences
-//< kssrv's tests hold the run that reads the specification and judges a real server
-//< (`kssrv/tests/claims.kspl`). The specification stands outside kssrv's folder, so that run goes
-//< only when it is named with the file: here. This suite builds kssrv and starts that run twice.
+//< Holds kssrv to `SPECS`: their tables of requests, and their checkable sentences
+//< kssrv's tests hold the run that reads such a specification and judges a real server
+//< (`kssrv/tests/claims.kspl`). The local server's specification stands outside kssrv's folder, so
+//< that run goes only when it is named with the file: here. This suite builds kssrv once, then
+//< starts that run twice for each specification.
 //< * **On the specification as it stands**: every check must pass.
 //< * **On a copy with one answer changed** (`PLANTED`): the run must fail, naming the changed
 //<   line. Without it, a run that judged nothing would go green.
@@ -19,15 +20,20 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/harness"
 
-priv const SPEC: U8[] = "docs/SPEC-local-server.md" //< the specification, from the root
-priv const RUN: U8[] = "claims" //< the run of kssrv's tests that reads it (`SPEC_RUN` there)
+priv const SPECS: U8[][2] = ::{ "docs/SPEC-local-server.md", "kssrv/docs/SPEC-api.md" } //<
+    //< The specifications, from the root
+priv const RUN: U8[] = "claims" //< the run of kssrv's tests that reads them (`SPEC_RUN` there)
 
-priv const PLANTED: U8[] = "| `GET /api/status` | none | — | — | 401 |" //<
-    //< The row the copy changes: its answer becomes `PLANTED_AS`, which the server does not give
-priv const PLANTED_AS: U8[] = "| `GET /api/status` | none | — | — | 200 |" //<
-    //< The changed row; a request without the token is refused, so judging it must fail
-priv const PLANTED_SAYS: U8[] = "the status is 401, the specification says 200" //<
-    //< What the run says of the changed row (`judged` in `kssrv/tests/claims.kspl`)
+priv const PLANTED: U8[][2] = ::{ "| `GET /api/status` | none | — | — | 401 |",
+    "| `GET /%2e%2e/outside.txt` | none | — | — | 403 |" } //<
+        //< For each of `SPECS`, the row its copy changes: its answer becomes `PLANTED_AS`, which
+        //< the server does not give
+priv const PLANTED_AS: U8[][2] = ::{ "| `GET /api/status` | none | — | — | 200 |",
+    "| `GET /%2e%2e/outside.txt` | none | — | — | 200 |" } //<
+        //< The changed rows; the server refuses both requests, so judging them must fail
+priv const PLANTED_SAYS: U8[][2] = ::{ "the status is 401, the specification says 200",
+    "the status is 403, the specification says 200" } //<
+        //< What the run says of each changed row (`judged` in `kssrv/tests/claims.kspl`)
 
 priv fn built(work: U8[], arena: Arena$@): U8[] //< kssrv, built here; empty where it cannot be
     //< **Only a link that fails can skip, and only where `KSTLS_REQUIRE_LIBS` is not `1`**: kssrv
@@ -52,7 +58,7 @@ priv fn built(work: U8[], arena: Arena$@): U8[] //< kssrv, built here; empty whe
 
 priv fn run_claims(exe: U8[], spec: U8[], work: U8[], arena: Arena$@): verdict.Run_out //<
     //< kssrv's tests' run `claims` on the specification at `spec`
-    //< **From the root, with `spec` as given**: a failure then names `docs/SPEC-local-server.md`.
+    //< **From the root, with `spec` as given**: a failure then names the file as `SPECS` does.
     return ksplc_harness
         .run(ksplc_harness
         .ksplc_argv(U8[][]::{ "run", "kssrv/tests/main.kspl", exe, work, RUN,
@@ -65,32 +71,46 @@ priv fn line_number(text: U8[], at: Sz): Sz //< the line, from 1, that holds byt
             n += 1
     return n
 
+priv fn spec_cases(exe: U8[], i: Sz, work: U8[], arena: Arena$@) //<
+    //< The run on `SPECS[i]` as it stands, then on a copy with `PLANTED[i]` changed
+    spec: = SPECS[i]
+    text: = io.read_file(fs.join(harness.root(), spec, arena), arena) catch
+        verdict.check(arena.text().s(spec).s(" can be read").take(), false, spec)
+        return
+    as_is: = run_claims(exe, spec, fs.join(work, "as_is", arena), arena)
+    // **The run's own lines are passed on whole**, and only on a failure: each names the line of
+    // the specification it read, and this suite reads no mark out of them.
+    verdict.check(arena.text().s("kssrv answers as ").s(spec).s(" says").take(),
+        as_is.exited_with(0), as_is.out)
+    // **The planted copy**: one answer changed, and the run must fail on that line, for that
+    // reason.
+    at: = text.find_str(PLANTED[i]) catch
+        verdict.check(arena.text().s(spec).s(" holds the row `PLANTED` changes").take(), false,
+            PLANTED[i])
+        return
+    copy: = fs.join(work, "SPEC-planted.md", arena)
+    io.write_file(copy, text.replace(PLANTED[i], PLANTED_AS[i], arena)) catch
+        verdict.check(arena.text().s("a copy of ").s(spec).s(" can be written").take(), false, copy)
+        return
+    planted: = run_claims(exe, copy, fs.join(work, "planted", arena), arena)
+    named: = arena.text().s(copy).c(':').s("\{line_number(text, at)\}: ").take()
+    verdict.check(arena.text().s("a copy of ").s(spec)
+        .s(" with one answer changed fails, naming its line (`PLANTED`)").take(),
+        !planted.exited_with(0) && planted.out.find_str(named).is_some() &&
+        planted.out.find_str(PLANTED_SAYS[i]).is_some(),
+        arena.text().s("wanted a failure naming '").s(named).s("' and saying '")
+        .s(PLANTED_SAYS[i]).s("':\n").s(planted.out).take())
+
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
-    text: = io.read_file(fs.join(harness.root(), SPEC, arena), arena) catch
-        return ksplc_harness.fatal(arena.text().s("cannot read ").s(SPEC).take())
     work: = harness.sandbox("server_claims")
     exe: = built(work, arena)
     if exe.len == 0
         return ksplc_harness.finish()
-    as_is: = run_claims(exe, SPEC, fs.join(work, "as_is", arena), arena)
-    // **The run's own lines are passed on whole**, and only on a failure: each names the line of
-    // the specification it read, and this suite reads no mark out of them.
-    verdict.check(arena.text().s("kssrv answers as ").s(SPEC).s(" says").take(),
-        as_is.exited_with(0), as_is.out)
-    // **The planted copy**: one answer changed, and the run must fail on that line, for that
-    // reason.
-    at: = text.find_str(PLANTED) catch
-        verdict.check("the specification holds the row `PLANTED` changes", false, PLANTED)
-        return ksplc_harness.finish()
-    copy: = fs.join(work, "SPEC-planted.md", arena)
-    io.write_file(copy, text.replace(PLANTED, PLANTED_AS, arena)) catch
-        return ksplc_harness.fatal(arena.text().s("cannot write ").s(copy).take())
-    planted: = run_claims(exe, copy, fs.join(work, "planted", arena), arena)
-    named: = arena.text().s(copy).c(':').s("\{line_number(text, at)\}: ").take()
-    verdict.check("a copy with one answer changed fails, naming its line (`PLANTED`)",
-        !planted.exited_with(0) && planted.out.find_str(named).is_some() &&
-        planted.out.find_str(PLANTED_SAYS).is_some(),
-        arena.text().s("wanted a failure naming '").s(named).s("' and saying '").s(PLANTED_SAYS)
-        .s("':\n").s(planted.out).take())
+    for i in Range.asc(SPECS.len)
+        dir: = fs.join(work, arena.text().s("spec\{i\}").take(), arena)
+        fs.mkdir_all(dir) catch
+            return ksplc_harness
+                .fatal(arena.text().s("cannot make ").s(dir).take())
+        spec_cases(exe, i, dir, arena)
     return ksplc_harness.finish()

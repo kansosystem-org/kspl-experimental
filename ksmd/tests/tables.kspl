@@ -8,6 +8,7 @@ import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor_tables" { Table_edit }
 import "ksmd/edit/history" { capture }
 import "ksmd/edit/region" { gap_spot, text_spot }
+import "ksmd/edit/typed" { number_as_text }
 import "ksmd/tests/support" { changed, opened, records_one_column, saves, written }
 import "std/chars"
 import "std/ds" { List }
@@ -106,6 +107,19 @@ priv fn cells()
     saves("a number too large for a cell stays the text typed, as in Excel", ed@, arena,
         "%ksmd 2\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"1e400\" | =A1*3 |\n:::\n")
     shown(ed@, 0, 0, "1e400", "and shows as typed", arena)
+    // A point with digits on one side only is a number, as Excel takes it; the file keeps JSON's
+    // form. Being a number, it is not text that looks like one, so the page does not mark it.
+    typed: = U8[][]::{ "1.", ".5", "-.5" }
+    kept: = U8[][]::{ "1", "0.5", "-0.5" }
+    for i in Range.asc(typed.len)
+        set(ed@, 0, 0, 0, typed[i])
+        want: = arena.text().s("%ksmd 2\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| ")
+            .s(kept[i]).s(" | =A1*3 |\n:::\n").take()
+        saves(typed[i], ed@, arena, want)
+        verdict.check(typed[i], !number_as_text(ed.doc.tables[0]@, 0, 0), "is marked as text")
+    set(ed@, 0, 0, 0, "+.5")
+    saves("a '+' in front stays text, as for any typed number", ed@, arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"+.5\" | =A1*3 |\n:::\n")
     // Text typed in quotes follows a formula's rule: `\` is itself and `""` is a quote. The file
     // keeps JSON's escapes for a text cell.
     set(ed@, 0, 0, 0, "\"C:\\new\"")
@@ -691,11 +705,11 @@ priv fn pasting()
     ed.undo()
     saves("one undo takes the whole paste away", ed@, arena, before)
     $spaced: = List<|List<|U8[]|>|>(arena)
-    spaced.push(row3("  Revenue", " 1,234.5 ", " 7 ", arena))
+    spaced.push(row3("  Revenue", " 1,234.5 ", " .5 ", arena))
     ed.paste_cells(0, 0, 0, spaced@) catch e
         verdict.check("pasting spaced values", false, e.message())
     saves("a pasted text keeps its spaces, and a number reads without them", ed@, arena,
-        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| \"  Revenue\" | 1234.5 | 7 \
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| \"  Revenue\" | 1234.5 | 0.5 \
             |\n:::\n")
     ed.undo()
     $dated: = List<|List<|U8[]|>|>(arena)

@@ -39,9 +39,20 @@ fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], flags: U8[]
         //< Caution: **Wait for the line that names the port.** The system chooses the port, so
         //< only that line tells which one to connect to.
         //< **Keep the output**: without it, a failed startup leaves no reason.
+    return start_command(U8[][]::{ exe }, root, out_log, err_log, flags, arena)
+
+fn start_command( //< starts kssrv as `start_server` does, through a program that runs it
+    command: U8[][], //< the words before the port: kssrv, or a program such as Valgrind and kssrv
+    root: U8[],
+    out_log: U8[],
+    err_log: U8[],
+    flags: U8[][],
+    arena: Arena$@,
+): Started
     // Caution: **Take the options as a list** (some are two words, such as `--page <file>`).
     $argv: = List<|U8[]|>(arena)
-    argv.push(exe)
+    for word in command
+        argv.push(word)
     argv.push(FREE_PORT)
     argv.push(root)
     for f in flags
@@ -142,6 +153,21 @@ impl Running
 
     fn stop(r: Self$@) //< kills the server
         r.child.kill()
+priv const TOKEN_LINE: U8[] = "#t=" //< the marker before the token in the output
+    //< Caution: **Keep it matching kssrv's output** (`kssrv/main.kspl`): the token is the URL's
+    //< fragment, from `#t=` to the line's end.
+
+fn token_from(out_log: U8[], arena: Arena$@): U8[] //< extracts the token from the output
+    //< Empty if there is none.
+    //< Caution: **Do not read only the end.** Other lines follow the token, so taking the log's
+    //< tail drops it.
+    text: = io.read_file(out_log, arena) catch
+        return ""
+    // `lines` drops the `\r` at a line's end, which a child's output on Windows has.
+    for line in text.lines(arena)
+        if at: = line.find_str(TOKEN_LINE)
+            return line.sub_from(at + TOKEN_LINE.len)
+    return ""
 
 priv fn ready_line(said: U8[]): U8[]? //<
     //< the rest of the ready line after `READY_LINE`, once the whole line is out

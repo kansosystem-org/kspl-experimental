@@ -1,6 +1,6 @@
 # The ksmd editing page
 
-**This document says why the editing page in a browser works the way it does**: its input, its menus, its tables and its tools. The document language, the model, the editor's actions and the file lifecycle are in [`DESIGN-ksmd.md`](DESIGN-ksmd.md).
+**This document says why the editing page in a browser works the way it does**: its input, its menus, its tables and its tools. The file's rules are in [`SPEC-file-format.md`](SPEC-file-format.md). The model, the editor's actions and the file lifecycle are in [`DESIGN-ksmd.md`](DESIGN-ksmd.md).
 
 ## Input, menus and tables
 
@@ -67,7 +67,7 @@
 
 **Each column holds one condition, and a row shows when it meets every column's.** A narrowed column's arrow is marked, and a line above the table says how many rows are shown. The right-click menu's Filter group opens the same panel, and can show only the rows with the chosen cell's value.
 
-**A filter is kept in the file, so a document opens with the rows it was left with** (`filter` in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)). A person who narrowed a long table to their own rows finds it so the next day, as in Excel.
+**A filter is kept in the file, so a document opens with the rows it was left with** ("Filters" in [`SPEC-file-format.md`](SPEC-file-format.md)). A person who narrowed a long table to their own rows finds it so the next day, as in Excel.
 
 * **The next reader sees at once that rows are hidden.** The line above the table says how many of how many rows show, and its Show all rows takes the filter away.
 * **The file still holds every row**, and a formula counts every row, shown or not. Only the page hides them.
@@ -225,7 +225,7 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
 
 ## Column widths and row heights
 
-**A table's columns and rows keep the sizes a person gives them, as in a spreadsheet** (`sizes.js`). The file holds them as `char_widths` and `heights` ("Column widths and row heights" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+**A table's columns and rows keep the sizes a person gives them, as in a spreadsheet** (`sizes.js`). The file holds them as `char_widths` and `heights` ("Column widths and row heights" in [`SPEC-file-format.md`](SPEC-file-format.md)).
 
 * **A column is as wide as its width in characters, and the table as wide as its columns.** A narrow window makes the page scroll sideways, and no text wraps to fit it. A table that filled the window wrapped its text differently on each screen, and a person could not make one column stay narrow.
 * **A column with no width fits its text**: its widest value or its name, from 3 to 60 characters. Rows a filter hides count too, so a filter moves no column.
@@ -541,7 +541,7 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
 
 ## Drawing on an image or a chart
 
-**An image and a chart each have the drawing tools of "Charts, images and drawing" in [`SPEC-editing-page.md`](SPEC-editing-page.md)** (`drawings.js`). The shapes are saved in the picture's clause ("Shapes drawn over an image or a chart" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+**An image and a chart each have the drawing tools of "Charts, images and drawing" in [`SPEC-editing-page.md`](SPEC-editing-page.md)** (`drawings.js`). The shapes are saved in the picture's clause ("Shapes over an image or a chart" in [`SPEC-file-format.md`](SPEC-file-format.md#shapes-over-an-image-or-a-chart)).
 
 * **A new shape is chosen once it is drawn, and a moved one stays inside the picture.** Delete takes the chosen shape away, and Esc lets it go.
 * **A chosen shape takes the keyboard's focus.** Where the focus then goes to the text or to a field, Delete and Backspace act there and leave the shape. Any change to the document lets the chosen shape go, as another shape can then stand in its place.
@@ -553,7 +553,7 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
 
 ## A diagram on the page
 
-**Insert ▸ Diagram puts an empty drawing area at the caret** (`diagram.js`). Its tools, and the keys and presses that use them, are "Diagrams" in [`SPEC-editing-page.md`](SPEC-editing-page.md). The file's form is "Diagrams" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md).
+**Insert ▸ Diagram puts an empty drawing area at the caret** (`diagram.js`). Its tools, and the keys and presses that use them, are "Diagrams" in [`SPEC-editing-page.md`](SPEC-editing-page.md). The file's form is "Diagrams" in [`SPEC-file-format.md`](SPEC-file-format.md#diagrams).
 
 * **A moved shape stays inside the area, and the area is never resized smaller than what it holds.**
 * **A chosen arrow shows a handle halfway along each stretch**, and a bend's own handle moves it.
@@ -588,7 +588,7 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
 **Each page has a header and a footer of the page's own**, drawn with the margin boxes of CSS (`@page` in `print.css`).
 
 * **The header holds the time of the print at the left and the document's name in the middle of the page.** The footer holds "page / pages" at the right.
-* **The document's settings can put their own text in the header's middle and at the footer's left.** They also set the paper and its orientation ("The document's own settings" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
+* **The document's settings can put their own text in the header's middle and at the footer's left.** They also set the paper and its orientation ("The document's own settings" in [`SPEC-file-format.md`](SPEC-file-format.md#the-documents-own-settings)).
 * **A document with no file yet is named "Untitled", as Excel names a new workbook Book1.** The menu bar, the window's title ("Untitled - ksmd") and the printed header show it, so each still says which document is open. Saving asks for a path as before.
 * **The browser's own line would put the title off the middle.** Chrome centres it in the room after the date, so a longer date moves it further right.
 * **A browser that draws margin boxes then draws no line of its own at that edge**, so the person changes no setting. Chrome 153 does so, as the checks here found.

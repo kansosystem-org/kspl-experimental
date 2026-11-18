@@ -206,14 +206,14 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-broken-pipe (output losing its destination ends quietly) | ✅ | ➖(note 2) | ✅(note 14) |
 | test-extract (extract-ksplc-core / extract-ksplc-rest / extract-rest / extract-std), each package with a `Makefile` tested from a copy of its folder alone | ✅ | ➖(note 2) | ✅ |
 | The checks on the tree's text (conventions / docref / docsnippet / spec-claims / vscode / lint-gate / recipe-bytes / deps / pytools) | ✅ | ➖(note 2) | ➖(note 26) |
-| test-server-claims (kssrv answers each request in the tables of `docs/SPEC-local-server.md` as its row says, and keeps that specification's checked sentences) | ✅(note 36) | ➖(note 2) | ✅(note 36) |
+| test-server-claims (kssrv answers each request in the tables of `docs/SPEC-local-server.md` and of kssrv's own specification as its row says, and keeps those specifications' checked sentences) | ✅(note 36) | ➖(note 2) | ✅(note 36) |
 | The other suites (c-warnings / own-machine / cli / config / std-dir / thin-use / lint / fmt / link-rules / ext-import / doc / runtime / limits / decl-macros / spawn / place / visibility) | ✅(note 22) | ➖(note 2) | ✅(note 22) |
 | self-host (the LLVM backend) | ✅ | ✅ | ✅ |
 | debug tests (the LLVM backend) | ✅ | ✅ | ✅ |
 | test-llvm-pkgs (kssrv's and kstls's tests on code the LLVM backend built) | ✅ | ➖(note 28) | ➖(note 28) |
 | test-blas (ksai's unit tests with `BLAS=1`) | ✅ | ➖(note 15) | ➖(note 15) |
 | kstls's own tests (the OpenSSL binding, from a copy by `test-extract`) | ✅ | ➖(note 2) | ✅(note 18) |
-| perf-log (peak memory, the tree types' sizes and counted instructions, judged by `perf_guard`) | ✅ | ➖(note 16) | ➖(note 16) |
+| perf-log (peak memory, the tree types' sizes, and counted instructions of the compiler, a program and kssrv, judged by `perf_guard`) | ✅ | ➖(note 16) | ➖(note 16) |
 | test-race (no data race that the tests reach, under ThreadSanitizer) | ✅ | ➖(note 2) | ➖(note 17) |
 | test-sanitize (the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls are clean under the memory and undefined-behaviour sanitizers) | ✅ | ➖(note 29) | ➖(note 29) |
 | test-holes (each known way to break memory or threads keeps its verdict today) | ✅ | ➖(note 34) | ➖(note 34) |
@@ -276,9 +276,9 @@ The suite a note names says what it checks in its opening comment; a note adds w
   * Note: The decision's canonical source is "Writing when nobody is left to read it" in `ksplc/gen/runtime/hosted_io.c`.
 * **note 15**: `make test-blas` runs ksai's unit tests with `BLAS=1`; ksai is the one package holding `#cfg(blas)`. It needs libopenblas, which the windows-ucrt64 and macOS runners lack. **`make lint` cannot replace it**, since only a real build shows whether the FFI is right: argument order, types, the library linked. So this is also where a library named by `##link` is seen linked.
 * **note 16**: `tests/checkers/perf_baseline.json` holds baselines (with tolerance factors) taken on the Linux CI's hardware, which would mislead elsewhere.
-  * The verdict rests on the peak memory, the exact sizes of `Ast_node` and its list of children, and two counts of instructions. The build time is only recorded, as a ratio to the baseline (`tests/checkers/perf_guard.kspl` says why).
-  * **The counts stand in for speed.** Cachegrind counts the instructions of `tests/checkers/perf_work.kspl`, a fixed workload: once as stage1 translates it on an empty cache, once as the program built from it runs. Each may be at most 1.1 times its baseline. GitHub's runners give no hardware counter to `perf stat`, so the gate needs `valgrind`, which the image holds. Without it, the gate fails.
-  * **Re-taking the baseline**: where a change costs more on purpose, run `make perf-log PERF_UPDATE=1` and commit the file with the change. It rewrites every value, the times among them, so take it on CI's image where you can. A change to `perf_work.kspl` itself needs a new baseline too.
+  * The verdict rests on the peak memory, the exact sizes of `Ast_node` and its list of children, and three counts of instructions. The build time is only recorded, as a ratio to the baseline (`tests/checkers/perf_guard.kspl` says why).
+  * **The counts stand in for speed.** Cachegrind counts the instructions of `tests/checkers/perf_work.kspl`, a fixed workload: once as stage1 translates it on an empty cache, once as the program built from it runs. The third count is kssrv, built as `make kssrv` ships it, answering the fixed requests of `kssrv/tests/workload.kspl`. Only the server runs under Cachegrind, and the workload stops it with `POST /api/stop`. Each count may be at most 1.1 times its baseline. GitHub's runners give no hardware counter to `perf stat`, so the gate needs `valgrind`, which the image holds. Without it, the gate fails.
+  * **Re-taking the baseline**: where a change costs more on purpose, run `make perf-log PERF_UPDATE=1` and commit the file with the change. It rewrites every value, the times among them, so take it on CI's image where you can. A change to `perf_work.kspl` or `kssrv/tests/workload.kspl` itself needs a new baseline too.
 * **note 17**: `test-race` builds the programs that start threads with clang's `-fsanitize=thread` and runs their tests (`tests/suite/race_test.kspl`). **Only Linux runs it**: Windows has no ThreadSanitizer, and macOS's runner is kept for what depends on its hardware (note 2).
   * **Only the C backend is built.** Through LLVM, `-fsanitize=thread` watches only the functions `--sanitize=thread` marks in the IR.
   * **It runs each program's tests once, on the schedule that run happens to take.** What it finds and what it does not:
@@ -319,9 +319,10 @@ The suite a note names says what it checks in its opening comment; a note adds w
   * **The windows-ucrt64 runner has clang alone**, so there gcc's builds give a `SKIP` line, as in `test-equiv`.
 * **note 33**: `test-ksagent-chat` checks the launcher's model server with no browser (`tools/tests/chat_launch.mjs`), then drives ksagent's chat page in a headless Chromium (`tools/tests/chat_page.mjs`). Without a browser, only the second half is skipped. **Linux and Windows run the gate**, in the browser of note 31; macOS does not.
   * **On Windows, the launcher's cases that start a model server say `SKIP`**: their stand-in is a shell script, which Windows does not start as a program. A real `llama-server` checks them by hand.
-* **note 36**: `test-server-claims` builds kssrv and starts the run `claims` of kssrv's tests (`kssrv/tests/claims.kspl`) on `docs/SPEC-local-server.md`.
-  * **That run reads the specification's tables and sentences**, so neither side keeps a copy of the other. It goes only with `--spec=`, since a copy of kssrv's folder alone holds no specification (note 27).
-  * **Its failure case is a copy of the specification with one answer changed**, on which the run must fail and name that line.
+* **note 36**: `test-server-claims` builds kssrv and starts the run `claims` of kssrv's tests (`kssrv/tests/claims.kspl`) on `docs/SPEC-local-server.md`, then on kssrv's own specification ("kssrv — what a client can ask for").
+  * **That run reads the specification's tables and sentences**, so neither side keeps a copy of the other. The specification also says which mode its rows start from: for local use, or facing outward. The run goes only with `--spec=`, since a copy of kssrv's folder alone does not hold the local server's specification (note 27).
+  * **Its failure case is a copy of each specification with one answer changed**, on which the run must fail and name that line.
+  * **ksmd, ksagent and ksos have runs of the same kind inside their own tests** (`ksmd/tests/claims.kspl`, `ksagent/tests/claims_test.kspl`, `lib/ksos/tests/board_claims_test.kspl`), so they need no gate of their own. Each reads the rows of its package's specification, and runs wherever that package's tests run. Each failure case judges one row of each form again with its answer changed.
   * **The address it listens on is checked through `127.0.0.2`**, a second loopback address. A server for every address takes that connection, and one for `127.0.0.1` alone refuses it.
   * Where kssrv does not link, it says `SKIP`, unless `KSTLS_REQUIRE_LIBS` is 1 (note 18).
 

@@ -147,6 +147,7 @@
 | You type | It is |
 | :-- | :-- |
 | `12`, `-3.5`, `1e3` | A number |
+| `1.`, `.5`, `-.5` | A number, as Excel takes it. The file keeps it as `1`, `0.5` and `-0.5` |
 | `2026-10-23` | A date |
 | `2026/10/23`, `2026/1/5`, `11/6` | A date, while Edit ▸ AutoCorrect ▸ Turn typed dates into dates is on. `11/6` falls in the year the document was opened. The file keeps `2026-11-06` |
 | `=B1*C1` | A formula ("Formulas" below) |
@@ -239,22 +240,7 @@
 
 **A formula starts with `=` and shows its result.** Opening its cell shows the formula.
 
-| Write | It means |
-| :-- | :-- |
-| `D1`, `AA12` | A cell: its column's letters, then its row, from the first data row |
-| `$D$1`, `$D1`, `D$1` | A cell whose column, row or both stay when the formula is copied |
-| `D1:D9` | A range of cells |
-| `budget.D1`, `budget.D1:D9` | Cells of the table named `budget` in the same document |
-| `"Q1 sales".D1` | Cells of a table whose name is not plain lowercase |
-| `D`, `D:F` | Whole columns of the formula's own table, every data row, rows added later included |
-| `map.D`, `map.D:F` | Whole columns of the table named `map` |
-| `+ - * /` | Arithmetic |
-| `&` | Two texts joined |
-| `= <> < <= > >=` | Comparisons, giving `true` or `false` |
-| `and`, `or`, `not` | Conditions joined |
-| `"Pens"`, `".\src\"` | Text, in quotes. Every character inside is itself, `\` included |
-| `"say ""hi"""` | A quote inside text, written twice, as in Excel. `""` alone is empty text |
-| `0xFF`, `0b_0111_0001` | A whole number in hexadecimal or binary, kept as you wrote it. `_` can stand anywhere after `0x` or `0b`. A number past 2^53 does not read |
+**How a formula is written, what each kind of value does, and what each error mark means are "Tables and formulas" in [`SPEC-file-format.md`](SPEC-file-format.md#tables-and-formulas).** A cell is its column's letters, then its row: `D1`. A range is `D1:D9`, and `budget.D1` names a cell of the table `budget`.
 
 **While a formula is typed, each reference shows in a colour of its own, with a frame of that colour round the cells it names.** The first is blue and the second red, then purple, green, orange, teal, magenta and brown. The same cells written twice keep one colour. A reference to another table is framed in that table; one that names no cell stays plain. The colours go when the cell closes.
 
@@ -282,10 +268,6 @@
 | See a function's arguments | Type inside its brackets; a tip shows them, the current one in bold |
 | Find a function by what it does, and read about it | Insert ▸ Function…, or `Shift`+`F3`; Insert writes `=name(` in the chosen cell |
 
-**Kinds never turn into each other.** Text in arithmetic is `#VALUE!`, even text that looks like a number. An empty cell is 0, empty text or `false`, as the other side needs. Against a date it is earlier than every date, so `B1 < today()` holds for an empty B1.
-
-**Two numbers are equal when the 15 digits they show agree.** So `0.1+0.2 = 0.3` is `true`, and `<`, `>` and `<>` give the same answer as `=`. In the same way, `+` and `-` give exactly 0 where the two sides cancel at those digits: `=0.1+0.2-0.3` is 0. A lookup's key and a condition of `sum_if` match by this rule too. So do a colour rule and a filter's "is greater than" and "is less than".
-
 **Point at a cell that shows an error, or choose it, to see why.** Its tooltip and the status bar give the reason in words, and what to write instead where that is clear:
 
 | The cell holds | The reason says |
@@ -300,19 +282,6 @@ The reason is worked out each time the table is calculated. It is not saved in t
 
 **Text that looks like a number has an orange corner at its lower left, in a column of numbers.** A typed `1,000`, `12%`, `$12` or `１２` stays text, and a sum leaves it out. Point at the cell or choose it to see why. To make it a number, type it plain, as `1000` or `0.12`. A number format then shows the `,`, the currency or the `%`.
 
-
-| Mark | The cause |
-| :-- | :-- |
-| `#VALUE!` | A value of the wrong kind |
-| `#DIV/0!` | A division by zero |
-| `#NUM!` | A number too large, or a value outside a function's range |
-| `#REF!` | A reference to a cell, a column or a table that is gone |
-| `#CYCLE!` | The cell depends on itself |
-| `#EMPTY!` | `min`, `max` or an average of no numbers |
-| `#SHAPE!` | Ranges of shapes that do not match, as in `sum_if` |
-| `#SYNTAX!` | The formula does not read. A literal such as `0x10` written as the digits of `hex_to_dec`, `bin_to_dec`, `hex_to_bin` or `bin_to_hex` does not read either: write `=0x10`, or `hex_to_dec("10")` |
-| `#BLOCKED!` | It may call the document's own functions, which you have not allowed yet |
-| `#LIMIT!` | The document's formulas read more than 500 million cell values, so this cell was not calculated |
 
 ### Your own functions
 
@@ -481,15 +450,9 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 
 ## Limits
 
-| Limit | The most |
-| :-- | :-- |
-| A document's size | 8 MiB, 100,000 blocks |
-| A table | 10,000 data rows, 100,000 cells |
-| A formula | 4,096 bytes, 64 levels of nesting |
-| A text a formula makes | 32,767 bytes |
-| The cell values all formulas read, each time the document calculates | 500 million. Past it, each formula not yet calculated shows `#LIMIT!` |
-| A diagram | 1,000 shapes, 2,000 arrows and lines |
-| The editor's memory | 128 MiB. Past it, the page asks you to save and open the document again |
+**A document keeps the file's limits, such as a table's 256 columns.** They are "Limits" in [`SPEC-file-format.md`](SPEC-file-format.md#limits), and a diagram's are its "Diagrams" section. An edit past one of them is refused, and changes nothing.
+
+**The editor's memory holds at most 128 MiB.** Past it, the page asks you to save and open the document again.
 
 ## Every command and its key
 

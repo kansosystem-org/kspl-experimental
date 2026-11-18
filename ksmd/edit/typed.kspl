@@ -4,7 +4,7 @@
 import "ksmd/base/dates" { is_date, month_day, typed_date, write_date }
 import "ksmd/base/marker" { formula_text_end, is_decimal, run_of_digits }
 import "ksmd/calc/calc" { Results }
-import "ksmd/calc/formula" { unquoted, write_quoted }
+import "ksmd/calc/formula" { as_decimal, unquoted, write_quoted }
 import "ksmd/model/model" { Cell_kind, Table }
 import "ksmd/syntax/inline" { is_destination }
 import "std/chars"
@@ -14,7 +14,7 @@ import "std/strnum"
 
 struct Value //< what typed text puts in a cell
     kind: Cell_kind
-    text: U8[] //< a formula without its `=`, a number as written, or the text
+    text: U8[] //< a formula without its `=`, a number in JSON's form, or the text
 
 struct Reading //< how typed text is read, as the editor's `Auto_entry` sets it
     dates: Bool //< whether `2026/10/23` and `11/6` become dates
@@ -31,9 +31,13 @@ fn value_of(typed: U8[], read: Reading, arena: Arena$@): Value //< how `set_cell
     // **Text in quotes follows a formula's rule**: `\` is itself and `""` is a quote.
     if typed[0] == '"' && formula_text_end(typed, 0) == typed.len - 1
         return Value::{ .kind = .text, .text = unquoted(typed, arena) }
-    // A number past the largest a cell holds stays the text typed, as Excel keeps `1e400`.
-    if is_decimal(typed) && is_finite(typed)
-        return Value::{ .kind = .number, .text = typed }
+    // A number past the largest a cell holds stays the text typed, as Excel keeps `1e400`. A
+    // typed `1.` or `.5` is kept in JSON's form, which the file holds: `1` and `0.5`.
+    defer $plain: = Str_builder()
+    number: = as_decimal(typed, plain@)
+    if is_decimal(number) && is_finite(number)
+        kept: = typed if number.len == typed.len else arena.dup_str(number)
+        return Value::{ .kind = .number, .text = kept }
     if is_date(typed)
         return Value::{ .kind = .date, .text = typed }
     if !read.dates
@@ -61,7 +65,7 @@ priv const OTHER_MONEY: U8[][_] = ::{ "¥", "€", "£", "￥", "￡" } //<
     //< the currency signs besides `$` that a number written as text may carry; they read as `$`
 
 fn looks_like_number(text: U8[]): Bool //<
-    //< Whether text reads as a number to a person, though a cell keeps it as text: `1,000`, `.5`,
+    //< Whether text reads as a number to a person, though a cell keeps it as text: `1,000`, `+.5`,
     //< `+5`, `12%`, `$12`, `１２`, or `12` in quotes
     //< **Arithmetic and `sum` leave such text out**, so the page marks it in a column of numbers
     //< (`numbers_column`). Full-width digits and signs read as their ASCII ones, and spaces at the

@@ -1,0 +1,134 @@
+//< Sends kssrv a fixed set of requests, so that `make perf-log` can count the server's instructions
+//< Usage: `ksplc run kssrv/tests/workload.kspl <work_dir> <program> [<word>...]`. The words start
+//< kssrv through Cachegrind, the last being kssrv. This file counts nothing, and reads a clock only
+//< to give up on a server that hangs. **The same requests go in the same order on every run.**
+//< **Every answer is checked**: a server that refused everything would be cheap and pass.
+//< **Plain HTTP only.** Over HTTPS, most of the count would be OpenSSL's, not kssrv's.
+//< **The run ends with `POST /api/stop`**, a local server's endpoint, so it runs with `--local`.
+//< The server exits by itself, and Cachegrind writes its count only then.
+import "kssrv/tests/client"
+import "kssrv/tests/start"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+
+priv const ROUNDS: Sz = 200 //< how many times the six requests go
+    //< **Enough that answering outweighs starting**: Cachegrind counts start-up too. Measured on
+    //< the `-O3` build: start-up and stop count about 1.2 million instructions, and each round
+    //< about 0.4 million. So 200 rounds are 98% answering, and take about two seconds.
+
+priv const FILE_REL: U8[] = "www/doc.txt" //< the static file, under the work folder
+priv const FILE_PATH: U8[] = "/doc.txt" //< the static file, as a request names it
+priv const FILE_SIZE: Sz = 16 * 1024 //< its size: one read of the server's (`IO_CHUNK`)
+priv const RANGE_HEAD: U8[] = "Range: bytes=100-1123\r\n" //< asks for 1024 bytes of it
+priv const PAGE_BODY: U8[] = "<title>page</title>\n" //< the page `--local` needs, outside the root
+
+// The five requests after the static file, in the order they go: what each asks, its target and
+// the status it must get. The range and the conditional request add a header line (`round`).
+priv const WHATS: U8[][5] = ::{ "a missing file", "a range", "a conditional request",
+    "a path out of the root", "the JSON status" }
+priv const TARGETS: U8[][5] = ::{ "/missing.txt", FILE_PATH, FILE_PATH, "/../doc.txt",
+    "/api/status" }
+priv const WANTS: I32[5] = ::{ 404, 206, 304, 403, 200 }
+
+priv const ANSWER_WAIT_MS: I32 = 600000 //< the cap on waiting for an answer under Cachegrind
+    //< Cachegrind runs a program tens of times slower; the cap only stops a server that hangs.
+
+fn main(): I32
+    defer arena: = Arena(64 * 1024 * 1024)
+    argv: = sys.args()
+    if argv.len < 3
+        io.err().s("usage: ksplc run kssrv/tests/workload.kspl <work_dir> <program> [<word>...]\n")
+        return 2
+    dir: = arena.dup_str(argv.get(1))
+    $command: = List<|U8[]|>(arena)
+    for i in Range.asc(argv.len - 2)
+        command.push(arena.dup_str(argv.get(i + 2)))
+    root: = fs.join(dir, "www", arena)
+    page: = fs.join(dir, "page.html", arena)
+    fs.mkdir_all(root) catch
+        return failed("the root cannot be made", dir)
+    fs.write_tree(dir, U8[][]::{ FILE_REL, "page.html" },
+        U8[][]::{ filler(arena), PAGE_BODY }, arena) catch
+            return failed("the files cannot be placed", dir)
+    out_log: = fs.join(dir, "kssrv.out", arena)
+    err_log: = fs.join(dir, "kssrv.err", arena)
+    flags: = U8[][]::{ "--local", arena.text().s("--page=\{page\}").take() }
+    started: = start.start_command(command.slice(), root, out_log, err_log, flags, arena)
+    if c: = started.child
+        return serve_rounds(c, started.port, out_log, err_log, arena)
+    return failed("kssrv did not start", started.why)
+
+priv fn serve_rounds(child_in: subproc.Child, port: I32, out_log: U8[], err_log: U8[],
+    arena: Arena$@): I32 //< the rounds and the stop, on a kssrv that came up; the exit code
+        //< Caution: **Kill the server on every failure.** Left running, it holds the port and never
+        //< writes its count.
+    $child: = child_in
+    token: = start.token_from(out_log, arena)
+    if token.len == 0
+        child.kill()
+        return failed("kssrv printed no token", start.read_log(out_log, err_log, arena))
+    auth: = client.bearer_head(token, arena)
+    for _r in Range.asc(ROUNDS)
+        mark: = arena.save()
+        wrong: = round(port, auth, arena) catch e
+            child.kill()
+            return failed(e.reason(), start.read_log(out_log, err_log, arena))
+        if wrong.len > 0
+            child.kill()
+            return failed("an answer was wrong", wrong)
+        arena.restore(mark)
+    stop: =
+        client.request(port, client.raw("POST", "/api/stop", auth, "", arena), 1, ANSWER_WAIT_MS,
+        false, arena) catch e
+            child.kill()
+            return failed(e.reason(), start.read_log(out_log, err_log, arena))
+    if stop.get(0).status != 200
+        child.kill()
+        return failed("/api/stop was refused", client.shown(stop.get(0), arena))
+    code: = child.wait().unwrap_or(-1)
+    if code != 0
+        return failed("kssrv did not exit cleanly", start.read_log(out_log, err_log, arena))
+    io.out().s("[workload] \{ROUNDS\} rounds of 6 requests answered; kssrv stopped\n")
+    return 0
+
+priv fn round(port: I32, auth: U8[], arena: Arena$@): U8[]!client.Http_end //<
+    //< One connection, and on it the six requests; the first wrong answer, or empty
+    //< **Each request goes after the last answer.** Sent at once, the server would read them in a
+    //< number of pieces that depends on timing, and the count would vary with it.
+    defer $conn: = client.Conn.open(port)!
+    file: = ask(conn@, FILE_PATH, auth, arena)!
+    tag: = client.header(file.head, "etag")
+    if file.status != 200 || tag.len == 0
+        return wrong("a static file, with its ETag", 200, file, arena)
+    extras: = U8[][]::{ auth, arena.text().s(auth).s(RANGE_HEAD).take(),
+        arena.text().s(auth).s("If-None-Match: \{tag\}\r\n").take(), auth, auth }
+    for i in Range.asc(WHATS.len)
+        resp: = ask(conn@, TARGETS[i], extras[i], arena)!
+        if resp.status != WANTS[i]
+            return wrong(WHATS[i], WANTS[i], resp, arena)
+    return ""
+
+priv fn ask(conn: client.Conn$@, target: U8[], extra: U8[], arena: Arena$@):
+    client.Resp!client.Http_end //< sends one GET with the header lines `extra`; its answer
+    conn.send(client.raw("GET", target, extra, "", arena))!
+    return conn.next(false, ANSWER_WAIT_MS, arena)!
+
+priv fn wrong(what: U8[], want: I32, resp: client.Resp, arena: Arena$@): U8[] //<
+    //< says what was asked, the status it needed and the answer it got
+    return arena.text().s(what).s(": want \{want\}, got ").s(client.shown(resp, arena)).take()
+
+priv fn filler(arena: Arena$@): U8[] //< the static file's bytes: the same on every run
+    b: = arena.text()
+    for i in Range.asc(FILE_SIZE)
+        b.c('a' + U8::(i % 26))
+    return b.take()
+
+priv fn failed(what: U8[], why: U8[]): I32 //< says why the run failed; the exit code
+    io.err().s("[workload] FAIL: ").s(what).s("\n").s(why).s("\n")
+    return 1

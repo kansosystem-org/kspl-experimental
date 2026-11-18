@@ -85,7 +85,8 @@ flowchart BT
 
 | File | Purpose |
 | :-- | :-- |
-| [ksmd/docs/DESIGN-ksmd.md](docs/DESIGN-ksmd.md) | Document syntax, model, editor, file lifecycle and limits |
+| [ksmd/docs/SPEC-file-format.md](docs/SPEC-file-format.md) | The file format: every form a `.ksmd` file holds, and its limits |
+| [ksmd/docs/DESIGN-ksmd.md](docs/DESIGN-ksmd.md) | Why the format is as it is; the model, editor and file lifecycle |
 | [ksmd/docs/DESIGN-page.md](docs/DESIGN-page.md) | The editing page: input, menus, tables on the page and its tools |
 | [examples/](examples/) | Prose, calculating tables, includes and literal syntax |
 | [base/source.kspl](base/source.kspl) | Borrowed source views and diagnostic locations |
@@ -156,6 +157,7 @@ flowchart BT
 | :-- | :-- | :-- |
 | [`ksmd/docs/TUTORIAL-ksmd.md`](docs/TUTORIAL-ksmd.md) | A first walk: a document with a table, a chart and a diagram, saved and printed | A newcomer to ksmd, with a clone that builds and a browser |
 | [`ksmd/docs/SPEC-editing-page.md`](docs/SPEC-editing-page.md) | The reference: every task, command, key and function of the editing page | A person who writes documents in ksmd |
-| [`ksmd/docs/DESIGN-ksmd.md`](docs/DESIGN-ksmd.md) | The document language, the model, the file lifecycle and the limits, and why | Whoever changes ksmd |
+| [`ksmd/docs/SPEC-file-format.md`](docs/SPEC-file-format.md) | The file format: every form a `.ksmd` file holds, what it means, and its limits | A person or a model writing a `.ksmd` file by hand |
+| [`ksmd/docs/DESIGN-ksmd.md`](docs/DESIGN-ksmd.md) | Why the format is as it is, the model, the editor and the file lifecycle | Whoever changes ksmd |
 | [`ksmd/docs/DESIGN-page.md`](docs/DESIGN-page.md) | Why the editing page works the way it does | Whoever changes the page |
 | [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md) | How to weigh reuse and complexity | Whoever changes Kanso |

@@ -1,0 +1,136 @@
+//< What opening a file of a workspace gives, for the `Opened` rows of `ksmd/tests/claims.kspl`
+//< A workspace is a few files held in memory, so the view is assembled as the page assembles it,
+//< through `assemble_loaded`, with no folder on disk. Its text is each paragraph's and heading's
+//< text and each table cell as it shows (`shown`), which the formula rows use too.
+import "ksmd/base/dates" { write_date }
+import "ksmd/base/source" { Diagnostic }
+import "ksmd/calc/calc" { Results }
+import "ksmd/calc/calc"
+import "ksmd/calc/value" { Value }
+import "ksmd/files/assemble" { Assembly, assemble_loaded }
+import "ksmd/files/files" { Files, Load_error, Refusal, load, resolve_text }
+import "ksmd/model/format" { show_plain }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const PARTS_JOIN: U8[] = ", " //< between the parts of a view's text
+
+struct Named //< one file of a workspace
+    path: U8[] //< from the workspace's root
+    text: U8[]
+
+struct Opening //< what opening a file of a workspace gives
+    refused: Bool //< the file itself does not open
+    shows: U8[] //< the view's text; empty where the file is refused
+    problems: Sz //< how many problems the view holds; 1 where the file is refused
+    at: U8[] //< the first problem's place, `file:line:column`, then ` < ` and each include clause
+        //< that leads there, innermost first; the path alone where a refusal has no place
+    says: U8[] //< that problem's message
+
+fn opened(files: List<|Named|>, path: U8[], today: U8[], arena: Arena$@): Opening //<
+    //< Opens the file at `path` among `files`, on the date `today`
+    ws: = Workspace::{ .files = files }
+    top: = load(ws@, path, arena) catch e
+        return refused(e, path, arena)
+    a: = assemble_loaded(ws@, top, arena)
+    $out: = Opening::{ .refused = false, .shows = view_text(a@, today, arena),
+        .problems = a.problems.len, .at = "", .says = "" }
+    if a.problems.len > 0
+        p: = a.problems.get(0)
+        b: = arena.text().s(place(p.at, arena))
+        for at in p.chain
+            b.s(" < ").s(place(at, arena))
+        out.at = b.take()
+        out.says = p.at.message
+    return out
+
+fn shown(value: Value, arena: Arena$@): U8[] //<
+    //< What a cell of no format shows of a value: a number's digits, a date, `true` or `false`,
+    //< text as it is, or an error's mark
+    defer $out: = Str_builder()
+    switch value.kind
+    case .empty
+        return ""
+    case .number
+        show_plain(value.number, out@)
+    case .date
+        write_date(I64::value.number, out@)
+    case .text
+        return value.text
+    case .boolean
+        return "true" if value.boolean else "false"
+    case .error
+        return value.error.mark()
+    return arena.dup_str(out.slice())
+
+priv struct Workspace //< the files of a workspace, as a document's files
+    files: List<|Named|>
+
+impl Workspace
+    fn text_at(r: Self@, path: U8[]): U8[]!Refusal //< the text of the file at `path`, from the root
+        for named in r.files
+            if named.path.equals(path)
+                return named.text
+        throw .missing
+
+impl Workspace: Files
+    fn resolve(_r: Self@, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal
+        return resolve_text(folder, written, arena)
+
+    fn check(r: Self@, path: U8[], _arena: Arena$@): Void!Refusal
+        _text: = r.text_at(path)!
+
+    fn read(r: Self@, path: U8[], _limit: Sz, _arena: Arena$@): U8[]!Refusal //<
+        //< The whole file: a workspace in a text holds files far below any limit
+        return r.text_at(path)
+
+priv fn refused(failure: Load_error, path: U8[], arena: Arena$@): Opening //<
+    //< A file that does not open itself: its place, or its path where it has none
+    $out: = Opening::{ .refused = true, .shows = "", .problems = 1, .at = path, .says = "" }
+    switch failure
+    case .refused(why)
+        out.says = why.message()
+    case .invalid(at)
+        out.at = place(at, arena)
+        out.says = at.message
+    return out
+
+priv fn place(at: Diagnostic, arena: Arena$@): U8[] //< `file:line:column`
+    return arena.text().s(at.path).s(":\{at.line\}:\{at.column\}").take()
+
+priv fn view_text(assembly: Assembly@, today: U8[], arena: Arena$@): U8[] //<
+    //< The view in reading order: each paragraph's and heading's text, and each table's data cells
+    //< as they show, row by row; other blocks add nothing. Each source calculates on its own.
+    $values: = List<|Results?|>(arena)
+    for _ in Range.asc(assembly.sources.len)
+        values.push(.none)
+    $parts: = List<|U8[]|>(arena)
+    for e in Range.asc(assembly.entries.len)
+        block: = assembly.block_of(e)
+        source: = assembly.instances.get(assembly.entries.get(e).instance).source
+        doc: = assembly.sources.get(source).doc
+        switch block.kind
+        case .paragraph, .heading
+            b: = arena.text()
+            for i in Range.asc(block.count)
+                b.s(doc.inlines.get(block.first + i).text)
+            parts.push(b.take())
+        case .table
+            $results: Results? = values.get(source)
+            if results.is_none()
+                results = .some(calc.calculate(doc@, today, arena))
+                values.set(source, results)
+            got: = results catch
+                panic("a source's values are calculated above")
+            table: = doc.tables[block.first]@
+            for row in Range.asc(table.rows.len)
+                for column in Range.asc(table.columns.len)
+                    parts.push(shown(got.at(block.first, row, column), arena))
+        default {}
+    b: = arena.text()
+    for i in Range.asc(parts.len)
+        if i > 0
+            b.s(PARTS_JOIN)
+        b.s(parts.get(i))
+    return b.take()

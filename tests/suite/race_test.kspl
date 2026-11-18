@@ -241,6 +241,13 @@ struct Raced //< one sanitized run: the check it reports to, where it runs, and 
     log_dir: U8[] //< the folder its processes' sanitizer logs go to, one per check
     env: U8[][] //< `NAME=value` pairs for this run alone
 
+priv fn tsan_options(log_dir: U8[], abort_stacks: Bool, arena: Arena$@): U8[] //<
+    //< The `TSAN_OPTIONS=` pair a raced run starts with: its log folder, and whether an abort logs
+    //< its stack (`handle_abort`)
+    //< **A run's own `env` comes after this pair**, so a pair there replaces it for that run alone.
+    return arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(log_dir, "tsan", arena))
+        .s(":handle_abort=").s("1" if abort_stacks else "0").s(TSAN_HISTORY).take()
+
 priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[][] //<
     //< argv as a raced run starts it: under `RACE_STACK_KIB` and `RACE_CPU_S`, its logs in log_dir,
     //< env set
@@ -249,9 +256,7 @@ priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[
         .push_all(U8[][]::{ "sh", "-c",
         "ulimit -s \"$0\" && ulimit -t \"$1\" && shift && exec \"$@\"", RACE_STACK_KIB, RACE_CPU_S,
         "env" })
-    out
-        .push(arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(log_dir, "tsan", arena))
-        .s(":handle_abort=1").s(TSAN_HISTORY).take())
+    out.push(tsan_options(log_dir, true, arena))
     out.push_all(env)
     out.push_all(argv)
     return out.slice()
@@ -355,6 +360,9 @@ priv const PROGRAMS: Program[_] = ::{
         .define = "", .watched = true },
     Program::{ .stem = "ksagent", .pkg = "ksagent", .entry = "ksagent/tests/main.kspl",
         .opt = OPT_FOR_RUN, .define = "", .watched = true },
+    // The program ksagent's tests start for the rows of its specification (`claims_test.kspl`).
+    Program::{ .stem = "ksagent_main", .pkg = "ksagent", .entry = "ksagent/main.kspl",
+        .opt = OPT_FOR_BUILD, .define = "", .watched = true },
     Program::{ .stem = "ksai_6", .pkg = "lib/ksai", .entry = "lib/ksai/tests/main.kspl",
         .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "ksai_5", .pkg = "lib/ksai", .entry = "lib/ksai/tests/examples_main.kspl",
@@ -508,10 +516,11 @@ priv fn race_ksagent(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: 
     //< ksagent's tests (`ksagent/Makefile`'s `test`)
     //< Their stand-in model server answers from a second thread while the loop asks it.
     name: = "ksagent's tests run with no data race"
-    exes: = builds.exes(name, U8[][]::{ "ksagent" }, arena)
+    exes: = builds.exes(name, U8[][]::{ "ksagent", "ksagent_main" }, arena)
     if exes.len == 0
         return
-    argv: = harness_sanitizer.kept(U8[][]::{ exes.get(0),
+    // As `make test` in ksagent/ starts them: the program its rows run, then the work folder.
+    argv: = harness_sanitizer.kept(U8[][]::{ exes.get(0), exes.get(1),
         fs.join(work, "ksagent_work", arena) }, arena)
     runs
         .push(Raced::{ .name = name, .dir = fs.join(harness.root(), "ksagent", arena), .argv = argv,
@@ -533,10 +542,15 @@ priv fn race_lsp(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Aren
     argv: = harness_sanitizer.kept(U8[][]::{ exes.get(1), exes.get(0), top,
         arena.text().s("\{RACE_LIMIT_MS\}").take() }, arena)
     std_at: = arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take()
+    log_dir: = fs.join(work, "lsp_log", arena)
+    // Caution: **No stack for an abort in this run.** The session crashes the worker on purpose,
+    // and each logged abort starts `llvm-symbolizer` over ksplc's debug build. On a loaded 2-core
+    // runner that took past the server's 60 s, so the crash read as a hang. A panic still names
+    // its file and line, and a race is still logged with its stacks.
+    no_abort_stack: = tsan_options(log_dir, false, arena)
     runs
-        .push(Raced::{ .name = name, .dir = top, .argv = argv,
-        .log_dir = fs.join(work, "lsp_log", arena),
-        .env = harness_sanitizer.kept(U8[][]::{ std_at }, arena) })
+        .push(Raced::{ .name = name, .dir = top, .argv = argv, .log_dir = log_dir,
+        .env = harness_sanitizer.kept(U8[][]::{ std_at, no_abort_stack }, arena) })
 
 priv fn check_covered(deps: U8[], arena: Arena$@) //<
     //< Every tracked source that starts a thread is compiled into a program above, or left out

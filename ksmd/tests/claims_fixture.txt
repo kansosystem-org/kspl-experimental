@@ -1,0 +1,201 @@
+# The rows of ksmd's file format, a fixture
+
+The rows of every form, as ksmd's file format specification writes them. `ksmd/tests/claims.kspl` reads them in its own checks. Each row before the last heading must hold against the code. Each row under it must fail.
+
+**The rows calculate in a table named `t`, in a document opened on 2026-10-23.** Its cell A1 holds 2, A2 holds 3, B1 holds `"Pens"` and B2 holds `"Ink"`. A written path stands in a file in the folder `plans`. An `Opened` table opens the files of the blocks above it.
+
+## Rows that hold
+
+| Formula | Shows |
+| :-- | :-- |
+| `=A1+A2` | `5` |
+| `=B1&B2` | `PensInk` |
+| `=A1>A2` | `false` |
+| `=today()` | `2026-10-23` |
+| `=0.1+0.2` | `0.3` |
+| `=1/0` | `#DIV/0!` |
+| `=if(A1=2, "a\|b", "c")` | `a\|b` |
+
+| Formula | The reason says |
+| :-- | :-- |
+| `=1/0` | the divisor is 0 |
+
+| Entry | Shows 1234.5 as | Shows -0.125 as |
+| :-- | :-- | :-- |
+| `grouped:2` | `1,234.50` | `-0.13` |
+| `percent:1` | `123,450.0%` | `-12.5%` |
+
+| Version 1 formula | Reads as |
+| :-- | :-- |
+| `="C:\\src"` | `="C:\src"` |
+
+| Written | Answer |
+| :-- | :-- |
+| `pics/a.png` | `plans/pics/a.png` |
+| `../a.png` | `a.png` |
+| `../../a.png` | refused |
+| `pics\a.png` | refused |
+
+A block that no sentence follows is an example, and is not a row:
+
+```ksmd
+%ksmd 2
+
+# An example
+```
+
+```ksmd
+%ksmd 2
+# Title
+Some *words*.
+```
+
+It saves as:
+
+```ksmd
+%ksmd 2
+
+# Title
+
+Some *words*.
+```
+
+```ksmd
+%ksmd 2
+
+# Title
+
+Some **bold** and [a link](#top).
+
+- [x] done
+  1. first
+
+:::table name="t"
+| "a" |
+| 2 |
+:::
+```
+
+It reads as:
+
+```text
+heading 1
+  text "Title"
+paragraph
+  text "Some "
+  strong
+    text "bold"
+  text " and "
+  link "#top"
+    text "a link"
+  text "."
+list
+  ticked item
+    text "done"
+    numbered item
+      text "first"
+table "t"
+  row
+    cell "a"
+  row
+    cell 2
+```
+
+```ksmd
+%ksmd 3
+```
+
+It is refused at line 1, column 1.
+
+A workspace of two files, then what opening each gives:
+
+```ksmd top.ksmd
+%ksmd 2
+
+Top
+
+:::include path="parts/one.ksmd"
+:::
+
+:::include path="gone.ksmd"
+:::
+```
+
+```ksmd parts/one.ksmd
+%ksmd 2
+
+One
+```
+
+| Opened | Shows | Problem at | The reason says |
+| :-- | :-- | :-- | :-- |
+| `top.ksmd` | `Top, One` | `top.ksmd:8:1` | no file stands at this path |
+| `parts/one.ksmd` | `One` | none | |
+
+## Rows that must fail
+
+| Formula | Shows |
+| :-- | :-- |
+| `=A1+A2` | `6` |
+
+| Formula | The reason says |
+| :-- | :-- |
+| `=1/0` | the divisor is 1 |
+
+| Entry | Shows 1234.5 as | Shows -0.125 as |
+| :-- | :-- | :-- |
+| `number:0` | `1234` | `-0` |
+
+| Version 1 formula | Reads as |
+| :-- | :-- |
+| `="a\nb"` | `="a\nb"` |
+
+| Written | Answer |
+| :-- | :-- |
+| `../../a.png` | `a.png` |
+
+```ksmd
+%ksmd 2
+
+# Title
+```
+
+It saves as:
+
+```ksmd
+%ksmd 2
+
+# Title
+# Title
+```
+
+```ksmd
+%ksmd 2
+
+# Title
+```
+
+It reads as:
+
+```text
+heading 2
+  text "Title"
+```
+
+```ksmd
+%ksmd 2
+
+# Title
+```
+
+It is refused at line 3, column 1.
+
+```ksmd top.ksmd
+%ksmd 2
+
+Top
+```
+
+| Opened | Shows | Problem at | The reason says |
+| :-- | :-- | :-- | :-- |
+| `top.ksmd` | `Top, Top` | none | |

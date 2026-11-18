@@ -26,11 +26,27 @@ import "std/json" + { Json_builder }
 import "std/jsonrpc"
 import "std/mem" + { Arena, dealloc }
 import "std/str" { Str_builder }
+import "std/strnum" // `to_i64`, for the silence the environment sets
 import "std/subproc"
 import "std/sys"
 import "std/thread"
 
 priv const WORKER_TIMEOUT_MS: I32 = 10000 // the hang-detection timeout (a first analysis is slow)
+priv const SILENCE_ENV: U8[] = "KSPLC_LSP_SILENCE_MS" //<
+    //< the variable that sets that timeout instead
+
+priv const MAX_SILENCE_MS: I64 = 600000I64 //< the longest timeout the variable may set: ten minutes
+
+priv fn worker_timeout_ms(): I32 //< how long the worker may send nothing before it counts as hung
+    //< `KSPLC_LSP_SILENCE_MS` where it holds whole milliseconds, 1 to ten minutes; else 10 s
+    //< **For a test that runs the server under a sanitizer** beside other programs: there a live
+    //< worker can fall silent past 10 s, and a restart would read as a fault. An editor sets none.
+    if given: = sys.get_env(SILENCE_ENV)
+        ms: = given.to_i64() catch
+            fallback 0I64
+        if ms > 0I64 && ms <= MAX_SILENCE_MS
+            return I32::ms
+    return WORKER_TIMEOUT_MS
 
 priv fn relay_stripping_alive(src: U8[], out: Str_builder$@) //<
     //< It copies into out while removing the liveness markers
@@ -80,6 +96,15 @@ impl Worker_end
                 \{r.worker_end_text()\}. Restarting the worker. Open documents to restore: \
                 \{restores\}\n")
 
+priv fn log_silence(sent: Sz, started_us: I64, window_ms: I32) //<
+    //< It says on stderr what the worker did before it fell silent, so a stall reads apart
+    //< **A worker that sent nothing at all never got going** (a stalled machine, a start that
+    //< failed); one that sent signs of life for a while stopped in the middle of its work.
+    worked_ms: = (sys.mono_us() - started_us) / 1000I64 - I64::window_ms
+    io.err()
+        .s("ksplc lsp: the worker sent \{sent\} bytes in its first \{worked_ms\} ms on this \
+            message, then nothing for \{window_ms\} ms\n")
+
 priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker_end //<
     //< It reads the worker's output up to the completion marker and relays what precedes it
     //< Nothing is relayed before the marker comes, so a partial message never breaks the protocol.
@@ -93,17 +118,19 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
     tag: = lsp_msg.WORKER_DONE_TAG
     overlap: = lsp_msg.marker_len(tag) - 1
     $scanned: Sz = 0
+    window_ms: = worker_timeout_ms()
+    started_us: = sys.mono_us()
     for
-        got: =
-            worker.read(U8$[]::{ .ptr = rbuf, .len = cap }, WORKER_TIMEOUT_MS) catch e
-                switch e
-                case .timed_out
-                    ok = .hang
-                case .closed
-                    ok = .exited
-                case .failed
-                    ok = .read_error
-                break
+        got: = worker.read(U8$[]::{ .ptr = rbuf, .len = cap }, window_ms) catch e
+            switch e
+            case .timed_out
+                ok = .hang
+                log_silence(acc.slice().len, started_us, window_ms)
+            case .closed
+                ok = .exited
+            case .failed
+                ok = .read_error
+            break
         acc.s(U8$[]::{ .ptr = rbuf, .len = got })
         search_from: = 0 if scanned < overlap else scanned - overlap
         idx: = lsp_msg.marker_at(acc.slice(), search_from, tag)
@@ -137,7 +164,7 @@ priv fn exchange(child: subproc.Piped_child?@, frame: U8[], arena: Arena$@): Wor
     // Caution: **Bound the write by the watchdog too.** A worker stuck in an analysis reads
     // nothing, and once the pipe is full an unbounded write would hang the editor's server with it.
     if c: = child$
-        c.write(frame, WORKER_TIMEOUT_MS) catch
+        c.write(frame, worker_timeout_ms()) catch
             return .write_failed
         return pump_worker_output(c@, arena)
     return .write_failed

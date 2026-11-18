@@ -37,7 +37,7 @@
 
 | Property | Main mechanisms | Strength today |
 | :-- | :-- | :-- |
-| Functional suitability | self-host, `test-equiv`, `test-property`, `test-random-equiv`, `test-spec-claims`, `test-server-claims`, `test-negative`, `test-extract`, the package tests | Strong for ksplc and std, partial for the rest |
+| Functional suitability | self-host, `test-equiv`, `test-property`, `test-random-equiv`, `test-spec-claims`, `test-server-claims`, the claims runs of ksmd, ksagent and ksos, `test-negative`, `test-extract`, the package tests | Strong for ksplc and std, partial for the rest |
 | Performance efficiency | `perf-log`, `test-simd` | Partial |
 | Compatibility | `test-llvm-abi`, `test-emit-runtime`, `test-ship`, `test-lsp`, `test-layout-targets` | Strong; partial off Linux |
 | Interaction capability | `ksplc explain`, `ksplc doc`, `test-ksmd-browser`, the CLI comparison in `test-conventions` | Strong for ksplc, partial elsewhere |
@@ -50,7 +50,7 @@
 | Testability and verifiability | stage1 equal to stage2, `test-seed-sum`, a failure case per gate, `make coverage` by hand when the tests are surveyed | Strong |
 | Determinism | fixed seeds, no time bound in a test, byte-equal stages | Strong |
 | Observability | the round's verdict and causes, per-gate logs, panic positions | Strong |
-| Documentation | `test-docref`, `test-docsnippet`, `test-spec-claims`, `test-server-claims`, `test-docs` | Strong for references and code, partial for prose |
+| Documentation | `test-docref`, `test-docsnippet`, `test-spec-claims`, `test-server-claims`, the claims runs of ksmd, ksagent and ksos, `test-docs` | Strong for references and code, partial for prose |
 | Privacy | a local model, files as the only channel | Partial |
 | Licence compliance | `THIRD-PARTY-NOTICES.md` held by `test-conventions` | Strong |
 | Sustainability | a weekly CI, a factor per platform, time caps on jobs and gates | Strong; energy not measured |
@@ -63,25 +63,31 @@
 
 **The specification's claims are compiled.** `test-spec-claims` compiles code that [`SPEC-programming-language.md`](SPEC-programming-language.md) calls refused or allowed, in pairs. `test-negative` checks that wrong programs are refused, and `test-conventions` checks that each diagnostic code has an input that shows it.
 
-**The local server's claims are sent to a real server.** `test-server-claims` reads the tables of requests in [`SPEC-local-server.md`](SPEC-local-server.md) and sends each row to kssrv. Each answer must match its row and carry the guard headers. The suite also checks the sentences on the address, the printed line and the token's form. A failure names the specification's line.
+**The two server specifications' claims are sent to a real server.** `test-server-claims` reads the tables of requests in [`SPEC-local-server.md`](SPEC-local-server.md) and in kssrv's own [`SPEC-api.md`](../kssrv/docs/SPEC-api.md). It sends each row to kssrv, started in the mode the rows name. Each answer must match its row and carry the headers every answer carries. The suite also checks the sentences on the address, the printed line and the token's form. A failure names the specification's line.
+
+**The other packages' specifications are held to their rows inside their own tests.** Each run reads its specification and names its line on a failure.
+
+* **ksmd's file format** ([`SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md)): each row is read, written or calculated in the same process. That covers a formula's value or error, a number format, a path, a source saved or refused, and a workspace of includes opened.
+* **ksagent's commands** ([`SPEC-commands.md`](../ksagent/docs/SPEC-commands.md)): the built program runs each row with a stand-in model server. Its exit code and output must match.
+* **ksos's board** ([`SPEC-board.md`](../lib/ksos/docs/SPEC-board.md)): each pin, limit and constant is compared with the board code on the host.
 
 **Every package's tests run from a copy of its folder alone** (`test-extract`), on both backends (`debug`, `test-llvm-pkgs`). `test-surface` holds each published API to its record. `test-ksmd-browser` and `test-ksagent-chat` drive the two pages in a browser.
 
-**What is not covered**: only the language specification and the local server's have a claims gate. The specifications of kssrv, ksagent, ksmd and ksos are compared with the code by review. So are the local server's rules that no row or checked sentence shows, such as the hold on `/api/here` and the build.
+**What is not covered**: every specification has a claims check, but only for what a row can show. The rest is compared with the code by review. That covers ksmd's rules that only the page draws, such as charts, diagrams and which rows a filter shows. So are the two servers' rules that no row or checked sentence shows. Examples are the hold on `/api/here`, the build, HTTPS and the caps on connections and time.
 
 ### Performance efficiency
 
-**Memory and counted work are gated; time is recorded.** `perf-log` judges the compiler's peak memory during its own build, and the sizes of its tree types. It also counts the instructions of a fixed workload, `tests/checkers/perf_work.kspl`, under Cachegrind. One count is the compiler translating it, the other the program built from it. Each count may grow by a tenth over its baseline. The build time is only logged, since a time differs from machine to machine ("No fixed time bound in a test" in [`SPEC-gates.md`](SPEC-gates.md)). `test-simd` checks that ksai's marked loops are vectorized.
+**Memory and counted work are gated; time is recorded.** `perf-log` judges the compiler's peak memory during its own build, and the sizes of its tree types. It also counts the instructions of a fixed workload, `tests/checkers/perf_work.kspl`, under Cachegrind. One count is the compiler translating it, the other the program built from it. A third count is kssrv answering the plain HTTP requests of `kssrv/tests/workload.kspl`, 200 times each. They are a file, a missing file, a range, a conditional request, a path out of the root and a JSON call. Each count may grow by a tenth over its baseline. The build time is only logged, since a time differs from machine to machine ("No fixed time bound in a test" in [`SPEC-gates.md`](SPEC-gates.md)). `test-simd` checks that ksai's marked loops are vectorized.
 
 **A count is not a time.** It repeats to about one part in a million on one machine, and to a few parts in a hundred on another C library. It does not see a cache miss, a branch mispredicted or a slower system call. So a change that slows only memory access passes, and so does a slowdown in code that the workload does not reach.
 
-**What is not covered**: the compiler's count is taken on a small program, not on its own build, which takes several minutes under Cachegrind. kssrv's throughput and the language server's latency are not measured. ksai's benchmarks and ksmd's `make measure` run by hand, with no baseline to judge against.
+**What is not covered**: the compiler's count is taken on a small program, not on its own build, which takes several minutes under Cachegrind. kssrv is counted over plain HTTP on one connection at a time: HTTPS, many clients at once and large files are not counted. The language server's latency is not measured. ksai's benchmarks and ksmd's `make measure` run by hand, with no baseline to judge against.
 
 ### Compatibility
 
 **Each binary interface has its own gate.** `test-llvm-abi` checks that the two backends call each other correctly. `test-emit-runtime` checks that a runtime of another version does not link. `test-ship` links the shipped libraries into C and KSPL programs, static and shared. `test-layout-targets` checks every folded size against each machine ksplc knows.
 
-**Formats and protocols have their own checks.** A ksmd file names its version, and the reader also takes version 1 ([`DESIGN-ksmd.md`](../ksmd/docs/DESIGN-ksmd.md)). `test-lsp`, `test-lsp-tree` and `test-vscode` check the language server and the editor extension.
+**Formats and protocols have their own checks.** A ksmd file names its version, and the reader also takes version 1 ("Version 1 files" in [`ksmd/docs/SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md#version-1-files)). `test-lsp`, `test-lsp-tree` and `test-vscode` check the language server and the editor extension.
 
 **What is not covered**: Linux runs every gate, Windows the shared sections, and macOS a small set ("What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md)). The sanitizer and race gates run only on Linux, and the browser gates on Linux and Windows. The behaviour of Windows file systems is checked by hand on a Windows machine.
 
@@ -163,7 +169,7 @@
 
 **References and code in documents are checked; prose is reviewed.** `test-docref` checks every link, quoted heading, file and symbol name, and `make` target. `test-docsnippet` compiles every KSPL block, and `test-docs` runs the language tutorial. [W0211] checks a dotted name in a comment.
 
-**What is not covered**: only the claims listed for `test-spec-claims` are compiled, and only the local server's tables of requests are sent to a server. The other specifications' claims, and every other sentence, are checked by review.
+**What is not covered**: only the claims listed for `test-spec-claims` are compiled. The other specifications' rows are checked by their packages' claims runs. Every other sentence is checked by review.
 
 ### Privacy
 
@@ -187,7 +193,7 @@
 | :-- | :-- |
 | The car's sensors, wiring and panic hook are checked only on the car | A wrong stop harms people or things, and QEMU has no RP2040 model |
 | The sanitizer and race gates run only on Linux, and the browser gates not on macOS | A fault in memory or threads on Windows or macOS, or in a page on macOS, shows only on a person's machine, after the push |
-| Speed is gated only by counted instructions on one small workload | A slower server or language server, or a slowdown that the workload does not reach or that does not add instructions, passes every gate |
-| Only the language and local server specifications have a claims gate | The specifications of kssrv, ksagent, ksmd and ksos can drift from their code |
+| Speed is gated only by counted instructions on two small workloads | A slower language server or HTTPS server passes every gate. So does a slowdown the workloads do not reach, or one that adds no instructions |
+| A specification's claims are checked only where a row can show them | What only the page draws, a model server answers or the car does can drift from its specification |
 
 **Some gaps are decisions, with their reasons in the canonical source.** CI runs weekly ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `test-race` sees one schedule (its note in "What each platform runs" there). ksagent speaks plain http to its model ([The model server](../ksagent/docs/DESIGN-agent.md#the-model-server) in ksagent's design). No gate holds a coverage figure ("Testability and verifiability" above). The service manager, not kssrv, starts kssrv again after a panic ("Reliability" above).

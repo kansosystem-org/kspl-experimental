@@ -73,6 +73,21 @@ priv fn refusals()
             arrow or line between two; close the clause with ':::'")
     says("%ksmd 2\n\n:::diagram size=\"100,100\"\nbox id=\"a\" at=\"0,0\" size=\"10,10\"\n",
         "this clause has no closing ':::' line")
+    caption_limit()
+
+priv fn caption_limit() //< a caption of 2,000 bytes reads, and one byte more is refused
+    defer arena: = Arena(64 * 1024)
+    for bytes in Range(2000, 2002, 1)
+        b: = arena.text().s("%ksmd 2\n\n:::diagram size=\"100,100\" caption=\"")
+        for _i in Range.asc(bytes)
+            b.c('x')
+        text: = b.s("\"\n:::\n").take()
+        if bytes == 2000
+            ed: = opened(text, arena)
+            verdict.check("a diagram's caption of 2,000 bytes reads",
+                ed.doc.diagrams[0].caption.len == 2000, "")
+        else
+            says(text, "caption is one line of text in quotes, or leave it out")
 
 priv fn refuses(ed: Editor$@, block: Sz, clause: U8[], what: U8[]) //<
     //< The editor refuses to give the diagram this clause, and says what a diagram holds

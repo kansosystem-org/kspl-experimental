@@ -22168,6 +22168,7 @@ extern const I32 kspl_priv_std_subproc_STDIO_OUT;
 extern const I32 kspl_priv_std_subproc_STDIO_ERR;
 extern const I32 kspl_priv_std_subproc_STDIO_NO_WINDOW;
 extern const I32 kspl_priv_std_subproc_STDIO_GROUP;
+extern const Sz kspl_priv_std_subproc_DRAIN_MAX;
 extern const I32 kspl_priv_std_subproc_PIPE_GRACE_MS;
 extern const I32 kspl_priv_std_subproc_REAP_PAUSE_MAX_MS;
 extern const Const_std_subproc_Spawn_error_Array_1 kspl_priv_std_subproc__variants_of_Spawn_error;
@@ -22175,6 +22176,8 @@ extern const Const_std_subproc_Feed_error_Array_2 kspl_priv_std_subproc__variant
 extern const Const_std_subproc_Write_end_Array_2 kspl_priv_std_subproc__variants_of_Write_end;
 extern const Const_std_subproc_Read_end_Array_3 kspl_priv_std_subproc__variants_of_Read_end;
 extern const I32 kspl_priv_ksplc_lsp_server_WORKER_TIMEOUT_MS;
+extern const Slice_U8 kspl_priv_ksplc_lsp_server_SILENCE_ENV;
+extern const I64 kspl_priv_ksplc_lsp_server_MAX_SILENCE_MS;
 extern const Sz kspl_priv_ksplc_lsp_server_INBOX_CAPACITY;
 extern const Const_ksplc_lsp_server_Worker_end_Array_5 kspl_priv_ksplc_lsp_server__variants_of_Worker_end;
 extern const U8 kspl_priv_ksplc_tools_surface_COL;
@@ -25911,6 +25914,8 @@ static I32 kspl_priv_std_channel_left_ms(I64 deadline_us);
 static I64 kspl_priv_std_subproc_start(KSPL_UNUSED Slice_Slice_U8_Const __k_shadow0_argv, Slice_U8 cwd, I32 stdio, Slice_U8 out_path, Slice_U8 err_path);
 static Bool kspl_priv_std_subproc_take_into(std_str_Str_builder *into, Slice_U8 chunk, I32 count, Sz cap, Bool *cut);
 static Result_std_subproc_Run_result_std_subproc_Spawn_error kspl_std_subproc_run_capture(KSPL_UNUSED Slice_Slice_U8_Const __k_shadow0_argv, Slice_U8 cwd, I32 timeout_ms, Sz output_cap, std_mem_Arena *arena);
+static std_subproc_Run_result kspl_std_subproc_capture_until(I64 handle, I64 deadline_us, Sz output_cap, std_mem_Arena *arena);
+static Sz kspl_priv_std_subproc_read_ready(I64 handle, I32 mask, Slice_U8 chunk, Sz cap, std_str_Str_builder *out, std_str_Str_builder *err, Bool *out_open, Bool *err_open, Bool *cut);
 static I32 kspl_priv_std_subproc_next_pause(I32 pause);
 static Option_I32 kspl_priv_std_subproc_wait_until(I64 handle, I64 deadline_us);
 static Option_I32 kspl_priv_std_subproc_ended_by(I64 handle, I64 until_us);
@@ -25925,9 +25930,11 @@ static Result_Void_std_subproc_Write_end kspl_std_subproc_Piped_child_write(cons
 static Result_Sz_std_subproc_Read_end kspl_std_subproc_Piped_child_read(const std_subproc_Piped_child *r, Slice_U8 buf, I32 timeout_ms);
 static void kspl_std_subproc_Piped_child_kill(std_subproc_Piped_child *r);
 static Result_Sz_std_subproc_Read_end kspl_priv_std_subproc_read_one(I32 count);
+static I32 kspl_priv_ksplc_lsp_server_worker_timeout_ms(void);
 static void kspl_priv_ksplc_lsp_server_relay_stripping_alive(Slice_U8 src, std_str_Str_builder *out);
 static Slice_U8 kspl_ksplc_lsp_server_Worker_end_worker_end_text(ksplc_lsp_server_Worker_end r);
 static void kspl_ksplc_lsp_server_Worker_end_log_worker_giveup(ksplc_lsp_server_Worker_end r, Slice_U8 method, Sz restores);
+static void kspl_priv_ksplc_lsp_server_log_silence(Sz sent, I64 started_us, I32 window_ms);
 static ksplc_lsp_server_Worker_end kspl_priv_ksplc_lsp_server_pump_worker_output(const std_subproc_Piped_child *worker, std_mem_Arena *arena);
 static Option_std_subproc_Piped_child kspl_priv_ksplc_lsp_server_spawn_worker(void);
 static ksplc_lsp_server_Worker_end kspl_priv_ksplc_lsp_server_exchange(const Option_std_subproc_Piped_child *child, Slice_U8 frame, std_mem_Arena *arena);
@@ -27311,6 +27318,7 @@ static std_ds_Map_Slice_U8_Const_Slice_U8 *kspl_std_mem_Arena_create_std_ds_Map_
 static ksplc_pipeline_Compiler *kspl_std_mem_Arena_create_ksplc_pipeline_Compiler(std_mem_Arena *r, ksplc_pipeline_Compiler init_val);
 static ksplc_sema_session_ctx_Sema_ctx *kspl_std_mem_Arena_create_ksplc_sema_session_ctx_Sema_ctx(std_mem_Arena *r, ksplc_sema_session_ctx_Sema_ctx init_val);
 static ksplc_lsp_state_Doc_state *kspl_std_mem_Arena_create_ksplc_lsp_state_Doc_state(std_mem_Arena *r, ksplc_lsp_state_Doc_state init_val);
+static Writer kspl_put_Writer_I64(Writer out, I64 value);
 static Bool kspl_Option_std_subproc_Piped_child_is_some(const Option_std_subproc_Piped_child *r);
 static Bool kspl_Option_std_subproc_Piped_child_is_none(const Option_std_subproc_Piped_child *r);
 static Result_std_channel_Channel_std_str_Str_builder_std_thread_Thread_error kspl_std_channel_Channel_std_str_Str_builder_new(Sz capacity, std_mem_Arena *arena);
@@ -35173,6 +35181,7 @@ const I32 kspl_priv_std_subproc_STDIO_OUT = 2;
 const I32 kspl_priv_std_subproc_STDIO_ERR = 4;
 const I32 kspl_priv_std_subproc_STDIO_NO_WINDOW = 8;
 const I32 kspl_priv_std_subproc_STDIO_GROUP = 16;
+const Sz kspl_priv_std_subproc_DRAIN_MAX = ((Sz)1048576LL);
 const I32 kspl_priv_std_subproc_PIPE_GRACE_MS = 100;
 const I32 kspl_priv_std_subproc_REAP_PAUSE_MAX_MS = 10;
 const Const_std_subproc_Spawn_error_Array_1 kspl_priv_std_subproc__variants_of_Spawn_error = {.data = {(std_subproc_Spawn_error)kspl_std_subproc_Spawn_error_spawn_failed}};
@@ -35180,6 +35189,8 @@ const Const_std_subproc_Feed_error_Array_2 kspl_priv_std_subproc__variants_of_Fe
 const Const_std_subproc_Write_end_Array_2 kspl_priv_std_subproc__variants_of_Write_end = {.data = {(std_subproc_Write_end)kspl_std_subproc_Write_end_timed_out, (std_subproc_Write_end)kspl_std_subproc_Write_end_closed}};
 const Const_std_subproc_Read_end_Array_3 kspl_priv_std_subproc__variants_of_Read_end = {.data = {(std_subproc_Read_end)kspl_std_subproc_Read_end_timed_out, (std_subproc_Read_end)kspl_std_subproc_Read_end_closed, (std_subproc_Read_end)kspl_std_subproc_Read_end_failed}};
 const I32 kspl_priv_ksplc_lsp_server_WORKER_TIMEOUT_MS = 10000;
+const Slice_U8 kspl_priv_ksplc_lsp_server_SILENCE_ENV = KSPL_STR_INIT("KSPLC_LSP_SILENCE_MS");
+const I64 kspl_priv_ksplc_lsp_server_MAX_SILENCE_MS = 600000LL;
 const Sz kspl_priv_ksplc_lsp_server_INBOX_CAPACITY = (Sz)1024;
 const Const_ksplc_lsp_server_Worker_end_Array_5 kspl_priv_ksplc_lsp_server__variants_of_Worker_end = {.data = {(ksplc_lsp_server_Worker_end)kspl_ksplc_lsp_server_Worker_end_done, (ksplc_lsp_server_Worker_end)kspl_ksplc_lsp_server_Worker_end_hang, (ksplc_lsp_server_Worker_end)kspl_ksplc_lsp_server_Worker_end_exited, (ksplc_lsp_server_Worker_end)kspl_ksplc_lsp_server_Worker_end_write_failed, (ksplc_lsp_server_Worker_end)kspl_ksplc_lsp_server_Worker_end_read_error}};
 const U8 kspl_priv_ksplc_tools_surface_COL = 9;
@@ -139443,12 +139454,15 @@ static KSPL_UNUSED Result_std_subproc_Run_result_std_subproc_Spawn_error kspl_st
   }
 
   kspl_proc_close_stdin(h);
+  return (Result_std_subproc_Run_result_std_subproc_Spawn_error){.tag = kspl_Result_std_subproc_Run_result_std_subproc_Spawn_error_ok, .payload.ok = {kspl_std_subproc_capture_until(h, kspl_std_sys_deadline_after_ms((I64)timeout_ms), output_cap, arena)}};
+}
+
+static KSPL_UNUSED std_subproc_Run_result kspl_std_subproc_capture_until(I64 handle, I64 deadline_us, Sz output_cap, std_mem_Arena *arena) {
   std_str_Str_builder out = kspl_std_str_Str_builder_new();
   std_str_Str_builder err = kspl_std_str_Str_builder_new();
   U8_Array_4096 chunk = (U8_Array_4096){{0}};
   Bool cut = false;
-  I64 deadline = kspl_std_sys_deadline_after_ms((I64)timeout_ms);
-  I64 until = deadline;
+  I64 until = deadline_us;
   Bool out_open = true;
   Bool err_open = true;
   Bool timed_out = false;
@@ -139458,22 +139472,39 @@ static KSPL_UNUSED Result_std_subproc_Run_result_std_subproc_Spawn_error kspl_st
   {
     for (; out_open || err_open;) {
       I64 now = kspl_std_sys_mono_us();
-      if (!ended && kspl_proc_ended(h, &code)) {
+      if (!ended && kspl_proc_ended(handle, &code)) {
         ended = true;
         I64 grace_end = (I64)((U64)(now) + (U64)((I64)((U64)((I64)kspl_priv_std_subproc_PIPE_GRACE_MS) * (U64)(1000LL))));
         KSPL_UNUSED I64 __k_tmp3 = {0};
-        if (grace_end < deadline) {
+        if (grace_end < deadline_us) {
           __k_tmp3 = grace_end;
         }
 
         else {
-          __k_tmp3 = deadline;
+          __k_tmp3 = deadline_us;
         }
         until = __k_tmp3;
       }
 
       if (now >= until) {
         timed_out = !ended;
+        Sz left = kspl_priv_std_subproc_DRAIN_MAX;
+        {
+          for (; (out_open || err_open) && left > (Sz)0;) {
+            I32 mask = kspl_proc_poll(handle, 0);
+            if (mask <= 0) {
+              goto _mir_label_5;
+            }
+
+            Sz got = kspl_priv_std_subproc_read_ready(handle, mask, (Slice_U8){.ptr = (U8 *)chunk.data, .len = 4096}, output_cap, &out, &err, &out_open, &err_open, &cut);
+            if (got == (Sz)0) {
+              goto _mir_label_5;
+            }
+
+            left = (Sz)((size_t)(left) - (size_t)(got));
+          }
+        _mir_label_5:;
+        }
         goto _mir_label_2;
       }
 
@@ -139483,40 +139514,32 @@ static KSPL_UNUSED Result_std_subproc_Run_result_std_subproc_Spawn_error kspl_st
         pause = kspl_priv_std_subproc_next_pause(pause);
       }
 
-      I32 mask = kspl_proc_poll(h, wait_ms);
+      I32 mask = kspl_proc_poll(handle, wait_ms);
       if (mask < 0) {
         goto _mir_label_2;
       }
 
-      if (out_open && (mask & kspl_priv_std_subproc_STDIO_OUT) != 0) {
-        KSPL_UNUSED Slice_U8 __k_tmp4 = (Slice_U8){.ptr = (U8 *)chunk.data, .len = 4096};
-        out_open = kspl_priv_std_subproc_take_into(&out, __k_tmp4, kspl_proc_read(h, &chunk.data[(Sz)0], (Sz)4096, 0), output_cap, &cut);
-      }
-
-      if (err_open && (mask & kspl_priv_std_subproc_STDIO_ERR) != 0) {
-        KSPL_UNUSED Slice_U8 __k_tmp5 = (Slice_U8){.ptr = (U8 *)chunk.data, .len = 4096};
-        err_open = kspl_priv_std_subproc_take_into(&err, __k_tmp5, kspl_proc_read_err(h, &chunk.data[(Sz)0], (Sz)4096, 0), output_cap, &cut);
-      }
+      (void)(kspl_priv_std_subproc_read_ready(handle, mask, (Slice_U8){.ptr = (U8 *)chunk.data, .len = 4096}, output_cap, &out, &err, &out_open, &err_open, &cut));
     }
   _mir_label_2:;
   }
   Option_I32 exit_code = (Option_I32){.tag = kspl_Option_I32_none};
   if (timed_out) {
-    kspl_proc_kill(h);
+    kspl_proc_kill(handle);
   }
 
   else
       if (ended) {
-    exit_code = (Option_I32){.tag = kspl_Option_I32_some, .payload.some = {kspl_proc_wait(h)}};
+    exit_code = (Option_I32){.tag = kspl_Option_I32_some, .payload.some = {kspl_proc_wait(handle)}};
   }
 
   else {
-    exit_code = kspl_priv_std_subproc_wait_until(h, deadline);
+    exit_code = kspl_priv_std_subproc_wait_until(handle, deadline_us);
   }
   KSPL_UNUSED Option_I32 __k_tmp6 = exit_code;
   KSPL_UNUSED Slice_U8 __k_tmp7 = kspl_std_mem_Arena_dup_str(arena, kspl_std_str_Str_builder_slice(&out));
   KSPL_UNUSED Slice_U8 __k_tmp8 = kspl_std_mem_Arena_dup_str(arena, kspl_std_str_Str_builder_slice(&err));
-  KSPL_UNUSED Result_std_subproc_Run_result_std_subproc_Spawn_error __k_tmp9 = (Result_std_subproc_Run_result_std_subproc_Spawn_error){.tag = kspl_Result_std_subproc_Run_result_std_subproc_Spawn_error_ok, .payload.ok = {(std_subproc_Run_result){.exit_code = __k_tmp6, .stdout_data = __k_tmp7, .stderr_data = __k_tmp8, .output_lost = false, .output_cut = cut}}};
+  KSPL_UNUSED std_subproc_Run_result __k_tmp9 = (std_subproc_Run_result){.exit_code = __k_tmp6, .stdout_data = __k_tmp7, .stderr_data = __k_tmp8, .output_lost = false, .output_cut = cut};
   {
     kspl_std_str_Str_builder_free(&err);
   }
@@ -139530,6 +139553,43 @@ static KSPL_UNUSED Result_std_subproc_Run_result_std_subproc_Spawn_error kspl_st
   {
     kspl_std_str_Str_builder_free(&out);
   }
+}
+
+static KSPL_UNUSED Sz kspl_priv_std_subproc_read_ready(I64 handle, I32 mask, Slice_U8 chunk, Sz cap, std_str_Str_builder *out, std_str_Str_builder *err, Bool *out_open, Bool *err_open, Bool *cut) {
+  Sz got = (Sz)0;
+  if ((*(out_open)) && (mask & kspl_priv_std_subproc_STDIO_OUT) != 0) {
+    I32 n = kspl_proc_read(handle, chunk.ptr, chunk.len, 0);
+    KSPL_UNUSED Bool __k_tmp1 = kspl_priv_std_subproc_take_into(out, chunk, n, cap, cut);
+    (*(out_open)) = __k_tmp1;
+    KSPL_UNUSED Sz __k_tmp3 = {0};
+    if (n > 0) {
+      __k_tmp3 = (Sz)n;
+    }
+
+    else {
+      __k_tmp3 = (Sz)0;
+    }
+    KSPL_UNUSED Sz __k_tmp2 = __k_tmp3;
+    got = (Sz)((size_t)(got) + (size_t)(__k_tmp2));
+  }
+
+  if ((*(err_open)) && (mask & kspl_priv_std_subproc_STDIO_ERR) != 0) {
+    I32 n = kspl_proc_read_err(handle, chunk.ptr, chunk.len, 0);
+    KSPL_UNUSED Bool __k_tmp4 = kspl_priv_std_subproc_take_into(err, chunk, n, cap, cut);
+    (*(err_open)) = __k_tmp4;
+    KSPL_UNUSED Sz __k_tmp6 = {0};
+    if (n > 0) {
+      __k_tmp6 = (Sz)n;
+    }
+
+    else {
+      __k_tmp6 = (Sz)0;
+    }
+    KSPL_UNUSED Sz __k_tmp5 = __k_tmp6;
+    got = (Sz)((size_t)(got) + (size_t)(__k_tmp5));
+  }
+
+  return got;
 }
 
 static KSPL_UNUSED I32 kspl_priv_std_subproc_next_pause(I32 pause) {
@@ -139742,6 +139802,39 @@ static KSPL_UNUSED Result_Sz_std_subproc_Read_end kspl_priv_std_subproc_read_one
   return (Result_Sz_std_subproc_Read_end){.tag = kspl_Result_Sz_std_subproc_Read_end_err, .payload.err = {.error = (std_subproc_Read_end)kspl_std_subproc_Read_end_failed}};
 }
 
+static KSPL_UNUSED I32 kspl_priv_ksplc_lsp_server_worker_timeout_ms(void) {
+  KSPL_UNUSED Option_Slice_U8_Const __k_tmp1 = kspl_std_sys_get_env(kspl_priv_ksplc_lsp_server_SILENCE_ENV);
+  switch (__k_tmp1.tag) {
+  case kspl_Option_Slice_U8_Const_some: {
+    Slice_U8 given = __k_tmp1.payload.some.value;
+    KSPL_UNUSED Result_I64_std_strnum_Strnum_error __k_tmp2 = kspl_Slice_U8_Const_to_i64(given);
+    KSPL_UNUSED I64 __k_tmp3 = {0};
+    if (__k_tmp2.tag == kspl_Result_I64_std_strnum_Strnum_error_err) {
+      KSPL_UNUSED std_strnum_Strnum_error __k_e = __k_tmp2.payload.err.error;
+      __k_tmp3 = 0LL;
+      goto _mir_label_4;
+    _mir_label_4:;
+    }
+
+    else {
+      __k_tmp3 = __k_tmp2.payload.ok.value;
+    }
+    I64 ms = __k_tmp3;
+    if (ms > 0LL && ms <= kspl_priv_ksplc_lsp_server_MAX_SILENCE_MS) {
+      return (I32)ms;
+    }
+
+    break;
+  }
+  case kspl_Option_Slice_U8_Const_none: {
+    break;
+  }
+  default:
+    __builtin_unreachable();
+  }
+  return kspl_priv_ksplc_lsp_server_WORKER_TIMEOUT_MS;
+}
+
 static KSPL_UNUSED void kspl_priv_ksplc_lsp_server_relay_stripping_alive(Slice_U8 src, std_str_Str_builder *out) {
   Slice_U8 tag = kspl_ksplc_lsp_msg_WORKER_ALIVE_TAG;
   Sz i = (Sz)0;
@@ -139806,6 +139899,19 @@ static KSPL_UNUSED void kspl_ksplc_lsp_server_Worker_end_log_worker_giveup(ksplc
   return;
 }
 
+static const KSPL_UNUSED Slice_U8 kspl_lit_3322 = KSPL_STR_INIT("ksplc lsp: the worker sent ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3323 = KSPL_STR_INIT(" bytes in its first ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3324 = KSPL_STR_INIT(" ms on this message, then nothing for ");
+static KSPL_UNUSED void kspl_priv_ksplc_lsp_server_log_silence(Sz sent, I64 started_us, I32 window_ms) {
+  I64 worked_ms = (I64)((U64)(((I64)((U64)(kspl_std_sys_mono_us()) - (U64)(started_us))) / (1000LL)) - (U64)((I64)window_ms));
+  KSPL_UNUSED Writer __k_tmp4 = kspl_std_io_err();
+  KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Sz(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3322)), sent);
+  KSPL_UNUSED Writer __k_tmp2 = kspl_put_Writer_I64(((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3323)), worked_ms);
+  KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_I32(((__k_tmp2).vtable->s((__k_tmp2).obj, kspl_lit_3324)), window_ms);
+  (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3252)));
+  return;
+}
+
 static KSPL_UNUSED ksplc_lsp_server_Worker_end kspl_priv_ksplc_lsp_server_pump_worker_output(const std_subproc_Piped_child *worker, std_mem_Arena *arena) {
   Sz cap = (Sz)65536;
   U8 *rbuf = (U8 *)kspl_std_mem_Arena_alloc(arena, cap);
@@ -139814,15 +139920,18 @@ static KSPL_UNUSED ksplc_lsp_server_Worker_end kspl_priv_ksplc_lsp_server_pump_w
   Slice_U8 tag = kspl_ksplc_lsp_msg_WORKER_DONE_TAG;
   Sz overlap = (Sz)((size_t)(kspl_ksplc_lsp_msg_marker_len(tag)) - (size_t)((Sz)1));
   Sz scanned = (Sz)0;
+  I32 window_ms = kspl_priv_ksplc_lsp_server_worker_timeout_ms();
+  I64 started_us = kspl_std_sys_mono_us();
   {
     for (;;) {
-      KSPL_UNUSED Result_Sz_std_subproc_Read_end __k_tmp3 = kspl_std_subproc_Piped_child_read(worker, (Slice_U8){.ptr = rbuf, .len = cap}, kspl_priv_ksplc_lsp_server_WORKER_TIMEOUT_MS);
+      KSPL_UNUSED Result_Sz_std_subproc_Read_end __k_tmp3 = kspl_std_subproc_Piped_child_read(worker, (Slice_U8){.ptr = rbuf, .len = cap}, window_ms);
       KSPL_UNUSED Sz __k_tmp4 = {0};
       if (__k_tmp3.tag == kspl_Result_Sz_std_subproc_Read_end_err) {
         std_subproc_Read_end e = __k_tmp3.payload.err.error;
         switch (e) {
         case kspl_std_subproc_Read_end_timed_out: {
           ok = (ksplc_lsp_server_Worker_end)kspl_ksplc_lsp_server_Worker_end_hang;
+          kspl_priv_ksplc_lsp_server_log_silence(kspl_std_str_Str_builder_slice(&acc).len, started_us, window_ms);
           break;
         }
         case kspl_std_subproc_Read_end_closed: {
@@ -139885,11 +139994,11 @@ static KSPL_UNUSED ksplc_lsp_server_Worker_end kspl_priv_ksplc_lsp_server_pump_w
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3322 = KSPL_STR_INIT("lsp-worker");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3325 = KSPL_STR_INIT("lsp-worker");
 static KSPL_UNUSED Option_std_subproc_Piped_child kspl_priv_ksplc_lsp_server_spawn_worker(void) {
   std_sys_Args cmd_args = kspl_std_sys_args();
   KSPL_UNUSED const Slice_U8 __k_tmp1 = kspl_std_sys_Args_get(&cmd_args, (Sz)0);
-  KSPL_UNUSED Result_std_subproc_Piped_child_std_subproc_Spawn_error __k_tmp2 = kspl_std_subproc_spawn_piped_shared_err((Slice_Slice_U8_Const){.ptr = (Slice_U8 *)((const Slice_U8_Const_Array_2){.data = {__k_tmp1, kspl_lit_3322}}).data, .len = 2}, kspl_lit_5);
+  KSPL_UNUSED Result_std_subproc_Piped_child_std_subproc_Spawn_error __k_tmp2 = kspl_std_subproc_spawn_piped_shared_err((Slice_Slice_U8_Const){.ptr = (Slice_U8 *)((const Slice_U8_Const_Array_2){.data = {__k_tmp1, kspl_lit_3325}}).data, .len = 2}, kspl_lit_5);
   KSPL_UNUSED std_subproc_Piped_child __k_tmp3 = {0};
   if (__k_tmp2.tag == kspl_Result_std_subproc_Piped_child_std_subproc_Spawn_error_err) {
     KSPL_UNUSED std_subproc_Spawn_error __k_e = __k_tmp2.payload.err.error;
@@ -139908,7 +140017,7 @@ static KSPL_UNUSED ksplc_lsp_server_Worker_end kspl_priv_ksplc_lsp_server_exchan
   switch (__k_tmp1.tag) {
   case kspl_Option_std_subproc_Piped_child_some: {
     std_subproc_Piped_child c = __k_tmp1.payload.some.value;
-    KSPL_UNUSED Result_Void_std_subproc_Write_end __k_tmp2 = kspl_std_subproc_Piped_child_write(&c, frame, kspl_priv_ksplc_lsp_server_WORKER_TIMEOUT_MS);
+    KSPL_UNUSED Result_Void_std_subproc_Write_end __k_tmp2 = kspl_std_subproc_Piped_child_write(&c, frame, kspl_priv_ksplc_lsp_server_worker_timeout_ms());
     if (__k_tmp2.tag == kspl_Result_Void_std_subproc_Write_end_err) {
       KSPL_UNUSED std_subproc_Write_end __k_e = __k_tmp2.payload.err.error;
       return (ksplc_lsp_server_Worker_end)kspl_ksplc_lsp_server_Worker_end_write_failed;
@@ -140082,14 +140191,14 @@ static KSPL_UNUSED void kspl_ksplc_lsp_server_Lsp_docs_free(ksplc_lsp_server_Lsp
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3323 = KSPL_STR_INIT("languageId");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3324 = KSPL_STR_INIT("version");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3326 = KSPL_STR_INIT("languageId");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3327 = KSPL_STR_INIT("version");
 static KSPL_UNUSED std_str_Str_builder kspl_priv_ksplc_lsp_server_build_doc_frame(Slice_U8 method, Slice_U8 uri, Slice_U8 text, std_mem_Arena *arena) {
   std_json_Json_builder b = kspl_std_json_Json_builder_new(arena);
   KSPL_UNUSED std_json_Object_builder __k_tmp4 = kspl_std_json_Json_builder_obj(&b);
   KSPL_UNUSED std_json_Object_builder __k_tmp3 = kspl_std_json_Object_builder_set(__k_tmp4, kspl_lit_1157, kspl_std_json_Json_builder_str_val(&b, uri));
-  KSPL_UNUSED std_json_Object_builder __k_tmp2 = kspl_std_json_Object_builder_set(__k_tmp3, kspl_lit_3323, kspl_std_json_Json_builder_str_val(&b, kspl_lit_1165));
-  KSPL_UNUSED std_json_Object_builder __k_tmp1 = kspl_std_json_Object_builder_set(__k_tmp2, kspl_lit_3324, kspl_std_json_Json_builder_int_val(&b, 1LL));
+  KSPL_UNUSED std_json_Object_builder __k_tmp2 = kspl_std_json_Object_builder_set(__k_tmp3, kspl_lit_3326, kspl_std_json_Json_builder_str_val(&b, kspl_lit_1165));
+  KSPL_UNUSED std_json_Object_builder __k_tmp1 = kspl_std_json_Object_builder_set(__k_tmp2, kspl_lit_3327, kspl_std_json_Json_builder_int_val(&b, 1LL));
   std_json_Value td = kspl_std_json_Object_builder_build(kspl_std_json_Object_builder_set(__k_tmp1, kspl_lit_1075, kspl_std_json_Json_builder_str_val(&b, text)));
   std_json_Value params = kspl_std_json_Object_builder_build(kspl_std_json_Object_builder_set(kspl_std_json_Json_builder_obj(&b), kspl_lit_1483, td));
   std_str_Str_builder frame = kspl_std_str_Str_builder_new();
@@ -140097,10 +140206,10 @@ static KSPL_UNUSED std_str_Str_builder kspl_priv_ksplc_lsp_server_build_doc_fram
   return frame;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3325 = KSPL_STR_INIT("ksplc lsp: quarantining '");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3328 = KSPL_STR_INIT("ksplc lsp: quarantining '");
 static KSPL_UNUSED void kspl_priv_ksplc_lsp_server_quarantine(ksplc_lsp_server_Lsp_docs *docs, Slice_U8 uri, ksplc_lsp_server_Worker_end end) {
   KSPL_UNUSED Writer __k_tmp4 = kspl_std_io_err();
-  KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Slice_U8_Const(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3325)), uri);
+  KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Slice_U8_Const(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3328)), uri);
   KSPL_UNUSED Writer __k_tmp2 = ((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_1207));
   KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Slice_U8_Const(__k_tmp2, kspl_ksplc_lsp_server_Worker_end_worker_end_text(end));
   (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3)));
@@ -140273,8 +140382,8 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_lsp_server_named_uri(std_json_Value 
   return kspl_Option_Slice_U8_Const_unwrap_or(kspl_std_json_Value_as_str(&__k_tmp3), kspl_lit_5);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3326 = KSPL_STR_INIT("\"exit\"");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3327 = KSPL_STR_INIT("exit");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3329 = KSPL_STR_INIT("\"exit\"");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3330 = KSPL_STR_INIT("exit");
 KSPL_EXPORT(ksplc_lsp_read_editor)
 void *ksplc_lsp_read_editor(ksplc_lsp_server_Editor_reader *reader) {
   std_mem_Arena *arena = kspl_std_mem_Arena_new((Sz)((size_t)((Sz)64) * (size_t)((Sz)1024)));
@@ -140297,14 +140406,14 @@ void *ksplc_lsp_read_editor(ksplc_lsp_server_Editor_reader *reader) {
       Bool last = !got;
       KSPL_UNUSED Bool __k_tmp6 = got;
       if (__k_tmp6) {
-        KSPL_UNUSED Option_Sz __k_tmp5 = kspl_Slice_U8_find_str(kspl_std_str_Str_builder_slice(&body), kspl_lit_3326);
+        KSPL_UNUSED Option_Sz __k_tmp5 = kspl_Slice_U8_find_str(kspl_std_str_Str_builder_slice(&body), kspl_lit_3329);
         __k_tmp6 = kspl_Option_Sz_is_some(&__k_tmp5);
       }
 
       if (__k_tmp6) {
         KSPL_UNUSED std_json_Value __k_tmp8 = kspl_priv_ksplc_lsp_server_message_of(kspl_std_str_Str_builder_slice(&body), arena);
         KSPL_UNUSED std_json_Value __k_tmp7 = kspl_std_json_Value_get(&__k_tmp8, kspl_lit_1152);
-        last = kspl_Slice_U8_Const_equals(kspl_Option_Slice_U8_Const_unwrap_or(kspl_std_json_Value_as_str(&__k_tmp7), kspl_lit_5), kspl_lit_3327);
+        last = kspl_Slice_U8_Const_equals(kspl_Option_Slice_U8_Const_unwrap_or(kspl_std_json_Value_as_str(&__k_tmp7), kspl_lit_5), kspl_lit_3330);
       }
 
       if (got && body.len > (Sz)0) {
@@ -140465,13 +140574,13 @@ static KSPL_UNUSED ksplc_lsp_server_Waiting kspl_ksplc_lsp_server_Waiting_new(vo
   return (ksplc_lsp_server_Waiting){.arena = a, .empty = __k_tmp1, .held = kspl_std_ds_List_ksplc_lsp_server_Held_new(a), .head = (Sz)0};
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3328 = KSPL_STR_INIT("ksplc/lsp/server");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3331 = KSPL_STR_INIT("ksplc/lsp/server");
 static KSPL_UNUSED ksplc_lsp_server_Inbound kspl_ksplc_lsp_server_Waiting_next(ksplc_lsp_server_Waiting *r, const ksplc_lsp_server_Editor_reader *reader, Bool wait, std_mem_Arena *arena) {
   if (r->head >= r->held.len) {
     return kspl_ksplc_lsp_server_Editor_reader_next(reader, wait, arena);
   }
 
-  Slice_U8 body = kspl_std_mem_Arena_dup_str(arena, kspl_std_ds_List_ksplc_lsp_server_Held_get(&r->held, r->head, kspl_lit_3328, (Sz)505).body);
+  Slice_U8 body = kspl_std_mem_Arena_dup_str(arena, kspl_std_ds_List_ksplc_lsp_server_Held_get(&r->held, r->head, kspl_lit_3331, (Sz)532).body);
   r->head = (Sz)((size_t)(r->head) + (size_t)((Sz)1));
   if (r->head >= r->held.len) {
     KSPL_UNUSED std_ds_List_ksplc_lsp_server_Held __k_tmp1 = kspl_std_ds_List_ksplc_lsp_server_Held_new(r->arena);
@@ -140487,7 +140596,7 @@ static KSPL_UNUSED Bool kspl_ksplc_lsp_server_Waiting_replaced(ksplc_lsp_server_
   Sz at = r->head;
   for (;;) {
     for (; at < r->held.len;) {
-      ksplc_lsp_server_Held h = kspl_std_ds_List_ksplc_lsp_server_Held_get(&r->held, at, kspl_lit_3328, (Sz)521);
+      ksplc_lsp_server_Held h = kspl_std_ds_List_ksplc_lsp_server_Held_get(&r->held, at, kspl_lit_3331, (Sz)548);
       at = (Sz)((size_t)(at) + (size_t)((Sz)1));
       if (h.asks) {
         return false;
@@ -140666,16 +140775,16 @@ static KSPL_UNUSED void kspl_priv_ksplc_lsp_server_supervise(ksplc_lsp_server_Ed
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3329 = KSPL_STR_INIT("ksplc/tools/surface");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3332 = KSPL_STR_INIT("ksplc/tools/surface");
 static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_surface_flat(Slice_U8 src, Sz from, Sz to) {
   std_str_Str_builder out = kspl_std_str_Str_builder_new();
   Sz i = from;
   Bool gap = false;
   Bool held_comma = false;
   for (; i < to;) {
-    const U8 ch = (*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3329, (Sz)39)));
-    if ((U8)ch == 47 && (Sz)((size_t)(i) + (size_t)((Sz)1)) < to && (U8)(*(kspl_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(i) + (size_t)((Sz)1)), kspl_lit_3329, (Sz)40))) == 47) {
-      for (; i < to && (U8)(*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3329, (Sz)41))) != 10;) {
+    const U8 ch = (*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3332, (Sz)39)));
+    if ((U8)ch == 47 && (Sz)((size_t)(i) + (size_t)((Sz)1)) < to && (U8)(*(kspl_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(i) + (size_t)((Sz)1)), kspl_lit_3332, (Sz)40))) == 47) {
+      for (; i < to && (U8)(*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3332, (Sz)41))) != 10;) {
         i = (Sz)((size_t)(i) + (size_t)((Sz)1));
       }
       gap = true;
@@ -140708,7 +140817,7 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_surface_flat(Slice_U8 src, Sz 
     }
 
     Slice_U8 had = kspl_std_str_Str_builder_slice(&out);
-    Bool opened = had.len > (Sz)0 && ((*(kspl_Slice_U8_at(&had, (Sz)((size_t)(had.len) - (size_t)((Sz)1)), kspl_lit_3329, (Sz)64))) == 40 || (*(kspl_Slice_U8_at(&had, (Sz)((size_t)(had.len) - (size_t)((Sz)1)), kspl_lit_3329, (Sz)64))) == 91);
+    Bool opened = had.len > (Sz)0 && ((*(kspl_Slice_U8_at(&had, (Sz)((size_t)(had.len) - (size_t)((Sz)1)), kspl_lit_3332, (Sz)64))) == 40 || (*(kspl_Slice_U8_at(&had, (Sz)((size_t)(had.len) - (size_t)((Sz)1)), kspl_lit_3332, (Sz)64))) == 91);
     if (gap && had.len > (Sz)0 && !closes && !opened) {
       (void)(kspl_std_str_Str_builder_c(&out, 32));
     }
@@ -140724,11 +140833,11 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_surface_flat(Slice_U8 src, Sz 
     i = (Sz)((size_t)(i) + (size_t)((Sz)1));
     {
       for (; i < to;) {
-        const U8 c2 = (*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3329, (Sz)75)));
+        const U8 c2 = (*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3332, (Sz)75)));
         (void)(kspl_std_str_Str_builder_c(&out, c2));
         i = (Sz)((size_t)(i) + (size_t)((Sz)1));
         if ((U8)c2 == 92 && i < to) {
-          (void)(kspl_std_str_Str_builder_c(&out, (*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3329, (Sz)79)))));
+          (void)(kspl_std_str_Str_builder_c(&out, (*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3332, (Sz)79)))));
           i = (Sz)((size_t)(i) + (size_t)((Sz)1));
           goto _mir_label_5;
         }
@@ -140760,7 +140869,7 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_surface_vis_of(const ksplc_bas
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *const c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)91)));
+      ksplc_base_ast_Ast_node *const c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)91)));
       if (c->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_visibility || c->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_linkage) {
         KSPL_UNUSED Slice_U8 __k_tmp3 = vis;
         KSPL_UNUSED Sz __k_tmp4 = (Sz)c->loc.offset;
@@ -140776,7 +140885,7 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_surface_attrs_of(const ksplc_b
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *const c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)99)));
+      ksplc_base_ast_Ast_node *const c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)99)));
       if (c->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute_list) {
         KSPL_UNUSED Sz __k_tmp3 = (Sz)c->loc.offset;
         return kspl_priv_ksplc_tools_surface_flat(src, __k_tmp3, kspl_ksplc_base_ast_doc_end_of(c));
@@ -140795,7 +140904,7 @@ static KSPL_UNUSED ksplc_base_ast_Ast_node *kspl_priv_ksplc_tools_surface_decl_o
       {
         KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
         for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-          ksplc_base_ast_Ast_node *const c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)110)));
+          ksplc_base_ast_Ast_node *const c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)110)));
           if (c->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_keyword && c->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_literal && c->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute && c->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute_list && c->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_visibility && c->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_linkage) {
             next = c;
             goto _mir_label_4;
@@ -140836,7 +140945,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_surface_add(std_ds_List_ksplc_tool
   }
 
   Slice_U8 body = text;
-  if ((U8)(*(kspl_Slice_U8_Const_at_ref(&body, (Sz)((size_t)(body.len) - (size_t)((Sz)1)), kspl_lit_3329, (Sz)134))) == 59) {
+  if ((U8)(*(kspl_Slice_U8_Const_at_ref(&body, (Sz)((size_t)(body.len) - (size_t)((Sz)1)), kspl_lit_3332, (Sz)134))) == 59) {
     body = kspl_Slice_U8_Const_sub(body, (Sz)0, (Sz)((size_t)(body.len) - (size_t)((Sz)1)));
   }
 
@@ -140891,7 +141000,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_surface_add_parts(std_ds_List_kspl
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      ksplc_base_ast_doc_Param_doc one = kspl_std_ds_List_ksplc_base_ast_doc_Param_doc_get(params, i, kspl_lit_3329, (Sz)194);
+      ksplc_base_ast_doc_Param_doc one = kspl_std_ds_List_ksplc_base_ast_doc_Param_doc_get(params, i, kspl_lit_3332, (Sz)194);
       if (one.doc.len > (Sz)0) {
         kspl_priv_ksplc_tools_surface_add(lines, kspl_priv_ksplc_tools_surface_param_key(key, i, one.name), one.name, one.doc);
       }
@@ -140933,7 +141042,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_surface_methods_into(std_ds_List_k
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *const m = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)231)));
+      ksplc_base_ast_Ast_node *const m = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)231)));
       if (m->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute_list) {
         KSPL_UNUSED Sz __k_tmp3 = (Sz)m->loc.offset;
         held.attrs = kspl_priv_ksplc_tools_surface_flat(src, __k_tmp3, kspl_ksplc_base_ast_doc_end_of(m));
@@ -140986,7 +141095,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_surface_add_struct(std_ds_List_ksp
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *const f = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)262)));
+      ksplc_base_ast_Ast_node *const f = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)262)));
       if (f->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_struct_field && kspl_priv_ksplc_tools_surface_published(kspl_priv_ksplc_tools_surface_vis_of(f, src))) {
         kspl_priv_ksplc_tools_surface_add_member(lines, name, held.attrs, f, src);
       }
@@ -141001,7 +141110,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_surface_add_enum(std_ds_List_ksplc
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      ksplc_base_ast_Ast_node *const v = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)270)));
+      ksplc_base_ast_Ast_node *const v = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)270)));
       if (v->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_enum_variant) {
         kspl_priv_ksplc_tools_surface_add_member(lines, name, held.attrs, v, src);
       }
@@ -141051,7 +141160,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_surface_collect_item(ksplc_base_as
     {
       KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
       for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-        ksplc_base_ast_Ast_node *const inner = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)305)));
+        ksplc_base_ast_Ast_node *const inner = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)305)));
         if (inner->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_top_level_item) {
           kspl_priv_ksplc_tools_surface_collect_item(inner, src, lines, group_attrs);
         }
@@ -141173,7 +141282,7 @@ static KSPL_UNUSED std_ds_List_ksplc_tools_surface_Line kspl_ksplc_tools_surface
     {
       KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
       for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-        ksplc_base_ast_Ast_node *const item = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)360)));
+        ksplc_base_ast_Ast_node *const item = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)360)));
         kspl_priv_ksplc_tools_surface_collect_item(item, src, &lines, kspl_lit_5);
       }
     }
@@ -141189,7 +141298,7 @@ static KSPL_UNUSED Slice_U8 kspl_ksplc_tools_surface_render_surface(const std_ds
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const ksplc_tools_surface_Line l = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3329, (Sz)371)));
+      const ksplc_tools_surface_Line l = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3332, (Sz)371)));
       (void)(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_c(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_c(kspl_std_str_Arena_text_s(out, file), kspl_priv_ksplc_tools_surface_COL), l.key), kspl_priv_ksplc_tools_surface_COL), l.text));
       if (l.doc.len > (Sz)0) {
         (void)(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_c(out, kspl_priv_ksplc_tools_surface_COL), l.doc));
@@ -141244,14 +141353,14 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_logical_of(Slice_U8 name) 
   return name;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3330 = KSPL_STR_INIT("ksplc doc: cannot read ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3333 = KSPL_STR_INIT("ksplc doc: cannot read ");
 static KSPL_UNUSED Option_std_ds_List_ksplc_tools_surface_Line kspl_priv_ksplc_tools_doc_read_lines(Slice_U8 path, Slice_U8 logical, kspeg_engine_Target *parser) {
   KSPL_UNUSED Result_Slice_U8_Const_std_io_Io_error __k_tmp1 = kspl_std_io_read_file(path, null);
   KSPL_UNUSED Slice_U8 __k_tmp2 = {0};
   if (__k_tmp1.tag == kspl_Result_Slice_U8_Const_std_io_Io_error_err) {
     std_io_Io_error e = __k_tmp1.payload.err.error;
     KSPL_UNUSED Writer __k_tmp7 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp6 = kspl_put_Writer_Slice_U8_Const(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3330)), path);
+    KSPL_UNUSED Writer __k_tmp6 = kspl_put_Writer_Slice_U8_Const(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3333)), path);
     KSPL_UNUSED Writer __k_tmp5 = ((__k_tmp6).vtable->s((__k_tmp6).obj, kspl_lit_13));
     KSPL_UNUSED Writer __k_tmp4 = kspl_put_Writer_Slice_U8_Const(__k_tmp5, kspl_std_io_Io_error_variant_name(e));
     (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3)));
@@ -141323,11 +141432,11 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_doc_hidden_count(Slice_U8 path, Slic
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3331 = KSPL_STR_INIT("ksplc/tools/doc");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3334 = KSPL_STR_INIT("ksplc/tools/doc");
 static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_summary_of(Slice_U8 doc) {
   Sz i = (Sz)0;
   for (; (Sz)((size_t)(i) + (size_t)((Sz)1)) < doc.len;) {
-    if ((U8)(*(kspl_Slice_U8_Const_at_ref(&doc, i, kspl_lit_3331, (Sz)114))) == 46 && (U8)(*(kspl_Slice_U8_Const_at_ref(&doc, (Sz)((size_t)(i) + (size_t)((Sz)1)), kspl_lit_3331, (Sz)114))) == 32) {
+    if ((U8)(*(kspl_Slice_U8_Const_at_ref(&doc, i, kspl_lit_3334, (Sz)114))) == 46 && (U8)(*(kspl_Slice_U8_Const_at_ref(&doc, (Sz)((size_t)(i) + (size_t)((Sz)1)), kspl_lit_3334, (Sz)114))) == 32) {
       return kspl_Slice_U8_Const_sub(doc, (Sz)0, (Sz)((size_t)(i) + (size_t)((Sz)1)));
     }
 
@@ -141368,7 +141477,7 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_anchor_taken(std_ds_List_S
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 one = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3331, (Sz)137)));
+      const Slice_U8 one = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3334, (Sz)137)));
       if (kspl_Slice_U8_Const_equals(one, kspl_std_str_Str_builder_slice(&base))) {
         n = (Sz)((size_t)(n) + (size_t)((Sz)1));
       }
@@ -141404,7 +141513,7 @@ static KSPL_UNUSED std_ds_List_Slice_U8_Const kspl_priv_ksplc_tools_doc_anchors(
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const ksplc_tools_surface_Line r = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3331, (Sz)151)));
+      const ksplc_tools_surface_Line r = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3334, (Sz)151)));
       if (kspl_priv_ksplc_tools_doc_shown(r)) {
         kspl_std_ds_List_Slice_U8_Const_push(&out, kspl_priv_ksplc_tools_doc_anchor_taken(&seen, r.key));
       }
@@ -141417,9 +141526,9 @@ static KSPL_UNUSED std_ds_List_Slice_U8_Const kspl_priv_ksplc_tools_doc_anchors(
   return out;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3332 = KSPL_STR_INIT(" #");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3335 = KSPL_STR_INIT(" #");
 static KSPL_UNUSED Bool kspl_priv_ksplc_tools_doc_names_entry(Slice_U8 entry, Slice_U8 name) {
-  return kspl_Slice_U8_Const_equals(entry, name) || (kspl_Slice_U8_Const_starts_with(entry, name, (Sz)0) && kspl_Slice_U8_Const_starts_with(kspl_Slice_U8_Const_sub_from(entry, name.len), kspl_lit_3332, (Sz)0));
+  return kspl_Slice_U8_Const_equals(entry, name) || (kspl_Slice_U8_Const_starts_with(entry, name, (Sz)0) && kspl_Slice_U8_Const_starts_with(kspl_Slice_U8_Const_sub_from(entry, name.len), kspl_lit_3335, (Sz)0));
 }
 
 static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_target_of(const std_ds_List_ksplc_tools_surface_Line *rows, const std_ds_List_Slice_U8_Const *links, Slice_U8 tail, Slice_U8 name) {
@@ -141454,8 +141563,8 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_link_for(const std_ds_List
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      if (kspl_priv_ksplc_tools_doc_shown(kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3331, (Sz)180)) && kspl_priv_ksplc_tools_doc_names_entry(kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3331, (Sz)180).key, name)) {
-        return kspl_std_ds_List_Slice_U8_Const_get(links, i, kspl_lit_3331, (Sz)181);
+      if (kspl_priv_ksplc_tools_doc_shown(kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3334, (Sz)180)) && kspl_priv_ksplc_tools_doc_names_entry(kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3334, (Sz)180).key, name)) {
+        return kspl_std_ds_List_Slice_U8_Const_get(links, i, kspl_lit_3334, (Sz)181);
       }
     }
   }
@@ -141467,10 +141576,10 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_linked(Slice_U8 doc, const
   return kspl_ksplc_sema_session_pointer_link_names(doc, kspl_ksplc_sema_session_pointer_next_dotted, kspl_lit_552, (Callable1_Slice_U8_Const_Slice_U8_Const){.obj = (void *)&__k_anon_env_v_1, .vtable = &kspl_vtable_impl_ksplc_tools_doc__anon_env_1_Callable1_Slice_U8_Const_Slice_U8_Const});
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3333 = KSPL_STR_INIT("Caution: ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3334 = KSPL_STR_INIT("Note: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3336 = KSPL_STR_INIT("Caution: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3337 = KSPL_STR_INIT("Note: ");
 static KSPL_UNUSED Sz kspl_priv_ksplc_tools_doc_next_label(Slice_U8 doc, Sz from) {
-  const Slice_U8_Const_Array_2 labels = (const Slice_U8_Const_Array_2){.data = {kspl_lit_3333, kspl_lit_3334}};
+  const Slice_U8_Const_Array_2 labels = (const Slice_U8_Const_Array_2){.data = {kspl_lit_3336, kspl_lit_3337}};
   Sz best = doc.len;
   KSPL_UNUSED Slice_Slice_U8_Const __k_for_coll1 = (Slice_Slice_U8_Const){.ptr = (Slice_U8 *)labels.data, .len = 2};
   {
@@ -141492,7 +141601,7 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_doc_next_label(Slice_U8 doc, Sz from
           }
           Sz at = __k_tmp6;
           here = (Sz)((size_t)(i) + (size_t)(at));
-          if (here > from && (U8)(*(kspl_Slice_U8_Const_at_ref(&doc, (Sz)((size_t)(here) - (size_t)((Sz)1)), kspl_lit_3331, (Sz)205))) == 32) {
+          if (here > from && (U8)(*(kspl_Slice_U8_Const_at_ref(&doc, (Sz)((size_t)(here) - (size_t)((Sz)1)), kspl_lit_3334, (Sz)205))) == 32) {
             if ((Sz)((size_t)(here) - (size_t)((Sz)1)) < best) {
               best = (Sz)((size_t)(here) - (size_t)((Sz)1));
             }
@@ -141527,15 +141636,15 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_doc_say(Slice_U8 doc, std_str_Str_
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3335 = KSPL_STR_INIT("` — ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3336 = KSPL_STR_INIT("**Return value** — ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3338 = KSPL_STR_INIT("` — ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3339 = KSPL_STR_INIT("**Return value** — ");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_doc_write_parts(const std_ds_List_ksplc_tools_surface_Line *rows, const std_ds_List_Slice_U8_Const *links, Slice_U8 tail, Slice_U8 key, std_str_Str_builder *out) {
   Bool listing = false;
   KSPL_UNUSED const std_ds_List_ksplc_tools_surface_Line *const *__k_for_coll1 = &rows;
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const ksplc_tools_surface_Line r = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3331, (Sz)233)));
+      const ksplc_tools_surface_Line r = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3334, (Sz)233)));
       if (!kspl_Slice_U8_Const_equals(kspl_ksplc_tools_surface_owner_of(r.key), key)) {
         goto _mir_label_1;
       }
@@ -141548,11 +141657,11 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_doc_write_parts(const std_ds_List_
       (void)(kspl_std_str_Str_builder_s(out, kspl_lit_556));
       Slice_U8 part = kspl_ksplc_tools_surface_part_name_of(r.key);
       if (part.len > (Sz)0) {
-        (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_503), part), kspl_lit_3335));
+        (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_503), part), kspl_lit_3338));
       }
 
       else {
-        (void)(kspl_std_str_Str_builder_s(out, kspl_lit_3336));
+        (void)(kspl_std_str_Str_builder_s(out, kspl_lit_3339));
       }
       (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_priv_ksplc_tools_doc_linked(r.doc, rows, links, tail)), kspl_lit_3));
     _mir_label_1:;
@@ -141561,25 +141670,25 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_doc_write_parts(const std_ds_List_
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3337 = KSPL_STR_INIT("###");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3338 = KSPL_STR_INIT(" `");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3339 = KSPL_STR_INIT("`\n\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3340 = KSPL_STR_INIT("```\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3341 = KSPL_STR_INIT("\n```\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3340 = KSPL_STR_INIT("###");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3341 = KSPL_STR_INIT(" `");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3342 = KSPL_STR_INIT("`\n\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3343 = KSPL_STR_INIT("```\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3344 = KSPL_STR_INIT("\n```\n");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_doc_write_entry(const std_ds_List_ksplc_tools_surface_Line *rows, const std_ds_List_Slice_U8_Const *links, Slice_U8 tail, Sz at, std_str_Str_builder *out) {
-  ksplc_tools_surface_Line r = kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, at, kspl_lit_3331, (Sz)251);
+  ksplc_tools_surface_Line r = kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, at, kspl_lit_3334, (Sz)251);
   KSPL_UNUSED Slice_U8 __k_tmp1 = {0};
   KSPL_UNUSED Option_Sz __k_tmp2 = kspl_Slice_U8_Const_find_char(r.key, 46);
   if (kspl_Option_Sz_is_some(&__k_tmp2)) {
-    __k_tmp1 = kspl_lit_3337;
+    __k_tmp1 = kspl_lit_3340;
   }
 
   else {
     __k_tmp1 = kspl_lit_594;
   }
   Slice_U8 heading = __k_tmp1;
-  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3), heading), kspl_lit_3338), r.key), kspl_lit_3339));
-  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3340), r.text), kspl_lit_3341));
+  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3), heading), kspl_lit_3341), r.key), kspl_lit_3342));
+  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3343), r.text), kspl_lit_3344));
   if (r.doc.len > (Sz)0) {
     (void)(kspl_std_str_Str_builder_c(out, 10));
     kspl_priv_ksplc_tools_doc_say(kspl_priv_ksplc_tools_doc_linked(r.doc, rows, links, tail), out);
@@ -141611,7 +141720,7 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_said_of_file(const std_ds_
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const ksplc_tools_surface_Line r = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3331, (Sz)269)));
+      const ksplc_tools_surface_Line r = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3334, (Sz)269)));
       if (kspl_ksplc_tools_surface_is_file_row(r.key)) {
         return r.doc;
       }
@@ -141626,7 +141735,7 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_doc_entries_in(const std_ds_List_ksp
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const ksplc_tools_surface_Line r = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3331, (Sz)276)));
+      const ksplc_tools_surface_Line r = (*(kspl_std_ds_List_ksplc_tools_surface_Line_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3334, (Sz)276)));
       if (kspl_priv_ksplc_tools_doc_shown(r)) {
         n = (Sz)((size_t)(n) + (size_t)((Sz)1));
       }
@@ -141635,40 +141744,40 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_doc_entries_in(const std_ds_List_ksp
   return n;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3342 = KSPL_STR_INIT("Everything a file here can reach, whether or not it is published (`--surface-scope=all`). **Declarations without `pub` do not form a public API.**");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3343 = KSPL_STR_INIT("Published declarations use `pub`. Other declarations are reachable only from inside the package.");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3345 = KSPL_STR_INIT("Everything a file here can reach, whether or not it is published (`--surface-scope=all`). **Declarations without `pub` do not form a public API.**");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3346 = KSPL_STR_INIT("Published declarations use `pub`. Other declarations are reachable only from inside the package.");
 static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_scope_says(void) {
   if (kspl_ksplc_base_core_config.surface_all) {
-    return kspl_lit_3342;
+    return kspl_lit_3345;
   }
 
-  return kspl_lit_3343;
+  return kspl_lit_3346;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3344 = KSPL_STR_INIT("# ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3345 = KSPL_STR_INIT(" — the API reference\n\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3346 = KSPL_STR_INIT(" `ksplc doc ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3347 = KSPL_STR_INIT(".<name>` shows one entry.\n\n## Contents\n\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3348 = KSPL_STR_INIT("Nothing here is published. `ksplc doc --surface-scope=all ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3349 = KSPL_STR_INIT("` lists its ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3350 = KSPL_STR_INIT(" declarations.\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3351 = KSPL_STR_INIT("* [`");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3352 = KSPL_STR_INIT("`](#");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3353 = KSPL_STR_INIT(" — ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3354 = KSPL_STR_INIT("\n---\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3347 = KSPL_STR_INIT("# ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3348 = KSPL_STR_INIT(" — the API reference\n\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3349 = KSPL_STR_INIT(" `ksplc doc ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3350 = KSPL_STR_INIT(".<name>` shows one entry.\n\n## Contents\n\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3351 = KSPL_STR_INIT("Nothing here is published. `ksplc doc --surface-scope=all ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3352 = KSPL_STR_INIT("` lists its ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3353 = KSPL_STR_INIT(" declarations.\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3354 = KSPL_STR_INIT("* [`");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3355 = KSPL_STR_INIT("`](#");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3356 = KSPL_STR_INIT(" — ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3357 = KSPL_STR_INIT("\n---\n");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_doc_write_file(Slice_U8 file, const std_ds_List_ksplc_tools_surface_Line *rows, Sz hidden, std_str_Str_builder *out) {
   std_ds_List_Slice_U8_Const links = kspl_priv_ksplc_tools_doc_anchors(rows);
   Slice_U8 tail = kspl_priv_ksplc_tools_doc_tail_of(file);
-  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3344), file), kspl_lit_3345));
+  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3347), file), kspl_lit_3348));
   Slice_U8 said = kspl_priv_ksplc_tools_doc_said_of_file(rows);
   if (said.len > (Sz)0) {
     kspl_priv_ksplc_tools_doc_say(kspl_priv_ksplc_tools_doc_linked(said, rows, &links, tail), out);
     (void)(kspl_std_str_Str_builder_s(out, kspl_lit_526));
   }
 
-  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_priv_ksplc_tools_doc_scope_says()), kspl_lit_3346), file), kspl_lit_3347));
+  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_priv_ksplc_tools_doc_scope_says()), kspl_lit_3349), file), kspl_lit_3350));
   if (hidden > (Sz)0 && kspl_priv_ksplc_tools_doc_entries_in(rows) == (Sz)0) {
-    (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Sz(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3348), file), kspl_lit_3349), hidden), kspl_lit_3350));
+    (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Sz(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3351), file), kspl_lit_3352), hidden), kspl_lit_3353));
   }
 
   KSPL_UNUSED Range __k_for_coll1 = kspl_Range_asc(rows->len);
@@ -141677,30 +141786,30 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_doc_write_file(Slice_U8 file, cons
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      ksplc_tools_surface_Line r = kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3331, (Sz)305);
+      ksplc_tools_surface_Line r = kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3334, (Sz)305);
       if (!kspl_priv_ksplc_tools_doc_shown(r)) {
         goto _mir_label_1;
       }
 
-      KSPL_UNUSED std_str_Str_builder *__k_tmp4 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3351), r.key), kspl_lit_3352);
-      (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(__k_tmp4, kspl_std_ds_List_Slice_U8_Const_get(&links, i, kspl_lit_3331, (Sz)308)), kspl_lit_20));
+      KSPL_UNUSED std_str_Str_builder *__k_tmp4 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3354), r.key), kspl_lit_3355);
+      (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(__k_tmp4, kspl_std_ds_List_Slice_U8_Const_get(&links, i, kspl_lit_3334, (Sz)308)), kspl_lit_20));
       Slice_U8 first = kspl_priv_ksplc_tools_doc_summary_of(r.doc);
       if (first.len > (Sz)0) {
-        (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3353), first));
+        (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3356), first));
       }
 
       (void)(kspl_std_str_Str_builder_c(out, 10));
     _mir_label_1:;
     }
   }
-  (void)(kspl_std_str_Str_builder_s(out, kspl_lit_3354));
+  (void)(kspl_std_str_Str_builder_s(out, kspl_lit_3357));
   KSPL_UNUSED Range __k_for_coll2 = kspl_Range_asc(rows->len);
   {
     KSPL_UNUSED Sz __k_for_idx2 = (Sz)0;
     for (; __k_for_idx2 < __k_for_coll2.len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp7 = kspl_Range_get(&__k_for_coll2, __k_for_idx2);
       Sz i = __k_tmp7;
-      if (kspl_priv_ksplc_tools_doc_shown(kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3331, (Sz)315))) {
+      if (kspl_priv_ksplc_tools_doc_shown(kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3334, (Sz)315))) {
         kspl_priv_ksplc_tools_doc_write_entry(rows, &links, tail, i, out);
       }
     }
@@ -141718,8 +141827,8 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_without_type_args(Slice_U8
   Sz depth = (Sz)0;
   Sz i = (Sz)0;
   for (; i < key.len;) {
-    Bool opens = (Sz)((size_t)(i) + (size_t)((Sz)1)) < key.len && (U8)(*(kspl_Slice_U8_Const_at_ref(&key, i, kspl_lit_3331, (Sz)326))) == 60 && (U8)(*(kspl_Slice_U8_Const_at_ref(&key, (Sz)((size_t)(i) + (size_t)((Sz)1)), kspl_lit_3331, (Sz)326))) == 124;
-    Bool closes = depth > (Sz)0 && (Sz)((size_t)(i) + (size_t)((Sz)1)) < key.len && (U8)(*(kspl_Slice_U8_Const_at_ref(&key, i, kspl_lit_3331, (Sz)327))) == 124 && (U8)(*(kspl_Slice_U8_Const_at_ref(&key, (Sz)((size_t)(i) + (size_t)((Sz)1)), kspl_lit_3331, (Sz)327))) == 62;
+    Bool opens = (Sz)((size_t)(i) + (size_t)((Sz)1)) < key.len && (U8)(*(kspl_Slice_U8_Const_at_ref(&key, i, kspl_lit_3334, (Sz)326))) == 60 && (U8)(*(kspl_Slice_U8_Const_at_ref(&key, (Sz)((size_t)(i) + (size_t)((Sz)1)), kspl_lit_3334, (Sz)326))) == 124;
+    Bool closes = depth > (Sz)0 && (Sz)((size_t)(i) + (size_t)((Sz)1)) < key.len && (U8)(*(kspl_Slice_U8_Const_at_ref(&key, i, kspl_lit_3334, (Sz)327))) == 124 && (U8)(*(kspl_Slice_U8_Const_at_ref(&key, (Sz)((size_t)(i) + (size_t)((Sz)1)), kspl_lit_3334, (Sz)327))) == 62;
     if (opens || closes) {
       KSPL_UNUSED Sz __k_tmp4 = {0};
       if (opens) {
@@ -141735,7 +141844,7 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_doc_without_type_args(Slice_U8
     }
 
     if (depth == (Sz)0) {
-      (void)(kspl_std_str_Arena_text_c(b, (*(kspl_Slice_U8_Const_at_ref(&key, i, kspl_lit_3331, (Sz)333)))));
+      (void)(kspl_std_str_Arena_text_c(b, (*(kspl_Slice_U8_Const_at_ref(&key, i, kspl_lit_3334, (Sz)333)))));
     }
 
     i = (Sz)((size_t)(i) + (size_t)((Sz)1));
@@ -141755,7 +141864,7 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_doc_write_one(Slice_U8 file, const s
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      ksplc_tools_surface_Line r = kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3331, (Sz)349);
+      ksplc_tools_surface_Line r = kspl_std_ds_List_ksplc_tools_surface_Line_get(rows, i, kspl_lit_3334, (Sz)349);
       if (!kspl_priv_ksplc_tools_doc_shown(r)) {
         goto _mir_label_1;
       }
@@ -141763,7 +141872,7 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_doc_write_one(Slice_U8 file, const s
       Slice_U8 key = kspl_priv_ksplc_tools_doc_without_type_args(r.key);
       if (kspl_priv_ksplc_tools_doc_names_entry(key, bare) || kspl_Slice_U8_Const_starts_with(key, member, (Sz)0)) {
         if (n == (Sz)0) {
-          (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3344), file), 46), name), kspl_lit_3));
+          (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3347), file), 46), name), kspl_lit_3));
         }
 
         kspl_priv_ksplc_tools_doc_write_entry(rows, &links, kspl_priv_ksplc_tools_doc_tail_of(file), i, out);
@@ -141776,26 +141885,26 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_doc_write_one(Slice_U8 file, const s
   return n;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3355 = KSPL_STR_INIT("tests");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3358 = KSPL_STR_INIT("tests");
 static KSPL_UNUSED Bool kspl_priv_ksplc_tools_doc_skip_dir(Slice_U8 name) {
-  return kspl_Slice_U8_Const_equals(name, kspl_lit_3355) || kspl_ksplc_base_locate_skip_build_output(name);
+  return kspl_Slice_U8_Const_equals(name, kspl_lit_3358) || kspl_ksplc_base_locate_skip_build_output(name);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3356 = KSPL_STR_INIT("ksplc doc: cannot read the folder ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3357 = KSPL_STR_INIT(" `ksplc doc <file>` shows one file's entries.\n\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3358 = KSPL_STR_INIT("* `");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3359 = KSPL_STR_INIT(" entries");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3360 = KSPL_STR_INIT("No file here publishes anything. `ksplc doc --surface-scope=all ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3361 = KSPL_STR_INIT("` lists what each file declares.\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3362 = KSPL_STR_INIT("\nThese files could not be read. Their contents are not listed:\n\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3363 = KSPL_STR_INIT("`\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3359 = KSPL_STR_INIT("ksplc doc: cannot read the folder ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3360 = KSPL_STR_INIT(" `ksplc doc <file>` shows one file's entries.\n\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3361 = KSPL_STR_INIT("* `");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3362 = KSPL_STR_INIT(" entries");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3363 = KSPL_STR_INIT("No file here publishes anything. `ksplc doc --surface-scope=all ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3364 = KSPL_STR_INIT("` lists what each file declares.\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3365 = KSPL_STR_INIT("\nThese files could not be read. Their contents are not listed:\n\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3366 = KSPL_STR_INIT("`\n");
 static KSPL_UNUSED Bool kspl_priv_ksplc_tools_doc_write_folder(Slice_U8 name, Slice_U8 dir, kspeg_engine_Target *parser, std_str_Str_builder *out) {
   KSPL_UNUSED Result_std_ds_List_Slice_U8_Const_std_fs_Fs_error __k_tmp1 = kspl_std_fs_walk_files(dir, kspl_priv_ksplc_tools_doc_skip_dir, kspl_ksplc_base_core_arena);
   KSPL_UNUSED std_ds_List_Slice_U8_Const __k_tmp2 = {0};
   if (__k_tmp1.tag == kspl_Result_std_ds_List_Slice_U8_Const_std_fs_Fs_error_err) {
     std_fs_Fs_error e = __k_tmp1.payload.err.error;
     KSPL_UNUSED Writer __k_tmp7 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp6 = kspl_put_Writer_Slice_U8_Const(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3356)), dir);
+    KSPL_UNUSED Writer __k_tmp6 = kspl_put_Writer_Slice_U8_Const(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3359)), dir);
     KSPL_UNUSED Writer __k_tmp5 = ((__k_tmp6).vtable->s((__k_tmp6).obj, kspl_lit_13));
     KSPL_UNUSED Writer __k_tmp4 = kspl_put_Writer_Slice_U8_Const(__k_tmp5, kspl_std_fs_Fs_error_variant_name(e));
     (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3)));
@@ -141806,21 +141915,21 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_doc_write_folder(Slice_U8 name, Sl
     __k_tmp2 = __k_tmp1.payload.ok.value;
   }
   std_ds_List_Slice_U8_Const paths = __k_tmp2;
-  KSPL_UNUSED std_str_Str_builder *__k_tmp8 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3344), name), kspl_lit_3345);
-  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(__k_tmp8, kspl_priv_ksplc_tools_doc_scope_says()), kspl_lit_3357));
+  KSPL_UNUSED std_str_Str_builder *__k_tmp8 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3347), name), kspl_lit_3348);
+  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(__k_tmp8, kspl_priv_ksplc_tools_doc_scope_says()), kspl_lit_3360));
   std_ds_List_Slice_U8_Const missed = kspl_std_ds_List_Slice_U8_Const_new(kspl_ksplc_base_core_arena);
   Sz listed = (Sz)0;
   KSPL_UNUSED const std_ds_List_Slice_U8_Const *__k_for_coll1 = &paths;
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < __k_for_coll1->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 path = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll1, __k_for_idx1, kspl_lit_3331, (Sz)380)));
+      const Slice_U8 path = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll1, __k_for_idx1, kspl_lit_3334, (Sz)380)));
       if (!kspl_Slice_U8_Const_has_kspl_ext(path)) {
         goto _mir_label_9;
       }
 
       Slice_U8 rest = kspl_Slice_U8_Const_sub_from(path, dir.len);
-      for (; rest.len > (Sz)0 && kspl_std_sys_is_path_sep((*(kspl_Slice_U8_Const_at_ref(&rest, (Sz)0, kspl_lit_3331, (Sz)386))));) {
+      for (; rest.len > (Sz)0 && kspl_std_sys_is_path_sep((*(kspl_Slice_U8_Const_at_ref(&rest, (Sz)0, kspl_lit_3334, (Sz)386))));) {
         rest = kspl_Slice_U8_Const_sub_from(rest, (Sz)1);
       }
       KSPL_UNUSED Slice_U8 __k_tmp13 = {0};
@@ -141843,7 +141952,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_doc_write_folder(Slice_U8 name, Sl
         }
 
         listed = (Sz)((size_t)(listed) + (size_t)((Sz)1));
-        (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Sz(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3358), logical), kspl_lit_3335), n), kspl_lit_3359));
+        (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Sz(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3361), logical), kspl_lit_3338), n), kspl_lit_3362));
         Slice_U8 first = kspl_priv_ksplc_tools_doc_summary_of(kspl_priv_ksplc_tools_doc_said_of_file(&rows));
         if (first.len > (Sz)0) {
           (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3081), first));
@@ -141863,17 +141972,17 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_doc_write_folder(Slice_U8 name, Sl
     }
   }
   if (listed == (Sz)0 && !kspl_ksplc_base_core_config.surface_all) {
-    (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3360), name), kspl_lit_3361));
+    (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3363), name), kspl_lit_3364));
   }
 
   if (missed.len > (Sz)0) {
-    (void)(kspl_std_str_Str_builder_s(out, kspl_lit_3362));
+    (void)(kspl_std_str_Str_builder_s(out, kspl_lit_3365));
     KSPL_UNUSED const std_ds_List_Slice_U8_Const *__k_for_coll2 = &missed;
     {
       KSPL_UNUSED Sz __k_for_idx2 = (Sz)0;
       for (; __k_for_idx2 < __k_for_coll2->len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
-        const Slice_U8 one = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll2, __k_for_idx2, kspl_lit_3331, (Sz)412)));
-        (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3358), one), kspl_lit_3363));
+        const Slice_U8 one = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll2, __k_for_idx2, kspl_lit_3334, (Sz)412)));
+        (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(out, kspl_lit_3361), one), kspl_lit_3366));
       }
     }
   }
@@ -141909,18 +142018,18 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_doc_unpublished(Slice_U8 path, Sli
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3364 = KSPL_STR_INIT("ksplc doc: --emit-surface records one whole file, and '");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3365 = KSPL_STR_INIT("' is not one. Name a file such as std/io\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3366 = KSPL_STR_INIT("ksplc doc: no file or folder is called '");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3367 = KSPL_STR_INIT("'. Looked for ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3368 = KSPL_STR_INIT("ksplc doc: cannot write ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3369 = KSPL_STR_INIT("ksplc doc: ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3370 = KSPL_STR_INIT(" declares '");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3371 = KSPL_STR_INIT("' without `pub`. Run `ksplc doc --surface-scope=all ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3372 = KSPL_STR_INIT("` to show it\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3373 = KSPL_STR_INIT(" publishes nothing called '");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3374 = KSPL_STR_INIT("'. Run `ksplc doc ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3375 = KSPL_STR_INIT("` to list its published entries\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3367 = KSPL_STR_INIT("ksplc doc: --emit-surface records one whole file, and '");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3368 = KSPL_STR_INIT("' is not one. Name a file such as std/io\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3369 = KSPL_STR_INIT("ksplc doc: no file or folder is called '");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3370 = KSPL_STR_INIT("'. Looked for ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3371 = KSPL_STR_INIT("ksplc doc: cannot write ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3372 = KSPL_STR_INIT("ksplc doc: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3373 = KSPL_STR_INIT(" declares '");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3374 = KSPL_STR_INIT("' without `pub`. Run `ksplc doc --surface-scope=all ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3375 = KSPL_STR_INIT("` to show it\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3376 = KSPL_STR_INIT(" publishes nothing called '");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3377 = KSPL_STR_INIT("'. Run `ksplc doc ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3378 = KSPL_STR_INIT("` to list its published entries\n");
 static KSPL_UNUSED Bool kspl_ksplc_tools_doc_print_doc(Slice_U8 target, kspeg_engine_Target *parser) {
   Sz after_slash = (Sz)0;
   KSPL_UNUSED Option_Sz __k_tmp1 = kspl_Slice_U8_Const_rfind_char(target, 47);
@@ -141973,8 +142082,8 @@ static KSPL_UNUSED Bool kspl_ksplc_tools_doc_print_doc(Slice_U8 target, kspeg_en
   Slice_U8 record = kspl_ksplc_base_core_config.surface_path;
   if (record.len > (Sz)0 && (key.len > (Sz)0 || !kspl_std_fs_exists(path))) {
     KSPL_UNUSED Writer __k_tmp5 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp4 = kspl_put_Writer_Slice_U8_Const(((__k_tmp5).vtable->s((__k_tmp5).obj, kspl_lit_3364)), target);
-    (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3365)));
+    KSPL_UNUSED Writer __k_tmp4 = kspl_put_Writer_Slice_U8_Const(((__k_tmp5).vtable->s((__k_tmp5).obj, kspl_lit_3367)), target);
+    (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3368)));
     KSPL_UNUSED Bool __k_tmp6 = false;
     {
       kspl_std_str_Str_builder_free(&out);
@@ -141986,9 +142095,9 @@ static KSPL_UNUSED Bool kspl_ksplc_tools_doc_print_doc(Slice_U8 target, kspeg_en
     Slice_U8 dir = kspl_priv_ksplc_tools_doc_folder_path_of(name);
     if (key.len > (Sz)0 || !kspl_std_fs_is_dir(dir)) {
       KSPL_UNUSED Writer __k_tmp10 = kspl_std_io_err();
-      KSPL_UNUSED Writer __k_tmp9 = ((__k_tmp10).vtable->s((__k_tmp10).obj, kspl_lit_3366));
+      KSPL_UNUSED Writer __k_tmp9 = ((__k_tmp10).vtable->s((__k_tmp10).obj, kspl_lit_3369));
       KSPL_UNUSED Writer __k_tmp8 = kspl_put_Writer_Slice_U8_Const(__k_tmp9, name);
-      KSPL_UNUSED Writer __k_tmp7 = kspl_put_Writer_Slice_U8_Const(((__k_tmp8).vtable->s((__k_tmp8).obj, kspl_lit_3367)), path);
+      KSPL_UNUSED Writer __k_tmp7 = kspl_put_Writer_Slice_U8_Const(((__k_tmp8).vtable->s((__k_tmp8).obj, kspl_lit_3370)), path);
       (void)(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3)));
       KSPL_UNUSED Bool __k_tmp11 = false;
       {
@@ -142033,7 +142142,7 @@ static KSPL_UNUSED Bool kspl_ksplc_tools_doc_print_doc(Slice_U8 target, kspeg_en
     if (__k_tmp19.tag == kspl_Result_Void_std_io_Io_error_err) {
       std_io_Io_error e = __k_tmp19.payload.err.error;
       KSPL_UNUSED Writer __k_tmp24 = kspl_std_io_err();
-      KSPL_UNUSED Writer __k_tmp23 = kspl_put_Writer_Slice_U8_Const(((__k_tmp24).vtable->s((__k_tmp24).obj, kspl_lit_3368)), record);
+      KSPL_UNUSED Writer __k_tmp23 = kspl_put_Writer_Slice_U8_Const(((__k_tmp24).vtable->s((__k_tmp24).obj, kspl_lit_3371)), record);
       KSPL_UNUSED Writer __k_tmp22 = ((__k_tmp23).vtable->s((__k_tmp23).obj, kspl_lit_13));
       KSPL_UNUSED Writer __k_tmp21 = kspl_put_Writer_Slice_U8_Const(__k_tmp22, kspl_std_io_Io_error_variant_name(e));
       (void)(((__k_tmp21).vtable->s((__k_tmp21).obj, kspl_lit_3)));
@@ -142068,23 +142177,23 @@ static KSPL_UNUSED Bool kspl_ksplc_tools_doc_print_doc(Slice_U8 target, kspeg_en
       if (kspl_priv_ksplc_tools_doc_write_one(name, &rows, key, &out) == (Sz)0) {
     if (kspl_priv_ksplc_tools_doc_unpublished(path, name, key, parser)) {
       KSPL_UNUSED Writer __k_tmp34 = kspl_std_io_err();
-      KSPL_UNUSED Writer __k_tmp33 = ((__k_tmp34).vtable->s((__k_tmp34).obj, kspl_lit_3369));
+      KSPL_UNUSED Writer __k_tmp33 = ((__k_tmp34).vtable->s((__k_tmp34).obj, kspl_lit_3372));
       KSPL_UNUSED Writer __k_tmp32 = kspl_put_Writer_Slice_U8_Const(__k_tmp33, name);
-      KSPL_UNUSED Writer __k_tmp31 = kspl_put_Writer_Slice_U8_Const(((__k_tmp32).vtable->s((__k_tmp32).obj, kspl_lit_3370)), key);
-      KSPL_UNUSED Writer __k_tmp30 = ((__k_tmp31).vtable->s((__k_tmp31).obj, kspl_lit_3371));
+      KSPL_UNUSED Writer __k_tmp31 = kspl_put_Writer_Slice_U8_Const(((__k_tmp32).vtable->s((__k_tmp32).obj, kspl_lit_3373)), key);
+      KSPL_UNUSED Writer __k_tmp30 = ((__k_tmp31).vtable->s((__k_tmp31).obj, kspl_lit_3374));
       KSPL_UNUSED Writer __k_tmp29 = kspl_put_Writer_Slice_U8_Const(__k_tmp30, name);
       KSPL_UNUSED Writer __k_tmp28 = kspl_put_Writer_Slice_U8_Const(((__k_tmp29).vtable->s((__k_tmp29).obj, kspl_lit_16)), key);
-      (void)(((__k_tmp28).vtable->s((__k_tmp28).obj, kspl_lit_3372)));
+      (void)(((__k_tmp28).vtable->s((__k_tmp28).obj, kspl_lit_3375)));
     }
 
     else {
       KSPL_UNUSED Writer __k_tmp40 = kspl_std_io_err();
-      KSPL_UNUSED Writer __k_tmp39 = ((__k_tmp40).vtable->s((__k_tmp40).obj, kspl_lit_3369));
+      KSPL_UNUSED Writer __k_tmp39 = ((__k_tmp40).vtable->s((__k_tmp40).obj, kspl_lit_3372));
       KSPL_UNUSED Writer __k_tmp38 = kspl_put_Writer_Slice_U8_Const(__k_tmp39, name);
-      KSPL_UNUSED Writer __k_tmp37 = kspl_put_Writer_Slice_U8_Const(((__k_tmp38).vtable->s((__k_tmp38).obj, kspl_lit_3373)), key);
-      KSPL_UNUSED Writer __k_tmp36 = ((__k_tmp37).vtable->s((__k_tmp37).obj, kspl_lit_3374));
+      KSPL_UNUSED Writer __k_tmp37 = kspl_put_Writer_Slice_U8_Const(((__k_tmp38).vtable->s((__k_tmp38).obj, kspl_lit_3376)), key);
+      KSPL_UNUSED Writer __k_tmp36 = ((__k_tmp37).vtable->s((__k_tmp37).obj, kspl_lit_3377));
       KSPL_UNUSED Writer __k_tmp35 = kspl_put_Writer_Slice_U8_Const(__k_tmp36, name);
-      (void)(((__k_tmp35).vtable->s((__k_tmp35).obj, kspl_lit_3375)));
+      (void)(((__k_tmp35).vtable->s((__k_tmp35).obj, kspl_lit_3378)));
     }
     KSPL_UNUSED Bool __k_tmp41 = false;
     {
@@ -142105,9 +142214,9 @@ static KSPL_UNUSED Bool kspl_ksplc_tools_doc_print_doc(Slice_U8 target, kspeg_en
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3376 = KSPL_STR_INIT("ksplc: failed to start ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3377 = KSPL_STR_INIT("Windows error");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3378 = KSPL_STR_INIT("errno");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3379 = KSPL_STR_INIT("ksplc: failed to start ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3380 = KSPL_STR_INIT("Windows error");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3381 = KSPL_STR_INIT("errno");
 static KSPL_UNUSED I32 kspl_ksplc_tools_run_start_spawn_or_exit(std_ds_List_Slice_U8_Const *list, Slice_U8 what, Slice_U8 cwd) {
   I32 code = 0;
   KSPL_UNUSED Range __k_for_coll1 = kspl_Range_asc(kspl_priv_ksplc_tools_run_start_START_TRIES);
@@ -142142,16 +142251,16 @@ static KSPL_UNUSED I32 kspl_ksplc_tools_run_start_spawn_or_exit(std_ds_List_Slic
   _mir_label_2:;
   }
   Writer e = kspl_std_io_err();
-  (void)(kspl_put_Writer_Slice_U8_Const(((e).vtable->s((e).obj, kspl_lit_3376)), what));
+  (void)(kspl_put_Writer_Slice_U8_Const(((e).vtable->s((e).obj, kspl_lit_3379)), what));
   if (code > 0) {
     KSPL_UNUSED Writer __k_tmp10 = ((e).vtable->s((e).obj, kspl_lit_993));
     KSPL_UNUSED Slice_U8 __k_tmp11 = {0};
     if (kspl_std_sys_is_windows()) {
-      __k_tmp11 = kspl_lit_3377;
+      __k_tmp11 = kspl_lit_3380;
     }
 
     else {
-      __k_tmp11 = kspl_lit_3378;
+      __k_tmp11 = kspl_lit_3381;
     }
     KSPL_UNUSED Writer __k_tmp9 = ((__k_tmp10).vtable->s((__k_tmp10).obj, __k_tmp11));
     KSPL_UNUSED Writer __k_tmp8 = ((__k_tmp9).vtable->s((__k_tmp9).obj, kspl_lit_351));
@@ -142174,39 +142283,39 @@ static KSPL_UNUSED Bool kspl_ksplc_tools_run_start_held_by_another_on(I32 code, 
   return windows && (code == 32 || code == 5 || code == 33);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3379 = KSPL_STR_INIT("the file is not there");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3380 = KSPL_STR_INIT("a folder on its path is not there");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3381 = KSPL_STR_INIT("access was refused (a security program may hold or block it)");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3382 = KSPL_STR_INIT("another program holds the file (often a virus scanner)");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3383 = KSPL_STR_INIT("another program has locked part of the file");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3384 = KSPL_STR_INIT("Windows Security found a threat in it and blocked it");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3385 = KSPL_STR_INIT("a policy on this computer blocks it");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3386 = KSPL_STR_INIT("no such file");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3387 = KSPL_STR_INIT("not a program this system can run");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3388 = KSPL_STR_INIT("permission denied");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3382 = KSPL_STR_INIT("the file is not there");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3383 = KSPL_STR_INIT("a folder on its path is not there");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3384 = KSPL_STR_INIT("access was refused (a security program may hold or block it)");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3385 = KSPL_STR_INIT("another program holds the file (often a virus scanner)");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3386 = KSPL_STR_INIT("another program has locked part of the file");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3387 = KSPL_STR_INIT("Windows Security found a threat in it and blocked it");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3388 = KSPL_STR_INIT("a policy on this computer blocks it");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3389 = KSPL_STR_INIT("no such file");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3390 = KSPL_STR_INIT("not a program this system can run");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3391 = KSPL_STR_INIT("permission denied");
 static KSPL_UNUSED Slice_U8 kspl_ksplc_tools_run_start_start_failure_on(I32 code, Bool windows) {
   if (windows) {
     switch (code) {
     case (I32)2LL: {
-      return kspl_lit_3379;
-    }
-    case (I32)3LL: {
-      return kspl_lit_3380;
-    }
-    case (I32)5LL: {
-      return kspl_lit_3381;
-    }
-    case (I32)32LL: {
       return kspl_lit_3382;
     }
-    case (I32)33LL: {
+    case (I32)3LL: {
       return kspl_lit_3383;
     }
-    case (I32)225LL: {
+    case (I32)5LL: {
       return kspl_lit_3384;
     }
-    case (I32)1260LL: {
+    case (I32)32LL: {
       return kspl_lit_3385;
+    }
+    case (I32)33LL: {
+      return kspl_lit_3386;
+    }
+    case (I32)225LL: {
+      return kspl_lit_3387;
+    }
+    case (I32)1260LL: {
+      return kspl_lit_3388;
     }
     default: {
       return kspl_lit_5;
@@ -142216,13 +142325,13 @@ static KSPL_UNUSED Slice_U8 kspl_ksplc_tools_run_start_start_failure_on(I32 code
 
   switch (code) {
   case (I32)2LL: {
-    return kspl_lit_3386;
+    return kspl_lit_3389;
   }
   case (I32)8LL: {
-    return kspl_lit_3387;
+    return kspl_lit_3390;
   }
   case (I32)13LL: {
-    return kspl_lit_3388;
+    return kspl_lit_3391;
   }
   default: {
     return kspl_lit_5;
@@ -142258,7 +142367,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_compile_flags(std_ds_Li
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3389 = KSPL_STR_INIT("ksplc/tools/run");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3392 = KSPL_STR_INIT("ksplc/tools/run");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_flags_key(std_str_Str_builder *key) {
   std_ds_List_Slice_U8_Const flags = kspl_std_ds_List_Slice_U8_Const_new(null);
   kspl_priv_ksplc_tools_run_append_compile_flags(&flags);
@@ -142277,7 +142386,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_flags_key(std_str_Str_b
         __k_tmp5 = kspl_lit_5;
       }
       KSPL_UNUSED std_str_Str_builder *__k_tmp4 = kspl_std_str_Str_builder_s(key, __k_tmp5);
-      (void)(kspl_std_str_Str_builder_s(__k_tmp4, kspl_std_ds_List_Slice_U8_Const_get(&flags, i, kspl_lit_3389, (Sz)86)));
+      (void)(kspl_std_str_Str_builder_s(__k_tmp4, kspl_std_ds_List_Slice_U8_Const_get(&flags, i, kspl_lit_3392, (Sz)86)));
     }
   }
   {
@@ -142289,15 +142398,15 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_flags_key(std_str_Str_b
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3390 = KSPL_STR_INIT("CC");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3391 = KSPL_STR_INIT("clang");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3393 = KSPL_STR_INIT("CC");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3394 = KSPL_STR_INIT("clang");
 static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_run_cc_name(void) {
-  return kspl_Option_Slice_U8_Const_unwrap_or(kspl_std_sys_get_env(kspl_lit_3390), kspl_lit_3391);
+  return kspl_Option_Slice_U8_Const_unwrap_or(kspl_std_sys_get_env(kspl_lit_3393), kspl_lit_3394);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3392 = KSPL_STR_INIT("-dumpmachine");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3395 = KSPL_STR_INIT("-dumpmachine");
 static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_run_target_triple(std_mem_Arena *arena) {
-  KSPL_UNUSED Slice_Slice_U8_Const __k_shadow0_argv = (Slice_Slice_U8_Const){.ptr = (Slice_U8 *)((const Slice_U8_Const_Array_2){.data = {kspl_priv_ksplc_tools_run_cc_name(), kspl_lit_3392}}).data, .len = 2};
+  KSPL_UNUSED Slice_Slice_U8_Const __k_shadow0_argv = (Slice_Slice_U8_Const){.ptr = (Slice_U8 *)((const Slice_U8_Const_Array_2){.data = {kspl_priv_ksplc_tools_run_cc_name(), kspl_lit_3395}}).data, .len = 2};
   KSPL_UNUSED Result_Slice_U8_std_subproc_Run_error __k_tmp1 = kspl_std_subproc_run(__k_shadow0_argv, kspl_lit_5, 10000, (Sz)4096, arena);
   KSPL_UNUSED Slice_U8 __k_tmp2 = {0};
   if (__k_tmp1.tag == kspl_Result_Slice_U8_std_subproc_Run_error_err) {
@@ -142310,12 +142419,12 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_run_target_triple(std_mem_Aren
   return __k_tmp2;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3393 = KSPL_STR_INIT("msvc");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3394 = KSPL_STR_INIT("darwin");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3395 = KSPL_STR_INIT("apple");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3396 = KSPL_STR_INIT("windows");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3397 = KSPL_STR_INIT("mingw");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3398 = KSPL_STR_INIT("cygwin");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3396 = KSPL_STR_INIT("msvc");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3397 = KSPL_STR_INIT("darwin");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3398 = KSPL_STR_INIT("apple");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3399 = KSPL_STR_INIT("windows");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3400 = KSPL_STR_INIT("mingw");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3401 = KSPL_STR_INIT("cygwin");
 static KSPL_UNUSED ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_kind(std_mem_Arena *arena) {
   switch (kspl_priv_ksplc_tools_run_target_answer.tag) {
   case kspl_Option_ksplc_tools_run_Target_kind_some: {
@@ -142329,26 +142438,26 @@ static KSPL_UNUSED ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_
     __builtin_unreachable();
   }
   Slice_U8 triple = kspl_priv_ksplc_tools_run_target_triple(arena);
-  KSPL_UNUSED Option_Sz __k_tmp2 = kspl_Slice_U8_find_str(triple, kspl_lit_3393);
+  KSPL_UNUSED Option_Sz __k_tmp2 = kspl_Slice_U8_find_str(triple, kspl_lit_3396);
   KSPL_UNUSED Bool __k_tmp1 = kspl_Option_Sz_is_some(&__k_tmp2);
-  KSPL_UNUSED Option_Sz __k_tmp4 = kspl_Slice_U8_find_str(triple, kspl_lit_3394);
+  KSPL_UNUSED Option_Sz __k_tmp4 = kspl_Slice_U8_find_str(triple, kspl_lit_3397);
   KSPL_UNUSED Bool __k_tmp6 = kspl_Option_Sz_is_some(&__k_tmp4);
   if (!__k_tmp6) {
-    KSPL_UNUSED Option_Sz __k_tmp5 = kspl_Slice_U8_find_str(triple, kspl_lit_3395);
+    KSPL_UNUSED Option_Sz __k_tmp5 = kspl_Slice_U8_find_str(triple, kspl_lit_3398);
     __k_tmp6 = kspl_Option_Sz_is_some(&__k_tmp5);
   }
 
   KSPL_UNUSED Bool __k_tmp3 = __k_tmp6;
-  KSPL_UNUSED Option_Sz __k_tmp7 = kspl_Slice_U8_find_str(triple, kspl_lit_3396);
+  KSPL_UNUSED Option_Sz __k_tmp7 = kspl_Slice_U8_find_str(triple, kspl_lit_3399);
   KSPL_UNUSED Bool __k_tmp9 = kspl_Option_Sz_is_some(&__k_tmp7);
   if (!__k_tmp9) {
-    KSPL_UNUSED Option_Sz __k_tmp8 = kspl_Slice_U8_find_str(triple, kspl_lit_3397);
+    KSPL_UNUSED Option_Sz __k_tmp8 = kspl_Slice_U8_find_str(triple, kspl_lit_3400);
     __k_tmp9 = kspl_Option_Sz_is_some(&__k_tmp8);
   }
 
   KSPL_UNUSED Bool __k_tmp11 = __k_tmp9;
   if (!__k_tmp11) {
-    KSPL_UNUSED Option_Sz __k_tmp10 = kspl_Slice_U8_find_str(triple, kspl_lit_3398);
+    KSPL_UNUSED Option_Sz __k_tmp10 = kspl_Slice_U8_find_str(triple, kspl_lit_3401);
     __k_tmp11 = kspl_Option_Sz_is_some(&__k_tmp10);
   }
 
@@ -142357,41 +142466,41 @@ static KSPL_UNUSED ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_
   return answer;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3399 = KSPL_STR_INIT("-lm");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3400 = KSPL_STR_INIT("-lpthread");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3401 = KSPL_STR_INIT("-lws2_32");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3402 = KSPL_STR_INIT("-lshell32");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3402 = KSPL_STR_INIT("-lm");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3403 = KSPL_STR_INIT("-lpthread");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3404 = KSPL_STR_INIT("-lws2_32");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3405 = KSPL_STR_INIT("-lshell32");
 static KSPL_UNUSED void kspl_ksplc_tools_run_append_link_libs(std_ds_List_Slice_U8_Const *list, std_mem_Arena *arena) {
   ksplc_tools_run_Target_kind k = kspl_priv_ksplc_tools_run_target_kind(arena);
   if (!k.msvc) {
-    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3399);
+    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3402);
   }
 
   if (!k.windows && !k.msvc && !k.darwin) {
-    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3400);
+    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3403);
   }
 
   if (k.windows || k.msvc) {
-    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3401);
-    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3402);
+    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3404);
+    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3405);
   }
 
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3403 = KSPL_STR_INIT("-Wl,-dead_strip");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3404 = KSPL_STR_INIT("-Wl,--gc-sections");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3406 = KSPL_STR_INIT("-Wl,-dead_strip");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3407 = KSPL_STR_INIT("-Wl,--gc-sections");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_dead_strip_flag(std_ds_List_Slice_U8_Const *list, std_mem_Arena *arena) {
   if (!kspl_priv_ksplc_tools_run_strips_unused_sections()) {
     return;
   }
 
   if (kspl_priv_ksplc_tools_run_target_kind(arena).darwin) {
-    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3403);
+    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3406);
   }
 
   else {
-    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3404);
+    kspl_std_ds_List_Slice_U8_Const_push(list, kspl_lit_3407);
   }
   return;
 }
@@ -142448,7 +142557,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_shadowed_now(Slice_U8 path) {
       }
 
       Slice_U8 rest = kspl_Slice_U8_Const_sub_from(path, base.len);
-      if (rest.len == (Sz)0 || (U8)(*(kspl_Slice_U8_Const_at_ref(&rest, (Sz)0, kspl_lit_3389, (Sz)201))) != 47) {
+      if (rest.len == (Sz)0 || (U8)(*(kspl_Slice_U8_Const_at_ref(&rest, (Sz)0, kspl_lit_3392, (Sz)201))) != 47) {
         goto _mir_label_2;
       }
 
@@ -142494,7 +142603,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_deps_are_fresh(Slice_U8 deps_p
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      Slice_U8 line = (*(kspl_std_ds_List_Slice_U8_Const_at(&__k_for_coll1, __k_for_idx1, kspl_lit_3389, (Sz)223)));
+      Slice_U8 line = (*(kspl_std_ds_List_Slice_U8_Const_at(&__k_for_coll1, __k_for_idx1, kspl_lit_3392, (Sz)223)));
       if (line.len < (Sz)((size_t)(kspl_ksplc_base_cache_HASH_HEX_LEN) + (size_t)((Sz)2))) {
         KSPL_UNUSED Bool __k_tmp6 = false;
         {
@@ -142568,7 +142677,7 @@ static KSPL_UNUSED Option_Slice_U8_Const kspl_ksplc_tools_run_deps_text(const st
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 import_path = (*(kspl_std_ds_List_Slice_U8_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3389, (Sz)248)));
+      const Slice_U8 import_path = (*(kspl_std_ds_List_Slice_U8_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3392, (Sz)248)));
       if (kspl_Slice_U8_equals(import_path, kspl_ksplc_base_core_STDIN_NAME)) {
         goto _mir_label_1;
       }
@@ -142596,7 +142705,7 @@ static KSPL_UNUSED Option_Slice_U8_Const kspl_ksplc_tools_run_deps_text(const st
   {
     KSPL_UNUSED Sz __k_for_idx2 = (Sz)0;
     for (; __k_for_idx2 < __k_for_coll2->len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
-      Slice_U8 embedded = (*(kspl_std_ds_List_Slice_U8_Const_at(__k_for_coll2, __k_for_idx2, kspl_lit_3389, (Sz)261)));
+      Slice_U8 embedded = (*(kspl_std_ds_List_Slice_U8_Const_at(__k_for_coll2, __k_for_idx2, kspl_lit_3392, (Sz)261)));
       if (!kspl_priv_ksplc_tools_run_append_dep_line(embedded, &out)) {
         KSPL_UNUSED Option_Slice_U8_Const __k_tmp6 = (Option_Slice_U8_Const){.tag = kspl_Option_Slice_U8_Const_none};
         {
@@ -142610,7 +142719,7 @@ static KSPL_UNUSED Option_Slice_U8_Const kspl_ksplc_tools_run_deps_text(const st
   {
     KSPL_UNUSED Sz __k_for_idx3 = (Sz)0;
     for (; __k_for_idx3 < __k_for_coll3->len; __k_for_idx3 = (Sz)((size_t)(__k_for_idx3) + (size_t)((Sz)1))) {
-      Slice_U8 cfg = (*(kspl_std_ds_List_Slice_U8_Const_at(__k_for_coll3, __k_for_idx3, kspl_lit_3389, (Sz)267)));
+      Slice_U8 cfg = (*(kspl_std_ds_List_Slice_U8_Const_at(__k_for_coll3, __k_for_idx3, kspl_lit_3392, (Sz)267)));
       if (!kspl_priv_ksplc_tools_run_append_dep_line(cfg, &out)) {
         KSPL_UNUSED Option_Slice_U8_Const __k_tmp9 = (Option_Slice_U8_Const){.tag = kspl_Option_Slice_U8_Const_none};
         {
@@ -142624,7 +142733,7 @@ static KSPL_UNUSED Option_Slice_U8_Const kspl_ksplc_tools_run_deps_text(const st
   {
     KSPL_UNUSED Sz __k_for_idx4 = (Sz)0;
     for (; __k_for_idx4 < __k_for_coll5->len; __k_for_idx4 = (Sz)((size_t)(__k_for_idx4) + (size_t)((Sz)1))) {
-      Slice_U8 cfg = (*(kspl_std_ds_List_Slice_U8_Const_at(__k_for_coll5, __k_for_idx4, kspl_lit_3389, (Sz)273)));
+      Slice_U8 cfg = (*(kspl_std_ds_List_Slice_U8_Const_at(__k_for_coll5, __k_for_idx4, kspl_lit_3392, (Sz)273)));
       KSPL_UNUSED Range __k_for_coll4 = kspl_Range_asc(kspl_ksplc_base_cache_HASH_HEX_LEN);
       {
         KSPL_UNUSED Sz __k_for_idx5 = (Sz)0;
@@ -142658,21 +142767,21 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_append_dep_line(Slice_U8 path,
   return true;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3405 = KSPL_STR_INIT("\n  failed at: ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3406 = KSPL_STR_INIT("ksplc run: cannot create the ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3408 = KSPL_STR_INIT("\n  failed at: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3409 = KSPL_STR_INIT("ksplc run: cannot create the ");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_run_exit_mkdir_failed(Slice_U8 what, Slice_U8 path, std_fs_Fs_error error) {
   std_str_Str_builder at = kspl_std_str_Str_builder_new();
   switch (error.tag) {
   case kspl_std_fs_Fs_error_mkdir_failed: {
     Slice_U8 part = error.payload.mkdir_failed.at;
-    (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(&at, kspl_lit_3405), part));
+    (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(&at, kspl_lit_3408), part));
     break;
   }
   default: {
   } break;
   }
   KSPL_UNUSED Writer __k_tmp4 = kspl_std_io_err();
-  KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Slice_U8_Const(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3406)), what);
+  KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Slice_U8_Const(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3409)), what);
   KSPL_UNUSED Writer __k_tmp2 = kspl_put_Writer_Slice_U8_Const(((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_13)), path);
   KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Slice_U8(__k_tmp2, kspl_std_str_Str_builder_slice(&at));
   (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3)));
@@ -142710,7 +142819,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_append_slot_key(Slice_U8 scrip
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 d = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3389, (Sz)323)));
+      const Slice_U8 d = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3392, (Sz)323)));
       (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(&h, d), 0));
     }
   }
@@ -142737,7 +142846,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_has_obj(const std_ds_List_kspl
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3389, (Sz)354)));
+      const ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3392, (Sz)354)));
       if (kspl_Slice_U8_Const_equals(u.obj, obj)) {
         return true;
       }
@@ -142803,7 +142912,7 @@ static KSPL_UNUSED Result_U8_Const_Array_64_std_io_Io_error kspl_priv_ksplc_tool
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3407 = KSPL_STR_INIT(".o");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3410 = KSPL_STR_INIT(".o");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_objects(Slice_U8 obj_dir, const std_ds_List_ksplc_tools_run_Unit *units, std_mem_Arena *arena) {
   KSPL_UNUSED Result_std_ds_List_Slice_U8_Const_std_fs_Fs_error __k_tmp1 = kspl_std_fs_read_dir(obj_dir, arena);
   KSPL_UNUSED std_ds_List_Slice_U8_Const __k_tmp2 = {0};
@@ -142820,8 +142929,8 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_objects(Slice_U8 obj_dir
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < __k_for_coll2->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 name = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll2, __k_for_idx1, kspl_lit_3389, (Sz)390)));
-      if (name.len != (Sz)((size_t)(kspl_ksplc_base_cache_HASH_HEX_LEN) + (size_t)((Sz)2)) || !kspl_Slice_U8_Const_ends_with(name, kspl_lit_3407)) {
+      const Slice_U8 name = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll2, __k_for_idx1, kspl_lit_3392, (Sz)390)));
+      if (name.len != (Sz)((size_t)(kspl_ksplc_base_cache_HASH_HEX_LEN) + (size_t)((Sz)2)) || !kspl_Slice_U8_Const_ends_with(name, kspl_lit_3410)) {
         goto _mir_label_4;
       }
 
@@ -142830,7 +142939,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_objects(Slice_U8 obj_dir
       {
         KSPL_UNUSED Sz __k_for_idx2 = (Sz)0;
         for (; __k_for_idx2 < (*__k_for_coll1)->len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
-          const ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at_ref((*(__k_for_coll1)), __k_for_idx2, kspl_lit_3389, (Sz)394)));
+          const ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at_ref((*(__k_for_coll1)), __k_for_idx2, kspl_lit_3392, (Sz)394)));
           if (kspl_Slice_U8_Const_ends_with(u.obj, name)) {
             keep = true;
           }
@@ -142859,9 +142968,9 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_run_under_slot(Slice_U8 path, 
   return kspl_Slice_U8_Const_sub_from(path, (Sz)((size_t)(slot.len) + (size_t)((Sz)1)));
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3408 = KSPL_STR_INIT("-c");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3409 = KSPL_STR_INIT("-o");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3410 = KSPL_STR_INIT("ksplc run: failed to start ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3411 = KSPL_STR_INIT("-c");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3412 = KSPL_STR_INIT("-o");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3413 = KSPL_STR_INIT("ksplc run: failed to start ");
 static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_ksplc_tools_run_Unit *units, Slice_U8 slot, std_mem_Arena *arena) {
   Bool ok = true;
   KSPL_UNUSED Range __k_for_coll1 = kspl_Range_asc(units->len);
@@ -142870,7 +142979,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_kspl
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp3 = kspl_Range_get(&__k_for_coll1, __k_for_idx1);
       Sz i = __k_tmp3;
-      ksplc_tools_run_Unit u = kspl_std_ds_List_ksplc_tools_run_Unit_get(units, i, kspl_lit_3389, (Sz)420);
+      ksplc_tools_run_Unit u = kspl_std_ds_List_ksplc_tools_run_Unit_get(units, i, kspl_lit_3392, (Sz)420);
       if (u.cached) {
         goto _mir_label_1;
       }
@@ -142878,16 +142987,16 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_kspl
       KSPL_UNUSED std_ds_List_Slice_U8_Const __k_shadow0_argv = kspl_std_ds_List_Slice_U8_Const_new(arena);
       kspl_std_ds_List_Slice_U8_Const_push(&__k_shadow0_argv, kspl_priv_ksplc_tools_run_cc_name());
       kspl_priv_ksplc_tools_run_append_compile_flags(&__k_shadow0_argv);
-      kspl_std_ds_List_Slice_U8_Const_push(&__k_shadow0_argv, kspl_lit_3408);
+      kspl_std_ds_List_Slice_U8_Const_push(&__k_shadow0_argv, kspl_lit_3411);
       kspl_std_ds_List_Slice_U8_Const_push(&__k_shadow0_argv, kspl_priv_ksplc_tools_run_under_slot(u.src, slot));
-      kspl_std_ds_List_Slice_U8_Const_push(&__k_shadow0_argv, kspl_lit_3409);
+      kspl_std_ds_List_Slice_U8_Const_push(&__k_shadow0_argv, kspl_lit_3412);
       kspl_std_ds_List_Slice_U8_Const_push(&__k_shadow0_argv, kspl_priv_ksplc_tools_run_under_slot(u.obj, slot));
       KSPL_UNUSED Result_std_subproc_Child_std_subproc_Spawn_error __k_tmp4 = kspl_std_subproc_spawn_async(kspl_std_ds_List_Slice_U8_Const_slice(&__k_shadow0_argv), slot);
       KSPL_UNUSED std_subproc_Child __k_tmp5 = {0};
       if (__k_tmp4.tag == kspl_Result_std_subproc_Child_std_subproc_Spawn_error_err) {
         KSPL_UNUSED std_subproc_Spawn_error __k_e = __k_tmp4.payload.err.error;
         KSPL_UNUSED Writer __k_tmp9 = kspl_std_io_err();
-        KSPL_UNUSED Writer __k_tmp8 = ((__k_tmp9).vtable->s((__k_tmp9).obj, kspl_lit_3410));
+        KSPL_UNUSED Writer __k_tmp8 = ((__k_tmp9).vtable->s((__k_tmp9).obj, kspl_lit_3413));
         KSPL_UNUSED Writer __k_tmp7 = kspl_put_Writer_Slice_U8_Const(__k_tmp8, kspl_priv_ksplc_tools_run_cc_name());
         (void)(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3)));
         ok = false;
@@ -142899,7 +143008,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_kspl
       }
       std_subproc_Child child = __k_tmp5;
       KSPL_UNUSED Option_std_subproc_Child __k_tmp10 = (Option_std_subproc_Child){.tag = kspl_Option_std_subproc_Child_some, .payload.some = {child}};
-      (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, kspl_lit_3389, (Sz)434))).child = __k_tmp10;
+      (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, kspl_lit_3392, (Sz)434))).child = __k_tmp10;
     _mir_label_1:;
     }
   }
@@ -142909,8 +143018,8 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_kspl
     for (; __k_for_idx2 < __k_for_coll2.len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp13 = kspl_Range_get(&__k_for_coll2, __k_for_idx2);
       Sz i = __k_tmp13;
-      Option_std_subproc_Child taken = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, kspl_lit_3389, (Sz)438))).child;
-      (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, kspl_lit_3389, (Sz)439))).child = (Option_std_subproc_Child){.tag = kspl_Option_std_subproc_Child_none};
+      Option_std_subproc_Child taken = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, kspl_lit_3392, (Sz)438))).child;
+      (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, kspl_lit_3392, (Sz)439))).child = (Option_std_subproc_Child){.tag = kspl_Option_std_subproc_Child_none};
       switch (taken.tag) {
       case kspl_Option_std_subproc_Child_some: {
         std_subproc_Child c = taken.payload.some.value;
@@ -142932,8 +143041,8 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_kspl
   return ok;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3411 = KSPL_STR_INIT("--define=");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3412 = KSPL_STR_INIT("--pkg-src-dir=");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3414 = KSPL_STR_INIT("--define=");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3415 = KSPL_STR_INIT("--pkg-src-dir=");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_child_ksplc(std_ds_List_Slice_U8_Const *list, std_mem_Arena *arena) {
   if (!kspl_ksplc_base_locate_std_found()) {
     KSPL_UNUSED Writer __k_tmp1 = kspl_std_io_err();
@@ -142949,22 +143058,22 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_child_ksplc(std_ds_List
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 d = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3389, (Sz)463)));
-      kspl_std_ds_List_Slice_U8_Const_push(list, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3411), d)));
+      const Slice_U8 d = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3392, (Sz)463)));
+      kspl_std_ds_List_Slice_U8_Const_push(list, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3414), d)));
     }
   }
   KSPL_UNUSED std_str_Arena_text *__k_tmp6 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_277);
   kspl_std_ds_List_Slice_U8_Const_push(list, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(__k_tmp6, kspl_ksplc_base_locate_std_dir())));
   if (kspl_ksplc_base_locate_pkg_src_dir().len > (Sz)0) {
-    KSPL_UNUSED std_str_Arena_text *__k_tmp7 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3412);
+    KSPL_UNUSED std_str_Arena_text *__k_tmp7 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3415);
     kspl_std_ds_List_Slice_U8_Const_push(list, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(__k_tmp7, kspl_ksplc_base_locate_pkg_src_dir())));
   }
 
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3413 = KSPL_STR_INIT("ksplc run: cannot set ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3414 = KSPL_STR_INIT(". script_path() will report none\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3416 = KSPL_STR_INIT("ksplc run: cannot set ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3417 = KSPL_STR_INIT(". script_path() will report none\n");
 static KSPL_UNUSED I32 kspl_priv_ksplc_tools_run_exec_program(Slice_U8 script, Slice_U8 exe, std_ds_List_Slice_U8_Const *script_args, std_mem_Arena *arena) {
   std_str_Str_builder env_val = kspl_std_str_Str_builder_new();
   (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(&env_val, exe), 10), script));
@@ -142972,8 +143081,8 @@ static KSPL_UNUSED I32 kspl_priv_ksplc_tools_run_exec_program(Slice_U8 script, S
   if (__k_tmp1.tag == kspl_Result_Void_std_sys_Env_error_err) {
     KSPL_UNUSED std_sys_Env_error __k_e = __k_tmp1.payload.err.error;
     KSPL_UNUSED Writer __k_tmp4 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Slice_U8_Const(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3413)), kspl_std_sys_SCRIPT_ENV_NAME);
-    (void)(((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3414)));
+    KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Slice_U8_Const(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3416)), kspl_std_sys_SCRIPT_ENV_NAME);
+    (void)(((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3417)));
   }
 
   KSPL_UNUSED std_ds_List_Slice_U8_Const __k_shadow0_argv = kspl_std_ds_List_Slice_U8_Const_new(arena);
@@ -143026,9 +143135,9 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_commit_path(Slice_U8 from, Sli
   return true;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3415 = KSPL_STR_INIT("ab");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3418 = KSPL_STR_INIT("ab");
 static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_sync_to_disk(Slice_U8 path) {
-  KSPL_UNUSED Result_std_io_File_stream_std_io_Io_error __k_tmp1 = kspl_std_io_open(path, kspl_lit_3415);
+  KSPL_UNUSED Result_std_io_File_stream_std_io_Io_error __k_tmp1 = kspl_std_io_open(path, kspl_lit_3418);
   KSPL_UNUSED std_io_File_stream __k_tmp2 = {0};
   if (__k_tmp1.tag == kspl_Result_std_io_File_stream_std_io_Io_error_err) {
     KSPL_UNUSED std_io_Io_error __k_e = __k_tmp1.payload.err.error;
@@ -143059,14 +143168,14 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_sync_to_disk(Slice_U8 path) {
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3416 = KSPL_STR_INIT(".old.0");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3417 = KSPL_STR_INIT(".old.");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3419 = KSPL_STR_INIT(".old.0");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3420 = KSPL_STR_INIT(".old.");
 static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_run_aside_name(Slice_U8 path, std_str_Str_builder *out) {
   Sz n = (Sz)0;
-  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_clear(out), path), kspl_lit_3416));
+  (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_clear(out), path), kspl_lit_3419));
   for (; kspl_std_fs_exists(kspl_std_str_Str_builder_slice(out));) {
     n = (Sz)((size_t)(n) + (size_t)((Sz)1));
-    KSPL_UNUSED std_str_Str_builder *__k_tmp3 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_clear(out), path), kspl_lit_3417);
+    KSPL_UNUSED std_str_Str_builder *__k_tmp3 = kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_clear(out), path), kspl_lit_3420);
     (void)(kspl_put_std_str_Str_builder_Ptr_Sz(__k_tmp3, n));
   }
   return kspl_std_str_Str_builder_slice(out);
@@ -143075,7 +143184,7 @@ static KSPL_UNUSED Slice_U8 kspl_priv_ksplc_tools_run_aside_name(Slice_U8 path, 
 static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_aside(Slice_U8 exe_path, std_mem_Arena *arena) {
   Slice_U8 dir = kspl_std_sys_get_dir_name(exe_path);
   KSPL_UNUSED std_str_Arena_text *__k_tmp1 = kspl_std_mem_Arena_text(arena);
-  Slice_U8 stem = kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(__k_tmp1, kspl_std_sys_get_file_name(exe_path)), kspl_lit_3417));
+  Slice_U8 stem = kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(__k_tmp1, kspl_std_sys_get_file_name(exe_path)), kspl_lit_3420));
   KSPL_UNUSED Result_std_ds_List_Slice_U8_Const_std_fs_Fs_error __k_tmp2 = kspl_std_fs_read_dir(dir, arena);
   KSPL_UNUSED std_ds_List_Slice_U8_Const __k_tmp3 = {0};
   if (__k_tmp2.tag == kspl_Result_std_ds_List_Slice_U8_Const_std_fs_Fs_error_err) {
@@ -143091,7 +143200,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_aside(Slice_U8 exe_path,
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < __k_for_coll1->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 name = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll1, __k_for_idx1, kspl_lit_3389, (Sz)524)));
+      const Slice_U8 name = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll1, __k_for_idx1, kspl_lit_3392, (Sz)524)));
       if (kspl_Slice_U8_Const_starts_with(name, stem, (Sz)0)) {
         KSPL_UNUSED Result_Void_std_fs_Fs_error __k_tmp7 = kspl_std_fs_remove_path(kspl_std_fs_join(dir, name, arena));
         if (__k_tmp7.tag == kspl_Result_Void_std_fs_Fs_error_err) {
@@ -143104,7 +143213,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_aside(Slice_U8 exe_path,
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3418 = KSPL_STR_INIT("ksplc run: waiting for another run of this script to finish building it\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3421 = KSPL_STR_INIT("ksplc run: waiting for another run of this script to finish building it\n");
 static KSPL_UNUSED std_fs_File_lock kspl_priv_ksplc_tools_run_hold_slot(Slice_U8 path) {
   KSPL_UNUSED Result_std_fs_File_lock_std_fs_Fs_error __k_tmp1 = kspl_std_fs_File_lock_try_take(path);
   KSPL_UNUSED std_fs_File_lock __k_tmp2 = {0};
@@ -143113,7 +143222,7 @@ static KSPL_UNUSED std_fs_File_lock kspl_priv_ksplc_tools_run_hold_slot(Slice_U8
     switch (e.tag) {
     case kspl_std_fs_Fs_error_held_elsewhere: {
       KSPL_UNUSED Writer __k_tmp4 = kspl_std_io_err();
-      (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3418)));
+      (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3421)));
       break;
     }
     default: {
@@ -143141,16 +143250,16 @@ static KSPL_UNUSED std_fs_File_lock kspl_priv_ksplc_tools_run_hold_slot(Slice_U8
   return lock;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3419 = KSPL_STR_INIT("ksplc run: cannot lock the cache: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3422 = KSPL_STR_INIT("ksplc run: cannot lock the cache: ");
 static KSPL_UNUSED __attribute__((noreturn)) void kspl_priv_ksplc_tools_run_exit_lock_failed(Slice_U8 path) {
   KSPL_UNUSED Writer __k_tmp2 = kspl_std_io_err();
-  KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Slice_U8_Const(((__k_tmp2).vtable->s((__k_tmp2).obj, kspl_lit_3419)), path);
+  KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Slice_U8_Const(((__k_tmp2).vtable->s((__k_tmp2).obj, kspl_lit_3422)), path);
   (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3)));
   kspl_std_sys_exit(1);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3420 = KSPL_STR_INIT("ksplc run: the program could not be read from standard input\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3421 = KSPL_STR_INIT("ksplc run: no such file: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3423 = KSPL_STR_INIT("ksplc run: the program could not be read from standard input\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3424 = KSPL_STR_INIT("ksplc run: no such file: ");
 static KSPL_UNUSED void kspl_ksplc_tools_run_run_script(Slice_U8 script, std_ds_List_Slice_U8_Const *script_args) {
   if (kspl_Slice_U8_Const_equals(script, kspl_ksplc_base_core_STDIN_NAME)) {
     KSPL_UNUSED Result_Slice_U8_Const_std_io_Io_error __k_tmp1 = kspl_std_io_read_stdin(kspl_ksplc_base_core_arena, (Sz)268435456);
@@ -143158,7 +143267,7 @@ static KSPL_UNUSED void kspl_ksplc_tools_run_run_script(Slice_U8 script, std_ds_
     if (__k_tmp1.tag == kspl_Result_Slice_U8_Const_std_io_Io_error_err) {
       KSPL_UNUSED std_io_Io_error __k_e = __k_tmp1.payload.err.error;
       KSPL_UNUSED Writer __k_tmp4 = kspl_std_io_err();
-      (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3420)));
+      (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3423)));
       kspl_std_sys_exit(1);
     }
 
@@ -143171,7 +143280,7 @@ static KSPL_UNUSED void kspl_ksplc_tools_run_run_script(Slice_U8 script, std_ds_
 
   if (!kspl_std_fs_exists(script)) {
     KSPL_UNUSED Writer __k_tmp6 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp5 = kspl_put_Writer_Slice_U8_Const(((__k_tmp6).vtable->s((__k_tmp6).obj, kspl_lit_3421)), script);
+    KSPL_UNUSED Writer __k_tmp5 = kspl_put_Writer_Slice_U8_Const(((__k_tmp6).vtable->s((__k_tmp6).obj, kspl_lit_3424)), script);
     (void)(((__k_tmp5).vtable->s((__k_tmp5).obj, kspl_lit_3)));
     kspl_std_sys_exit(1);
   }
@@ -143215,23 +143324,23 @@ static KSPL_UNUSED __attribute__((noreturn)) void kspl_priv_ksplc_tools_run_run_
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3422 = KSPL_STR_INIT("ksplc run");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3423 = KSPL_STR_INIT("cache directory");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3424 = KSPL_STR_INIT("deps");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3425 = KSPL_STR_INIT("prog.exe");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3426 = KSPL_STR_INIT("prog.objs");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3427 = KSPL_STR_INIT("prog.new.exe");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3428 = KSPL_STR_INIT("prog.new.c");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3429 = KSPL_STR_INIT("prog.libs");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3425 = KSPL_STR_INIT("ksplc run");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3426 = KSPL_STR_INIT("cache directory");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3427 = KSPL_STR_INIT("deps");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3428 = KSPL_STR_INIT("prog.exe");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3429 = KSPL_STR_INIT("prog.objs");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3430 = KSPL_STR_INIT("prog.new.exe");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3431 = KSPL_STR_INIT("prog.new.c");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3432 = KSPL_STR_INIT("prog.libs");
 static KSPL_UNUSED ksplc_tools_run_Run_slot kspl_priv_ksplc_tools_run_open_run_slot(Slice_U8 script, Option_Slice_U8_Const given, std_mem_Arena *arena) {
   std_str_Str_builder root = kspl_std_str_Str_builder_new();
   if (!kspl_ksplc_base_cache_append_cache_root(&root)) {
-    kspl_ksplc_base_cache_exit_unlocated(kspl_lit_3422);
+    kspl_ksplc_base_cache_exit_unlocated(kspl_lit_3425);
   }
 
   Slice_U8 refusal = kspl_ksplc_base_cache_refused_root(kspl_std_str_Str_builder_slice(&root), arena);
   if (refusal.len > (Sz)0) {
-    kspl_ksplc_base_cache_exit_refused(kspl_lit_3422, refusal);
+    kspl_ksplc_base_cache_exit_refused(kspl_lit_3425, refusal);
   }
 
   Slice_U8 runs_dir = kspl_std_fs_join(kspl_std_str_Str_builder_slice(&root), kspl_ksplc_base_cache_RUN_KIND, arena);
@@ -143242,7 +143351,7 @@ static KSPL_UNUSED ksplc_tools_run_Run_slot kspl_priv_ksplc_tools_run_open_run_s
   KSPL_UNUSED Result_Void_std_fs_Fs_error __k_tmp1 = kspl_std_fs_mkdir_all(dir);
   if (__k_tmp1.tag == kspl_Result_Void_std_fs_Fs_error_err) {
     std_fs_Fs_error e = __k_tmp1.payload.err.error;
-    kspl_priv_ksplc_tools_run_exit_mkdir_failed(kspl_lit_3423, dir, e);
+    kspl_priv_ksplc_tools_run_exit_mkdir_failed(kspl_lit_3426, dir, e);
   }
 
   KSPL_UNUSED Slice_Slice_U8_Const __k_for_coll1 = (Slice_Slice_U8_Const){.ptr = (Slice_U8 *)((const Slice_U8_Const_Array_2){.data = {runs_dir, dir}}).data, .len = 2};
@@ -143252,7 +143361,7 @@ static KSPL_UNUSED ksplc_tools_run_Run_slot kspl_priv_ksplc_tools_run_open_run_s
       const Slice_U8 inside = (*(__k_for_coll1.ptr + __k_for_idx1));
       Slice_U8 why = kspl_ksplc_base_cache_refused_inside(inside, arena);
       if (why.len > (Sz)0) {
-        kspl_ksplc_base_cache_exit_refused(kspl_lit_3422, why);
+        kspl_ksplc_base_cache_exit_refused(kspl_lit_3425, why);
       }
     }
   }
@@ -143261,13 +143370,13 @@ static KSPL_UNUSED ksplc_tools_run_Run_slot kspl_priv_ksplc_tools_run_open_run_s
     kspl_ksplc_base_cache_prune_dirs(runs_dir, kspl_ksplc_base_cache_HASH_HEX_LEN, kspl_priv_ksplc_tools_run_MAX_RUN_SLOTS, kspl_priv_ksplc_tools_run_RUN_SLOT_SPARE_SECS, dir, arena);
   }
 
-  Slice_U8 deps = kspl_std_fs_join(dir, kspl_lit_3424, arena);
-  KSPL_UNUSED Slice_U8 __k_tmp5 = kspl_std_fs_join(dir, kspl_lit_3425, arena);
-  KSPL_UNUSED Slice_U8 __k_tmp6 = kspl_std_fs_join(dir, kspl_lit_3426, arena);
-  KSPL_UNUSED Slice_U8 __k_tmp7 = kspl_std_fs_join(dir, kspl_lit_3427, arena);
-  KSPL_UNUSED Slice_U8 __k_tmp8 = kspl_std_fs_join(dir, kspl_lit_3428, arena);
+  Slice_U8 deps = kspl_std_fs_join(dir, kspl_lit_3427, arena);
+  KSPL_UNUSED Slice_U8 __k_tmp5 = kspl_std_fs_join(dir, kspl_lit_3428, arena);
+  KSPL_UNUSED Slice_U8 __k_tmp6 = kspl_std_fs_join(dir, kspl_lit_3429, arena);
+  KSPL_UNUSED Slice_U8 __k_tmp7 = kspl_std_fs_join(dir, kspl_lit_3430, arena);
+  KSPL_UNUSED Slice_U8 __k_tmp8 = kspl_std_fs_join(dir, kspl_lit_3431, arena);
   KSPL_UNUSED Slice_U8 __k_tmp9 = kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), deps), kspl_lit_1406));
-  KSPL_UNUSED ksplc_tools_run_Run_slot __k_tmp10 = (ksplc_tools_run_Run_slot){.dir = dir, .cacheable = cacheable, .exe = __k_tmp5, .deps = deps, .objs = __k_tmp6, .new_exe = __k_tmp7, .new_c = __k_tmp8, .new_deps = __k_tmp9, .libs = kspl_std_fs_join(dir, kspl_lit_3429, arena)};
+  KSPL_UNUSED ksplc_tools_run_Run_slot __k_tmp10 = (ksplc_tools_run_Run_slot){.dir = dir, .cacheable = cacheable, .exe = __k_tmp5, .deps = deps, .objs = __k_tmp6, .new_exe = __k_tmp7, .new_c = __k_tmp8, .new_deps = __k_tmp9, .libs = kspl_std_fs_join(dir, kspl_lit_3432, arena)};
   {
     kspl_std_str_Str_builder_free(&slot_key);
   }
@@ -143283,14 +143392,14 @@ static KSPL_UNUSED ksplc_tools_run_Run_slot kspl_priv_ksplc_tools_run_open_run_s
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3430 = KSPL_STR_INIT("ksplc run: the compile left no list of libraries (");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3433 = KSPL_STR_INIT("ksplc run: the compile left no list of libraries (");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_run_rebuild_in_slot(const ksplc_tools_run_Run_slot *slot, Slice_U8 script, Option_Slice_U8_Const given, std_mem_Arena *arena) {
   kspl_priv_ksplc_tools_run_sweep_aside(slot->exe, arena);
   Sz units_n = kspl_priv_ksplc_tools_run_generate_c(slot, script, given, arena);
   std_ds_List_Slice_U8_Const named_libs = kspl_std_ds_List_Slice_U8_Const_new(arena);
   if (!kspl_ksplc_tools_libs_append_named_libs(slot->libs, &named_libs, arena)) {
     KSPL_UNUSED Writer __k_tmp3 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp2 = ((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3430));
+    KSPL_UNUSED Writer __k_tmp2 = ((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3433));
     KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Slice_U8_Const(__k_tmp2, slot->libs);
     (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_489)));
     KSPL_UNUSED Result_Void_std_fs_Fs_error __k_tmp4 = kspl_std_fs_remove_path(slot->new_deps);
@@ -143343,21 +143452,21 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_rebuild_in_slot(const ksplc_to
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3431 = KSPL_STR_INIT("--emit-deps=");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3432 = KSPL_STR_INIT("--emit-libs=");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3433 = KSPL_STR_INIT("--split=");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3434 = KSPL_STR_INIT("ksplc: failed to start ksplc\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3435 = KSPL_STR_INIT("ksplc: the compiling ksplc stopped reading the program part way\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3434 = KSPL_STR_INIT("--emit-deps=");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3435 = KSPL_STR_INIT("--emit-libs=");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3436 = KSPL_STR_INIT("--split=");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3437 = KSPL_STR_INIT("ksplc: failed to start ksplc\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3438 = KSPL_STR_INIT("ksplc: the compiling ksplc stopped reading the program part way\n");
 static KSPL_UNUSED Sz kspl_priv_ksplc_tools_run_generate_c(const ksplc_tools_run_Run_slot *slot, Slice_U8 script, Option_Slice_U8_Const given, std_mem_Arena *arena) {
   std_ds_List_Slice_U8_Const ksplc_argv = kspl_std_ds_List_Slice_U8_Const_new(arena);
   kspl_priv_ksplc_tools_run_append_child_ksplc(&ksplc_argv, arena);
-  KSPL_UNUSED std_str_Arena_text *__k_tmp1 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3431);
+  KSPL_UNUSED std_str_Arena_text *__k_tmp1 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3434);
   kspl_std_ds_List_Slice_U8_Const_push(&ksplc_argv, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(__k_tmp1, slot->new_deps)));
-  KSPL_UNUSED std_str_Arena_text *__k_tmp2 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3432);
+  KSPL_UNUSED std_str_Arena_text *__k_tmp2 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3435);
   kspl_std_ds_List_Slice_U8_Const_push(&ksplc_argv, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(__k_tmp2, slot->libs)));
   Sz units_n = kspl_priv_ksplc_tools_run_pick_unit_count();
   if (units_n > (Sz)1) {
-    kspl_std_ds_List_Slice_U8_Const_push(&ksplc_argv, kspl_std_str_Arena_text_take(kspl_put_std_str_Arena_text_Ptr_Sz(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3433), units_n)));
+    kspl_std_ds_List_Slice_U8_Const_push(&ksplc_argv, kspl_std_str_Arena_text_take(kspl_put_std_str_Arena_text_Ptr_Sz(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3436), units_n)));
   }
 
   kspl_std_ds_List_Slice_U8_Const_push(&ksplc_argv, script);
@@ -143373,12 +143482,12 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_run_generate_c(const ksplc_tools_run
       switch (e) {
       case kspl_std_subproc_Feed_error_spawn_failed: {
         KSPL_UNUSED Writer __k_tmp6 = kspl_std_io_err();
-        (void)(((__k_tmp6).vtable->s((__k_tmp6).obj, kspl_lit_3434)));
+        (void)(((__k_tmp6).vtable->s((__k_tmp6).obj, kspl_lit_3437)));
         break;
       }
       case kspl_std_subproc_Feed_error_input_not_taken: {
         KSPL_UNUSED Writer __k_tmp7 = kspl_std_io_err();
-        (void)(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3435)));
+        (void)(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3438)));
         break;
       }
       default:
@@ -143417,14 +143526,14 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_tools_run_generate_c(const ksplc_tools_run
   return units_n;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3436 = KSPL_STR_INIT("object directory");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3437 = KSPL_STR_INIT("ksplc run: cannot read the generated C (");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3439 = KSPL_STR_INIT("object directory");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3440 = KSPL_STR_INIT("ksplc run: cannot read the generated C (");
 static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_plan_units(const ksplc_tools_run_Run_slot *slot, Sz units_n, std_ds_List_ksplc_tools_run_Unit *units, std_mem_Arena *arena) {
   Slice_U8 obj_dir = kspl_std_fs_join(slot->dir, kspl_lit_2470, arena);
   KSPL_UNUSED Result_Void_std_fs_Fs_error __k_tmp1 = kspl_std_fs_mkdir_all(obj_dir);
   if (__k_tmp1.tag == kspl_Result_Void_std_fs_Fs_error_err) {
     std_fs_Fs_error e = __k_tmp1.payload.err.error;
-    kspl_priv_ksplc_tools_run_exit_mkdir_failed(kspl_lit_3436, obj_dir, e);
+    kspl_priv_ksplc_tools_run_exit_mkdir_failed(kspl_lit_3439, obj_dir, e);
   }
 
   Slice_U8 stem = kspl_std_sys_strip_last_ext(slot->new_c);
@@ -143464,7 +143573,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_plan_units(const ksplc_tools_r
       if (__k_tmp10.tag == kspl_Result_U8_Const_Array_64_std_io_Io_error_err) {
         KSPL_UNUSED std_io_Io_error __k_e = __k_tmp10.payload.err.error;
         KSPL_UNUSED Writer __k_tmp15 = kspl_std_io_err();
-        KSPL_UNUSED Writer __k_tmp14 = ((__k_tmp15).vtable->s((__k_tmp15).obj, kspl_lit_3437));
+        KSPL_UNUSED Writer __k_tmp14 = ((__k_tmp15).vtable->s((__k_tmp15).obj, kspl_lit_3440));
         KSPL_UNUSED Writer __k_tmp13 = kspl_put_Writer_Slice_U8(__k_tmp14, kspl_std_str_Str_builder_slice(&src));
         (void)(((__k_tmp13).vtable->s((__k_tmp13).obj, kspl_lit_489)));
         kspl_std_sys_exit(1);
@@ -143474,7 +143583,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_plan_units(const ksplc_tools_r
         __k_tmp11 = __k_tmp10.payload.ok.value;
       }
       const Const_U8_Array_64 key = __k_tmp11;
-      Slice_U8 obj = kspl_std_fs_join(obj_dir, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), (Slice_U8){.ptr = (U8 *)key.data, .len = 64}), kspl_lit_3407)), arena);
+      Slice_U8 obj = kspl_std_fs_join(obj_dir, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), (Slice_U8){.ptr = (U8 *)key.data, .len = 64}), kspl_lit_3410)), arena);
       if (kspl_priv_ksplc_tools_run_has_obj(units, obj)) {
         {
           kspl_std_str_Str_builder_free(&src);
@@ -143501,17 +143610,17 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_plan_units(const ksplc_tools_r
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3438 = KSPL_STR_INIT("ksplc run: the C compiler failed on the generated code (");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3439 = KSPL_STR_INIT("*.c)\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3440 = KSPL_STR_INIT("ksplc run: linking failed\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3441 = KSPL_STR_INIT("ksplc run: cannot update the cache: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3441 = KSPL_STR_INIT("ksplc run: the C compiler failed on the generated code (");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3442 = KSPL_STR_INIT("*.c)\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3443 = KSPL_STR_INIT("ksplc run: linking failed\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3444 = KSPL_STR_INIT("ksplc run: cannot update the cache: ");
 static KSPL_UNUSED void kspl_priv_ksplc_tools_run_build_and_link(const ksplc_tools_run_Run_slot *slot, std_ds_List_ksplc_tools_run_Unit *units, std_ds_List_Slice_U8_Const *named_libs, std_mem_Arena *arena) {
   kspl_priv_ksplc_tools_run_sweep_objects(kspl_std_fs_join(slot->dir, kspl_lit_2470, arena), units, arena);
   if (!kspl_priv_ksplc_tools_run_compile_units(units, slot->dir, arena)) {
     KSPL_UNUSED Writer __k_tmp3 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp2 = ((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3438));
+    KSPL_UNUSED Writer __k_tmp2 = ((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3441));
     KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Slice_U8_Const(__k_tmp2, kspl_std_sys_strip_last_ext(slot->new_c));
-    (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3439)));
+    (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3442)));
     KSPL_UNUSED Result_Void_std_fs_Fs_error __k_tmp4 = kspl_std_fs_remove_path(slot->new_deps);
     if (__k_tmp4.tag == kspl_Result_Void_std_fs_Fs_error_err) {
       KSPL_UNUSED std_fs_Fs_error __k_e = __k_tmp4.payload.err.error;
@@ -143526,11 +143635,11 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_build_and_link(const ksplc_too
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3389, (Sz)761)));
+      const ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3392, (Sz)761)));
       kspl_std_ds_List_Slice_U8_Const_push(&link_argv, kspl_priv_ksplc_tools_run_under_slot(u.obj, slot->dir));
     }
   }
-  kspl_std_ds_List_Slice_U8_Const_push(&link_argv, kspl_lit_3409);
+  kspl_std_ds_List_Slice_U8_Const_push(&link_argv, kspl_lit_3412);
   kspl_std_ds_List_Slice_U8_Const_push(&link_argv, kspl_priv_ksplc_tools_run_under_slot(slot->new_exe, slot->dir));
   kspl_std_ds_List_Slice_U8_Const_push_all(&link_argv, kspl_std_ds_List_Slice_U8_Const_slice(named_libs));
   kspl_ksplc_tools_run_append_link_libs(&link_argv, arena);
@@ -143540,7 +143649,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_build_and_link(const ksplc_too
   I32 link_code = kspl_ksplc_tools_run_start_spawn_or_exit(&link_argv, __k_tmp8, slot->dir);
   if (link_code != 0) {
     KSPL_UNUSED Writer __k_tmp9 = kspl_std_io_err();
-    (void)(((__k_tmp9).vtable->s((__k_tmp9).obj, kspl_lit_3440)));
+    (void)(((__k_tmp9).vtable->s((__k_tmp9).obj, kspl_lit_3443)));
     KSPL_UNUSED Result_Void_std_fs_Fs_error __k_tmp10 = kspl_std_fs_remove_path(slot->new_exe);
     if (__k_tmp10.tag == kspl_Result_Void_std_fs_Fs_error_err) {
       KSPL_UNUSED std_fs_Fs_error __k_e = __k_tmp10.payload.err.error;
@@ -143556,7 +143665,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_build_and_link(const ksplc_too
 
   if (!kspl_priv_ksplc_tools_run_sync_to_disk(slot->new_exe) || !kspl_priv_ksplc_tools_run_commit_path(slot->new_exe, slot->exe)) {
     KSPL_UNUSED Writer __k_tmp16 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp15 = ((__k_tmp16).vtable->s((__k_tmp16).obj, kspl_lit_3441));
+    KSPL_UNUSED Writer __k_tmp15 = ((__k_tmp16).vtable->s((__k_tmp16).obj, kspl_lit_3444));
     KSPL_UNUSED Writer __k_tmp14 = kspl_put_Writer_Slice_U8_Const(__k_tmp15, slot->exe);
     (void)(((__k_tmp14).vtable->s((__k_tmp14).obj, kspl_lit_3)));
     kspl_std_sys_exit(1);
@@ -143624,7 +143733,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_append_link_record(Slice_U8 ex
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3389, (Sz)813)));
+      const ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3392, (Sz)813)));
       KSPL_UNUSED Result_std_fs_File_info_std_fs_Fs_error __k_tmp3 = kspl_std_fs_stat(u.obj);
       KSPL_UNUSED std_fs_File_info __k_tmp4 = {0};
       if (__k_tmp3.tag == kspl_Result_std_fs_File_info_std_fs_Fs_error_err) {
@@ -143647,7 +143756,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_append_link_record(Slice_U8 ex
   {
     KSPL_UNUSED Sz __k_for_idx2 = (Sz)0;
     for (; __k_for_idx2 < (*__k_for_coll2)->len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
-      const Slice_U8 lib = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll2)), __k_for_idx2, kspl_lit_3389, (Sz)819)));
+      const Slice_U8 lib = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll2)), __k_for_idx2, kspl_lit_3392, (Sz)819)));
       (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(out, lib), 10));
     }
   }
@@ -143711,18 +143820,18 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_exe_is_recorded(const ksplc_to
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3442 = KSPL_STR_INIT("ksplc build: no such file: ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3443 = KSPL_STR_INIT(".libs");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3444 = KSPL_STR_INIT("ksplc build: '");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3445 = KSPL_STR_INIT("' would be overwritten by its own C. Name the executable\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3446 = KSPL_STR_INIT("ksplc build: cannot make the folder ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3447 = KSPL_STR_INIT("ksplc build: the compile left no list of libraries (");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3448 = KSPL_STR_INIT("ksplc build: the C compiler failed on ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3445 = KSPL_STR_INIT("ksplc build: no such file: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3446 = KSPL_STR_INIT(".libs");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3447 = KSPL_STR_INIT("ksplc build: '");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3448 = KSPL_STR_INIT("' would be overwritten by its own C. Name the executable\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3449 = KSPL_STR_INIT("ksplc build: cannot make the folder ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3450 = KSPL_STR_INIT("ksplc build: the compile left no list of libraries (");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3451 = KSPL_STR_INIT("ksplc build: the C compiler failed on ");
 static KSPL_UNUSED void kspl_ksplc_tools_run_build_program(Slice_U8 input, Slice_U8 output, Slice_U8 cflags) {
   std_mem_Arena *arena = kspl_std_mem_Arena_new((Sz)((size_t)((Sz)64) * (size_t)((Sz)1024)));
   if (!kspl_std_fs_exists(input)) {
     KSPL_UNUSED Writer __k_tmp2 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Slice_U8_Const(((__k_tmp2).vtable->s((__k_tmp2).obj, kspl_lit_3442)), input);
+    KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Slice_U8_Const(((__k_tmp2).vtable->s((__k_tmp2).obj, kspl_lit_3445)), input);
     (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3)));
     kspl_std_sys_exit(1);
   }
@@ -143730,11 +143839,11 @@ static KSPL_UNUSED void kspl_ksplc_tools_run_build_program(Slice_U8 input, Slice
   kspl_priv_ksplc_tools_run_exit_if_refused(kspl_lit_1042, input);
   Slice_U8 stem = kspl_std_sys_strip_last_ext(output);
   Slice_U8 c_path = kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), stem), kspl_lit_3270));
-  Slice_U8 libs_path = kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), stem), kspl_lit_3443));
+  Slice_U8 libs_path = kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), stem), kspl_lit_3446));
   if (kspl_Slice_U8_Const_equals(c_path, output) || kspl_Slice_U8_Const_equals(libs_path, output)) {
     KSPL_UNUSED Writer __k_tmp4 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Slice_U8_Const(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3444)), output);
-    (void)(((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3445)));
+    KSPL_UNUSED Writer __k_tmp3 = kspl_put_Writer_Slice_U8_Const(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3447)), output);
+    (void)(((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3448)));
     kspl_std_sys_exit(1);
   }
 
@@ -143744,7 +143853,7 @@ static KSPL_UNUSED void kspl_ksplc_tools_run_build_program(Slice_U8 input, Slice
     if (__k_tmp5.tag == kspl_Result_Void_std_fs_Fs_error_err) {
       std_fs_Fs_error e = __k_tmp5.payload.err.error;
       KSPL_UNUSED Writer __k_tmp10 = kspl_std_io_err();
-      KSPL_UNUSED Writer __k_tmp9 = kspl_put_Writer_Slice_U8_Const(((__k_tmp10).vtable->s((__k_tmp10).obj, kspl_lit_3446)), dir);
+      KSPL_UNUSED Writer __k_tmp9 = kspl_put_Writer_Slice_U8_Const(((__k_tmp10).vtable->s((__k_tmp10).obj, kspl_lit_3449)), dir);
       KSPL_UNUSED Writer __k_tmp8 = ((__k_tmp9).vtable->s((__k_tmp9).obj, kspl_lit_13));
       KSPL_UNUSED Writer __k_tmp7 = kspl_put_Writer_Slice_U8_Const(__k_tmp8, kspl_std_fs_Fs_error_variant_name(e));
       (void)(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3)));
@@ -143755,7 +143864,7 @@ static KSPL_UNUSED void kspl_ksplc_tools_run_build_program(Slice_U8 input, Slice
 
   std_ds_List_Slice_U8_Const gen = kspl_std_ds_List_Slice_U8_Const_new(arena);
   kspl_priv_ksplc_tools_run_append_child_ksplc(&gen, arena);
-  kspl_std_ds_List_Slice_U8_Const_push(&gen, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3432), libs_path)));
+  kspl_std_ds_List_Slice_U8_Const_push(&gen, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), kspl_lit_3435), libs_path)));
   kspl_std_ds_List_Slice_U8_Const_push(&gen, input);
   kspl_std_ds_List_Slice_U8_Const_push(&gen, c_path);
   I32 code = kspl_ksplc_tools_run_start_spawn_or_exit(&gen, kspl_lit_315, kspl_lit_5);
@@ -143766,7 +143875,7 @@ static KSPL_UNUSED void kspl_ksplc_tools_run_build_program(Slice_U8 input, Slice
   std_ds_List_Slice_U8_Const named_libs = kspl_std_ds_List_Slice_U8_Const_new(arena);
   if (!kspl_ksplc_tools_libs_append_named_libs(libs_path, &named_libs, arena)) {
     KSPL_UNUSED Writer __k_tmp12 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp11 = kspl_put_Writer_Slice_U8_Const(((__k_tmp12).vtable->s((__k_tmp12).obj, kspl_lit_3447)), libs_path);
+    KSPL_UNUSED Writer __k_tmp11 = kspl_put_Writer_Slice_U8_Const(((__k_tmp12).vtable->s((__k_tmp12).obj, kspl_lit_3450)), libs_path);
     (void)(((__k_tmp11).vtable->s((__k_tmp11).obj, kspl_lit_489)));
     kspl_std_sys_exit(1);
   }
@@ -143784,7 +143893,7 @@ static KSPL_UNUSED void kspl_ksplc_tools_run_build_program(Slice_U8 input, Slice
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < __k_for_coll1.len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      Slice_U8 w = (*(kspl_std_ds_List_Slice_U8_Const_at(&__k_for_coll1, __k_for_idx1, kspl_lit_3389, (Sz)904)));
+      Slice_U8 w = (*(kspl_std_ds_List_Slice_U8_Const_at(&__k_for_coll1, __k_for_idx1, kspl_lit_3392, (Sz)904)));
       if (w.len > (Sz)0) {
         kspl_std_ds_List_Slice_U8_Const_push(&cc, w);
       }
@@ -143794,12 +143903,12 @@ static KSPL_UNUSED void kspl_ksplc_tools_run_build_program(Slice_U8 input, Slice
   kspl_std_ds_List_Slice_U8_Const_push_all(&cc, kspl_std_ds_List_Slice_U8_Const_slice(&named_libs));
   kspl_ksplc_tools_run_append_link_libs(&cc, arena);
   kspl_ksplc_tools_run_append_exe_flags(&cc, arena);
-  kspl_std_ds_List_Slice_U8_Const_push(&cc, kspl_lit_3409);
+  kspl_std_ds_List_Slice_U8_Const_push(&cc, kspl_lit_3412);
   kspl_std_ds_List_Slice_U8_Const_push(&cc, output);
   I32 cc_code = kspl_ksplc_tools_run_start_spawn_or_exit(&cc, kspl_priv_ksplc_tools_run_cc_name(), kspl_lit_5);
   if (cc_code != 0) {
     KSPL_UNUSED Writer __k_tmp17 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp16 = kspl_put_Writer_Slice_U8_Const(((__k_tmp17).vtable->s((__k_tmp17).obj, kspl_lit_3448)), c_path);
+    KSPL_UNUSED Writer __k_tmp16 = kspl_put_Writer_Slice_U8_Const(((__k_tmp17).vtable->s((__k_tmp17).obj, kspl_lit_3451)), c_path);
     (void)(((__k_tmp16).vtable->s((__k_tmp16).obj, kspl_lit_3)));
   }
 
@@ -143855,11 +143964,11 @@ static KSPL_UNUSED Bool kspl_ksplc_cli_Mode_needs_grammar(ksplc_cli_Mode r) {
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3449 = KSPL_STR_INIT("ksplc: cleared ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3450 = KSPL_STR_INIT("ksplc/main");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3451 = KSPL_STR_INIT("\nfmt failed on ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3452 = KSPL_STR_INIT(" file(s):\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3453 = KSPL_STR_INIT("  -> ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3452 = KSPL_STR_INIT("ksplc: cleared ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3453 = KSPL_STR_INIT("ksplc/main");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3454 = KSPL_STR_INIT("\nfmt failed on ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3455 = KSPL_STR_INIT(" file(s):\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3456 = KSPL_STR_INIT("  -> ");
 static KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error kspl_ksplc_cli_Mode_dispatch(ksplc_cli_Mode r) {
   kspeg_engine_Target *parser = null;
   if (kspl_ksplc_cli_Mode_needs_grammar(r)) {
@@ -143896,7 +144005,7 @@ static KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error kspl_ksplc_cli_Mode_
     }
 
     KSPL_UNUSED Writer __k_tmp5 = kspl_std_io_err();
-    KSPL_UNUSED Writer __k_tmp4 = ((__k_tmp5).vtable->s((__k_tmp5).obj, kspl_lit_3449));
+    KSPL_UNUSED Writer __k_tmp4 = ((__k_tmp5).vtable->s((__k_tmp5).obj, kspl_lit_3452));
     KSPL_UNUSED Writer __k_tmp3 = ((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_std_str_Str_builder_slice(&dir)));
     (void)(((__k_tmp3).vtable->c((__k_tmp3).obj, 10)));
     {
@@ -143968,7 +144077,7 @@ static KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error kspl_ksplc_cli_Mode_
     {
       KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
       for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-        const Slice_U8 f_path = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3450, (Sz)104)));
+        const Slice_U8 f_path = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3453, (Sz)104)));
         KSPL_UNUSED Result_Void_ksplc_fmt_file_Fmt_error __k_tmp9 = kspl_ksplc_fmt_file_format_file(f_path, parser, config, in_place, &fixed);
         if (__k_tmp9.tag == kspl_Result_Void_ksplc_fmt_file_Fmt_error_err) {
           KSPL_UNUSED ksplc_fmt_file_Fmt_error _e = __k_tmp9.payload.err.error;
@@ -143980,16 +144089,16 @@ static KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error kspl_ksplc_cli_Mode_
     kspl_ksplc_fmt_file_Fixed_points_print_stats(&fixed);
     if (failed.len > (Sz)0) {
       KSPL_UNUSED Writer __k_tmp13 = kspl_std_io_err();
-      KSPL_UNUSED Writer __k_tmp12 = ((__k_tmp13).vtable->s((__k_tmp13).obj, kspl_lit_3451));
+      KSPL_UNUSED Writer __k_tmp12 = ((__k_tmp13).vtable->s((__k_tmp13).obj, kspl_lit_3454));
       KSPL_UNUSED Writer __k_tmp11 = kspl_put_Writer_Sz(__k_tmp12, failed.len);
-      (void)(((__k_tmp11).vtable->s((__k_tmp11).obj, kspl_lit_3452)));
+      (void)(((__k_tmp11).vtable->s((__k_tmp11).obj, kspl_lit_3455)));
       KSPL_UNUSED const std_ds_List_Slice_U8_Const *__k_for_coll2 = &failed;
       {
         KSPL_UNUSED Sz __k_for_idx2 = (Sz)0;
         for (; __k_for_idx2 < __k_for_coll2->len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
-          const Slice_U8 f = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll2, __k_for_idx2, kspl_lit_3450, (Sz)110)));
+          const Slice_U8 f = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll2, __k_for_idx2, kspl_lit_3453, (Sz)110)));
           KSPL_UNUSED Writer __k_tmp18 = kspl_std_io_err();
-          KSPL_UNUSED Writer __k_tmp17 = ((__k_tmp18).vtable->s((__k_tmp18).obj, kspl_lit_3453));
+          KSPL_UNUSED Writer __k_tmp17 = ((__k_tmp18).vtable->s((__k_tmp18).obj, kspl_lit_3456));
           KSPL_UNUSED Writer __k_tmp16 = ((__k_tmp17).vtable->s((__k_tmp17).obj, f));
           (void)(((__k_tmp16).vtable->c((__k_tmp16).obj, 10)));
         }
@@ -144157,7 +144266,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_run_keyword_dump(kspeg_engine_Targe
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < __k_for_coll1->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      kspeg_engine_Rule_keywords *entry = (*(kspl_std_ds_List_kspeg_engine_Rule_keywords_Ptr_at(__k_for_coll1, __k_for_idx1, kspl_lit_3450, (Sz)167)));
+      kspeg_engine_Rule_keywords *entry = (*(kspl_std_ds_List_kspeg_engine_Rule_keywords_Ptr_at(__k_for_coll1, __k_for_idx1, kspl_lit_3453, (Sz)167)));
       kspl_std_ds_List_Slice_U8_Const_push_all(every_name, kspl_std_ds_List_Slice_U8_Const_slice(entry->keywords));
     }
   }
@@ -144169,7 +144278,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_run_keyword_dump(kspeg_engine_Targe
   {
     KSPL_UNUSED Sz __k_for_idx2 = (Sz)0;
     for (; __k_for_idx2 < __k_for_coll2->len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
-      const Slice_U8 kw = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll2, __k_for_idx2, kspl_lit_3450, (Sz)175)));
+      const Slice_U8 kw = (*(kspl_std_ds_List_Slice_U8_Const_at_ref(__k_for_coll2, __k_for_idx2, kspl_lit_3453, (Sz)175)));
       KSPL_UNUSED Writer __k_tmp6 = kspl_std_io_out();
       KSPL_UNUSED Writer __k_tmp5 = ((__k_tmp6).vtable->s((__k_tmp6).obj, kw));
       (void)(((__k_tmp5).vtable->c((__k_tmp5).obj, 10)));
@@ -144198,13 +144307,13 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_print_flag_words(void (*append)(std
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3454 = KSPL_STR_INIT("Finished with ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3455 = KSPL_STR_INIT(" error(s), ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3456 = KSPL_STR_INIT(" warning(s)");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3457 = KSPL_STR_INIT(" information(s), and ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3458 = KSPL_STR_INIT(" hint(s)");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3459 = KSPL_STR_INIT(".\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3460 = KSPL_STR_INIT("The codes above are explained by `ksplc explain <code>`: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3457 = KSPL_STR_INIT("Finished with ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3458 = KSPL_STR_INIT(" error(s), ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3459 = KSPL_STR_INIT(" warning(s)");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3460 = KSPL_STR_INIT(" information(s), and ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3461 = KSPL_STR_INIT(" hint(s)");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3462 = KSPL_STR_INIT(".\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3463 = KSPL_STR_INIT("The codes above are explained by `ksplc explain <code>`: ");
 static KSPL_UNUSED void kspl_priv_ksplc_main_print_diag_summary(ksplc_pipeline_Compiler *compiler, Bool is_lint) {
   if (kspl_ksplc_base_core_config.diag_json) {
     return;
@@ -144216,18 +144325,18 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_print_diag_summary(ksplc_pipeline_C
   }
 
   KSPL_UNUSED Writer __k_tmp3 = kspl_std_io_err();
-  KSPL_UNUSED Writer __k_tmp2 = kspl_put_Writer_Sz(((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3454)), n.errors);
-  KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Sz(((__k_tmp2).vtable->s((__k_tmp2).obj, kspl_lit_3455)), n.warnings);
-  (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3456)));
+  KSPL_UNUSED Writer __k_tmp2 = kspl_put_Writer_Sz(((__k_tmp3).vtable->s((__k_tmp3).obj, kspl_lit_3457)), n.errors);
+  KSPL_UNUSED Writer __k_tmp1 = kspl_put_Writer_Sz(((__k_tmp2).vtable->s((__k_tmp2).obj, kspl_lit_3458)), n.warnings);
+  (void)(((__k_tmp1).vtable->s((__k_tmp1).obj, kspl_lit_3459)));
   if (is_lint) {
     KSPL_UNUSED Writer __k_tmp6 = kspl_std_io_err();
     KSPL_UNUSED Writer __k_tmp5 = kspl_put_Writer_Sz(((__k_tmp6).vtable->s((__k_tmp6).obj, kspl_lit_484)), n.informations);
-    KSPL_UNUSED Writer __k_tmp4 = kspl_put_Writer_Sz(((__k_tmp5).vtable->s((__k_tmp5).obj, kspl_lit_3457)), n.hints);
-    (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3458)));
+    KSPL_UNUSED Writer __k_tmp4 = kspl_put_Writer_Sz(((__k_tmp5).vtable->s((__k_tmp5).obj, kspl_lit_3460)), n.hints);
+    (void)(((__k_tmp4).vtable->s((__k_tmp4).obj, kspl_lit_3461)));
   }
 
   KSPL_UNUSED Writer __k_tmp7 = kspl_std_io_err();
-  (void)(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3459)));
+  (void)(((__k_tmp7).vtable->s((__k_tmp7).obj, kspl_lit_3462)));
   if (compiler == null || compiler->sema == null) {
     return;
   }
@@ -144235,7 +144344,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_print_diag_summary(ksplc_pipeline_C
   std_ds_List_Slice_U8_Const *codes = compiler->sema->diags.counts.codes;
   if (codes->len > (Sz)0) {
     KSPL_UNUSED Writer __k_tmp8 = kspl_std_io_err();
-    (void)(((__k_tmp8).vtable->s((__k_tmp8).obj, kspl_lit_3460)));
+    (void)(((__k_tmp8).vtable->s((__k_tmp8).obj, kspl_lit_3463)));
     KSPL_UNUSED Range __k_for_coll1 = kspl_Range_asc(codes->len);
     {
       KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
@@ -144252,11 +144361,11 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_print_diag_summary(ksplc_pipeline_C
           __k_tmp14 = kspl_lit_5;
         }
         KSPL_UNUSED Writer __k_tmp12 = ((__k_tmp13).vtable->s((__k_tmp13).obj, __k_tmp14));
-        (void)(((__k_tmp12).vtable->s((__k_tmp12).obj, kspl_std_ds_List_Slice_U8_Const_get(codes, i, kspl_lit_3450, (Sz)211))));
+        (void)(((__k_tmp12).vtable->s((__k_tmp12).obj, kspl_std_ds_List_Slice_U8_Const_get(codes, i, kspl_lit_3453, (Sz)211))));
       }
     }
     KSPL_UNUSED Writer __k_tmp15 = kspl_std_io_err();
-    (void)(((__k_tmp15).vtable->s((__k_tmp15).obj, kspl_lit_3459)));
+    (void)(((__k_tmp15).vtable->s((__k_tmp15).obj, kspl_lit_3462)));
   }
 
   return;
@@ -144274,7 +144383,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_end_compile(Slice_U8 closing) {
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3461 = KSPL_STR_INIT("Error: the program could not be read from standard input\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3464 = KSPL_STR_INIT("Error: the program could not be read from standard input\n");
 static KSPL_UNUSED Option_Slice_U8_Const kspl_priv_ksplc_main_read_supplied(Slice_U8 name) {
   if (!kspl_Slice_U8_Const_equals(name, kspl_ksplc_base_core_STDIN_NAME)) {
     return (Option_Slice_U8_Const){.tag = kspl_Option_Slice_U8_Const_none};
@@ -144284,7 +144393,7 @@ static KSPL_UNUSED Option_Slice_U8_Const kspl_priv_ksplc_main_read_supplied(Slic
   KSPL_UNUSED Slice_U8 __k_tmp2 = {0};
   if (__k_tmp1.tag == kspl_Result_Slice_U8_Const_std_io_Io_error_err) {
     KSPL_UNUSED std_io_Io_error __k_e = __k_tmp1.payload.err.error;
-    kspl_ksplc_usage_error_exit(kspl_lit_3461);
+    kspl_ksplc_usage_error_exit(kspl_lit_3464);
     __k_tmp2 = kspl_lit_5;
     goto _mir_label_3;
   _mir_label_3:;
@@ -144300,9 +144409,9 @@ static KSPL_UNUSED Option_Slice_U8_Const kspl_priv_ksplc_main_read_supplied(Slic
   return (Option_Slice_U8_Const){.tag = kspl_Option_Slice_U8_Const_some, .payload.some = {mended.code}};
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3462 = KSPL_STR_INIT("Unknown");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3463 = KSPL_STR_INIT("Grammar sync error: Rule '");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3464 = KSPL_STR_INIT("' is defined in kspl.kspeg but missing from Ast_kind enum.");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3465 = KSPL_STR_INIT("Unknown");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3466 = KSPL_STR_INIT("Grammar sync error: Rule '");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3467 = KSPL_STR_INIT("' is defined in kspl.kspeg but missing from Ast_kind enum.");
 static KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error kspl_priv_ksplc_main_run_compiler(Slice_U8 in_path, Slice_U8 out_path, Slice_U8 deps_path, Slice_U8 libs_path, kspeg_engine_Target *parser, Bool is_lint) {
   I64 start_time = kspl_std_sys_mono_us();
   Slice_U8 mod_name = kspl_Slice_U8_Const_strip_kspl_ext(in_path);
@@ -144324,9 +144433,9 @@ static KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error kspl_priv_ksplc_main
   I32 expected_max = (I32)((ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_max);
   I32 current_size = kspl_ksplc_base_core_Global_pools_get_kind_pool_size(&kspl_ksplc_base_core_pools);
   if (current_size > expected_max) {
-    Slice_U8 unknown_name = kspl_ksplc_base_core_Global_pools_get_kind_str(&kspl_ksplc_base_core_pools, expected_max, kspl_lit_3462);
+    Slice_U8 unknown_name = kspl_ksplc_base_core_Global_pools_get_kind_str(&kspl_ksplc_base_core_pools, expected_max, kspl_lit_3465);
     std_str_Str_builder err_msg = kspl_std_str_Str_builder_new();
-    (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Slice_U8_Const(kspl_std_str_Str_builder_s(&err_msg, kspl_lit_3463), unknown_name), kspl_lit_3464));
+    (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Slice_U8_Const(kspl_std_str_Str_builder_s(&err_msg, kspl_lit_3466), unknown_name), kspl_lit_3467));
     kspl_ksplc_base_diag_ice_panic(kspl_std_str_Str_builder_slice(&err_msg));
     {
       kspl_std_str_Str_builder_free(&err_msg);
@@ -144372,7 +144481,7 @@ static KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error kspl_priv_ksplc_main
   {
     KSPL_UNUSED Sz __k_for_idx1 = (Sz)0;
     for (; __k_for_idx1 < (*__k_for_coll1)->len; __k_for_idx1 = (Sz)((size_t)(__k_for_idx1) + (size_t)((Sz)1))) {
-      const Slice_U8 path = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3450, (Sz)282)));
+      const Slice_U8 path = (*(kspl_std_ds_List_Slice_U8_Const_at_ref((*(__k_for_coll1)), __k_for_idx1, kspl_lit_3453, (Sz)282)));
       KSPL_UNUSED ksplc_base_ast_Ast_node *__k_tmp7 = compiler->root_file;
       KSPL_UNUSED ksplc_sema_session_ctx_Sema_ctx *__k_tmp8 = compiler->sema;
       KSPL_UNUSED ksplc_tools_interface_Form __k_tmp9 = kspl_ksplc_tools_interface_form_of(path);
@@ -144476,8 +144585,8 @@ static KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error kspl_priv_ksplc_main
     for (; __k_for_idx2 < __k_for_coll2.len; __k_for_idx2 = (Sz)((size_t)(__k_for_idx2) + (size_t)((Sz)1))) {
       KSPL_UNUSED Sz __k_tmp18 = kspl_Range_get(&__k_for_coll2, __k_for_idx2);
       Sz i = __k_tmp18;
-      KSPL_UNUSED Slice_U8 __k_tmp19 = kspl_std_ds_List_Slice_U8_Const_get(kspl_ksplc_base_core_config.interface_paths, i, kspl_lit_3450, (Sz)312);
-      KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error __k_tmp20 = kspl_ksplc_pipeline_Staged_outputs_write_whole(&staged, __k_tmp19, kspl_std_ds_List_Slice_U8_Const_get(&interface_texts, i, kspl_lit_3450, (Sz)312));
+      KSPL_UNUSED Slice_U8 __k_tmp19 = kspl_std_ds_List_Slice_U8_Const_get(kspl_ksplc_base_core_config.interface_paths, i, kspl_lit_3453, (Sz)312);
+      KSPL_UNUSED Result_Void_ksplc_pipeline_Compile_error __k_tmp20 = kspl_ksplc_pipeline_Staged_outputs_write_whole(&staged, __k_tmp19, kspl_std_ds_List_Slice_U8_Const_get(&interface_texts, i, kspl_lit_3453, (Sz)312));
       if (__k_tmp20.tag == kspl_Result_Void_ksplc_pipeline_Compile_error_err) {
         {
           kspl_ksplc_pipeline_Staged_outputs_free(&staged);
@@ -144540,19 +144649,19 @@ static KSPL_UNUSED void kspl_std_io_Io_error_report_and_exit(std_io_Io_error r, 
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3465 = KSPL_STR_INIT("parse/syntax_error: compilation terminated (see diagnostics above)\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3466 = KSPL_STR_INIT("parse/circular_import: circular import across directory boundaries is forbidden: ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3467 = KSPL_STR_INIT("parse/kspeg: ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3468 = KSPL_STR_INIT("parse/kspeg: failed to parse kspl.kspeg grammar itself\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3469 = KSPL_STR_INIT("parse/io");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3470 = KSPL_STR_INIT("sema/analysis_failed: compilation terminated (see diagnostics above)\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3471 = KSPL_STR_INIT("sema/not_constant: expression is not a compile-time constant\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3472 = KSPL_STR_INIT("sema/division_by_zero: division or modulo by zero\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3473 = KSPL_STR_INIT("sema/invalid_argument: invalid argument\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3474 = KSPL_STR_INIT("sema/nesting_too_deep: compilation terminated (see diagnostics above)\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3475 = KSPL_STR_INIT("codegen: compilation terminated (see diagnostics above)\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3476 = KSPL_STR_INIT("fmt/failed: some files could not be formatted (listed above)\n");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3477 = KSPL_STR_INIT("unknown: unrecognized error\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3468 = KSPL_STR_INIT("parse/syntax_error: compilation terminated (see diagnostics above)\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3469 = KSPL_STR_INIT("parse/circular_import: circular import across directory boundaries is forbidden: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3470 = KSPL_STR_INIT("parse/kspeg: ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3471 = KSPL_STR_INIT("parse/kspeg: failed to parse kspl.kspeg grammar itself\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3472 = KSPL_STR_INIT("parse/io");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3473 = KSPL_STR_INIT("sema/analysis_failed: compilation terminated (see diagnostics above)\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3474 = KSPL_STR_INIT("sema/not_constant: expression is not a compile-time constant\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3475 = KSPL_STR_INIT("sema/division_by_zero: division or modulo by zero\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3476 = KSPL_STR_INIT("sema/invalid_argument: invalid argument\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3477 = KSPL_STR_INIT("sema/nesting_too_deep: compilation terminated (see diagnostics above)\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3478 = KSPL_STR_INIT("codegen: compilation terminated (see diagnostics above)\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3479 = KSPL_STR_INIT("fmt/failed: some files could not be formatted (listed above)\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3480 = KSPL_STR_INIT("unknown: unrecognized error\n");
 static KSPL_UNUSED void kspl_ksplc_pipeline_Compile_error_report_and_exit(const ksplc_pipeline_Compile_error *r) {
   std_str_Str_builder msg = kspl_std_str_Str_builder_new();
   Bool closes = false;
@@ -144563,12 +144672,12 @@ static KSPL_UNUSED void kspl_ksplc_pipeline_Compile_error_report_and_exit(const 
     switch (p_err.tag) {
     case kspl_ksplc_parse_load_Parse_error_syntax_error: {
       closes = true;
-      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3465));
+      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3468));
       break;
     }
     case kspl_ksplc_parse_load_Parse_error_circular_import: {
       Slice_U8 path = p_err.payload.circular_import.path;
-      (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Slice_U8_Const(kspl_std_str_Str_builder_s(&msg, kspl_lit_3466), path), kspl_lit_3));
+      (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Slice_U8_Const(kspl_std_str_Str_builder_s(&msg, kspl_lit_3469), path), kspl_lit_3));
       break;
     }
     case kspl_ksplc_parse_load_Parse_error_kspeg: {
@@ -144576,18 +144685,18 @@ static KSPL_UNUSED void kspl_ksplc_pipeline_Compile_error_report_and_exit(const 
       switch (kspeg_err.tag) {
       case kspl_kspeg_rule_Kspeg_signal_fatal: {
         Slice_U8 e_msg = kspeg_err.payload.fatal.msg;
-        (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Slice_U8_Const(kspl_std_str_Str_builder_s(&msg, kspl_lit_3467), e_msg), kspl_lit_3));
+        (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_Slice_U8_Const(kspl_std_str_Str_builder_s(&msg, kspl_lit_3470), e_msg), kspl_lit_3));
         break;
       }
       default: {
-        (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3468));
+        (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3471));
       } break;
       }
       break;
     }
     case kspl_ksplc_parse_load_Parse_error_io: {
       std_io_Io_error io_err = p_err.payload.io.err;
-      kspl_std_io_Io_error_report_and_exit(io_err, kspl_lit_3469);
+      kspl_std_io_Io_error_report_and_exit(io_err, kspl_lit_3472);
       break;
     }
     default:
@@ -144600,24 +144709,24 @@ static KSPL_UNUSED void kspl_ksplc_pipeline_Compile_error_report_and_exit(const 
     switch (s_err) {
     case kspl_ksplc_sema_session_ctx_Sema_error_analysis_failed: {
       closes = true;
-      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3470));
+      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3473));
       break;
     }
     case kspl_ksplc_sema_session_ctx_Sema_error_not_constant: {
-      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3471));
+      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3474));
       break;
     }
     case kspl_ksplc_sema_session_ctx_Sema_error_division_by_zero: {
-      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3472));
+      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3475));
       break;
     }
     case kspl_ksplc_sema_session_ctx_Sema_error_invalid_argument: {
-      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3473));
+      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3476));
       break;
     }
     case kspl_ksplc_sema_session_ctx_Sema_error_nesting_too_deep: {
       closes = true;
-      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3474));
+      (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3477));
       break;
     }
     default:
@@ -144632,18 +144741,18 @@ static KSPL_UNUSED void kspl_ksplc_pipeline_Compile_error_report_and_exit(const 
   }
   case kspl_ksplc_pipeline_Compile_error_codegen: {
     closes = true;
-    (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3475));
+    (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3478));
     break;
   }
   case kspl_ksplc_pipeline_Compile_error_fmt_failed: {
-    (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3476));
+    (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3479));
     break;
   }
   default:
     __builtin_unreachable();
   }
   if (msg.len == (Sz)0) {
-    (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3477));
+    (void)(kspl_std_str_Str_builder_s(&msg, kspl_lit_3480));
   }
 
   if (!closes) {
@@ -144681,8 +144790,8 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_print_internal_trace(void) {
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3478 = KSPL_STR_INIT("Final Global Heap : ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3479 = KSPL_STR_INIT(" bytes (Expected 0. A nonzero value indicates a memory leak)\n");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3481 = KSPL_STR_INIT("Final Global Heap : ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3482 = KSPL_STR_INIT(" bytes (Expected 0. A nonzero value indicates a memory leak)\n");
 static KSPL_UNUSED Result_Void_I32 kspl_main(void) {
   {
     {
@@ -144708,8 +144817,8 @@ static KSPL_UNUSED Result_Void_I32 kspl_main(void) {
   Sz heap_used = kspl_std_mem_heap_used_bytes();
   if (heap_used != (Sz)0) {
     std_str_Str_builder final_msg = kspl_std_str_Str_builder_new();
-    KSPL_UNUSED std_str_Str_builder *__k_tmp4 = kspl_std_str_Str_builder_s(&final_msg, kspl_lit_3478);
-    (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_std_strfmt_Int_fmt(__k_tmp4, kspl_Sz_fmt_spec(heap_used, (Sz)0, false, true)), kspl_lit_3479));
+    KSPL_UNUSED std_str_Str_builder *__k_tmp4 = kspl_std_str_Str_builder_s(&final_msg, kspl_lit_3481);
+    (void)(kspl_std_str_Str_builder_s(kspl_put_std_str_Str_builder_Ptr_std_strfmt_Int_fmt(__k_tmp4, kspl_Sz_fmt_spec(heap_used, (Sz)0, false, true)), kspl_lit_3482));
     kspl_ksplc_usage_error_exit(kspl_std_str_Str_builder_slice(&final_msg));
     {
       kspl_std_str_Str_builder_free(&final_msg);
@@ -144899,10 +145008,10 @@ static KSPL_UNUSED I32 kspl_ksplc_main__anon_env_2_call(KSPL_UNUSED const ksplc_
   return kspl_Slice_U8_Const_compare((*(left)), (*(right)));
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3480 = KSPL_STR_INIT("Slice.at_ref");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3483 = KSPL_STR_INIT("Slice.at_ref");
 static KSPL_UNUSED const U8 *kspl_Slice_U8_Const_at_ref(const Slice_U8 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len || r->len < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3480, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3483, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -145621,7 +145730,7 @@ static KSPL_UNUSED Result_Slice_U8_Const_std_str_Str_error kspl_Slice_U8_Const_u
   return (Result_Slice_U8_Const_std_str_Str_error){.tag = kspl_Result_Slice_U8_Const_std_str_Str_error_ok, .payload.ok = {(Slice_U8){.ptr = (U8 *)(buf_ptr), .len = w}}};
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3481 = KSPL_STR_INIT("std/str");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3484 = KSPL_STR_INIT("std/str");
 static KSPL_UNUSED Slice_U8 kspl_Slice_U8_Const_dedent(Slice_U8 r, std_mem_Arena *arena) {
   std_str_Str_builder res = kspl_std_str_Str_builder_new();
   if (r.len == (Sz)0) {
@@ -145650,14 +145759,14 @@ static KSPL_UNUSED Slice_U8 kspl_Slice_U8_Const_dedent(Slice_U8 r, std_mem_Arena
       Sz k = (Sz)0;
       {
         for (;;) {
-          KSPL_UNUSED Bool __k_tmp7 = k < indent.len && ((U8)(*(kspl_Slice_U8_Const_at_ref(&indent, k, kspl_lit_3481, (Sz)388))) == 32 || (U8)(*(kspl_Slice_U8_Const_at_ref(&indent, k, kspl_lit_3481, (Sz)388))) == 9);
+          KSPL_UNUSED Bool __k_tmp7 = k < indent.len && ((U8)(*(kspl_Slice_U8_Const_at_ref(&indent, k, kspl_lit_3484, (Sz)388))) == 32 || (U8)(*(kspl_Slice_U8_Const_at_ref(&indent, k, kspl_lit_3484, (Sz)388))) == 9);
           if (__k_tmp7) {
             KSPL_UNUSED Bool __k_tmp6 = !have_prefix;
             if (!__k_tmp6) {
               KSPL_UNUSED Bool __k_tmp5 = k < prefix.len;
               if (__k_tmp5) {
-                KSPL_UNUSED const U8 __k_tmp4 = (*(kspl_Slice_U8_Const_at_ref(&prefix, k, kspl_lit_3481, (Sz)389)));
-                __k_tmp5 = __k_tmp4 == (*(kspl_Slice_U8_Const_at_ref(&indent, k, kspl_lit_3481, (Sz)389)));
+                KSPL_UNUSED const U8 __k_tmp4 = (*(kspl_Slice_U8_Const_at_ref(&prefix, k, kspl_lit_3484, (Sz)389)));
+                __k_tmp5 = __k_tmp4 == (*(kspl_Slice_U8_Const_at_ref(&indent, k, kspl_lit_3484, (Sz)389)));
               }
 
               __k_tmp6 = __k_tmp5;
@@ -145812,12 +145921,12 @@ static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_additive_op(Slice_U8 r) {
   return kspl_Slice_U8_Const_equals(r, kspl_lit_92) || kspl_Slice_U8_Const_equals(r, kspl_lit_533);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3482 = KSPL_STR_INIT("std/bytes");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3485 = KSPL_STR_INIT("std/bytes");
 static KSPL_UNUSED U32 kspl_Slice_U8_Const_get_u32_be(Slice_U8 r, Sz at) {
-  KSPL_UNUSED U32 __k_tmp3 = (U32)(*(kspl_Slice_U8_Const_at_ref(&r, at, kspl_lit_3482, (Sz)42))) << (24);
-  KSPL_UNUSED U32 __k_tmp2 = __k_tmp3 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)1)), kspl_lit_3482, (Sz)42))) << (16);
-  KSPL_UNUSED U32 __k_tmp1 = __k_tmp2 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)2)), kspl_lit_3482, (Sz)42))) << (8);
-  return __k_tmp1 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)3)), kspl_lit_3482, (Sz)42)));
+  KSPL_UNUSED U32 __k_tmp3 = (U32)(*(kspl_Slice_U8_Const_at_ref(&r, at, kspl_lit_3485, (Sz)42))) << (24);
+  KSPL_UNUSED U32 __k_tmp2 = __k_tmp3 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)1)), kspl_lit_3485, (Sz)42))) << (16);
+  KSPL_UNUSED U32 __k_tmp1 = __k_tmp2 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)2)), kspl_lit_3485, (Sz)42))) << (8);
+  return __k_tmp1 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)3)), kspl_lit_3485, (Sz)42)));
 }
 
 static KSPL_UNUSED U64 kspl_Slice_U8_Const_get_u64_be(Slice_U8 r, Sz at) {
@@ -145826,10 +145935,10 @@ static KSPL_UNUSED U64 kspl_Slice_U8_Const_get_u64_be(Slice_U8 r, Sz at) {
 }
 
 static KSPL_UNUSED U32 kspl_Slice_U8_Const_get_u32_le(Slice_U8 r, Sz at) {
-  KSPL_UNUSED U32 __k_tmp3 = (U32)(*(kspl_Slice_U8_Const_at_ref(&r, at, kspl_lit_3482, (Sz)52)));
-  KSPL_UNUSED U32 __k_tmp2 = __k_tmp3 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)1)), kspl_lit_3482, (Sz)52))) << (8);
-  KSPL_UNUSED U32 __k_tmp1 = __k_tmp2 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)2)), kspl_lit_3482, (Sz)52))) << (16);
-  return __k_tmp1 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)3)), kspl_lit_3482, (Sz)52))) << (24);
+  KSPL_UNUSED U32 __k_tmp3 = (U32)(*(kspl_Slice_U8_Const_at_ref(&r, at, kspl_lit_3485, (Sz)52)));
+  KSPL_UNUSED U32 __k_tmp2 = __k_tmp3 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)1)), kspl_lit_3485, (Sz)52))) << (8);
+  KSPL_UNUSED U32 __k_tmp1 = __k_tmp2 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)2)), kspl_lit_3485, (Sz)52))) << (16);
+  return __k_tmp1 | (U32)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((size_t)(at) + (size_t)((Sz)3)), kspl_lit_3485, (Sz)52))) << (24);
 }
 
 static KSPL_UNUSED Slice_U8 kspl_Slice_U8_Const_strip_file_uri(Slice_U8 r) {
@@ -146396,10 +146505,10 @@ static KSPL_UNUSED Slice_U8 kspl_Slice_U8_Const_resolve_embed_path(Slice_U8 r, S
   }
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3483 = KSPL_STR_INIT("std/");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3486 = KSPL_STR_INIT("std/");
 static KSPL_UNUSED std_str_Str_builder kspl_Slice_U8_Const_logical_path(Slice_U8 r, Slice_U8 written) {
   std_str_Str_builder res = kspl_std_str_Str_builder_new();
-  KSPL_UNUSED Bool __k_tmp2 = kspl_Slice_U8_Const_starts_with(written, kspl_lit_3483, (Sz)0);
+  KSPL_UNUSED Bool __k_tmp2 = kspl_Slice_U8_Const_starts_with(written, kspl_lit_3486, (Sz)0);
   if (!__k_tmp2) {
     KSPL_UNUSED Option_Sz __k_tmp1 = kspl_Slice_U8_Const_find_char(written, 47);
     __k_tmp2 = kspl_Option_Sz_is_some(&__k_tmp1) && !kspl_Slice_U8_Const_starts_with(written, kspl_lit_16, (Sz)0);
@@ -146439,34 +146548,34 @@ static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_made_temp(Slice_U8 r) {
   return kspl_Slice_U8_Const_is_made_name(r) && kspl_Slice_U8_Const_starts_with(kspl_Slice_U8_Const_made_stem(r), kspl_ksplc_base_c_name_MADE_TEMP_STEM, (Sz)0);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3484 = KSPL_STR_INIT("char");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3485 = KSPL_STR_INIT("do");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3486 = KSPL_STR_INIT("int");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3487 = KSPL_STR_INIT("long");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3488 = KSPL_STR_INIT("register");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3489 = KSPL_STR_INIT("restrict");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3490 = KSPL_STR_INIT("short");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3491 = KSPL_STR_INIT("signed");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3492 = KSPL_STR_INIT("static");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3493 = KSPL_STR_INIT("union");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3494 = KSPL_STR_INIT("volatile");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3495 = KSPL_STR_INIT("_Bool");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3496 = KSPL_STR_INIT("_Complex");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3497 = KSPL_STR_INIT("_Imaginary");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3487 = KSPL_STR_INIT("char");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3488 = KSPL_STR_INIT("do");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3489 = KSPL_STR_INIT("int");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3490 = KSPL_STR_INIT("long");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3491 = KSPL_STR_INIT("register");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3492 = KSPL_STR_INIT("restrict");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3493 = KSPL_STR_INIT("short");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3494 = KSPL_STR_INIT("signed");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3495 = KSPL_STR_INIT("static");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3496 = KSPL_STR_INIT("union");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3497 = KSPL_STR_INIT("volatile");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3498 = KSPL_STR_INIT("_Bool");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3499 = KSPL_STR_INIT("_Complex");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3500 = KSPL_STR_INIT("_Imaginary");
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_c_keyword(Slice_U8 r) {
-  return kspl_Slice_U8_Const_equals(r, kspl_lit_1520) || kspl_Slice_U8_Const_equals(r, kspl_lit_629) || kspl_Slice_U8_Const_equals(r, kspl_lit_426) || kspl_Slice_U8_Const_equals(r, kspl_lit_3484) || kspl_Slice_U8_Const_equals(r, kspl_lit_537) || kspl_Slice_U8_Const_equals(r, kspl_lit_630) || kspl_Slice_U8_Const_equals(r, kspl_lit_425) || kspl_Slice_U8_Const_equals(r, kspl_lit_3485) || kspl_Slice_U8_Const_equals(r, kspl_lit_2683) || kspl_Slice_U8_Const_equals(r, kspl_lit_578) || kspl_Slice_U8_Const_equals(r, kspl_lit_647) || kspl_Slice_U8_Const_equals(r, kspl_lit_599) || kspl_Slice_U8_Const_equals(r, kspl_lit_2682) || kspl_Slice_U8_Const_equals(r, kspl_lit_566) || kspl_Slice_U8_Const_equals(r, kspl_lit_435) || kspl_Slice_U8_Const_equals(r, kspl_lit_433) || kspl_Slice_U8_Const_equals(r, kspl_lit_788) || kspl_Slice_U8_Const_equals(r, kspl_lit_3486) || kspl_Slice_U8_Const_equals(r, kspl_lit_3487) || kspl_Slice_U8_Const_equals(r, kspl_lit_3488) || kspl_Slice_U8_Const_equals(r, kspl_lit_3489) || kspl_Slice_U8_Const_equals(r, kspl_lit_573) || kspl_Slice_U8_Const_equals(r, kspl_lit_3490) || kspl_Slice_U8_Const_equals(r, kspl_lit_3491) || kspl_Slice_U8_Const_equals(r, kspl_lit_625) || kspl_Slice_U8_Const_equals(r, kspl_lit_3492) || kspl_Slice_U8_Const_equals(r, kspl_lit_644) || kspl_Slice_U8_Const_equals(r, kspl_lit_567) || kspl_Slice_U8_Const_equals(r, kspl_lit_677) || kspl_Slice_U8_Const_equals(r, kspl_lit_3493) || kspl_Slice_U8_Const_equals(r, kspl_lit_2550) || kspl_Slice_U8_Const_equals(r, kspl_lit_894) || kspl_Slice_U8_Const_equals(r, kspl_lit_3494) || kspl_Slice_U8_Const_equals(r, kspl_lit_683) || kspl_Slice_U8_Const_equals(r, kspl_lit_3495) || kspl_Slice_U8_Const_equals(r, kspl_lit_3496) || kspl_Slice_U8_Const_equals(r, kspl_lit_3497);
+  return kspl_Slice_U8_Const_equals(r, kspl_lit_1520) || kspl_Slice_U8_Const_equals(r, kspl_lit_629) || kspl_Slice_U8_Const_equals(r, kspl_lit_426) || kspl_Slice_U8_Const_equals(r, kspl_lit_3487) || kspl_Slice_U8_Const_equals(r, kspl_lit_537) || kspl_Slice_U8_Const_equals(r, kspl_lit_630) || kspl_Slice_U8_Const_equals(r, kspl_lit_425) || kspl_Slice_U8_Const_equals(r, kspl_lit_3488) || kspl_Slice_U8_Const_equals(r, kspl_lit_2683) || kspl_Slice_U8_Const_equals(r, kspl_lit_578) || kspl_Slice_U8_Const_equals(r, kspl_lit_647) || kspl_Slice_U8_Const_equals(r, kspl_lit_599) || kspl_Slice_U8_Const_equals(r, kspl_lit_2682) || kspl_Slice_U8_Const_equals(r, kspl_lit_566) || kspl_Slice_U8_Const_equals(r, kspl_lit_435) || kspl_Slice_U8_Const_equals(r, kspl_lit_433) || kspl_Slice_U8_Const_equals(r, kspl_lit_788) || kspl_Slice_U8_Const_equals(r, kspl_lit_3489) || kspl_Slice_U8_Const_equals(r, kspl_lit_3490) || kspl_Slice_U8_Const_equals(r, kspl_lit_3491) || kspl_Slice_U8_Const_equals(r, kspl_lit_3492) || kspl_Slice_U8_Const_equals(r, kspl_lit_573) || kspl_Slice_U8_Const_equals(r, kspl_lit_3493) || kspl_Slice_U8_Const_equals(r, kspl_lit_3494) || kspl_Slice_U8_Const_equals(r, kspl_lit_625) || kspl_Slice_U8_Const_equals(r, kspl_lit_3495) || kspl_Slice_U8_Const_equals(r, kspl_lit_644) || kspl_Slice_U8_Const_equals(r, kspl_lit_567) || kspl_Slice_U8_Const_equals(r, kspl_lit_677) || kspl_Slice_U8_Const_equals(r, kspl_lit_3496) || kspl_Slice_U8_Const_equals(r, kspl_lit_2550) || kspl_Slice_U8_Const_equals(r, kspl_lit_894) || kspl_Slice_U8_Const_equals(r, kspl_lit_3497) || kspl_Slice_U8_Const_equals(r, kspl_lit_683) || kspl_Slice_U8_Const_equals(r, kspl_lit_3498) || kspl_Slice_U8_Const_equals(r, kspl_lit_3499) || kspl_Slice_U8_Const_equals(r, kspl_lit_3500);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3498 = KSPL_STR_INIT("EOF");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3499 = KSPL_STR_INIT("far");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3500 = KSPL_STR_INIT("near");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3501 = KSPL_STR_INIT("pascal");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3502 = KSPL_STR_INIT("bool");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3503 = KSPL_STR_INIT("stdin");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3504 = KSPL_STR_INIT("stdout");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3505 = KSPL_STR_INIT("stderr");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3501 = KSPL_STR_INIT("EOF");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3502 = KSPL_STR_INIT("far");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3503 = KSPL_STR_INIT("near");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3504 = KSPL_STR_INIT("pascal");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3505 = KSPL_STR_INIT("bool");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3506 = KSPL_STR_INIT("stdin");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3507 = KSPL_STR_INIT("stdout");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3508 = KSPL_STR_INIT("stderr");
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_preamble_macro(Slice_U8 r) {
-  return kspl_Slice_U8_Const_equals(r, kspl_lit_2653) || kspl_Slice_U8_Const_equals(r, kspl_lit_3498) || kspl_Slice_U8_Const_equals(r, kspl_lit_3378) || kspl_Slice_U8_Const_equals(r, kspl_lit_3499) || kspl_Slice_U8_Const_equals(r, kspl_lit_3500) || kspl_Slice_U8_Const_equals(r, kspl_lit_3501) || kspl_Slice_U8_Const_equals(r, kspl_lit_3502) || kspl_Slice_U8_Const_equals(r, kspl_lit_3503) || kspl_Slice_U8_Const_equals(r, kspl_lit_3504) || kspl_Slice_U8_Const_equals(r, kspl_lit_3505);
+  return kspl_Slice_U8_Const_equals(r, kspl_lit_2653) || kspl_Slice_U8_Const_equals(r, kspl_lit_3501) || kspl_Slice_U8_Const_equals(r, kspl_lit_3381) || kspl_Slice_U8_Const_equals(r, kspl_lit_3502) || kspl_Slice_U8_Const_equals(r, kspl_lit_3503) || kspl_Slice_U8_Const_equals(r, kspl_lit_3504) || kspl_Slice_U8_Const_equals(r, kspl_lit_3505) || kspl_Slice_U8_Const_equals(r, kspl_lit_3506) || kspl_Slice_U8_Const_equals(r, kspl_lit_3507) || kspl_Slice_U8_Const_equals(r, kspl_lit_3508);
 }
 
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_macro_case(Slice_U8 r) {
@@ -146488,54 +146597,54 @@ static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_macro_case(Slice_U8 r) {
   return has_upper;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3506 = KSPL_STR_INIT("linux");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3507 = KSPL_STR_INIT("unix");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3508 = KSPL_STR_INIT("i386");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3509 = KSPL_STR_INIT("sun");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3510 = KSPL_STR_INIT("sparc");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3511 = KSPL_STR_INIT("mips");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3512 = KSPL_STR_INIT("mc68000");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3509 = KSPL_STR_INIT("linux");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3510 = KSPL_STR_INIT("unix");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3511 = KSPL_STR_INIT("i386");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3512 = KSPL_STR_INIT("sun");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3513 = KSPL_STR_INIT("sparc");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3514 = KSPL_STR_INIT("mips");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3515 = KSPL_STR_INIT("mc68000");
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_gnu_macro(Slice_U8 r) {
-  return kspl_Slice_U8_Const_equals(r, kspl_lit_3506) || kspl_Slice_U8_Const_equals(r, kspl_lit_3507) || kspl_Slice_U8_Const_equals(r, kspl_lit_3508) || kspl_Slice_U8_Const_equals(r, kspl_lit_3509) || kspl_Slice_U8_Const_equals(r, kspl_lit_3510) || kspl_Slice_U8_Const_equals(r, kspl_lit_3511) || kspl_Slice_U8_Const_equals(r, kspl_lit_3512);
+  return kspl_Slice_U8_Const_equals(r, kspl_lit_3509) || kspl_Slice_U8_Const_equals(r, kspl_lit_3510) || kspl_Slice_U8_Const_equals(r, kspl_lit_3511) || kspl_Slice_U8_Const_equals(r, kspl_lit_3512) || kspl_Slice_U8_Const_equals(r, kspl_lit_3513) || kspl_Slice_U8_Const_equals(r, kspl_lit_3514) || kspl_Slice_U8_Const_equals(r, kspl_lit_3515);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3513 = KSPL_STR_INIT("ksplc/base/c_name");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3516 = KSPL_STR_INIT("ksplc/base/c_name");
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_reserved_for_compiler(Slice_U8 r) {
-  return r.len >= (Sz)2 && (U8)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)0, kspl_lit_3513, (Sz)135))) == 95 && ((U8)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)1, kspl_lit_3513, (Sz)135))) == 95 || kspl_U8_is_upper((*(kspl_Slice_U8_Const_at_ref(&r, (Sz)1, kspl_lit_3513, (Sz)135)))));
+  return r.len >= (Sz)2 && (U8)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)0, kspl_lit_3516, (Sz)135))) == 95 && ((U8)(*(kspl_Slice_U8_Const_at_ref(&r, (Sz)1, kspl_lit_3516, (Sz)135))) == 95 || kspl_U8_is_upper((*(kspl_Slice_U8_Const_at_ref(&r, (Sz)1, kspl_lit_3516, (Sz)135)))));
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3514 = KSPL_STR_INIT("_asm");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3515 = KSPL_STR_INIT("_based");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3516 = KSPL_STR_INIT("_cdecl");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3517 = KSPL_STR_INIT("_declspec");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3518 = KSPL_STR_INIT("_except");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3519 = KSPL_STR_INIT("_fastcall");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3520 = KSPL_STR_INIT("_finally");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3521 = KSPL_STR_INIT("_forceinline");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3522 = KSPL_STR_INIT("_inline");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3523 = KSPL_STR_INIT("_int8");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3524 = KSPL_STR_INIT("_int16");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3525 = KSPL_STR_INIT("_int32");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3526 = KSPL_STR_INIT("_int64");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3527 = KSPL_STR_INIT("_leave");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3528 = KSPL_STR_INIT("_multiple_inheritance");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3529 = KSPL_STR_INIT("_ptr32");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3530 = KSPL_STR_INIT("_ptr64");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3531 = KSPL_STR_INIT("_restrict");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3532 = KSPL_STR_INIT("_stdcall");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3533 = KSPL_STR_INIT("_thiscall");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3534 = KSPL_STR_INIT("_try");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3535 = KSPL_STR_INIT("_unaligned");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3536 = KSPL_STR_INIT("_uptr");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3537 = KSPL_STR_INIT("_uuidof");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3538 = KSPL_STR_INIT("_vectorcall");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3539 = KSPL_STR_INIT("_virtual_inheritance");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3540 = KSPL_STR_INIT("_w64");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3541 = KSPL_STR_INIT("static_assert");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3542 = KSPL_STR_INIT("L__FUNCTION__");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3543 = KSPL_STR_INIT("L__FUNCSIG__");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3517 = KSPL_STR_INIT("_asm");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3518 = KSPL_STR_INIT("_based");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3519 = KSPL_STR_INIT("_cdecl");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3520 = KSPL_STR_INIT("_declspec");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3521 = KSPL_STR_INIT("_except");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3522 = KSPL_STR_INIT("_fastcall");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3523 = KSPL_STR_INIT("_finally");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3524 = KSPL_STR_INIT("_forceinline");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3525 = KSPL_STR_INIT("_inline");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3526 = KSPL_STR_INIT("_int8");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3527 = KSPL_STR_INIT("_int16");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3528 = KSPL_STR_INIT("_int32");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3529 = KSPL_STR_INIT("_int64");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3530 = KSPL_STR_INIT("_leave");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3531 = KSPL_STR_INIT("_multiple_inheritance");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3532 = KSPL_STR_INIT("_ptr32");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3533 = KSPL_STR_INIT("_ptr64");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3534 = KSPL_STR_INIT("_restrict");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3535 = KSPL_STR_INIT("_stdcall");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3536 = KSPL_STR_INIT("_thiscall");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3537 = KSPL_STR_INIT("_try");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3538 = KSPL_STR_INIT("_unaligned");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3539 = KSPL_STR_INIT("_uptr");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3540 = KSPL_STR_INIT("_uuidof");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3541 = KSPL_STR_INIT("_vectorcall");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3542 = KSPL_STR_INIT("_virtual_inheritance");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3543 = KSPL_STR_INIT("_w64");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3544 = KSPL_STR_INIT("static_assert");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3545 = KSPL_STR_INIT("L__FUNCTION__");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3546 = KSPL_STR_INIT("L__FUNCSIG__");
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_microsoft_keyword(Slice_U8 r) {
-  return kspl_Slice_U8_Const_equals(r, kspl_lit_3514) || kspl_Slice_U8_Const_equals(r, kspl_lit_3515) || kspl_Slice_U8_Const_equals(r, kspl_lit_3516) || kspl_Slice_U8_Const_equals(r, kspl_lit_3517) || kspl_Slice_U8_Const_equals(r, kspl_lit_3518) || kspl_Slice_U8_Const_equals(r, kspl_lit_3519) || kspl_Slice_U8_Const_equals(r, kspl_lit_3520) || kspl_Slice_U8_Const_equals(r, kspl_lit_3521) || kspl_Slice_U8_Const_equals(r, kspl_lit_3522) || kspl_Slice_U8_Const_equals(r, kspl_lit_3523) || kspl_Slice_U8_Const_equals(r, kspl_lit_3524) || kspl_Slice_U8_Const_equals(r, kspl_lit_3525) || kspl_Slice_U8_Const_equals(r, kspl_lit_3526) || kspl_Slice_U8_Const_equals(r, kspl_lit_3527) || kspl_Slice_U8_Const_equals(r, kspl_lit_3528) || kspl_Slice_U8_Const_equals(r, kspl_lit_3529) || kspl_Slice_U8_Const_equals(r, kspl_lit_3530) || kspl_Slice_U8_Const_equals(r, kspl_lit_3531) || kspl_Slice_U8_Const_equals(r, kspl_lit_3532) || kspl_Slice_U8_Const_equals(r, kspl_lit_3533) || kspl_Slice_U8_Const_equals(r, kspl_lit_3534) || kspl_Slice_U8_Const_equals(r, kspl_lit_3535) || kspl_Slice_U8_Const_equals(r, kspl_lit_3536) || kspl_Slice_U8_Const_equals(r, kspl_lit_3537) || kspl_Slice_U8_Const_equals(r, kspl_lit_3538) || kspl_Slice_U8_Const_equals(r, kspl_lit_3539) || kspl_Slice_U8_Const_equals(r, kspl_lit_3540) || kspl_Slice_U8_Const_equals(r, kspl_lit_3541) || kspl_Slice_U8_Const_equals(r, kspl_lit_3542) || kspl_Slice_U8_Const_equals(r, kspl_lit_3543);
+  return kspl_Slice_U8_Const_equals(r, kspl_lit_3517) || kspl_Slice_U8_Const_equals(r, kspl_lit_3518) || kspl_Slice_U8_Const_equals(r, kspl_lit_3519) || kspl_Slice_U8_Const_equals(r, kspl_lit_3520) || kspl_Slice_U8_Const_equals(r, kspl_lit_3521) || kspl_Slice_U8_Const_equals(r, kspl_lit_3522) || kspl_Slice_U8_Const_equals(r, kspl_lit_3523) || kspl_Slice_U8_Const_equals(r, kspl_lit_3524) || kspl_Slice_U8_Const_equals(r, kspl_lit_3525) || kspl_Slice_U8_Const_equals(r, kspl_lit_3526) || kspl_Slice_U8_Const_equals(r, kspl_lit_3527) || kspl_Slice_U8_Const_equals(r, kspl_lit_3528) || kspl_Slice_U8_Const_equals(r, kspl_lit_3529) || kspl_Slice_U8_Const_equals(r, kspl_lit_3530) || kspl_Slice_U8_Const_equals(r, kspl_lit_3531) || kspl_Slice_U8_Const_equals(r, kspl_lit_3532) || kspl_Slice_U8_Const_equals(r, kspl_lit_3533) || kspl_Slice_U8_Const_equals(r, kspl_lit_3534) || kspl_Slice_U8_Const_equals(r, kspl_lit_3535) || kspl_Slice_U8_Const_equals(r, kspl_lit_3536) || kspl_Slice_U8_Const_equals(r, kspl_lit_3537) || kspl_Slice_U8_Const_equals(r, kspl_lit_3538) || kspl_Slice_U8_Const_equals(r, kspl_lit_3539) || kspl_Slice_U8_Const_equals(r, kspl_lit_3540) || kspl_Slice_U8_Const_equals(r, kspl_lit_3541) || kspl_Slice_U8_Const_equals(r, kspl_lit_3542) || kspl_Slice_U8_Const_equals(r, kspl_lit_3543) || kspl_Slice_U8_Const_equals(r, kspl_lit_3544) || kspl_Slice_U8_Const_equals(r, kspl_lit_3545) || kspl_Slice_U8_Const_equals(r, kspl_lit_3546);
 }
 
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_needs_c_escape(Slice_U8 r) {
@@ -146676,9 +146785,9 @@ static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_space_required_keyword(Slice_U8 r
   return kspl_Slice_U8_Const_equals(r, kspl_lit_573) || kspl_Slice_U8_Const_equals(r, kspl_lit_574) || kspl_Slice_U8_Const_equals(r, kspl_lit_575) || kspl_Slice_U8_Const_equals(r, kspl_lit_426) || kspl_Slice_U8_Const_equals(r, kspl_lit_425) || kspl_Slice_U8_Const_equals(r, kspl_lit_578) || kspl_Slice_U8_Const_equals(r, kspl_lit_567) || kspl_Slice_U8_Const_equals(r, kspl_lit_568) || kspl_Slice_U8_Const_equals(r, kspl_lit_616) || kspl_Slice_U8_Const_equals(r, kspl_lit_592) || kspl_Slice_U8_Const_equals(r, kspl_lit_628) || kspl_Slice_U8_Const_equals(r, kspl_lit_599) || kspl_Slice_U8_Const_equals(r, kspl_lit_604) || kspl_Slice_U8_Const_equals(r, kspl_lit_1732) || kspl_Slice_U8_Const_equals(r, kspl_lit_433) || kspl_Slice_U8_Const_equals(r, kspl_lit_566) || kspl_Slice_U8_Const_equals(r, kspl_lit_596);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3544 = KSPL_STR_INIT("^=");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3547 = KSPL_STR_INIT("^=");
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_op(Slice_U8 r) {
-  return kspl_Slice_U8_Const_equals(r, kspl_lit_97) || kspl_Slice_U8_Const_equals(r, kspl_lit_681) || kspl_Slice_U8_Const_equals(r, kspl_lit_1174) || kspl_Slice_U8_Const_equals(r, kspl_lit_1175) || kspl_Slice_U8_Const_equals(r, kspl_lit_1176) || kspl_Slice_U8_Const_equals(r, kspl_lit_544) || kspl_Slice_U8_Const_equals(r, kspl_lit_545) || kspl_Slice_U8_Const_equals(r, kspl_lit_92) || kspl_Slice_U8_Const_equals(r, kspl_lit_533) || kspl_Slice_U8_Const_equals(r, kspl_lit_91) || kspl_Slice_U8_Const_equals(r, kspl_lit_289) || kspl_Slice_U8_Const_equals(r, kspl_lit_1332) || kspl_Slice_U8_Const_equals(r, kspl_lit_580) || kspl_Slice_U8_Const_equals(r, kspl_lit_581) || kspl_Slice_U8_Const_equals(r, kspl_lit_94) || kspl_Slice_U8_Const_equals(r, kspl_lit_1329) || kspl_Slice_U8_Const_equals(r, kspl_lit_1940) || kspl_Slice_U8_Const_equals(r, kspl_lit_2089) || kspl_Slice_U8_Const_equals(r, kspl_lit_1923) || kspl_Slice_U8_Const_equals(r, kspl_lit_2556) || kspl_Slice_U8_Const_equals(r, kspl_lit_1827) || kspl_Slice_U8_Const_equals(r, kspl_lit_2557) || kspl_Slice_U8_Const_equals(r, kspl_lit_2558) || kspl_Slice_U8_Const_equals(r, kspl_lit_530) || kspl_Slice_U8_Const_equals(r, kspl_lit_531) || kspl_Slice_U8_Const_equals(r, kspl_lit_3544) || kspl_Slice_U8_Const_equals(r, kspl_lit_95) || kspl_Slice_U8_Const_equals(r, kspl_lit_93) || kspl_Slice_U8_Const_equals(r, kspl_lit_352) || kspl_Slice_U8_Const_equals(r, kspl_lit_1333) || kspl_Slice_U8_Const_equals(r, kspl_lit_1334) || kspl_Slice_U8_Const_equals(r, kspl_lit_568) || kspl_Slice_U8_Const_equals(r, kspl_lit_536) || kspl_Slice_U8_Const_equals(r, kspl_lit_570) || kspl_Slice_U8_Const_equals(r, kspl_lit_2) || kspl_Slice_U8_Const_equals(r, kspl_lit_2468);
+  return kspl_Slice_U8_Const_equals(r, kspl_lit_97) || kspl_Slice_U8_Const_equals(r, kspl_lit_681) || kspl_Slice_U8_Const_equals(r, kspl_lit_1174) || kspl_Slice_U8_Const_equals(r, kspl_lit_1175) || kspl_Slice_U8_Const_equals(r, kspl_lit_1176) || kspl_Slice_U8_Const_equals(r, kspl_lit_544) || kspl_Slice_U8_Const_equals(r, kspl_lit_545) || kspl_Slice_U8_Const_equals(r, kspl_lit_92) || kspl_Slice_U8_Const_equals(r, kspl_lit_533) || kspl_Slice_U8_Const_equals(r, kspl_lit_91) || kspl_Slice_U8_Const_equals(r, kspl_lit_289) || kspl_Slice_U8_Const_equals(r, kspl_lit_1332) || kspl_Slice_U8_Const_equals(r, kspl_lit_580) || kspl_Slice_U8_Const_equals(r, kspl_lit_581) || kspl_Slice_U8_Const_equals(r, kspl_lit_94) || kspl_Slice_U8_Const_equals(r, kspl_lit_1329) || kspl_Slice_U8_Const_equals(r, kspl_lit_1940) || kspl_Slice_U8_Const_equals(r, kspl_lit_2089) || kspl_Slice_U8_Const_equals(r, kspl_lit_1923) || kspl_Slice_U8_Const_equals(r, kspl_lit_2556) || kspl_Slice_U8_Const_equals(r, kspl_lit_1827) || kspl_Slice_U8_Const_equals(r, kspl_lit_2557) || kspl_Slice_U8_Const_equals(r, kspl_lit_2558) || kspl_Slice_U8_Const_equals(r, kspl_lit_530) || kspl_Slice_U8_Const_equals(r, kspl_lit_531) || kspl_Slice_U8_Const_equals(r, kspl_lit_3547) || kspl_Slice_U8_Const_equals(r, kspl_lit_95) || kspl_Slice_U8_Const_equals(r, kspl_lit_93) || kspl_Slice_U8_Const_equals(r, kspl_lit_352) || kspl_Slice_U8_Const_equals(r, kspl_lit_1333) || kspl_Slice_U8_Const_equals(r, kspl_lit_1334) || kspl_Slice_U8_Const_equals(r, kspl_lit_568) || kspl_Slice_U8_Const_equals(r, kspl_lit_536) || kspl_Slice_U8_Const_equals(r, kspl_lit_570) || kspl_Slice_U8_Const_equals(r, kspl_lit_2) || kspl_Slice_U8_Const_equals(r, kspl_lit_2468);
 }
 
 static KSPL_UNUSED Bool kspl_Slice_U8_Const_is_unary_prefix(Slice_U8 r) {
@@ -146849,11 +146958,11 @@ static KSPL_UNUSED Writer kspl_Slice_U8_Const_drop_c_type_module_to(Slice_U8 r, 
   return res;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3545 = KSPL_STR_INIT("Const");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3546 = KSPL_STR_INIT("Ptr");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3547 = KSPL_STR_INIT("Result");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3548 = KSPL_STR_INIT("ksplc/base/mangle");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3549 = KSPL_STR_INIT("Array_");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3548 = KSPL_STR_INIT("Const");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3549 = KSPL_STR_INIT("Ptr");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3550 = KSPL_STR_INIT("Result");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3551 = KSPL_STR_INIT("ksplc/base/mangle");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3552 = KSPL_STR_INIT("Array_");
 static KSPL_UNUSED Writer kspl_Slice_U8_Const_mangle_type_name_to(Slice_U8 r, Writer out) {
   Writer res = out;
   Bool pending_under = false;
@@ -146866,7 +146975,7 @@ static KSPL_UNUSED Writer kspl_Slice_U8_Const_mangle_type_name_to(Slice_U8 r, Wr
           res = ((res).vtable->s((res).obj, kspl_lit_9));
         }
 
-        res = ((res).vtable->s((res).obj, kspl_lit_3545));
+        res = ((res).vtable->s((res).obj, kspl_lit_3548));
         pending_under = false;
         has_output = true;
         i = (I32)((U32)(i) + (U32)((I32)kspl_ksplc_base_core_IMMUT_MARK.len));
@@ -146890,24 +146999,24 @@ static KSPL_UNUSED Writer kspl_Slice_U8_Const_mangle_type_name_to(Slice_U8 r, Wr
       Slice_U8 word = kspl_lit_5;
       switch (c) {
       case (const U8)64LL: {
-        word = kspl_lit_3546;
+        word = kspl_lit_3549;
         break;
       }
       case (const U8)33LL: {
-        word = kspl_lit_3547;
+        word = kspl_lit_3550;
         break;
       }
       case (const U8)45LL: {
         KSPL_UNUSED U8 __k_tmp4 = {0};
         if (i > 0) {
-          __k_tmp4 = (*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((I32)((U32)(i) - (U32)(1))), kspl_lit_3548, (Sz)140)));
+          __k_tmp4 = (*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((I32)((U32)(i) - (U32)(1))), kspl_lit_3551, (Sz)140)));
         }
 
         else {
           __k_tmp4 = 32;
         }
         U8 prev = __k_tmp4;
-        Bool opens_number = (Sz)((I32)((U32)(i) + (U32)(1))) < r.len && kspl_U8_is_digit((*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((I32)((U32)(i) + (U32)(1))), kspl_lit_3548, (Sz)142)))) && !(kspl_U8_is_alnum(prev) && prev != 95);
+        Bool opens_number = (Sz)((I32)((U32)(i) + (U32)(1))) < r.len && kspl_U8_is_digit((*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((I32)((U32)(i) + (U32)(1))), kspl_lit_3551, (Sz)142)))) && !(kspl_U8_is_alnum(prev) && prev != 95);
         if (opens_number) {
           word = kspl_lit_1849;
         }
@@ -146920,7 +147029,7 @@ static KSPL_UNUSED Writer kspl_Slice_U8_Const_mangle_type_name_to(Slice_U8 r, Wr
         break;
       }
       case (const U8)91LL: {
-        word = kspl_lit_3549;
+        word = kspl_lit_3552;
         break;
       }
       case (const U8)46LL:
@@ -147042,7 +147151,7 @@ static KSPL_UNUSED Sz kspl_Slice_U8_Const_offset_of_utf16(Slice_U8 r, Sz line_id
   return i;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3550 = KSPL_STR_INIT("integer literal is too large for a compile-time constant expression");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3553 = KSPL_STR_INIT("integer literal is too large for a compile-time constant expression");
 static KSPL_UNUSED Result_I64_ksplc_sema_session_ctx_Sema_error kspl_Slice_U8_Const_parse_int_literal(Slice_U8 r, ksplc_base_ast_Ast_node *node, ksplc_sema_session_ctx_Sema_ctx *ctx, Bool negated) {
   Bool is_neg = negated != (r.len > (Sz)0 && (U8)(*(r.ptr)) == 45);
   KSPL_UNUSED Slice_U8 __k_tmp1 = {0};
@@ -147070,7 +147179,7 @@ static KSPL_UNUSED Result_I64_ksplc_sema_session_ctx_Sema_error kspl_Slice_U8_Co
 
   if (lit.overflow || lit.value > limit) {
     if (!ctx->suppress_errors) {
-      kspl_ksplc_sema_session_ctx_Sema_ctx_err(ctx, node, kspl_lit_3550);
+      kspl_ksplc_sema_session_ctx_Sema_ctx_err(ctx, node, kspl_lit_3553);
     }
 
     KSPL_START_TRACE();
@@ -147188,10 +147297,10 @@ static KSPL_UNUSED void kspl_std_ds_List_Slice_U8_Const_clear(std_ds_List_Slice_
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3551 = KSPL_STR_INIT("List.truncate");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3554 = KSPL_STR_INIT("List.truncate");
 static KSPL_UNUSED void kspl_std_ds_List_Slice_U8_Const_truncate(std_ds_List_Slice_U8_Const *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -147205,19 +147314,19 @@ static KSPL_UNUSED Slice_Slice_U8_Const kspl_std_ds_List_Slice_U8_Const_slice(st
   return (Slice_Slice_U8_Const){.ptr = r->ptr, .len = r->len};
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3552 = KSPL_STR_INIT("List.get");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3555 = KSPL_STR_INIT("List.get");
 static KSPL_UNUSED Slice_U8 kspl_std_ds_List_Slice_U8_Const_get(const std_ds_List_Slice_U8_Const *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3553 = KSPL_STR_INIT("List.set");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3556 = KSPL_STR_INIT("List.set");
 static KSPL_UNUSED void kspl_std_ds_List_Slice_U8_Const_set(std_ds_List_Slice_U8_Const *r, Sz index, Slice_U8 item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -147228,19 +147337,19 @@ static KSPL_UNUSED Bool kspl_std_ds_List_Slice_U8_Const_contains(const std_ds_Li
   return kspl_Slice_Const_Slice_U8_Const_contains((Slice_Slice_U8_Const){.ptr = (Slice_U8 *)(r->ptr), .len = r->len}, want);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3554 = KSPL_STR_INIT("List.at");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3557 = KSPL_STR_INIT("List.at");
 static KSPL_UNUSED Slice_U8 *kspl_std_ds_List_Slice_U8_Const_at(std_ds_List_Slice_U8_Const *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3555 = KSPL_STR_INIT("List.at_ref");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3558 = KSPL_STR_INIT("List.at_ref");
 static KSPL_UNUSED const Slice_U8 *kspl_std_ds_List_Slice_U8_Const_at_ref(const std_ds_List_Slice_U8_Const *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -147307,7 +147416,7 @@ static KSPL_UNUSED std_ds_List_Slice_U8_Const kspl_std_ds_List_Slice_U8_Const_di
   return out;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3556 = KSPL_STR_INIT("std/seq");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3559 = KSPL_STR_INIT("std/seq");
 static KSPL_UNUSED std_ds_List_Slice_U8_Const kspl_std_ds_List_Slice_U8_Const_order_by(const std_ds_List_Slice_U8_Const *r, Callable2_Const_Slice_U8_Const_Ptr_Const_Slice_U8_Const_Ptr_I32 cmp, std_mem_Arena *arena) {
   std_ds_List_Slice_U8_Const out = kspl_std_ds_List_Slice_U8_Const_copy_range(r, (Sz)0, r->len, arena);
   Sz n = out.len;
@@ -147334,15 +147443,15 @@ static KSPL_UNUSED std_ds_List_Slice_U8_Const kspl_std_ds_List_Slice_U8_Const_or
             goto _mir_label_4;
           }
 
-          Slice_U8 item = kspl_std_ds_List_Slice_U8_Const_get(&out, i, kspl_lit_3556, (Sz)184);
+          Slice_U8 item = kspl_std_ds_List_Slice_U8_Const_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_Slice_U8_Const_set(&out, __k_tmp10, kspl_std_ds_List_Slice_U8_Const_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_Slice_U8_Const_set(&out, __k_tmp10, kspl_std_ds_List_Slice_U8_Const_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_Slice_U8_Const_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_Slice_U8_Const_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -147386,13 +147495,13 @@ static KSPL_UNUSED std_ds_List_Slice_U8_Const kspl_std_ds_List_Slice_U8_Const_or
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_Slice_U8_Const_set(&to, __k_tmp19, kspl_std_ds_List_Slice_U8_Const_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_Slice_U8_Const_set(&to, __k_tmp19, kspl_std_ds_List_Slice_U8_Const_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_Slice_U8_Const_set(&to, __k_tmp20, kspl_std_ds_List_Slice_U8_Const_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_Slice_U8_Const_set(&to, __k_tmp20, kspl_std_ds_List_Slice_U8_Const_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -147456,7 +147565,7 @@ static KSPL_UNUSED void kspl_std_ds_List_kspeg_rule_Rule_Ptr_clear(std_ds_List_k
 
 static KSPL_UNUSED kspeg_rule_Rule *kspl_std_ds_List_kspeg_rule_Rule_Ptr_get(const std_ds_List_kspeg_rule_Rule_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -147464,7 +147573,7 @@ static KSPL_UNUSED kspeg_rule_Rule *kspl_std_ds_List_kspeg_rule_Rule_Ptr_get(con
 
 static KSPL_UNUSED kspeg_rule_Rule *const *kspl_std_ds_List_kspeg_rule_Rule_Ptr_at_ref(const std_ds_List_kspeg_rule_Rule_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -147758,7 +147867,7 @@ static KSPL_UNUSED void kspl_std_ds_List_kspeg_rule_Rule_entry_Ptr_push(std_ds_L
 
 static KSPL_UNUSED kspeg_rule_Rule_entry *kspl_std_ds_List_kspeg_rule_Rule_entry_Ptr_get(const std_ds_List_kspeg_rule_Rule_entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -147766,7 +147875,7 @@ static KSPL_UNUSED kspeg_rule_Rule_entry *kspl_std_ds_List_kspeg_rule_Rule_entry
 
 static KSPL_UNUSED kspeg_rule_Rule_entry **kspl_std_ds_List_kspeg_rule_Rule_entry_Ptr_at(std_ds_List_kspeg_rule_Rule_entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -147774,7 +147883,7 @@ static KSPL_UNUSED kspeg_rule_Rule_entry **kspl_std_ds_List_kspeg_rule_Rule_entr
 
 static KSPL_UNUSED kspeg_rule_Rule_entry *const *kspl_std_ds_List_kspeg_rule_Rule_entry_Ptr_at_ref(const std_ds_List_kspeg_rule_Rule_entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -147862,7 +147971,7 @@ static KSPL_UNUSED void kspl_std_ds_List_I32_clear(std_ds_List_I32 *r) {
 
 static KSPL_UNUSED void kspl_std_ds_List_I32_truncate(std_ds_List_I32 *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -147878,7 +147987,7 @@ static KSPL_UNUSED Slice_I32 kspl_std_ds_List_I32_slice(std_ds_List_I32 *r) {
 
 static KSPL_UNUSED I32 kspl_std_ds_List_I32_get(const std_ds_List_I32 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -147886,7 +147995,7 @@ static KSPL_UNUSED I32 kspl_std_ds_List_I32_get(const std_ds_List_I32 *r, Sz ind
 
 static KSPL_UNUSED void kspl_std_ds_List_I32_set(std_ds_List_I32 *r, Sz index, I32 item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -147899,7 +148008,7 @@ static KSPL_UNUSED Bool kspl_std_ds_List_I32_contains(const std_ds_List_I32 *r, 
 
 static KSPL_UNUSED I32 *kspl_std_ds_List_I32_at(std_ds_List_I32 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -147907,7 +148016,7 @@ static KSPL_UNUSED I32 *kspl_std_ds_List_I32_at(std_ds_List_I32 *r, Sz index, Sl
 
 static KSPL_UNUSED const I32 *kspl_std_ds_List_I32_at_ref(const std_ds_List_I32 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -147971,7 +148080,7 @@ static KSPL_UNUSED void kspl_std_ds_List_Bool_clear(std_ds_List_Bool *r) {
 
 static KSPL_UNUSED Bool kspl_std_ds_List_Bool_get(const std_ds_List_Bool *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -147979,7 +148088,7 @@ static KSPL_UNUSED Bool kspl_std_ds_List_Bool_get(const std_ds_List_Bool *r, Sz 
 
 static KSPL_UNUSED void kspl_std_ds_List_Bool_set(std_ds_List_Bool *r, Sz index, Bool item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -147988,7 +148097,7 @@ static KSPL_UNUSED void kspl_std_ds_List_Bool_set(std_ds_List_Bool *r, Sz index,
 
 static KSPL_UNUSED Bool *kspl_std_ds_List_Bool_at(std_ds_List_Bool *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -147996,7 +148105,7 @@ static KSPL_UNUSED Bool *kspl_std_ds_List_Bool_at(std_ds_List_Bool *r, Sz index,
 
 static KSPL_UNUSED const Bool *kspl_std_ds_List_Bool_at_ref(const std_ds_List_Bool *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -148055,7 +148164,7 @@ static KSPL_UNUSED void kspl_std_ds_List_kspeg_engine_Node_Ptr_push(std_ds_List_
 
 static KSPL_UNUSED void kspl_std_ds_List_kspeg_engine_Node_Ptr_truncate(std_ds_List_kspeg_engine_Node_Ptr *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -148067,7 +148176,7 @@ static KSPL_UNUSED void kspl_std_ds_List_kspeg_engine_Node_Ptr_truncate(std_ds_L
 
 static KSPL_UNUSED kspeg_engine_Node *kspl_std_ds_List_kspeg_engine_Node_Ptr_get(const std_ds_List_kspeg_engine_Node_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -148075,7 +148184,7 @@ static KSPL_UNUSED kspeg_engine_Node *kspl_std_ds_List_kspeg_engine_Node_Ptr_get
 
 static KSPL_UNUSED kspeg_engine_Node *const *kspl_std_ds_List_kspeg_engine_Node_Ptr_at_ref(const std_ds_List_kspeg_engine_Node_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -148356,7 +148465,7 @@ static KSPL_UNUSED void kspl_std_ds_List_kspeg_engine_Rule_prof_Ptr_clear(std_ds
 
 static KSPL_UNUSED kspeg_engine_Rule_prof *const *kspl_std_ds_List_kspeg_engine_Rule_prof_Ptr_at_ref(const std_ds_List_kspeg_engine_Rule_prof_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -148875,7 +148984,7 @@ static KSPL_UNUSED void kspl_std_ds_List_kspeg_engine_Rule_keywords_Ptr_push(std
 
 static KSPL_UNUSED kspeg_engine_Rule_keywords **kspl_std_ds_List_kspeg_engine_Rule_keywords_Ptr_at(std_ds_List_kspeg_engine_Rule_keywords_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -148941,7 +149050,7 @@ static KSPL_UNUSED void kspl_std_ds_List_U8_push(std_ds_List_U8 *r, U8 item) {
 
 static KSPL_UNUSED U8 kspl_std_ds_List_U8_get(const std_ds_List_U8 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -149303,7 +149412,7 @@ static KSPL_UNUSED void kspl_std_ds_List_Slice_U8_clear(std_ds_List_Slice_U8 *r)
 
 static KSPL_UNUSED Slice_U8 kspl_std_ds_List_Slice_U8_get(const std_ds_List_Slice_U8 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -149311,7 +149420,7 @@ static KSPL_UNUSED Slice_U8 kspl_std_ds_List_Slice_U8_get(const std_ds_List_Slic
 
 static KSPL_UNUSED const Slice_U8 *kspl_std_ds_List_Slice_U8_at_ref(const std_ds_List_Slice_U8 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -149620,7 +149729,7 @@ static KSPL_UNUSED Slice_U8 kspl_Option_Slice_U8_unwrap_or(Option_Slice_U8 r, Sl
 
 static KSPL_UNUSED const Slice_U8 *kspl_Slice_Const_Slice_U8_Const_at_ref(const Slice_Slice_U8_Const *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len || r->len < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3480, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3483, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -149646,10 +149755,10 @@ static KSPL_UNUSED std_str_Arena_text *kspl_put_std_str_Arena_text_Ptr_std_strfm
   return out;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3557 = KSPL_STR_INIT("Slice.at");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3560 = KSPL_STR_INIT("Slice.at");
 static KSPL_UNUSED U8 *kspl_Slice_U8_at(const Slice_U8 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len || r->len < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3560, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -149794,8 +149903,8 @@ static KSPL_UNUSED Sz kspl_Slice_U8_copy_from(const Slice_U8 *r, Sz at, Slice_U8
     {
       Sz i = n;
       for (; i > (Sz)0; i = (Sz)((size_t)(i) - (size_t)((Sz)1))) {
-        KSPL_UNUSED U8 __k_tmp4 = (*(kspl_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(i) - (size_t)((Sz)1)), kspl_lit_3482, (Sz)80)));
-        (*(kspl_Slice_U8_at(r, (Sz)((size_t)((Sz)((size_t)(at) + (size_t)(i))) - (size_t)((Sz)1)), kspl_lit_3482, (Sz)80))) = __k_tmp4;
+        KSPL_UNUSED U8 __k_tmp4 = (*(kspl_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(i) - (size_t)((Sz)1)), kspl_lit_3485, (Sz)80)));
+        (*(kspl_Slice_U8_at(r, (Sz)((size_t)((Sz)((size_t)(at) + (size_t)(i))) - (size_t)((Sz)1)), kspl_lit_3485, (Sz)80))) = __k_tmp4;
       }
     }
   }
@@ -149804,8 +149913,8 @@ static KSPL_UNUSED Sz kspl_Slice_U8_copy_from(const Slice_U8 *r, Sz at, Slice_U8
     {
       Sz i = (Sz)0;
       for (; i < n; i = (Sz)((size_t)(i) + (size_t)((Sz)1))) {
-        KSPL_UNUSED U8 __k_tmp7 = (*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3482, (Sz)83)));
-        (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)(i)), kspl_lit_3482, (Sz)83))) = __k_tmp7;
+        KSPL_UNUSED U8 __k_tmp7 = (*(kspl_Slice_U8_Const_at_ref(&src, i, kspl_lit_3485, (Sz)83)));
+        (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)(i)), kspl_lit_3485, (Sz)83))) = __k_tmp7;
       }
     }
   }
@@ -149813,10 +149922,10 @@ static KSPL_UNUSED Sz kspl_Slice_U8_copy_from(const Slice_U8 *r, Sz at, Slice_U8
 }
 
 static KSPL_UNUSED void kspl_Slice_U8_put_u32_be(const Slice_U8 *r, Sz at, U32 value) {
-  (*(kspl_Slice_U8_at(r, at, kspl_lit_3482, (Sz)92))) = (U8)(value >> (24));
-  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), kspl_lit_3482, (Sz)93))) = (U8)(value >> (16) & 0xffU);
-  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), kspl_lit_3482, (Sz)94))) = (U8)(value >> (8) & 0xffU);
-  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), kspl_lit_3482, (Sz)95))) = (U8)(value & 0xffU);
+  (*(kspl_Slice_U8_at(r, at, kspl_lit_3485, (Sz)92))) = (U8)(value >> (24));
+  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), kspl_lit_3485, (Sz)93))) = (U8)(value >> (16) & 0xffU);
+  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), kspl_lit_3485, (Sz)94))) = (U8)(value >> (8) & 0xffU);
+  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), kspl_lit_3485, (Sz)95))) = (U8)(value & 0xffU);
   return;
 }
 
@@ -149827,10 +149936,10 @@ static KSPL_UNUSED void kspl_Slice_U8_put_u64_be(const Slice_U8 *r, Sz at, U64 v
 }
 
 static KSPL_UNUSED void kspl_Slice_U8_put_u32_le(const Slice_U8 *r, Sz at, U32 value) {
-  (*(kspl_Slice_U8_at(r, at, kspl_lit_3482, (Sz)107))) = (U8)(value & 0xffU);
-  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), kspl_lit_3482, (Sz)108))) = (U8)(value >> (8) & 0xffU);
-  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), kspl_lit_3482, (Sz)109))) = (U8)(value >> (16) & 0xffU);
-  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), kspl_lit_3482, (Sz)110))) = (U8)(value >> (24));
+  (*(kspl_Slice_U8_at(r, at, kspl_lit_3485, (Sz)107))) = (U8)(value & 0xffU);
+  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), kspl_lit_3485, (Sz)108))) = (U8)(value >> (8) & 0xffU);
+  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), kspl_lit_3485, (Sz)109))) = (U8)(value >> (16) & 0xffU);
+  (*(kspl_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), kspl_lit_3485, (Sz)110))) = (U8)(value >> (24));
   return;
 }
 
@@ -150152,7 +150261,7 @@ static KSPL_UNUSED Bool kspl_Slice_U8_is_space_required_keyword(Slice_U8 r) {
 }
 
 static KSPL_UNUSED Bool kspl_Slice_U8_is_op(Slice_U8 r) {
-  return kspl_Slice_U8_equals(r, kspl_lit_97) || kspl_Slice_U8_equals(r, kspl_lit_681) || kspl_Slice_U8_equals(r, kspl_lit_1174) || kspl_Slice_U8_equals(r, kspl_lit_1175) || kspl_Slice_U8_equals(r, kspl_lit_1176) || kspl_Slice_U8_equals(r, kspl_lit_544) || kspl_Slice_U8_equals(r, kspl_lit_545) || kspl_Slice_U8_equals(r, kspl_lit_92) || kspl_Slice_U8_equals(r, kspl_lit_533) || kspl_Slice_U8_equals(r, kspl_lit_91) || kspl_Slice_U8_equals(r, kspl_lit_289) || kspl_Slice_U8_equals(r, kspl_lit_1332) || kspl_Slice_U8_equals(r, kspl_lit_580) || kspl_Slice_U8_equals(r, kspl_lit_581) || kspl_Slice_U8_equals(r, kspl_lit_94) || kspl_Slice_U8_equals(r, kspl_lit_1329) || kspl_Slice_U8_equals(r, kspl_lit_1940) || kspl_Slice_U8_equals(r, kspl_lit_2089) || kspl_Slice_U8_equals(r, kspl_lit_1923) || kspl_Slice_U8_equals(r, kspl_lit_2556) || kspl_Slice_U8_equals(r, kspl_lit_1827) || kspl_Slice_U8_equals(r, kspl_lit_2557) || kspl_Slice_U8_equals(r, kspl_lit_2558) || kspl_Slice_U8_equals(r, kspl_lit_530) || kspl_Slice_U8_equals(r, kspl_lit_531) || kspl_Slice_U8_equals(r, kspl_lit_3544) || kspl_Slice_U8_equals(r, kspl_lit_95) || kspl_Slice_U8_equals(r, kspl_lit_93) || kspl_Slice_U8_equals(r, kspl_lit_352) || kspl_Slice_U8_equals(r, kspl_lit_1333) || kspl_Slice_U8_equals(r, kspl_lit_1334) || kspl_Slice_U8_equals(r, kspl_lit_568) || kspl_Slice_U8_equals(r, kspl_lit_536) || kspl_Slice_U8_equals(r, kspl_lit_570) || kspl_Slice_U8_equals(r, kspl_lit_2) || kspl_Slice_U8_equals(r, kspl_lit_2468);
+  return kspl_Slice_U8_equals(r, kspl_lit_97) || kspl_Slice_U8_equals(r, kspl_lit_681) || kspl_Slice_U8_equals(r, kspl_lit_1174) || kspl_Slice_U8_equals(r, kspl_lit_1175) || kspl_Slice_U8_equals(r, kspl_lit_1176) || kspl_Slice_U8_equals(r, kspl_lit_544) || kspl_Slice_U8_equals(r, kspl_lit_545) || kspl_Slice_U8_equals(r, kspl_lit_92) || kspl_Slice_U8_equals(r, kspl_lit_533) || kspl_Slice_U8_equals(r, kspl_lit_91) || kspl_Slice_U8_equals(r, kspl_lit_289) || kspl_Slice_U8_equals(r, kspl_lit_1332) || kspl_Slice_U8_equals(r, kspl_lit_580) || kspl_Slice_U8_equals(r, kspl_lit_581) || kspl_Slice_U8_equals(r, kspl_lit_94) || kspl_Slice_U8_equals(r, kspl_lit_1329) || kspl_Slice_U8_equals(r, kspl_lit_1940) || kspl_Slice_U8_equals(r, kspl_lit_2089) || kspl_Slice_U8_equals(r, kspl_lit_1923) || kspl_Slice_U8_equals(r, kspl_lit_2556) || kspl_Slice_U8_equals(r, kspl_lit_1827) || kspl_Slice_U8_equals(r, kspl_lit_2557) || kspl_Slice_U8_equals(r, kspl_lit_2558) || kspl_Slice_U8_equals(r, kspl_lit_530) || kspl_Slice_U8_equals(r, kspl_lit_531) || kspl_Slice_U8_equals(r, kspl_lit_3547) || kspl_Slice_U8_equals(r, kspl_lit_95) || kspl_Slice_U8_equals(r, kspl_lit_93) || kspl_Slice_U8_equals(r, kspl_lit_352) || kspl_Slice_U8_equals(r, kspl_lit_1333) || kspl_Slice_U8_equals(r, kspl_lit_1334) || kspl_Slice_U8_equals(r, kspl_lit_568) || kspl_Slice_U8_equals(r, kspl_lit_536) || kspl_Slice_U8_equals(r, kspl_lit_570) || kspl_Slice_U8_equals(r, kspl_lit_2) || kspl_Slice_U8_equals(r, kspl_lit_2468);
 }
 
 static KSPL_UNUSED Bool kspl_Slice_U8_is_compound_sigil(Slice_U8 r) {
@@ -150291,7 +150400,7 @@ static KSPL_UNUSED Writer kspl_Slice_U8_mangle_type_name_to(Slice_U8 r, Writer o
           res = ((res).vtable->s((res).obj, kspl_lit_9));
         }
 
-        res = ((res).vtable->s((res).obj, kspl_lit_3545));
+        res = ((res).vtable->s((res).obj, kspl_lit_3548));
         pending_under = false;
         has_output = true;
         i = (I32)((U32)(i) + (U32)((I32)kspl_ksplc_base_core_IMMUT_MARK.len));
@@ -150315,24 +150424,24 @@ static KSPL_UNUSED Writer kspl_Slice_U8_mangle_type_name_to(Slice_U8 r, Writer o
       Slice_U8 word = kspl_lit_5;
       switch (c) {
       case (const U8)64LL: {
-        word = kspl_lit_3546;
+        word = kspl_lit_3549;
         break;
       }
       case (const U8)33LL: {
-        word = kspl_lit_3547;
+        word = kspl_lit_3550;
         break;
       }
       case (const U8)45LL: {
         KSPL_UNUSED U8 __k_tmp4 = {0};
         if (i > 0) {
-          __k_tmp4 = (*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((I32)((U32)(i) - (U32)(1))), kspl_lit_3548, (Sz)140)));
+          __k_tmp4 = (*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((I32)((U32)(i) - (U32)(1))), kspl_lit_3551, (Sz)140)));
         }
 
         else {
           __k_tmp4 = 32;
         }
         U8 prev = __k_tmp4;
-        Bool opens_number = (Sz)((I32)((U32)(i) + (U32)(1))) < r.len && kspl_U8_is_digit((*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((I32)((U32)(i) + (U32)(1))), kspl_lit_3548, (Sz)142)))) && !(kspl_U8_is_alnum(prev) && prev != 95);
+        Bool opens_number = (Sz)((I32)((U32)(i) + (U32)(1))) < r.len && kspl_U8_is_digit((*(kspl_Slice_U8_Const_at_ref(&r, (Sz)((I32)((U32)(i) + (U32)(1))), kspl_lit_3551, (Sz)142)))) && !(kspl_U8_is_alnum(prev) && prev != 95);
         if (opens_number) {
           word = kspl_lit_1849;
         }
@@ -150345,7 +150454,7 @@ static KSPL_UNUSED Writer kspl_Slice_U8_mangle_type_name_to(Slice_U8 r, Writer o
         break;
       }
       case (const U8)91LL: {
-        word = kspl_lit_3549;
+        word = kspl_lit_3552;
         break;
       }
       case (const U8)46LL:
@@ -150529,7 +150638,7 @@ static KSPL_UNUSED void kspl_std_ds_List_Sz_clear(std_ds_List_Sz *r) {
 
 static KSPL_UNUSED Sz kspl_std_ds_List_Sz_get(const std_ds_List_Sz *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -150537,7 +150646,7 @@ static KSPL_UNUSED Sz kspl_std_ds_List_Sz_get(const std_ds_List_Sz *r, Sz index,
 
 static KSPL_UNUSED void kspl_std_ds_List_Sz_set(std_ds_List_Sz *r, Sz index, Sz item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -150546,7 +150655,7 @@ static KSPL_UNUSED void kspl_std_ds_List_Sz_set(std_ds_List_Sz *r, Sz index, Sz 
 
 static KSPL_UNUSED Sz *kspl_std_ds_List_Sz_at(std_ds_List_Sz *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -150554,7 +150663,7 @@ static KSPL_UNUSED Sz *kspl_std_ds_List_Sz_at(std_ds_List_Sz *r, Sz index, Slice
 
 static KSPL_UNUSED const Sz *kspl_std_ds_List_Sz_at_ref(const std_ds_List_Sz *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -150615,15 +150724,15 @@ static KSPL_UNUSED std_ds_List_Sz kspl_std_ds_List_Sz_order_by(const std_ds_List
             goto _mir_label_4;
           }
 
-          Sz item = kspl_std_ds_List_Sz_get(&out, i, kspl_lit_3556, (Sz)184);
+          Sz item = kspl_std_ds_List_Sz_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_Sz_set(&out, __k_tmp10, kspl_std_ds_List_Sz_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_Sz_set(&out, __k_tmp10, kspl_std_ds_List_Sz_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_Sz_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_Sz_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -150667,13 +150776,13 @@ static KSPL_UNUSED std_ds_List_Sz kspl_std_ds_List_Sz_order_by(const std_ds_List
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_Sz_set(&to, __k_tmp19, kspl_std_ds_List_Sz_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_Sz_set(&to, __k_tmp19, kspl_std_ds_List_Sz_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_Sz_set(&to, __k_tmp20, kspl_std_ds_List_Sz_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_Sz_set(&to, __k_tmp20, kspl_std_ds_List_Sz_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -150978,7 +151087,7 @@ static KSPL_UNUSED void kspl_std_ds_List_I64_push(std_ds_List_I64 *r, I64 item) 
 
 static KSPL_UNUSED void kspl_std_ds_List_I64_truncate(std_ds_List_I64 *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -150990,7 +151099,7 @@ static KSPL_UNUSED void kspl_std_ds_List_I64_truncate(std_ds_List_I64 *r, Sz cou
 
 static KSPL_UNUSED I64 kspl_std_ds_List_I64_get(const std_ds_List_I64 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -150998,7 +151107,7 @@ static KSPL_UNUSED I64 kspl_std_ds_List_I64_get(const std_ds_List_I64 *r, Sz ind
 
 static KSPL_UNUSED void kspl_std_ds_List_I64_set(std_ds_List_I64 *r, Sz index, I64 item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -151269,7 +151378,7 @@ static KSPL_UNUSED void kspl_std_ds_List_std_json_Key_at_clear(std_ds_List_std_j
 
 static KSPL_UNUSED std_json_Key_at kspl_std_ds_List_std_json_Key_at_get(const std_ds_List_std_json_Key_at *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -151277,7 +151386,7 @@ static KSPL_UNUSED std_json_Key_at kspl_std_ds_List_std_json_Key_at_get(const st
 
 static KSPL_UNUSED void kspl_std_ds_List_std_json_Key_at_set(std_ds_List_std_json_Key_at *r, Sz index, std_json_Key_at item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -151339,15 +151448,15 @@ static KSPL_UNUSED std_ds_List_std_json_Key_at kspl_std_ds_List_std_json_Key_at_
             goto _mir_label_4;
           }
 
-          std_json_Key_at item = kspl_std_ds_List_std_json_Key_at_get(&out, i, kspl_lit_3556, (Sz)184);
+          std_json_Key_at item = kspl_std_ds_List_std_json_Key_at_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_std_json_Key_at_set(&out, __k_tmp10, kspl_std_ds_List_std_json_Key_at_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_std_json_Key_at_set(&out, __k_tmp10, kspl_std_ds_List_std_json_Key_at_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_std_json_Key_at_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_std_json_Key_at_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -151391,13 +151500,13 @@ static KSPL_UNUSED std_ds_List_std_json_Key_at kspl_std_ds_List_std_json_Key_at_
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_std_json_Key_at_set(&to, __k_tmp19, kspl_std_ds_List_std_json_Key_at_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_std_json_Key_at_set(&to, __k_tmp19, kspl_std_ds_List_std_json_Key_at_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_std_json_Key_at_set(&to, __k_tmp20, kspl_std_ds_List_std_json_Key_at_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_std_json_Key_at_set(&to, __k_tmp20, kspl_std_ds_List_std_json_Key_at_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -151508,7 +151617,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_diag_Lsp_diagnostic_clear(st
 
 static KSPL_UNUSED const ksplc_base_diag_Lsp_diagnostic *kspl_std_ds_List_ksplc_base_diag_Lsp_diagnostic_at_ref(const std_ds_List_ksplc_base_diag_Lsp_diagnostic *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -151593,7 +151702,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_config_file_Setting_push(std
 
 static KSPL_UNUSED ksplc_base_config_file_Setting *kspl_std_ds_List_ksplc_base_config_file_Setting_at(std_ds_List_ksplc_base_config_file_Setting *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -151601,7 +151710,7 @@ static KSPL_UNUSED ksplc_base_config_file_Setting *kspl_std_ds_List_ksplc_base_c
 
 static KSPL_UNUSED const ksplc_base_config_file_Setting *kspl_std_ds_List_ksplc_base_config_file_Setting_at_ref(const std_ds_List_ksplc_base_config_file_Setting *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -152280,10 +152389,10 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_push_all(st
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3558 = KSPL_STR_INIT("List.insert");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3561 = KSPL_STR_INIT("List.insert");
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_insert(std_ds_List_ksplc_base_ast_Ast_node_Ptr *r, Sz index, ksplc_base_ast_Ast_node *item, Slice_U8 file, Sz line) {
   if ((U64)index > (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3561, index, r->len, file, line);
   }
 
   kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_ensure_cap(r);
@@ -152293,10 +152402,10 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_insert(std_
   return;
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3559 = KSPL_STR_INIT("List.remove_at");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3562 = KSPL_STR_INIT("List.remove_at");
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_remove_at(std_ds_List_ksplc_base_ast_Ast_node_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3559, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3562, index, r->len, file, line);
   }
 
   kspl_std_mem_drop_at_ksplc_base_ast_Ast_node_Ptr(r->ptr + index);
@@ -152319,7 +152428,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_clear(std_d
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_truncate(std_ds_List_ksplc_base_ast_Ast_node_Ptr *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -152335,7 +152444,7 @@ static KSPL_UNUSED Slice_ksplc_base_ast_Ast_node_Ptr kspl_std_ds_List_ksplc_base
 
 static KSPL_UNUSED ksplc_base_ast_Ast_node *kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_get(const std_ds_List_ksplc_base_ast_Ast_node_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152343,7 +152452,7 @@ static KSPL_UNUSED ksplc_base_ast_Ast_node *kspl_std_ds_List_ksplc_base_ast_Ast_
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_set(std_ds_List_ksplc_base_ast_Ast_node_Ptr *r, Sz index, ksplc_base_ast_Ast_node *item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -152352,7 +152461,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_set(std_ds_
 
 static KSPL_UNUSED ksplc_base_ast_Ast_node **kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(std_ds_List_ksplc_base_ast_Ast_node_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -152360,7 +152469,7 @@ static KSPL_UNUSED ksplc_base_ast_Ast_node **kspl_std_ds_List_ksplc_base_ast_Ast
 
 static KSPL_UNUSED ksplc_base_ast_Ast_node *const *kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at_ref(const std_ds_List_ksplc_base_ast_Ast_node_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -152462,7 +152571,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_cfg_inactive_Cfg_inactive_cl
 
 static KSPL_UNUSED const ksplc_base_cfg_inactive_Cfg_inactive *kspl_std_ds_List_ksplc_base_cfg_inactive_Cfg_inactive_at_ref(const std_ds_List_ksplc_base_cfg_inactive_Cfg_inactive *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -152515,7 +152624,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_lint_codes_Global_setting_pu
 
 static KSPL_UNUSED ksplc_base_lint_codes_Global_setting kspl_std_ds_List_ksplc_base_lint_codes_Global_setting_get(const std_ds_List_ksplc_base_lint_codes_Global_setting *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152587,7 +152696,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_doc_Param_doc_clear(std_
 
 static KSPL_UNUSED ksplc_base_ast_doc_Param_doc kspl_std_ds_List_ksplc_base_ast_doc_Param_doc_get(const std_ds_List_ksplc_base_ast_doc_Param_doc *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152647,7 +152756,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_spell_Sig_part_clear(std
 
 static KSPL_UNUSED ksplc_base_ast_spell_Sig_part kspl_std_ds_List_ksplc_base_ast_spell_Sig_part_get(const std_ds_List_ksplc_base_ast_spell_Sig_part *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152701,7 +152810,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_fmt_import_Item_push(std_ds_List_
 
 static KSPL_UNUSED ksplc_fmt_import_Item kspl_std_ds_List_ksplc_fmt_import_Item_get(const std_ds_List_ksplc_fmt_import_Item *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152758,7 +152867,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_layout_Phys_push(std_ds_Lis
 
 static KSPL_UNUSED ksplc_parse_layout_Phys kspl_std_ds_List_ksplc_parse_layout_Phys_get(const std_ds_List_ksplc_parse_layout_Phys *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152870,7 +152979,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_layout_Insert_push(std_ds_L
 
 static KSPL_UNUSED ksplc_parse_layout_Insert kspl_std_ds_List_ksplc_parse_layout_Insert_get(const std_ds_List_ksplc_parse_layout_Insert *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152909,7 +153018,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_layout_Logical_push(std_ds_
 
 static KSPL_UNUSED ksplc_parse_layout_Logical kspl_std_ds_List_ksplc_parse_layout_Logical_get(const std_ds_List_ksplc_parse_layout_Logical *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152959,7 +153068,7 @@ static KSPL_UNUSED Option_ksplc_parse_layout_Frame kspl_std_ds_List_ksplc_parse_
 
 static KSPL_UNUSED ksplc_parse_layout_Frame kspl_std_ds_List_ksplc_parse_layout_Frame_get(const std_ds_List_ksplc_parse_layout_Frame *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -152967,7 +153076,7 @@ static KSPL_UNUSED ksplc_parse_layout_Frame kspl_std_ds_List_ksplc_parse_layout_
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_layout_Frame_set(std_ds_List_ksplc_parse_layout_Frame *r, Sz index, ksplc_parse_layout_Frame item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -153463,7 +153572,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_c
 
 static KSPL_UNUSED ksplc_parse_load_Kspeg_prof_entry *kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(const std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -153471,7 +153580,7 @@ static KSPL_UNUSED ksplc_parse_load_Kspeg_prof_entry *kspl_std_ds_List_ksplc_par
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr *r, Sz index, ksplc_parse_load_Kspeg_prof_entry *item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -153480,7 +153589,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_s
 
 static KSPL_UNUSED ksplc_parse_load_Kspeg_prof_entry *const *kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_at_ref(const std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -153541,15 +153650,15 @@ static KSPL_UNUSED std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr kspl_std_ds
             goto _mir_label_4;
           }
 
-          ksplc_parse_load_Kspeg_prof_entry *item = kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(&out, i, kspl_lit_3556, (Sz)184);
+          ksplc_parse_load_Kspeg_prof_entry *item = kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -153593,13 +153702,13 @@ static KSPL_UNUSED std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr kspl_std_ds
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_parse_load_Kspeg_prof_entry_Ptr_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -153670,7 +153779,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_base_ast_Loc_clear(std_ds_List_ks
 
 static KSPL_UNUSED ksplc_base_ast_Loc kspl_std_ds_List_ksplc_base_ast_Loc_get(const std_ds_List_ksplc_base_ast_Loc *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -153968,7 +154077,7 @@ static KSPL_UNUSED void kspl_std_ds_List_std_ds_Map_I32_ksplc_sema_type_scope_Se
 
 static KSPL_UNUSED void kspl_std_ds_List_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_truncate(std_ds_List_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -153980,7 +154089,7 @@ static KSPL_UNUSED void kspl_std_ds_List_std_ds_Map_I32_ksplc_sema_type_scope_Se
 
 static KSPL_UNUSED std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr *kspl_std_ds_List_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_get(const std_ds_List_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -153988,7 +154097,7 @@ static KSPL_UNUSED std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr *kspl_st
 
 static KSPL_UNUSED std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr *const *kspl_std_ds_List_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_at_ref(const std_ds_List_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -154332,7 +154441,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_pu
 
 static KSPL_UNUSED ksplc_sema_type_def_Struct_field *kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_get(const std_ds_List_ksplc_sema_type_def_Struct_field_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -154340,7 +154449,7 @@ static KSPL_UNUSED ksplc_sema_type_def_Struct_field *kspl_std_ds_List_ksplc_sema
 
 static KSPL_UNUSED ksplc_sema_type_def_Struct_field *const *kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at_ref(const std_ds_List_ksplc_sema_type_def_Struct_field_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -154401,7 +154510,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_pu
 
 static KSPL_UNUSED ksplc_sema_type_def_Enum_variant *kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_get(const std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -154409,7 +154518,7 @@ static KSPL_UNUSED ksplc_sema_type_def_Enum_variant *kspl_std_ds_List_ksplc_sema
 
 static KSPL_UNUSED ksplc_sema_type_def_Enum_variant *const *kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at_ref(const std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -154469,7 +154578,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_type_scope_Sema_symbol_Ptr_c
 
 static KSPL_UNUSED ksplc_sema_type_scope_Sema_symbol *kspl_std_ds_List_ksplc_sema_type_scope_Sema_symbol_Ptr_get(const std_ds_List_ksplc_sema_type_scope_Sema_symbol_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -154477,7 +154586,7 @@ static KSPL_UNUSED ksplc_sema_type_scope_Sema_symbol *kspl_std_ds_List_ksplc_sem
 
 static KSPL_UNUSED ksplc_sema_type_scope_Sema_symbol *const *kspl_std_ds_List_ksplc_sema_type_scope_Sema_symbol_Ptr_at_ref(const std_ds_List_ksplc_sema_type_scope_Sema_symbol_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -154497,7 +154606,7 @@ static KSPL_UNUSED ksplc_sema_type_def_Entry *kspl_std_mem_Arena_create_ksplc_se
 
 static KSPL_UNUSED const I32 *kspl_Slice_I32_Const_at_ref(const Slice_I32 *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len || r->len < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3480, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3483, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -154562,7 +154671,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_clear(std
 
 static KSPL_UNUSED ksplc_sema_type_def_Entry *kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(const std_ds_List_ksplc_sema_type_def_Entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -154570,7 +154679,7 @@ static KSPL_UNUSED ksplc_sema_type_def_Entry *kspl_std_ds_List_ksplc_sema_type_d
 
 static KSPL_UNUSED ksplc_sema_type_def_Entry *const *kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_at_ref(const std_ds_List_ksplc_sema_type_def_Entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -156668,7 +156777,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Generic_arg_cl
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Generic_arg_truncate(std_ds_List_ksplc_sema_session_state_Generic_arg *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -156680,7 +156789,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Generic_arg_tr
 
 static KSPL_UNUSED ksplc_sema_session_state_Generic_arg kspl_std_ds_List_ksplc_sema_session_state_Generic_arg_get(const std_ds_List_ksplc_sema_session_state_Generic_arg *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -156688,7 +156797,7 @@ static KSPL_UNUSED ksplc_sema_session_state_Generic_arg kspl_std_ds_List_ksplc_s
 
 static KSPL_UNUSED const ksplc_sema_session_state_Generic_arg *kspl_std_ds_List_ksplc_sema_session_state_Generic_arg_at_ref(const std_ds_List_ksplc_sema_session_state_Generic_arg *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -156741,7 +156850,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Trait_inst_pus
 
 static KSPL_UNUSED const ksplc_sema_session_state_Trait_inst *kspl_std_ds_List_ksplc_sema_session_state_Trait_inst_at_ref(const std_ds_List_ksplc_sema_session_state_Trait_inst *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -156790,7 +156899,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Pending_inst_p
 
 static KSPL_UNUSED ksplc_sema_session_state_Pending_inst kspl_std_ds_List_ksplc_sema_session_state_Pending_inst_get(const std_ds_List_ksplc_sema_session_state_Pending_inst *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -156844,7 +156953,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Pending_method
 
 static KSPL_UNUSED ksplc_sema_session_state_Pending_methods kspl_std_ds_List_ksplc_sema_session_state_Pending_methods_get(const std_ds_List_ksplc_sema_session_state_Pending_methods *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -156898,7 +157007,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Pending_constr
 
 static KSPL_UNUSED ksplc_sema_session_state_Pending_constraint kspl_std_ds_List_ksplc_sema_session_state_Pending_constraint_get(const std_ds_List_ksplc_sema_session_state_Pending_constraint *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -157190,7 +157299,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Lint_setting_e
 
 static KSPL_UNUSED const ksplc_sema_session_state_Lint_setting_entry *kspl_std_ds_List_ksplc_sema_session_state_Lint_setting_entry_at_ref(const std_ds_List_ksplc_sema_session_state_Lint_setting_entry *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -157457,7 +157566,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_ctx_Jump_label_clear
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_ctx_Jump_label_truncate(std_ds_List_ksplc_sema_session_ctx_Jump_label *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -157469,7 +157578,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_ctx_Jump_label_trunc
 
 static KSPL_UNUSED ksplc_sema_session_ctx_Jump_label kspl_std_ds_List_ksplc_sema_session_ctx_Jump_label_get(const std_ds_List_ksplc_sema_session_ctx_Jump_label *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -157528,7 +157637,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_ctx_Spawn_arg_push(s
 
 static KSPL_UNUSED const ksplc_sema_session_ctx_Spawn_arg *kspl_std_ds_List_ksplc_sema_session_ctx_Spawn_arg_at_ref(const std_ds_List_ksplc_sema_session_ctx_Spawn_arg *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -157796,7 +157905,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_state_Folded_layout_
 
 static KSPL_UNUSED ksplc_sema_session_state_Folded_layout kspl_std_ds_List_ksplc_sema_session_state_Folded_layout_get(const std_ds_List_ksplc_sema_session_state_Folded_layout *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -157804,7 +157913,7 @@ static KSPL_UNUSED ksplc_sema_session_state_Folded_layout kspl_std_ds_List_ksplc
 
 static KSPL_UNUSED const ksplc_sema_session_state_Folded_layout *kspl_std_ds_List_ksplc_sema_session_state_Folded_layout_at_ref(const std_ds_List_ksplc_sema_session_state_Folded_layout *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -159111,7 +159220,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_tools_interface_Named_push(std_ds
 
 static KSPL_UNUSED ksplc_tools_interface_Named kspl_std_ds_List_ksplc_tools_interface_Named_get(const std_ds_List_ksplc_tools_interface_Named *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -159119,7 +159228,7 @@ static KSPL_UNUSED ksplc_tools_interface_Named kspl_std_ds_List_ksplc_tools_inte
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_tools_interface_Named_set(std_ds_List_ksplc_tools_interface_Named *r, Sz index, ksplc_tools_interface_Named item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -159128,7 +159237,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_tools_interface_Named_set(std_ds_
 
 static KSPL_UNUSED ksplc_tools_interface_Named *kspl_std_ds_List_ksplc_tools_interface_Named_at(std_ds_List_ksplc_tools_interface_Named *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -159136,7 +159245,7 @@ static KSPL_UNUSED ksplc_tools_interface_Named *kspl_std_ds_List_ksplc_tools_int
 
 static KSPL_UNUSED const ksplc_tools_interface_Named *kspl_std_ds_List_ksplc_tools_interface_Named_at_ref(const std_ds_List_ksplc_tools_interface_Named *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -159377,7 +159486,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_tools_interface_Export_push(std_d
 
 static KSPL_UNUSED const ksplc_tools_interface_Export *kspl_std_ds_List_ksplc_tools_interface_Export_at_ref(const std_ds_List_ksplc_tools_interface_Export *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -159637,7 +159746,7 @@ static KSPL_UNUSED void kspl_std_ds_List_std_argparse_Opt_push(std_ds_List_std_a
 
 static KSPL_UNUSED std_argparse_Opt *kspl_std_ds_List_std_argparse_Opt_at(std_ds_List_std_argparse_Opt *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -159645,7 +159754,7 @@ static KSPL_UNUSED std_argparse_Opt *kspl_std_ds_List_std_argparse_Opt_at(std_ds
 
 static KSPL_UNUSED const std_argparse_Opt *kspl_std_ds_List_std_argparse_Opt_at_ref(const std_ds_List_std_argparse_Opt *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -159688,7 +159797,7 @@ static KSPL_UNUSED void kspl_std_ds_List_std_argparse_Cmd_push(std_ds_List_std_a
 
 static KSPL_UNUSED std_argparse_Cmd *kspl_std_ds_List_std_argparse_Cmd_at(std_ds_List_std_argparse_Cmd *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -160949,7 +161058,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr
 
 static KSPL_UNUSED ksplc_lsp_call_hier_Call_hier_entry *kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(const std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -160957,7 +161066,7 @@ static KSPL_UNUSED ksplc_lsp_call_hier_Call_hier_entry *kspl_std_ds_List_ksplc_l
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr *r, Sz index, ksplc_lsp_call_hier_Call_hier_entry *item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -160966,7 +161075,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr
 
 static KSPL_UNUSED ksplc_lsp_call_hier_Call_hier_entry *const *kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_at_ref(const std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -161027,15 +161136,15 @@ static KSPL_UNUSED std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr kspl_std_
             goto _mir_label_4;
           }
 
-          ksplc_lsp_call_hier_Call_hier_entry *item = kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(&out, i, kspl_lit_3556, (Sz)184);
+          ksplc_lsp_call_hier_Call_hier_entry *item = kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -161079,13 +161188,13 @@ static KSPL_UNUSED std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr kspl_std_
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_lsp_call_hier_Call_hier_entry_Ptr_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -161172,7 +161281,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_complete_Pick_clear(std_ds_Li
 
 static KSPL_UNUSED ksplc_lsp_complete_Pick kspl_std_ds_List_ksplc_lsp_complete_Pick_get(const std_ds_List_ksplc_lsp_complete_Pick *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -161180,7 +161289,7 @@ static KSPL_UNUSED ksplc_lsp_complete_Pick kspl_std_ds_List_ksplc_lsp_complete_P
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_complete_Pick_set(std_ds_List_ksplc_lsp_complete_Pick *r, Sz index, ksplc_lsp_complete_Pick item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -161189,7 +161298,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_complete_Pick_set(std_ds_List
 
 static KSPL_UNUSED const ksplc_lsp_complete_Pick *kspl_std_ds_List_ksplc_lsp_complete_Pick_at_ref(const std_ds_List_ksplc_lsp_complete_Pick *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -161250,15 +161359,15 @@ static KSPL_UNUSED std_ds_List_ksplc_lsp_complete_Pick kspl_std_ds_List_ksplc_ls
             goto _mir_label_4;
           }
 
-          ksplc_lsp_complete_Pick item = kspl_std_ds_List_ksplc_lsp_complete_Pick_get(&out, i, kspl_lit_3556, (Sz)184);
+          ksplc_lsp_complete_Pick item = kspl_std_ds_List_ksplc_lsp_complete_Pick_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_ksplc_lsp_complete_Pick_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_lsp_complete_Pick_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_ksplc_lsp_complete_Pick_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_lsp_complete_Pick_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_ksplc_lsp_complete_Pick_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_ksplc_lsp_complete_Pick_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -161302,13 +161411,13 @@ static KSPL_UNUSED std_ds_List_ksplc_lsp_complete_Pick kspl_std_ds_List_ksplc_ls
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_ksplc_lsp_complete_Pick_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_lsp_complete_Pick_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_ksplc_lsp_complete_Pick_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_lsp_complete_Pick_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_ksplc_lsp_complete_Pick_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_lsp_complete_Pick_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_ksplc_lsp_complete_Pick_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_lsp_complete_Pick_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -161373,7 +161482,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_uses_Spot_clear(std_ds_List_k
 
 static KSPL_UNUSED ksplc_lsp_uses_Spot kspl_std_ds_List_ksplc_lsp_uses_Spot_get(const std_ds_List_ksplc_lsp_uses_Spot *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -161381,7 +161490,7 @@ static KSPL_UNUSED ksplc_lsp_uses_Spot kspl_std_ds_List_ksplc_lsp_uses_Spot_get(
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_uses_Spot_set(std_ds_List_ksplc_lsp_uses_Spot *r, Sz index, ksplc_lsp_uses_Spot item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -161443,15 +161552,15 @@ static KSPL_UNUSED std_ds_List_ksplc_lsp_uses_Spot kspl_std_ds_List_ksplc_lsp_us
             goto _mir_label_4;
           }
 
-          ksplc_lsp_uses_Spot item = kspl_std_ds_List_ksplc_lsp_uses_Spot_get(&out, i, kspl_lit_3556, (Sz)184);
+          ksplc_lsp_uses_Spot item = kspl_std_ds_List_ksplc_lsp_uses_Spot_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_ksplc_lsp_uses_Spot_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_lsp_uses_Spot_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_ksplc_lsp_uses_Spot_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_lsp_uses_Spot_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_ksplc_lsp_uses_Spot_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_ksplc_lsp_uses_Spot_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -161495,13 +161604,13 @@ static KSPL_UNUSED std_ds_List_ksplc_lsp_uses_Spot kspl_std_ds_List_ksplc_lsp_us
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_ksplc_lsp_uses_Spot_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_lsp_uses_Spot_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_ksplc_lsp_uses_Spot_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_lsp_uses_Spot_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_ksplc_lsp_uses_Spot_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_lsp_uses_Spot_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_ksplc_lsp_uses_Spot_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_lsp_uses_Spot_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -161590,7 +161699,7 @@ static KSPL_UNUSED void kspl_std_ds_List_std_ds_List_ksplc_base_ast_Ast_node_Ptr
 
 static KSPL_UNUSED void kspl_std_ds_List_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr_truncate(std_ds_List_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -161602,7 +161711,7 @@ static KSPL_UNUSED void kspl_std_ds_List_std_ds_List_ksplc_base_ast_Ast_node_Ptr
 
 static KSPL_UNUSED std_ds_List_ksplc_base_ast_Ast_node_Ptr *kspl_std_ds_List_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr_get(const std_ds_List_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -161645,7 +161754,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lower_ctx_Jump_ctx_push(std_ds_Li
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_lower_ctx_Jump_ctx_truncate(std_ds_List_ksplc_lower_ctx_Jump_ctx *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -161657,7 +161766,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lower_ctx_Jump_ctx_truncate(std_d
 
 static KSPL_UNUSED ksplc_lower_ctx_Jump_ctx kspl_std_ds_List_ksplc_lower_ctx_Jump_ctx_get(const std_ds_List_ksplc_lower_ctx_Jump_ctx *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -161665,7 +161774,7 @@ static KSPL_UNUSED ksplc_lower_ctx_Jump_ctx kspl_std_ds_List_ksplc_lower_ctx_Jum
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_lower_ctx_Jump_ctx_set(std_ds_List_ksplc_lower_ctx_Jump_ctx *r, Sz index, ksplc_lower_ctx_Jump_ctx item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -161970,7 +162079,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lower_order_Operand_slot_clear(st
 
 static KSPL_UNUSED ksplc_lower_order_Operand_slot kspl_std_ds_List_ksplc_lower_order_Operand_slot_get(const std_ds_List_ksplc_lower_order_Operand_slot *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -161978,7 +162087,7 @@ static KSPL_UNUSED ksplc_lower_order_Operand_slot kspl_std_ds_List_ksplc_lower_o
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_lower_order_Operand_slot_set(std_ds_List_ksplc_lower_order_Operand_slot *r, Sz index, ksplc_lower_order_Operand_slot item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -161987,7 +162096,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lower_order_Operand_slot_set(std_
 
 static KSPL_UNUSED const ksplc_lower_order_Operand_slot *kspl_std_ds_List_ksplc_lower_order_Operand_slot_at_ref(const std_ds_List_ksplc_lower_order_Operand_slot *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -162047,7 +162156,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lower_order_Order_class_clear(std
 
 static KSPL_UNUSED ksplc_lower_order_Order_class kspl_std_ds_List_ksplc_lower_order_Order_class_get(const std_ds_List_ksplc_lower_order_Order_class *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -162110,7 +162219,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_lock_Lock_mark_push(std
 
 static KSPL_UNUSED const ksplc_sema_flow_lock_Lock_mark *kspl_std_ds_List_ksplc_sema_flow_lock_Lock_mark_at_ref(const std_ds_List_ksplc_sema_flow_lock_Lock_mark *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -162159,7 +162268,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_track_Local_state_push(
 
 static KSPL_UNUSED ksplc_sema_flow_track_Local_state kspl_std_ds_List_ksplc_sema_flow_track_Local_state_get(const std_ds_List_ksplc_sema_flow_track_Local_state *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -162167,7 +162276,7 @@ static KSPL_UNUSED ksplc_sema_flow_track_Local_state kspl_std_ds_List_ksplc_sema
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_track_Local_state_set(std_ds_List_ksplc_sema_flow_track_Local_state *r, Sz index, ksplc_sema_flow_track_Local_state item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -162176,7 +162285,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_track_Local_state_set(s
 
 static KSPL_UNUSED const ksplc_sema_flow_track_Local_state *kspl_std_ds_List_ksplc_sema_flow_track_Local_state_at_ref(const std_ds_List_ksplc_sema_flow_track_Local_state *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -162449,7 +162558,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_track_Df_exit_target_pu
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_track_Df_exit_target_truncate(std_ds_List_ksplc_sema_flow_track_Df_exit_target *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -162461,7 +162570,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_track_Df_exit_target_tr
 
 static KSPL_UNUSED ksplc_sema_flow_track_Df_exit_target kspl_std_ds_List_ksplc_sema_flow_track_Df_exit_target_get(const std_ds_List_ksplc_sema_flow_track_Df_exit_target *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -162469,7 +162578,7 @@ static KSPL_UNUSED ksplc_sema_flow_track_Df_exit_target kspl_std_ds_List_ksplc_s
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_track_Df_exit_target_set(std_ds_List_ksplc_sema_flow_track_Df_exit_target *r, Sz index, ksplc_sema_flow_track_Df_exit_target item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -162509,7 +162618,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_view_View_mark_push(std
 
 static KSPL_UNUSED const ksplc_sema_flow_view_View_mark *kspl_std_ds_List_ksplc_sema_flow_view_View_mark_at_ref(const std_ds_List_ksplc_sema_flow_view_View_mark *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -162548,7 +162657,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_view_View_end_push(std_
 
 static KSPL_UNUSED ksplc_sema_flow_view_View_end kspl_std_ds_List_ksplc_sema_flow_view_View_end_get(const std_ds_List_ksplc_sema_flow_view_View_end *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -162556,7 +162665,7 @@ static KSPL_UNUSED ksplc_sema_flow_view_View_end kspl_std_ds_List_ksplc_sema_flo
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_view_View_end_set(std_ds_List_ksplc_sema_flow_view_View_end *r, Sz index, ksplc_sema_flow_view_View_end item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -162565,7 +162674,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_flow_view_View_end_set(std_d
 
 static KSPL_UNUSED const ksplc_sema_flow_view_View_end *kspl_std_ds_List_ksplc_sema_flow_view_View_end_at_ref(const std_ds_List_ksplc_sema_flow_view_View_end *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -162829,7 +162938,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_body_generic_infer_Pairing_p
 
 static KSPL_UNUSED ksplc_sema_body_generic_infer_Pairing kspl_std_ds_List_ksplc_sema_body_generic_infer_Pairing_get(const std_ds_List_ksplc_sema_body_generic_infer_Pairing *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -162837,7 +162946,7 @@ static KSPL_UNUSED ksplc_sema_body_generic_infer_Pairing kspl_std_ds_List_ksplc_
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_body_generic_infer_Pairing_set(std_ds_List_ksplc_sema_body_generic_infer_Pairing *r, Sz index, ksplc_sema_body_generic_infer_Pairing item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -162846,7 +162955,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_body_generic_infer_Pairing_s
 
 static KSPL_UNUSED const ksplc_sema_body_generic_infer_Pairing *kspl_std_ds_List_ksplc_sema_body_generic_infer_Pairing_at_ref(const std_ds_List_ksplc_sema_body_generic_infer_Pairing *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -163657,7 +163766,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_gen_llvm_stmt_Case_info_push(std_
 
 static KSPL_UNUSED const ksplc_gen_llvm_stmt_Case_info *kspl_std_ds_List_ksplc_gen_llvm_stmt_Case_info_at_ref(const std_ds_List_ksplc_gen_llvm_stmt_Case_info *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -163705,7 +163814,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_desugar_Gen_param_push(std_
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_desugar_Gen_param_truncate(std_ds_List_ksplc_parse_desugar_Gen_param *r, Sz count, Slice_U8 file, Sz line) {
   if (count < (Sz)0) {
-    kspl_std_lang_bounds_panic(kspl_lit_3551, count, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3554, count, r->len, file, line);
   }
 
   for (; r->len > count;) {
@@ -163717,7 +163826,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_parse_desugar_Gen_param_truncate(
 
 static KSPL_UNUSED ksplc_parse_desugar_Gen_param kspl_std_ds_List_ksplc_parse_desugar_Gen_param_get(const std_ds_List_ksplc_parse_desugar_Gen_param *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -163725,7 +163834,7 @@ static KSPL_UNUSED ksplc_parse_desugar_Gen_param kspl_std_ds_List_ksplc_parse_de
 
 static KSPL_UNUSED const ksplc_parse_desugar_Gen_param *kspl_std_ds_List_ksplc_parse_desugar_Gen_param_at_ref(const std_ds_List_ksplc_parse_desugar_Gen_param *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -163813,7 +163922,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_decl_suite_Reached_clear(std
 
 static KSPL_UNUSED const ksplc_sema_decl_suite_Reached *kspl_std_ds_List_ksplc_sema_decl_suite_Reached_at_ref(const std_ds_List_ksplc_sema_decl_suite_Reached *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -164074,7 +164183,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry
 
 static KSPL_UNUSED ksplc_sema_session_prof_Body_prof_entry *kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(const std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -164082,7 +164191,7 @@ static KSPL_UNUSED ksplc_sema_session_prof_Body_prof_entry *kspl_std_ds_List_ksp
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr *r, Sz index, ksplc_sema_session_prof_Body_prof_entry *item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -164144,15 +164253,15 @@ static KSPL_UNUSED std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr kspl_
             goto _mir_label_4;
           }
 
-          ksplc_sema_session_prof_Body_prof_entry *item = kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(&out, i, kspl_lit_3556, (Sz)184);
+          ksplc_sema_session_prof_Body_prof_entry *item = kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -164196,13 +164305,13 @@ static KSPL_UNUSED std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr kspl_
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_sema_session_prof_Body_prof_entry_Ptr_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -164271,7 +164380,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_source_checks_Read_file_push(std_
 
 static KSPL_UNUSED const ksplc_source_checks_Read_file *kspl_std_ds_List_ksplc_source_checks_Read_file_at_ref(const std_ds_List_ksplc_source_checks_Read_file *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -164321,7 +164430,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_source_checks_Run_line_clear(std_
 
 static KSPL_UNUSED ksplc_source_checks_Run_line kspl_std_ds_List_ksplc_source_checks_Run_line_get(const std_ds_List_ksplc_source_checks_Run_line *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -164371,6 +164480,11 @@ static KSPL_UNUSED ksplc_lsp_state_Doc_state *kspl_std_mem_Arena_create_ksplc_ls
   return ptr;
 }
 
+static KSPL_UNUSED Writer kspl_put_Writer_I64(Writer out, I64 value) {
+  (void)(kspl_I64_fmt(value, out));
+  return out;
+}
+
 static KSPL_UNUSED Bool kspl_Option_std_subproc_Piped_child_is_some(const Option_std_subproc_Piped_child *r) {
   KSPL_UNUSED const Option_std_subproc_Piped_child __k_tmp1 = (*(r));
   switch (__k_tmp1.tag) {
@@ -164389,18 +164503,18 @@ static KSPL_UNUSED Bool kspl_Option_std_subproc_Piped_child_is_none(const Option
   return !kspl_Option_std_subproc_Piped_child_is_some(r);
 }
 
-static const KSPL_UNUSED Slice_U8 kspl_lit_3560 = KSPL_STR_INIT("Channel.new: the capacity must be 1 or more, not ");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3561 = KSPL_STR_INIT("std/channel");
-static const KSPL_UNUSED Slice_U8 kspl_lit_3562 = KSPL_STR_INIT("Channel.new: the capacity is too large (overflow)");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3563 = KSPL_STR_INIT("Channel.new: the capacity must be 1 or more, not ");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3564 = KSPL_STR_INIT("std/channel");
+static const KSPL_UNUSED Slice_U8 kspl_lit_3565 = KSPL_STR_INIT("Channel.new: the capacity is too large (overflow)");
 static KSPL_UNUSED Result_std_channel_Channel_std_str_Str_builder_std_thread_Thread_error kspl_std_channel_Channel_std_str_Str_builder_new(Sz capacity, std_mem_Arena *arena) {
   if (capacity < (Sz)1) {
     Panic_msg m = kspl_Panic_msg_new();
-    kspl_std_lang_panic(kspl_Panic_msg_slice(kspl_Panic_msg_n(kspl_Panic_msg_s(&m, kspl_lit_3560), (I64)capacity)), kspl_lit_3561, (Sz)64);
+    kspl_std_lang_panic(kspl_Panic_msg_slice(kspl_Panic_msg_n(kspl_Panic_msg_s(&m, kspl_lit_3563), (I64)capacity)), kspl_lit_3564, (Sz)64);
   }
 
   Sz bytes = (Sz)((size_t)(capacity) * (size_t)((Sz)sizeof(std_str_Str_builder)));
   if (((void)((Sz)sizeof(std_str_Str_builder)), (void)((Sz)0), true) && bytes / ((Sz)sizeof(std_str_Str_builder)) != capacity) {
-    kspl_std_lang_panic(kspl_lit_3562, kspl_lit_3561, (Sz)67);
+    kspl_std_lang_panic(kspl_lit_3565, kspl_lit_3564, (Sz)67);
   }
 
   std_str_Str_builder *at = (std_str_Str_builder *)kspl_std_mem_Arena_alloc(arena, bytes);
@@ -164624,7 +164738,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_lsp_server_Held_push(std_ds_List_
 
 static KSPL_UNUSED ksplc_lsp_server_Held kspl_std_ds_List_ksplc_lsp_server_Held_get(const std_ds_List_ksplc_lsp_server_Held *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -164679,7 +164793,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_tools_surface_Line_clear(std_ds_L
 
 static KSPL_UNUSED ksplc_tools_surface_Line kspl_std_ds_List_ksplc_tools_surface_Line_get(const std_ds_List_ksplc_tools_surface_Line *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -164687,7 +164801,7 @@ static KSPL_UNUSED ksplc_tools_surface_Line kspl_std_ds_List_ksplc_tools_surface
 
 static KSPL_UNUSED void kspl_std_ds_List_ksplc_tools_surface_Line_set(std_ds_List_ksplc_tools_surface_Line *r, Sz index, ksplc_tools_surface_Line item, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3553, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3556, index, r->len, file, line);
   }
 
   (*(r->ptr + index)) = item;
@@ -164696,7 +164810,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_tools_surface_Line_set(std_ds_Lis
 
 static KSPL_UNUSED const ksplc_tools_surface_Line *kspl_std_ds_List_ksplc_tools_surface_Line_at_ref(const std_ds_List_ksplc_tools_surface_Line *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -164757,15 +164871,15 @@ static KSPL_UNUSED std_ds_List_ksplc_tools_surface_Line kspl_std_ds_List_ksplc_t
             goto _mir_label_4;
           }
 
-          ksplc_tools_surface_Line item = kspl_std_ds_List_ksplc_tools_surface_Line_get(&out, i, kspl_lit_3556, (Sz)184);
+          ksplc_tools_surface_Line item = kspl_std_ds_List_ksplc_tools_surface_Line_get(&out, i, kspl_lit_3559, (Sz)184);
           {
             Sz k = i;
             for (; k > j; k = (Sz)((size_t)(k) - (size_t)((Sz)1))) {
               KSPL_UNUSED Sz __k_tmp10 = k;
-              kspl_std_ds_List_ksplc_tools_surface_Line_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_tools_surface_Line_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3556, (Sz)186), kspl_lit_3556, (Sz)186);
+              kspl_std_ds_List_ksplc_tools_surface_Line_set(&out, __k_tmp10, kspl_std_ds_List_ksplc_tools_surface_Line_get(&out, (Sz)((size_t)(k) - (size_t)((Sz)1)), kspl_lit_3559, (Sz)186), kspl_lit_3559, (Sz)186);
             }
           }
-          kspl_std_ds_List_ksplc_tools_surface_Line_set(&out, j, item, kspl_lit_3556, (Sz)187);
+          kspl_std_ds_List_ksplc_tools_surface_Line_set(&out, j, item, kspl_lit_3559, (Sz)187);
         _mir_label_4:;
         }
       }
@@ -164809,13 +164923,13 @@ static KSPL_UNUSED std_ds_List_ksplc_tools_surface_Line kspl_std_ds_List_ksplc_t
             for (; k < hi; k = (Sz)((size_t)(k) + (size_t)((Sz)1))) {
               if (b < hi && (a >= mid || ((cmp).vtable->call((cmp).obj, from.ptr + b, from.ptr + a)) < 0)) {
                 KSPL_UNUSED Sz __k_tmp19 = k;
-                kspl_std_ds_List_ksplc_tools_surface_Line_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_tools_surface_Line_get(&from, b, kspl_lit_3556, (Sz)203), kspl_lit_3556, (Sz)203);
+                kspl_std_ds_List_ksplc_tools_surface_Line_set(&to, __k_tmp19, kspl_std_ds_List_ksplc_tools_surface_Line_get(&from, b, kspl_lit_3559, (Sz)203), kspl_lit_3559, (Sz)203);
                 b = (Sz)((size_t)(b) + (size_t)((Sz)1));
               }
 
               else {
                 KSPL_UNUSED Sz __k_tmp20 = k;
-                kspl_std_ds_List_ksplc_tools_surface_Line_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_tools_surface_Line_get(&from, a, kspl_lit_3556, (Sz)206), kspl_lit_3556, (Sz)206);
+                kspl_std_ds_List_ksplc_tools_surface_Line_set(&to, __k_tmp20, kspl_std_ds_List_ksplc_tools_surface_Line_get(&from, a, kspl_lit_3559, (Sz)206), kspl_lit_3559, (Sz)206);
                 a = (Sz)((size_t)(a) + (size_t)((Sz)1));
               }
             }
@@ -164874,7 +164988,7 @@ static KSPL_UNUSED void kspl_std_ds_List_ksplc_tools_run_Unit_push(std_ds_List_k
 
 static KSPL_UNUSED ksplc_tools_run_Unit kspl_std_ds_List_ksplc_tools_run_Unit_get(const std_ds_List_ksplc_tools_run_Unit *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3552, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
   }
 
   return (*(r->ptr + index));
@@ -164882,7 +164996,7 @@ static KSPL_UNUSED ksplc_tools_run_Unit kspl_std_ds_List_ksplc_tools_run_Unit_ge
 
 static KSPL_UNUSED ksplc_tools_run_Unit *kspl_std_ds_List_ksplc_tools_run_Unit_at(std_ds_List_ksplc_tools_run_Unit *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3554, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3557, index, r->len, file, line);
   }
 
   return r->ptr + index;
@@ -164890,7 +165004,7 @@ static KSPL_UNUSED ksplc_tools_run_Unit *kspl_std_ds_List_ksplc_tools_run_Unit_a
 
 static KSPL_UNUSED const ksplc_tools_run_Unit *kspl_std_ds_List_ksplc_tools_run_Unit_at_ref(const std_ds_List_ksplc_tools_run_Unit *r, Sz index, Slice_U8 file, Sz line) {
   if ((U64)index >= (U64)r->len) {
-    kspl_std_lang_bounds_panic(kspl_lit_3555, index, r->len, file, line);
+    kspl_std_lang_bounds_panic(kspl_lit_3558, index, r->len, file, line);
   }
 
   return r->ptr + index;

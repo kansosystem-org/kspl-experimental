@@ -1,11 +1,13 @@
 //< The entry point that runs ksagent's tests together
 //< They drive the loop against a stand-in model server (`ksagent/tests/stub.kspl`), since CI has
 //< no model. They check the citation check, the folder's guards, the chat file, and eval's scoring.
+//< They also run the rows of `ksagent/docs/SPEC-commands.md` through the program itself.
 //< **This is the only `pub` declaration in this package.** Only `tests/debug/main.kspl`, another
 //< unit, needs it. Caution: **Do not add a checking function here.** Each one added is one more
 //< contract exposed outside the unit.
 import "ksagent/tests/agent_test"
 import "ksagent/tests/chat_test"
+import "ksagent/tests/claims_test"
 import "ksagent/tests/eval_test"
 import "ksagent/tests/office_safety_test"
 import "ksagent/tests/office_test"
@@ -15,11 +17,12 @@ import "std/mem" { Arena }
 import "std/suite"
 
 priv struct Tests //< what the tests take, each by the name of its parameter
+    ksagent: U8[] //< the program, `out/ksagent.exe`, that a test starts as a child
     work: U8[] //< a folder each test makes its own folder under; it must exist
     arena: Arena$@
 
 impl Tests: suite.Suite {}
 
-pub fn run_ksagent(work: U8[], arena: Arena$@) //< runs every ksagent test
-    $t: = Tests::{ .work = work, .arena = arena }
+pub fn run_ksagent(ksagent: U8[], work: U8[], arena: Arena$@) //< runs every ksagent test
+    $t: = Tests::{ .ksagent = ksagent, .work = work, .arena = arena }
     t.run()

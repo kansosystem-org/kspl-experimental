@@ -45,7 +45,7 @@ make ksagent                                   # -> out/ksagent.exe
 
 ## The tests
 
-**`make test` runs them from this folder** ([`ksagent/Makefile`](Makefile)). It needs a `ksplc` and a C compiler, and no model or Python. The tests start a stand-in model server in a thread, which gives prepared replies ([`ksagent/tests/stub.kspl`](tests/stub.kspl)), and check what ksagent does with each. The Word and Excel files they read are in [`ksagent/tests/office_data/`](tests/office_data/), made by [`ksagent/tests/make_office_fixtures.py`](tests/make_office_fixtures.py).
+**`make test` runs them from this folder** ([`ksagent/Makefile`](Makefile)). It needs a `ksplc` and a C compiler, and no model or Python. The tests start a stand-in model server in a thread, which gives prepared replies ([`ksagent/tests/stub.kspl`](tests/stub.kspl)), and check what ksagent does with each. **They also run each row of [`SPEC-commands.md`](docs/SPEC-commands.md) through the program itself**, which `make test` builds first. The Word and Excel files they read are in [`ksagent/tests/office_data/`](tests/office_data/), made by [`ksagent/tests/make_office_fixtures.py`](tests/make_office_fixtures.py).
 
 ## Further reading
 

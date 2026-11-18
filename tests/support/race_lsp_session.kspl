@@ -145,6 +145,12 @@ fn main(): I32
     if limit_ms <= LSP_EXIT_MS
         io.err().s("race_lsp_session: the limit must be over \{LSP_EXIT_MS\} ms\n")
         return 2
+    // **The server waits for its worker as long as this session waits for an answer.** Under the
+    // sanitizer and beside other raced programs, a live worker has fallen silent past the
+    // server's own 10 s; the restart then read as a fault this session never had.
+    sys.set_env("KSPLC_LSP_SILENCE_MS", arena.text().s("\{LSP_WAIT_MS\}").take()) catch
+        io.err().s("race_lsp_session: the server's silence cannot be set\n")
+        return 2
     faults: = play(args.get(1), args.get(2), limit_ms, arena)
     for f in faults
         io.out().s(f).c('\n')
