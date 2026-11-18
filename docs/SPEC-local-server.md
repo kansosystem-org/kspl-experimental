@@ -224,6 +224,117 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 | 422 | The file named for a build does not build; `error` holds the builder's message |
 | 500 | It could not be written or replaced |
 
+## The answers, request by request
+
+**Each row below is a request, and the answer a server that follows this protocol gives it.** The rows show the rules above at work. `make test-server-claims` sends every row to kssrv, in order, and fails on any other answer.
+
+**The rows start from this state.** The server runs with `--local` and a named page. Its root holds the file `note.txt` and the folder `sub`, which holds `deep.txt`. The file `outside.txt` stands beside the root, outside it.
+
+The columns read as follows:
+
+* **Token**: what `Authorization: Bearer` carries. `the token` is the one the server printed, `another` is 48 hexadecimal digits that are not it, and `none` sends no `Authorization`.
+* **Headers**: other header lines the request sends. A row that names no `Host` sends `Host: 127.0.0.1`.
+* **Body**: the body sent, as text or as a count of bytes. A row that names a `Content-Length` sends that header and no body.
+* **Answer**: the status, then the whole body where the row names one. After `holding`, each text is a part the body holds.
+
+**Every answer in these tables keeps three rules besides its own row.**
+
+* It carries the headers of "What guards the page in the browser".
+* It holds the token nowhere, in its headers or in its body.
+* A refusal (a status of 400 or more) says what happened in its body, unless it answers a `HEAD`.
+
+### Without the token, only the page
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /` | none | — | — | 200 |
+| `GET /index.html` | none | — | — | 200 |
+| `GET /note.txt` | none | — | — | 401 |
+| `GET /note.txt` | another | — | — | 401 |
+| `GET /note.txt` | the token | — | — | 200 `note` |
+| `GET /api/status` | none | — | — | 401 |
+| `GET /api/status` | another | — | — | 401 |
+| `GET /api/status` | the token | — | — | 200 holding `"local":true` and `"conditional_writes":true` |
+| `GET /api/file?path=note.txt` | none | — | — | 401 |
+| `GET /api/file?path=../outside.txt` | none | — | — | 401 |
+| `GET /api/file?path=missing.txt` | none | — | — | 401 |
+| `GET /api/list?path=sub` | none | — | — | 401 |
+| `GET /missing.txt` | none | — | — | 401 |
+| `GET /api/missing` | none | — | — | 401 |
+| `POST /api/stop` | none | — | — | 401 |
+| `PUT /api/file?path=new.txt` | none | `Content-Length: 200000` | — | 401 |
+
+### Only the loopback's name
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /` | none | `Host: localhost:8080` | — | 200 |
+| `GET /` | none | `Host: attacker.example` | — | 403 |
+| `GET /api/status` | the token | `Host: attacker.example` | — | 403 |
+| `PUT /api/file?path=new.txt` | the token | `Host: attacker.example` `Content-Length: 200000` | — | 403 |
+| `GET /` | none | `Host: 127.0.0.1` `Host: attacker.example` | — | 400 |
+
+### Nothing outside the root
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /api/file?path=note.txt` | the token | — | — | 200 `note` |
+| `GET /api/file?path=sub/deep.txt` | the token | — | — | 200 `deep` |
+| `GET /api/file?path=../outside.txt` | the token | — | — | 403 |
+| `GET /api/file?path=%2e%2e/outside.txt` | the token | — | — | 403 |
+| `GET /api/file?path=sub/../../outside.txt` | the token | — | — | 403 |
+| `GET /api/file?path=/etc/passwd` | the token | — | — | 403 |
+| `GET /api/file?path=C:%5Cx` | the token | — | — | 403 |
+| `GET /api/file?path=%5C%5Cserver%5Cshare%5Cx` | the token | — | — | 403 |
+| `GET /api/file?path=note.txt%00x` | the token | — | — | 403 |
+| `GET /api/file?path=CON` | the token | — | — | 403 |
+| `GET /api/file?path=%252e%252e/note.txt` | the token | — | — | 404 |
+| `GET /api/file?path=%zz` | the token | — | — | 400 |
+| `GET /api/file?path=missing.txt` | the token | — | — | 404 |
+| `GET /api/file?path=.env` | the token | — | — | 404 |
+| `HEAD /api/file?path=note.txt` | the token | — | — | 405 |
+| `DELETE /api/file?path=note.txt` | the token | — | — | 405 |
+
+### Writing
+
+The digest in two rows is the SHA-256 of `note`, the bytes `note.txt` holds at the start.
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `PUT /api/file?path=new.txt` | the token | — | `abc` | 200 `{"wrote":3}` |
+| `PUT /api/file?path=sub/made/new.txt` | the token | — | `abc` | 200 `{"wrote":3}` |
+| `PUT /api/file?path=none/deeper/new.txt` | the token | — | `abc` | 409 holding `"cause":"folders"` |
+| `PUT /api/file?path=sub` | the token | — | `abc` | 409 holding `"cause":"folder"` |
+| `PUT /api/file?path=.env` | the token | — | `abc` | 403 |
+| `PUT /api/file?path=sub/.git/config` | the token | — | `abc` | 403 |
+| `PUT /api/file?path=../outside.txt` | the token | — | `abc` | 403 |
+| `PUT /api/file?path=note.txt` | the token | `X-Kanso-If-Content: missing` | `abc` | 409 |
+| `PUT /api/file?path=note.txt` | the token | `X-Kanso-If-Content: 1234` | `abc` | 400 |
+| `PUT /api/file?path=note.txt` | the token | `X-Kanso-If-Content: edb465624291e4053c6c5ea4b7eb320dec773e10a57d26b95dcf0564f8e310f8` | `abc` | 200 |
+| `PUT /api/file?path=note.txt` | the token | `X-Kanso-If-Content: edb465624291e4053c6c5ea4b7eb320dec773e10a57d26b95dcf0564f8e310f8` | `xyz` | 409 |
+| `PUT /api/file?path=big.txt` | the token | — | 8,388,608 bytes | 200 `{"wrote":8388608}` |
+| `PUT /api/file?path=big.txt` | the token | — | 8,388,609 bytes | 413 |
+
+### Watching and listing
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /api/stat?path=note.txt` | the token | — | — | 200 holding `"size":3` |
+| `GET /api/stat?path=missing.txt` | the token | — | — | 404 |
+| `GET /api/list?path=sub` | the token | — | — | 200 `{"folders":["made"],"files":["deep.txt"],"more":false}` |
+| `GET /api/list?path=note.txt` | the token | — | — | 404 |
+| `GET /api/list?path=.git` | the token | — | — | 403 |
+| `GET /api/list?path=..` | the token | — | — | 403 |
+
+### Nothing else
+
+| Request | Token | Headers | Body | Answer |
+| :-- | :-- | :-- | :-- | :-- |
+| `GET /api/run` | the token | — | — | 404 |
+| `POST /api/exec` | the token | — | — | 404 |
+| `GET /api/allow?path=note.txt` | the token | — | — | 404 |
+| `POST /api/build?path=note.txt` | the token | — | — | 404 |
+
 ## When it is not connected
 
 A client checks `/api/status` once at startup. The response must declare `local: true`; an ordinary outward-facing server is not a local file service. A 401 means the server is present but the token is missing or refused.

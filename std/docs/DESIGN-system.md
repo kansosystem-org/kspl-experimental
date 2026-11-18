@@ -390,7 +390,7 @@ What this gives up:
 
 **Once the child itself has ended, `run_capture` reads its outputs for `PIPE_GRACE_MS` (100 ms) more.** Then it closes them and returns the child's own exit code. A process the child started without redirecting its outputs (`server &` in a shell script) holds the pipes open. Waiting for them to close would run to the time limit, and report a child that ended in time as stopped.
 
-**Nothing that the child itself wrote is lost**: once it has ended, all it wrote is in the pipes. The grace can cut only what the processes it left behind write later. Those are not killed, since only a time limit stops what a child started. `run_many` collects through files, which a leftover process cannot hold open.
+**Nothing that the child itself wrote is lost**: once it has ended, all it wrote is in the pipes. When the grace or the time limit ends, what the pipes hold is still read, without waiting. The grace is counted on the clock, and this program can wait for the CPU past it with the child's output unread. That read stops at 1 MiB, more than a full pipe holds, so a process that writes for good cannot hold it. The grace can cut only what the processes it left behind write later. Those are not killed, since only a time limit stops what a child started. `run_many` collects through files, which a leftover process cannot hold open.
 
 ### A child holds only the streams it is handed
 

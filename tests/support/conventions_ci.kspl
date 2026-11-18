@@ -167,8 +167,14 @@ priv const GATES_SRC: U8[] = "tools/ci_gates.kspl" //<
     //< holding no gate but cannot see the CI's matrix; this is the second link.
 priv const SHARD_PREFIX: U8[] = "ci-shard-" //< the sets one job of `ci` runs
 priv const MATRIX_HEAD: U8[] = "target: ["
-priv const LINUX_ONLY: U8[] = "ci-shard-linux" //<
-    //< What only the Linux runner runs (qemu, wasm, the browser, BLAS)
+priv const LINUX_ONLY: U8[][_] = ::{ "ci-shard-linux", "ci-shard-linux-race" } //<
+    //< What only the Linux runner runs (qemu, BLAS, the sanitizers), in two jobs
+
+priv fn listed(names: U8[][], name: U8[]): Bool //< whether names holds name
+    for n in names
+        if n.equals(name)
+            return true
+    return false
 
 priv fn body_of(names: List<|U8[]|>@, bodies: List<|U8[]|>@, job: U8[]): U8[] //<
     //< Looks up a job's body by name (empty where there is none)
@@ -206,7 +212,7 @@ priv fn check_ci_shards(arena: Arena$@)
     $want: = List<|U8[]|>(arena)
     for set in ci_gates.Set.variants()
         name: = set.variant_name().replace("_", "-", arena)
-        if name.starts_with(SHARD_PREFIX) && !name.equals(LINUX_ONLY)
+        if name.starts_with(SHARD_PREFIX) && !listed(U8[][]::LINUX_ONLY, name)
             want.push(name)
     if want.len == 0
         verdict.check("the CI's shards agree with the workflow's matrix", false,
@@ -215,11 +221,12 @@ priv fn check_ci_shards(arena: Arena$@)
     $names: = List<|U8[]|>(arena)
     $bodies: = List<|U8[]|>(arena)
     job_blocks(harness.read_under_root(CI_YML), names@, bodies@, arena)
-    // **Linux has one more**: what runs only there is a shard of its own (`ci-shard-linux`).
+    // **Linux has two more**: what runs only there is in shards of its own (`LINUX_ONLY`).
     $with_linux: = List<|U8[]|>(arena)
     for i in Range.asc(want.len)
         with_linux.push(want.get(i))
-    with_linux.push(LINUX_ONLY)
+    for name in LINUX_ONLY
+        with_linux.push(name)
     check_job(body_of(names@, bodies@, "linux"), "linux", with_linux@, bad@, arena)
     check_job(body_of(names@, bodies@, "windows-ucrt64"), "windows-ucrt64", want@, bad@, arena)
     verdict.check_list("the CI's shards agree with the workflow's matrix", want.len, "shards", bad@,

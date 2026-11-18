@@ -1,0 +1,339 @@
+//< Holds a `--local` server to the checkable sentences of the local server's specification
+//< For local use; not a suite; the run `claims` of `kssrv/tests/main.kspl`, which names the
+//< specification's file with `--spec=`. **Nothing here copies a rule**: the requests and their
+//< answers are read from the specification's tables, and the other rules from its sentences. A
+//< failure names the specification's line, so a change on one side alone points at the other.
+//< The specification stands outside this folder, so a copy of the folder alone runs every other
+//< run but this one.
+import "kssrv/tests/client"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/verdict"
+
+priv const ROWS_HEADING: U8[] = "## The answers, request by request" //< where the rows stand
+priv const ROWS_HEAD: U8[] = "| Request | Token | Headers | Body | Answer |" //<
+    //< The heading row of each table of requests; a table under any other is not read
+
+priv const HOLDING: U8[] = "holding " //< in an Answer cell, what makes its texts parts of the body
+
+priv const GUARD_HEADING: U8[] = "### What guards the page in the browser" //<
+    //< The section whose sentence starting `GUARD_SAYS` names the headers every answer carries
+priv const GUARD_SAYS: U8[] = "The server sends " //< opens that sentence
+
+priv const LISTEN_SAYS: U8[] = "**It listens on `" //< the rule naming the one address it listens on
+priv const OTHER_LOOPBACK: U8[] = "127.0.0.2" //< a loopback address that is not 127.0.0.1
+    //< **A socket bound to 127.0.0.1 alone is not reached through it**, while one bound to every
+    //< address is. So reaching the server through it shows a wider bind, with no second machine.
+
+priv const PRINTS_SAYS: U8[] = "the server prints one line, `" //< opens the line's form
+priv const TOKEN_SAYS: U8[] = "**The token is " //< the rule naming the token's length
+priv const TOKEN_FORM: U8[] = " lowercase hexadecimal digits**" //< what follows the length
+
+// The state the rows start from, as the specification's "The rows start from this state" says.
+priv const ROOT_RELS: U8[][2] = ::{ "note.txt", "sub/deep.txt" }
+priv const ROOT_BODIES: U8[][2] = ::{ "note", "deep" }
+priv const OUTSIDE_REL: U8[] = "outside.txt" //< the file beside the root
+
+struct Spec //< the specification's lines, and the name its failures give it
+    name: U8[]
+    lines: List<|U8[]|>
+
+priv struct Row //< one request of the specification's tables, and the answer it names
+    line: Sz //< its line in the specification, from 1
+    method: U8[]
+    target: U8[]
+    token: U8[] //< `the token`, `another` or `none`
+    heads: List<|U8[]|> //< the header lines it names, each `Name: value`
+    body: U8[] //< the body sent
+    announced: Bool //< whether a header names `Content-Length`, so that no body is sent
+    status: I32 //< the status it must answer
+    bodies: List<|U8[]|> //< the body it must answer, or the parts it must hold
+    holding: Bool //< whether `bodies` are parts of the body (`HOLDING`) rather than all of it
+
+priv struct Guard //< a header every answer carries, as the specification names it
+    name: U8[]
+    value: U8[]
+
+fn read(path: U8[], arena: Arena$@): Spec? //< the specification at `path`, or none
+    text: = io.read_file(path, arena) catch
+        return .none
+    return .some(Spec::{ .name = path, .lines = text.lines(arena) })
+
+fn place(dir: U8[], arena: Arena$@): Bool //< the root the rows start from, and the file beside it
+    fs.write_tree(dir, U8[][]::{ OUTSIDE_REL }, U8[][]::{ "outside\n" }, arena) catch
+        return false
+    fs.write_tree(fs.join(dir, "www", arena), U8[][]::ROOT_RELS, U8[][]::ROOT_BODIES, arena) catch
+        return false
+    return true
+
+priv fn where(spec: Spec@, index: Sz, arena: Arena$@): U8[] //< `<file>:<line>` of a line's index
+    return arena.text().s(spec.name).c(':').s("\{index + 1\}").take()
+
+priv fn line_of(spec: Spec@, heading: U8[], says: U8[]): Sz //<
+    //< The index of the first line after `heading` that holds `says`, or the line count
+    //< An empty `heading` searches from the top.
+    $in_sec: = heading.len == 0
+    for i in Range.asc(spec.lines.len)
+        line: = spec.lines.get(i)
+        if line.equals(heading)
+            in_sec = true
+            continue
+        if in_sec && line.find_str(says).is_some()
+            return i
+    return spec.lines.len
+
+priv fn text_at(spec: Spec@, index: Sz): U8[] //< the line, or empty past the end
+    return spec.lines.get(index) if index < spec.lines.len else ""
+
+priv fn span_after(line: U8[], says: U8[]): U8[] //<
+    //< The text in backticks that `says` opens, where `says` ends in a backtick
+    at: = line.find_str(says) catch
+        return ""
+    rest: = line.sub_from(at + says.len)
+    end: = rest.find_char('`') catch
+        return ""
+    return rest.sub(0, end)
+
+priv fn cells_of(line: U8[], arena: Arena$@): List<|U8[]|> //< a table row's cells, trimmed
+    $out: = List<|U8[]|>(arena)
+    inner: = line.trim_spaces()
+    if inner.len < 2
+        return out
+    for cell in inner.sub(1, inner.len - 2).split('|', arena)
+        out.push(cell.trim_spaces())
+    return out
+
+priv fn spans_of(cell: U8[], arena: Arena$@): List<|U8[]|> //< the texts a cell writes in backticks
+    $out: = List<|U8[]|>(arena)
+    parts: = cell.split('`', arena)
+    for $k: Sz = 1; k < parts.len; k += 2
+        out.push(parts.get(k))
+    return out
+
+priv fn is_none(cell: U8[]): Bool //< whether a cell says "nothing" (`—`)
+    return cell.equals("—") || cell.len == 0
+
+priv fn digits_from(text: U8[]): U8[] //< the digits at its start, with any commas between them
+    $n: Sz = 0
+    for n < text.len && (text[n].is_digit() || text[n] == ',')
+        n += 1
+    return text.sub(0, n)
+
+priv fn row_of(cells: List<|U8[]|>@, line: Sz, arena: Arena$@): Row!U8[] //<
+    //< Reads one row of a table of requests; the error says which cell cannot be read
+    if cells.len != 5
+        throw "a row of requests has five cells"
+    request: = spans_of(cells.get(0), arena)
+    if request.len != 1
+        throw "the Request cell is one `METHOD target` in backticks"
+    sp: = request.get(0).find_char(' ') catch
+        throw "the Request cell is one `METHOD target` in backticks"
+    token: = cells.get(1)
+    if !token.equals("the token") && !token.equals("another") && !token.equals("none")
+        throw "the Token cell is `the token`, `another` or `none`"
+    $heads: = List<|U8[]|>(arena)
+    $announced: = false
+    if !is_none(cells.get(2))
+        for h in spans_of(cells.get(2), arena)
+            if h.find_char(':').is_none()
+                throw "each header in the Headers cell is `Name: value`"
+            if h.starts_with("Content-Length:")
+                announced = true
+            heads.push(h)
+    $body: U8[] = ""
+    cell_body: = cells.get(3)
+    if !is_none(cell_body)
+        texts: = spans_of(cell_body, arena)
+        if texts.len == 1
+            body = texts.get(0)
+        else if cell_body.ends_with(" bytes")
+            n: = digits_from(cell_body).replace(",", "", arena).to_i64() catch
+                throw "the Body cell's count of bytes is digits"
+            body = client.filler(Sz::n, arena)
+        else
+            throw "the Body cell is text in backticks or `<count> bytes`"
+    answer: = cells.get(4)
+    status: = digits_from(answer).to_i64() catch
+        throw "the Answer cell starts with the status"
+    wanted: = spans_of(answer, arena)
+    holding: = answer.find_str(HOLDING).is_some()
+    if !holding && wanted.len > 1
+        throw "the Answer cell names one whole body, or the parts it holds after `holding`"
+    return Row::{ .line = line, .method = request.get(0).sub(0, sp),
+        .target = request.get(0).sub_from(sp + 1), .token = token, .heads = heads, .body = body,
+        .announced = announced, .status = I32::status, .bodies = wanted, .holding = holding }
+
+priv fn rows_of(spec: Spec@, arena: Arena$@): List<|Row|> //<
+    //< Every row of the tables of requests under `ROWS_HEADING`; a row that cannot be read fails
+    $rows: = List<|Row|>(arena)
+    $in_sec: = false
+    $in_table: = false
+    for i in Range.asc(spec.lines.len)
+        line: = spec.lines.get(i)
+        if line.equals(ROWS_HEADING)
+            in_sec = true
+            continue
+        if !in_sec
+            continue
+        if line.starts_with("## ")
+            break
+        if !line.starts_with("|")
+            in_table = false
+            continue
+        if line.equals(ROWS_HEAD)
+            in_table = true
+            continue
+        if !in_table || line.starts_with("| :--")
+            continue
+        cells: = cells_of(line, arena)
+        got: = row_of(cells@, i + 1, arena) catch why
+            verdict.check(arena.text().s(where(spec, i, arena)).s(": the row can be read").take(),
+                false, why)
+            continue
+        rows.push(got)
+    return rows
+
+priv fn guards_of(spec: Spec@, arena: Arena$@): List<|Guard|> //<
+    //< The `Name: value` pairs of the sentence that says what the server sends on every answer
+    $out: = List<|Guard|>(arena)
+    line: = text_at(spec, line_of(spec, GUARD_HEADING, GUARD_SAYS))
+    for span in spans_of(line.sub_from(line.find_str(GUARD_SAYS).unwrap_or(0)), arena)
+        if colon: = span.find_char(':')
+            out
+                .push(Guard::{ .name = span.sub(0, colon),
+                .value = span.sub_from(colon + 1).trim_spaces() })
+    return out
+
+priv fn another(token: U8[], arena: Arena$@): U8[] //< a token of the same form that is not it
+    if token.len == 0
+        return token
+    return arena.text().c('1' if token[0] == '0' else '0').s(token.sub_from(1)).take()
+
+priv fn raw_of(row: Row@, token: U8[], arena: Arena$@): U8[] //< the bytes the row sends
+    b: = arena.text().s(row.method).c(' ').s(row.target).s(" HTTP/1.1\r\n")
+    $named_host: = false
+    for h in row.heads
+        if h.starts_with("Host:")
+            named_host = true
+    if !named_host
+        b.s("Host: 127.0.0.1\r\n")
+    for h in row.heads
+        b.s(h).s("\r\n")
+    if row.token.equals("the token")
+        b.s(client.bearer_head(token, arena))
+    else if row.token.equals("another")
+        b.s(client.bearer_head(another(token, arena), arena))
+    if row.announced
+        return b.s("\r\n").take()
+    if !row.method.equals("GET") && !row.method.equals("HEAD") &&
+        !row.method.equals("DELETE")
+        b.s("Content-Length: \{row.body.len\}\r\n")
+    return b.s("\r\n").s(row.body).take()
+
+priv fn judged(row: Row@, resp: client.Resp, token: U8[], guards: List<|Guard|>@, arena: Arena$@):
+    U8[] //<
+        //< What the answer breaks of its row and of the rules for every answer; empty if nothing
+    b: = arena.text()
+    if resp.status != row.status
+        b.s("the status is \{resp.status\}, the specification says \{row.status\}; ")
+    for want in row.bodies
+        if row.holding && resp.body.find_str(want).is_none()
+            b.s("the body does not hold `").s(want).s("`; ")
+        else if !row.holding && !resp.body.equals(want)
+            b.s("the body is not the one the specification names; ")
+    for g in guards
+        if !client.header(resp.head, g.name).equals(g.value)
+            b.s("it lacks `").s(g.name).s(": ").s(g.value).s("`; ")
+    if resp.head.find_str(token).is_some() || resp.body.find_str(token).is_some()
+        b.s("it holds the token; ")
+    if resp.status >= 400 && !row.method.equals("HEAD") && resp.body.len == 0
+        b.s("the refusal says nothing in its body; ")
+    return b.take()
+
+fn row_cases(spec: Spec@, port: I32, token: U8[], arena: Arena$@) //<
+    //< Sends every row, in order, and checks each answer against its row and the rules for all
+    //< **The rows run in the specification's order**: a later row may read what an earlier wrote.
+    rows: = rows_of(spec, arena)
+    if !verdict.check(arena.text().s(spec.name).s(" holds rows under '").s(ROWS_HEADING).s("'")
+        .take(), rows.len > 0, "no table whose heading row is `ROWS_HEAD` in this file")
+        return
+    guards: = guards_of(spec, arena)
+    verdict.check(arena.text().s(spec.name).s(" names the headers every answer carries").take(),
+        guards.len > 0,
+        arena.text().s("no sentence starting '").s(GUARD_SAYS).s("' under '").s(GUARD_HEADING)
+        .s("'").take())
+    for i in Range.asc(rows.len)
+        row: = rows.get(i)
+        name: = arena.text().s(where(spec, row.line - 1, arena)).s(": `").s(row.method).c(' ')
+            .s(client.short(row.target)).s("` (token: ").s(row.token).s(") answers \{row.status\}")
+            .take()
+        got: =
+            client.request(port, raw_of(row@, token, arena), 1, client.DEFAULT_TIMEOUT_MS,
+            row.method.equals("HEAD"), arena) catch e
+                verdict.check(name, false,
+                    arena.text().s("no answer came: ").s(e.reason()).take())
+                continue
+        resp: = got.get(0)
+        broke: = judged(row@, resp, token, guards@, arena)
+        verdict.check(name, broke.len == 0,
+            arena.text().s(broke).s("\n    the answer: ").s(client.shown(resp, arena)).take())
+
+fn token_cases(spec: Spec@, printed: U8[], port: I32, token: U8[], arena: Arena$@) //<
+    //< The line the server printed has the specification's form, and the token its length
+    at: = line_of(spec, "", PRINTS_SAYS)
+    form: = span_after(text_at(spec, at), PRINTS_SAYS)
+    name: = arena.text().s(where(spec, at, arena)).s(": the server prints `").s(form).s("`").take()
+    // The form's `<number>` is the port and its `<token>` the token.
+    want: = form.replace("<number>", arena.text().s("\{port\}").take(), arena)
+        .replace("<token>", token, arena)
+    verdict.check(name,
+        form.len > 0 && token.len > 0 && printed.find_str(want).is_some(),
+        arena.text().s("no line holds '").s(want).s("':\n").s(printed).take())
+    t_at: = line_of(spec, "", TOKEN_SAYS)
+    t_line: = text_at(spec, t_at)
+    count: = digits_from(span_rest(t_line, TOKEN_SAYS)).to_i64() catch -1I64
+    $hex: = t_line.find_str(TOKEN_FORM).is_some()
+    for ch in token
+        if !ch.is_digit() && !(ch >= 'a' && ch <= 'f')
+            hex = false
+    verdict.check(arena.text().s(where(spec, t_at, arena))
+        .s(": the token is that many lowercase hexadecimal digits").take(),
+        hex && I64::token.len == count,
+        arena.text().s("the specification: ").s(t_line).s("\n    the token: ").s(token).take())
+
+priv fn span_rest(line: U8[], says: U8[]): U8[] //< what follows `says` in the line, or empty
+    at: = line.find_str(says) catch
+        return ""
+    return line.sub_from(at + says.len)
+
+priv fn reached(host: U8[], port: I32): Bool //< whether a connection to the address is taken
+    s: = net.Tcp_stream.connect(host, port) catch
+        return false
+    s.free()
+    return true
+
+fn listen_case(spec: Spec@, port: I32, arena: Arena$@) //<
+    //< The one address it listens on reaches it, and another loopback address does not
+    at: = line_of(spec, "", LISTEN_SAYS)
+    addr: = span_after(text_at(spec, at), LISTEN_SAYS)
+    there: = addr.len > 0 && reached(addr, port)
+    other: = reached(OTHER_LOOPBACK, port)
+    verdict.check(arena.text().s(where(spec, at, arena)).s(": it listens on `").s(addr)
+        .s("` only, so ").s(OTHER_LOOPBACK).s(" does not reach it").take(), there && !other,
+        arena.text().s("reached through `").s(addr).s("`: \{there\}; through ").s(OTHER_LOOPBACK)
+        .s(": \{other\}").take())
+
+fn probe_case(wide_port: I32, arena: Arena$@) //<
+    //< `listen_case`'s failure case: a server for every address is reached through the other one
+    //< Without it, a platform that routes no `OTHER_LOOPBACK` would pass a server for every
+    //< address.
+    verdict.check(arena.text().s("a server for every address is reached through ").s(OTHER_LOOPBACK)
+        .s(", so the loopback check can fail").take(), reached(OTHER_LOOPBACK, wide_port),
+        "the check cannot tell a server for the loopback alone from one for every address")

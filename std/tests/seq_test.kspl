@@ -1,6 +1,5 @@
 //< Tests of the collections: the combinators (`std/seq`) and the byte ring buffer (`std/ring`)
 import "std/ds" + { List, Map }
-import "std/io"
 import "std/json"
 import "std/mem" + { Arena }
 import "std/refcount" { Rc }
@@ -736,10 +735,8 @@ fn test_list_push_all_reads_before_free(ksplc: U8[], arena: Arena$@) //< ksplc r
         "", 300000, 1 << 20, arena) catch panic("the child must start")
     sys.unset_env("MALLOC_PERTURB_") catch panic("unset_env should succeed")
     sys.unset_env("MallocScribble") catch panic("unset_env should succeed")
-    if !r.exited_with(0) || !r.stdout_data.equals("ok")
-        io.err().s(r.stderr_data)
-    assert(r.exited_with(0) && r.stdout_data.equals("ok"),
-        "push_all must read its source before the old block is freed")
+    sys_test.assert_run(r.exited_with(0) && r.stdout_data.equals("ok"), r@,
+        "push_all must read its source before the old block is freed", arena)
     verdict.pass("Appended to itself as it grows, a list keeps every element and its count.")
 
 fn test_list_contains(arena: Arena$@) //< membership by the element's own `equals`

@@ -294,7 +294,7 @@ self-host: $(DIFF_TXT)
 	@$(ksplc_step) verdict DIFF=$(DIFF_TXT) LABEL='self-hosting, $(BACKEND) backend' \
 		|| { printf '%s\n' "$$SELF_HOST_HELP"; exit 1; }
 
-# --- Measuring performance (the two logs it hands to perf_guard) ---
+# --- Measuring performance (the four logs it hands to perf_guard) ---
 # Caution: **Measure two runs of the same executable**, in a cache of its own: a rebuilt ksplc
 # misses on its first, and one run alone hides the other's regression. `--stats` reports on
 # standard error, with the diagnostics: each log keeps that stream, shown whether or not it failed.
@@ -302,15 +302,36 @@ self-host: $(DIFF_TXT)
 perf_run = KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats \
 	ksplc/main.kspl $(TMP_DIR)/perf_$(1).c 2> $(LOG_DIR)/perf_$(1).log; \
 	rc=$$?; cat $(LOG_DIR)/perf_$(1).log; exit $$rc
-## Measure-and-inspect|perf-log|Measure and record translation's elapsed time and peak memory
+# **Speed is judged by counted instructions, never by a time** ("No fixed time bound in a test" in
+# docs/SPEC-gates.md). Cachegrind counts them, the same on every run of one build; GitHub's
+# runners expose no hardware counter to `perf stat`. **One fixed input is counted twice**: stage1
+# translating it on an empty cache, then the program stage1 builds from it as `ksplc build` ships
+# it. The second sees code that ksplc generates slower, before the seed is baked again.
+# $(call perf_count,<name>,<command>): one counted run, Cachegrind's log `$(LOG_DIR)/perf_<name>.log`.
+PERF_WORK := tests/checkers/perf_work.kspl
+perf_count = { command -v valgrind > /dev/null || { echo "perf-log needs valgrind to count \
+	instructions: install it, as .devcontainer/Dockerfile does"; exit 1; }; } && \
+	valgrind --tool=cachegrind --cache-sim=no --cachegrind-out-file=/dev/null \
+	--log-file=$(LOG_DIR)/perf_$(1).log $(2); rc=$$?; grep 'I *refs' $(LOG_DIR)/perf_$(1).log; \
+	exit $$rc
+# PERF_UPDATE=1 takes every baseline again from this run ("note 16" in docs/SPEC-gates.md).
+## Measure-and-inspect|perf-log|Measure translation's time and memory; count a fixed workload's instructions
 perf-log: $(STAGE1_EXE) $(SEED_EXE) | $(OUT_DIR)
-	@rm -rf $(TMP_DIR)/perf_cache
+	@rm -rf $(TMP_DIR)/perf_cache $(TMP_DIR)/perf_work_cache
 	@echo "# MEASURING cold (empty cache)"
 	@$(call perf_run,cold)
 	@echo "# MEASURING warm (same cache, 2nd run)"
 	@$(call perf_run,warm)
+	@echo "# COUNTING the compiler's instructions on $(PERF_WORK) (empty cache)"
+	@export KSPLC_CACHE_DIR=$(TMP_DIR)/perf_work_cache; $(call perf_count,compile_count, \
+	  ./$(STAGE1_EXE) $(KSPL_FLAGS) $(PERF_WORK) $(TMP_DIR)/perf_work.c)
+	@echo "# COUNTING the instructions of the program built from it"
+	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_work_cache ./$(STAGE1_EXE) build $(KSPL_FLAGS) \
+	  $(PERF_WORK) $(TMP_DIR)/perf_work.exe
+	@$(call perf_count,run_count,$(TMP_DIR)/perf_work.exe)
 	./$(SEED_EXE) run tests/checkers/perf_guard.kspl --cold=$(LOG_DIR)/perf_cold.log \
-	  --warm=$(LOG_DIR)/perf_warm.log
+	  --warm=$(LOG_DIR)/perf_warm.log --compile-count=$(LOG_DIR)/perf_compile_count.log \
+	  --run-count=$(LOG_DIR)/perf_run_count.log $(if $(filter 1,$(PERF_UPDATE)),--update)
 
 $(SEED_EXE): $(SEED_C) | $(OUT_DIR)
 	@echo "# COMPILING SEED COMPILER FROM C"

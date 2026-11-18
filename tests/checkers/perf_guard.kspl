@@ -1,12 +1,15 @@
 #!/usr/bin/env -S ksplc run
-//< CI performance guard: checks whether memory use has grown markedly over the baseline
+//< CI performance guard: checks whether memory use or counted work has grown markedly
 //< It reads the lines that ksplc prints to the log when self-hosting: "Compile time", "System Peak
-//< Memory", "AST Arena headroom", "AST Node bytes" and "AST Kids bytes". The peak and the time are
-//< compared against tests/checkers/perf_baseline.json.
-//< Caution: **The peak memory and the two exact type sizes decide. Do not remove either.** The
-//< peak covers **everything coarsely**, in steps of one chunk. The sizes of the tree's two types
-//< hold the node to the byte, and a node that grows can hide under the peak's 30% slack. The peak
-//< is our own count, not RSS: the most bytes `std/mem.kspl` held from malloc at once.
+//< Memory", "AST Arena headroom", "AST Node bytes" and "AST Kids bytes". It also reads the
+//< instructions that Cachegrind counted in two runs over `tests/checkers/perf_work.kspl`: the
+//< compiler translating it, and the program built from it. The peak, the time and the two counts
+//< are compared against tests/checkers/perf_baseline.json.
+//< Caution: **The peak memory, the two exact type sizes and the two counts decide. Do not remove
+//< any.** The peak covers **everything coarsely**, in steps of one chunk. The sizes of the tree's
+//< two types hold the node to the byte, and a node that grows can hide under the peak's 30% slack.
+//< The peak is our own count, not RSS: the most bytes `std/mem.kspl` held from malloc at once. The
+//< counts stand in for speed, which a time cannot judge.
 import "std/argparse"
 import "std/chars"
 import "std/fs"
@@ -26,6 +29,12 @@ priv const MEM_THRESHOLD: F64 = 1.3 //< the multiple allowed for the peak
     //< baseline to today's value**: the slack is lost, and the next run in which a chunk grows
     //< fails.
 
+priv const WORK_THRESHOLD: F64 = 1.1 //< the multiple allowed for a count of instructions
+    //< **A count repeats to about one part in a million** on one machine, so the slack is not
+    //< for noise. It is for another runner's C library, which takes other paths through `memcpy`
+    //< and the like (about a tenth of the work), and for a small change that costs a little more.
+    //< A change that costs a tenth more is worth a look; take the baseline again if it is meant.
+
 priv const TIME_PATTERN: U8[] = "Compile time\\s*:\\s*([\\d,]+) ms" //<
     //< The patterns picked out of the log
     //< **The canonical source is the lines `ksplc/main.kspl` prints**; change them and change
@@ -43,6 +52,10 @@ priv const PEAK_PATTERN: U8[] = "System Peak Memory:\\s*([\\d,]+) bytes" //<
     //< memory stays the same. Time measures the machine and its load, not the work. A loose bound
     //< buries a real regression; a tight one fails on noise. `--stats` adds the per-stage
     //< breakdown. To investigate time, compare the minimum of several runs on a quiet machine.
+
+priv const COUNT_PATTERN: U8[] = "I\\s+refs:\\s*([\\d,]+)" //<
+    //< The pattern for Cachegrind's count of the instructions a run executed
+    //< **The canonical source is Cachegrind's summary line** (`==<pid>== I refs: <n>`).
 
 priv enum Guard_error //< the tool failed
     //< Caution: **Do not add variants.** The code that finds the problem prints the reason, and the
@@ -76,17 +89,27 @@ priv const WANT_KIDS_BYTES: I64 = 32I64
 priv const NODE_PATTERN: U8[] = "AST Node bytes\\s*:\\s*([\\d,]+)"
 priv const KIDS_PATTERN: U8[] = "AST Kids bytes\\s*:\\s*([\\d,]+)"
 
-priv struct Baseline //< holds cold and warm together
+priv struct Work //< the instructions counted over `tests/checkers/perf_work.kspl`
+    //< Caution: **Keep both.** The compiler's count misses code that ksplc generates slower,
+    //< and the program's count misses a compiler that works more.
+    compile_ir: I64 //< the compiler translating it on an empty cache
+    run_ir: I64 //< the program built from it, run once
+
+priv struct Baseline //< holds cold, warm and the counted work together
     //< Caution: **Do not allow a form that holds only one**; split, the missing side passes
     //< unchecked.
     cold: Metrics
     warm: Metrics
+    work: Work
 
 // The baseline's JSON keys. **A key is the field's name**, and writing and reading both use these.
 priv const COLD_KEY: U8[] = "cold"
 priv const WARM_KEY: U8[] = "warm"
 priv const TIME_KEY: U8[] = "compile_ms"
 priv const PEAK_KEY: U8[] = "peak_bytes"
+priv const WORK_KEY: U8[] = "work"
+priv const COMPILE_IR_KEY: U8[] = "compile_instructions"
+priv const RUN_IR_KEY: U8[] = "run_instructions"
 
 priv const VALUE_CEILING: I64 = 1_000_000_000_000_000I64 //< the cap on a readable value
     //< It is a petabyte, or thirty thousand years in ms; no indicator reaches it.
@@ -170,6 +193,14 @@ priv fn parse_log(path: U8[], arena: Arena$@): Reading!Guard_error //<
         .shapes = Shapes::{ .node = max_capture(text, NODE_PATTERN, path, arena)!,
         .kids = max_capture(text, KIDS_PATTERN, path, arena)! } }
 
+priv fn parse_count(path: U8[], arena: Arena$@): I64!Guard_error //<
+    //< Reads the instructions Cachegrind counted from its log
+    text: = io.read_file(path, null) catch
+        io.err().s("[perf_guard] the log cannot be read: ").s(path).s("\n")
+        throw .failed
+    defer dealloc(Void$@::text.ptr)
+    return max_capture(text, COUNT_PATTERN, path, arena)!
+
 priv fn baseline_path(arena: Arena$@): U8[] //< the baseline's path
     //< Caution: **Do not derive it from cwd.** It is called from outside `make` too, so it looks
     //< next to the script (`tests/`); only when the script path is unknown does it assume the root.
@@ -186,7 +217,10 @@ priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
     $jb: = json.Json_builder(arena)
     defer $out: = Str_builder()
     doc: = jb.obj().set(COLD_KEY, metrics_value(cur.cold, jb@))
-        .set(WARM_KEY, metrics_value(cur.warm, jb@)).build()
+        .set(WARM_KEY, metrics_value(cur.warm, jb@))
+        .set(WORK_KEY,
+        jb.obj().set(COMPILE_IR_KEY, jb.int_val(cur.work.compile_ir))
+        .set(RUN_IR_KEY, jb.int_val(cur.work.run_ir)).build()).build()
     doc.dump(out@, 2)
     out.c('\n')
     io.write_file(path, out.slice()) catch
@@ -212,7 +246,7 @@ priv fn read_number(side: json.Value, side_key: U8[], key: U8[]): I64!Guard_erro
     case .none
         io.err()
             .s("[perf_guard] the baseline cannot be read: the key '\{side_key\}.\{key\}' is absent")
-    io.err().s(". Add --update to `make perf-log`'s recipe and take the measurements again\n")
+    io.err().s(". Take the measurements again with `make perf-log PERF_UPDATE=1`\n")
     throw .failed
 
 priv fn read_metrics(root: json.Value, key: U8[]): Metrics!Guard_error //< one side of the baseline
@@ -237,8 +271,11 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
         throw .failed
     // **A missing key or a wrong kind is refused, not filled with a default** (filled in, an old
     // baseline shows only as "the value was 0").
+    work: = root.val.get(WORK_KEY)
     return Baseline::{ .cold = read_metrics(root.val, COLD_KEY)!,
-        .warm = read_metrics(root.val, WARM_KEY)! }
+        .warm = read_metrics(root.val, WARM_KEY)!,
+        .work = Work::{ .compile_ir = read_number(work, WORK_KEY, COMPILE_IR_KEY)!,
+        .run_ir = read_number(work, WORK_KEY, RUN_IR_KEY)! } }
 
 priv fn ratio_text(base: I64, cur: I64, arena: Arena$@): U8[] //< the ratio against the baseline
     //< Where the baseline is 0 it cannot divide, so it returns `n/a`.
@@ -248,11 +285,31 @@ priv fn ratio_text(base: I64, cur: I64, arena: Arena$@): U8[] //< the ratio agai
 priv fn peak_limit(base_peak: I64): I64 //< the most peak memory a run may take against its baseline
     return I64::(F64::base_peak * MEM_THRESHOLD)
 
+priv fn work_limit(base_ir: I64): I64 //< the most instructions a run may count against its baseline
+    return I64::(F64::base_ir * WORK_THRESHOLD)
+
 priv fn limit_fires(): Bool //<
-    //< Whether the limit shows it can fail: twice the baseline is refused, the baseline is not
-    //< **A guard that passes every peak would hide every regression.**
+    //< Whether each limit shows it can fail: twice the baseline is refused, the baseline is not
+    //< **A guard that passes every peak or every count would hide every regression.** A count a
+    //< fifth over is refused too, so the slack stays well under "twice as slow".
     base: = 1000000I64
-    return 2I64 * base > peak_limit(base) && base <= peak_limit(base)
+    return 2I64 * base > peak_limit(base) && base <= peak_limit(base) &&
+        12I64 * base / 10I64 > work_limit(base) && base <= work_limit(base)
+
+priv fn report_work(base: Work, cur: Work): Bool //<
+    //< Prints both counts and returns whether each is within its limit
+    //< Caution: **Always print both**; one short circuit leaves the other out of the log.
+    compile_ok: = report_count("compiler's", base.compile_ir, cur.compile_ir)
+    run_ok: = report_count("program's", base.run_ir, cur.run_ir)
+    return compile_ok && run_ok
+
+priv fn report_count(kind: U8[], base: I64, cur: I64): Bool //< prints one count against its limit
+    limit: = work_limit(base)
+    ok: = cur <= limit
+    share: = (0.0 if base == 0I64 else F64::cur / F64::base)
+    io.out().s("[perf_guard] ").s(kind).s(" instructions: \{cur:,\} (baseline \{base:,\}, ")
+        .s("x\{share:.3\}, limit \{limit:,\}) -> ").s("PASS" if ok else "FAIL").s("\n")
+    return ok
 
 priv fn report(kind: U8[], base: Metrics, cur: Reading, arena: Arena$@): Bool //<
     //< Prints one measurement and returns whether the peak memory is within its limit
@@ -308,7 +365,8 @@ priv fn report_shapes(cold: Shapes, warm: Shapes): Bool //<
 fn main(): I32 //<
     //< Compares a build's cost against the baseline
     //< Usage: `make perf-log` (the proper entry point), or
-    //< `ksplc run tests/checkers/perf_guard.kspl --cold=<log> --warm=<log> [--update]`
+    //< `ksplc run tests/checkers/perf_guard.kspl --cold=<log> --warm=<log> --compile-count=<log>
+    //< --run-count=<log> [--update]`
     //<
     //< Caution: **Let `make perf-log` produce the logs.** It measures on an empty cache (cold) and
     //< again on the same cache (warm), **against separate baselines**. A hit in the AST disk cache
@@ -316,9 +374,9 @@ fn main(): I32 //<
     //< baseline for both leaves one side unchecked.
     defer arena: = Arena(1024 * 1024)
     if !limit_fires()
-        io.out().s("RESULT: SOME FAILED (1) -> the memory limit passes twice its baseline\n")
+        io.out().s("RESULT: SOME FAILED (1) -> a limit passes twice its baseline\n")
         return 1
-    io.out().s("[perf_guard] the memory limit refuses twice its baseline -> PASS\n")
+    io.out().s("[perf_guard] each limit refuses twice its baseline -> PASS\n")
     $update: = false
     $cold_log: U8[] = ""
     $warm_log: U8[] = ""
@@ -326,13 +384,23 @@ fn main(): I32 //<
         .create("perf_guard", "compare a build's cost against the baseline", arena)
     p.str_required("--cold", cold_log@, "the log of the build on an empty cache")
     p.str_required("--warm", warm_log@, "the log of the build on the same cache again")
+    $compile_log: U8[] = ""
+    $run_log: U8[] = ""
+    p.str_required("--compile-count", compile_log@,
+        "Cachegrind's log of the compiler translating tests/checkers/perf_work.kspl")
+    p.str_required("--run-count", run_log@, "Cachegrind's log of the program built from it")
     p.flag("--update", update@, "rewrite the baseline with these measurements")
     p.parse_or_exit()
     cold: = parse_log(cold_log, arena) catch
         return 2
     warm: = parse_log(warm_log, arena) catch
         return 2
-    cur: = Baseline::{ .cold = cold.metrics, .warm = warm.metrics }
+    compile_ir: = parse_count(compile_log, arena) catch
+        return 2
+    run_ir: = parse_count(run_log, arena) catch
+        return 2
+    cur: = Baseline::{ .cold = cold.metrics, .warm = warm.metrics,
+        .work = Work::{ .compile_ir = compile_ir, .run_ir = run_ir } }
 
     // Caution: **Run this check on a baseline rewrite too.** `--update` measures the values again,
     // but a type's size is fixed — let through on a rewrite, a change to a fixed value is recorded
@@ -350,24 +418,29 @@ fn main(): I32 //<
     // takes its own figures as the baseline and passes, comparing nothing.
     if !update && !fs.exists(path)
         io.out().s("RESULT: SOME FAILED (1) -> there is no baseline at ").s(path)
-            .s(" (take one with --update)\n")
+            .s(" (take one with `make perf-log PERF_UPDATE=1`)\n")
         return 1
     if update
         if !write_baseline(path, cur, arena)
             return 2
         io.out().s("[perf_guard] baseline written: cold \{cur.cold.compile_ms:,\} ms / ")
             .s("\{cur.cold.peak_bytes:,\} peak, warm \{cur.warm.compile_ms:,\} ms / ")
-            .s("\{cur.warm.peak_bytes:,\} peak\n")
+            .s("\{cur.warm.peak_bytes:,\} peak, instructions \{cur.work.compile_ir:,\} compiling / ")
+            .s("\{cur.work.run_ir:,\} running\n")
         return 0
     base: = read_baseline(path, arena) catch
         return 2
     // Caution: **Always print both**; a short circuit on a cold failure leaves warm out of the log.
     cold_ok: = report("cold", base.cold, cold, arena)
     warm_ok: = report("warm", base.warm, warm, arena)
-    if !cold_ok || !warm_ok
-        io.out()
-            .s("RESULT: SOME FAILED (1) -> memory regression (if this increase is intentional, ")
-            .s("refresh the baseline by re-running this with --update)\n")
+    work_ok: = report_work(base.work, cur.work)
+    if !cold_ok || !warm_ok || !work_ok
+        mem_ok: = cold_ok && warm_ok
+        what: =
+            ("memory and counted work" if !mem_ok && !work_ok
+            else ("memory" if !mem_ok else "counted work"))
+        io.out().s("RESULT: SOME FAILED (1) -> ").s(what).s(" regression (if this increase is ")
+            .s("intentional, take the baseline again: `make perf-log PERF_UPDATE=1`)\n")
         return 1
     io.out().s("RESULT: ALL PASS\n")
     return 0

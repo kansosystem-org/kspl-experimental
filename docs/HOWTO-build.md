@@ -165,13 +165,14 @@ pacman -S --needed mingw-w64-ucrt-x86_64-clang-tools-extra mingw-w64-ucrt-x86_64
 
 Caution: **Do not install `mingw-w64-ucrt-x86_64-make`.** UCRT64's PATH would pick it first. If it is installed, the Makefile rejects it at start-up and says how to reach MSYS2's `make`.
 
-**The full list also holds what three builds need beyond the gates:**
+**The full list also holds what two builds need beyond the gates:**
 
 | Build | What it needs from the full list |
 | :-- | :-- |
 | `make BLAS=1` | OpenBLAS (`-openblas`) |
-| Kanso OS for bare metal (`ksos-cm*` / `ksos-rp*`), for a real microcontroller | `llvm-objcopy` and `llvm-objdump` (`-llvm`), `ld.lld` (`-lld`), and `arm-none-eabi-gcc` for libgcc's soft-float and 64-bit division (`-arm-none-eabi-gcc`); QEMU runs the demos. **`clang`'s package holds none of these.** Without them the build reaches the link and stops with `command not found`, or with `ARM_TOOLCHAIN_HINT`'s guidance |
-| ksmd's page (`make ksmd-web` / `make test-ksmd-browser`) | `wasm-ld` (`-lld`), clang's wasm32 builtins (`-wasi-compiler-rt`), and `node` for the browser test |
+| Kanso OS for bare metal (`ksos-cm*` / `ksos-rp*`), for a real microcontroller | `llvm-objcopy` and `llvm-objdump` (`-llvm`), and `arm-none-eabi-gcc` for libgcc's soft-float and 64-bit division (`-arm-none-eabi-gcc`), with `ld.lld` (`-lld`) from the first list; QEMU runs the demos. **`clang`'s package holds none of these.** Without them the build reaches the link and stops with `command not found`, or with `ARM_TOOLCHAIN_HINT`'s guidance |
+
+**ksmd's page (`make ksmd-web`) needs only the first list**: `wasm-ld` (`-lld`) and clang's wasm32 builtins (`-wasi-compiler-rt`). Its browser checks (`make test-ksmd-browser`, `make test-ksagent-chat`) also need `node` (`-nodejs`), from the same list, and Google Chrome, installed as any Windows program.
 
 **The `-wasi-compiler-rt` package supplies the arithmetic helpers clang emits for wasm32**; the page stays freestanding, with no WASI system calls. Keep it at clang's version with `pacman -Syu`. Check that the file this prints exists, using the clang from `/ucrt64/bin` (`type -a clang`):
 

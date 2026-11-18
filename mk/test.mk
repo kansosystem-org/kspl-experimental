@@ -135,11 +135,11 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
 # rest of the packages' (`extract-rest`)**: each runs its packages one after another, so together
 # they would be the longest wait of a half.
 SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest extract-std fmt-tree docref c-warnings docsnippet \
-  conventions deps spec-claims vscode link-rules pytools recipe-bytes lint-gate own-machine \
+  conventions deps spec-claims server-claims vscode link-rules pytools recipe-bytes lint-gate own-machine \
   $(EXTRA_SUITES)
 
 # Linux's image alone holds their tool (`race`: clang's ThreadSanitizer; `sanitize`: its address,
-# leak and undefined-behaviour sanitizers): out of `test-suites`, run by `ci-shard-linux`.
+# leak and undefined-behaviour sanitizers): out of `test-suites`, run by the two Linux-only jobs.
 LINUX_SUITES := race sanitize holes
 
 ALL_SUITES := $(SUITES) $(LINUX_SUITES)

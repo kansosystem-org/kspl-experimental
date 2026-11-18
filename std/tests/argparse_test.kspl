@@ -682,7 +682,7 @@ fn test_argparse_prints_usage(ksplc: U8[], arena: Arena$@) //< ksplc runs the ch
         subproc.run_capture(sys_test.child_argv(ksplc, "usage_probe", USAGE_SRC, arena), "", 300000,
         4096, arena) catch panic("the child must start")
     out: = r.stdout_data
-    assert(r.exited_with(0), "the child must print its usage and end")
+    sys_test.assert_run(r.exited_with(0), r@, "the child must print its usage and end", arena)
     assert(out.starts_with("Usage: usage_probe [options] <file>\n"),
         "the first line names the program, its options and its positional")
     assert(out.find_str("says hello").is_some(), "the line saying what it is follows")
@@ -714,16 +714,17 @@ fn test_argparse_refusal_goes_to_stderr(ksplc: U8[], arena: Arena$@) //< ksplc r
     argv.push("--bogus")
     r: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena)
         catch panic("the child must start")
-    assert(r.exited_with(2), "a refused command line ends with 2")
-    assert(r.stdout_data.len == 0, "a refusal writes nothing to standard output")
-    assert(r.stderr_data.find_str("unknown option '--bogus'").is_some() &&
-        r.stderr_data.find_str("Usage: refuse_probe").is_some(),
-        "the reason and the usage go to standard error")
+    sys_test.assert_run(r.exited_with(2), r@, "a refused command line ends with 2", arena)
+    sys_test.assert_run(r.stdout_data.len == 0, r@, "a refusal writes nothing to standard output",
+        arena)
+    sys_test.assert_run(r.stderr_data.find_str("unknown option '--bogus'").is_some() &&
+        r.stderr_data.find_str("Usage: refuse_probe").is_some(), r@,
+        "the reason and the usage go to standard error", arena)
     argv.set(argv.len - 1, "--help")
     h: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena)
         catch panic("the child must start")
-    assert(h.exited_with(0) && h.stdout_data.starts_with("Usage: refuse_probe"),
-        "--help writes the usage to standard output and ends with 0")
+    sys_test.assert_run(h.exited_with(0) && h.stdout_data.starts_with("Usage: refuse_probe"), h@,
+        "--help writes the usage to standard output and ends with 0", arena)
     verdict.pass("A refusal and its usage go to standard error with 2; --help to standard output.")
 
 priv const SAW_MISSPELT_SRC: U8[] = //< a child that asks whether an item declared nowhere was given

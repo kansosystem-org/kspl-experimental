@@ -130,10 +130,10 @@ pub struct Run_result //< the outcome of one run that started: how it ended, and
 pub fn run_capture( //< runs one child to the end and collects both its outputs
     //< argv[0] is as for `spawn_wait`. stdout and stderr are collected apart, in one wait.
     //< **Past the time limit, the child and all it started are killed.** Once the child has ended,
-    //< what it started can hold the outputs open. They are read `PIPE_GRACE_MS` more, no longer.
-    //< **Its standard input is empty**, as `spawn_limited`'s is. In a group of its own, a child
-    //< that read the terminal would be stopped until its limit. So input piped to the caller does
-    //< not reach it.
+    //< what it started can hold the outputs open: they are read `PIPE_GRACE_MS` more. What they
+    //< hold when either time is up is still read, so none of the child's own output is lost.
+    //< **Its standard input is empty**, as `spawn_limited`'s is: in a group of its own, a child
+    //< that read the terminal would be stopped until its limit.
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
     timeout_ms: I32, //< how long it can run before it is killed
@@ -144,14 +144,19 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     if h == 0
         throw .spawn_failed
     kspl_proc_close_stdin(h)
+    return capture_until(h, sys.deadline_after_ms(timeout_ms), output_cap, arena)
+
+#cfg(!freestanding)
+fn capture_until(handle: I64, deadline_us: I64, output_cap: Sz, arena: Arena$@): Run_result //<
+    //< Collects a started child's two outputs until it ends, then reaps it and frees the handle
+    //< Past `deadline_us` (a `sys.mono_us` reading), the child and all it started are killed.
     // The two outputs are watched in one wait (`kspl_proc_poll`). **Append only what was read**:
     // the cap is a promise ("beyond this it is cut"), not the size to allocate.
     defer $out: = Str_builder()
     defer $err: = Str_builder()
     $chunk: U8[4096] = ::{}
     $cut: = false
-    deadline: = sys.deadline_after_ms(timeout_ms)
-    $until: = deadline // the deadline, or the end of the grace once the child has ended
+    $until: = deadline_us // the deadline, or the end of the grace once the child has ended
     $out_open: = true
     $err_open: = true
     $timed_out: = false
@@ -160,12 +165,25 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     $pause: I32 = 1
     for out_open || err_open
         now: = sys.mono_us()
-        if !ended && kspl_proc_ended(h, code@)
+        if !ended && kspl_proc_ended(handle, code@)
             ended = true
             grace_end: = now + I64::PIPE_GRACE_MS * 1000I64
-            until = grace_end if grace_end < deadline else deadline
+            until = grace_end if grace_end < deadline_us else deadline_us
         if now >= until
             timed_out = !ended
+            // Caution: **Read what is already in the pipes before stopping.** The time can pass
+            // while this program waits for the CPU, with all the child wrote still unread.
+            $left: = DRAIN_MAX
+            for (out_open || err_open) && left > 0
+                mask: = kspl_proc_poll(handle, 0)
+                if mask <= 0
+                    break
+                got: =
+                    read_ready(handle, mask, U8$[]::chunk, output_cap, out@, err@, out_open@,
+                    err_open@, cut@)
+                if got == 0
+                    break // only ends read, or nothing came though poll said it would
+                left -= got
             break
         // Caution: **Look at the child between the reads.** The outputs can stay open after it
         // ends, and a wait on them alone would run to the deadline.
@@ -173,26 +191,19 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
         if !ended && pause < wait_ms
             wait_ms = pause
             pause = next_pause(pause)
-        mask: = kspl_proc_poll(h, wait_ms)
+        mask: = kspl_proc_poll(handle, wait_ms)
         if mask < 0
             break // nothing left to watch (both streams were read to the end)
-        if out_open && (mask & STDIO_OUT) != 0
-            out_open =
-                take_into(out@, U8[]::chunk, kspl_proc_read(h, chunk[0]@, chunk.len, 0), output_cap,
-                cut@)
-        if err_open && (mask & STDIO_ERR) != 0
-            err_open =
-                take_into(err@, U8[]::chunk,
-                kspl_proc_read_err(h, chunk[0]@, chunk.len, 0), output_cap, cut@)
+        read_ready(handle, mask, U8$[]::chunk, output_cap, out@, err@, out_open@, err_open@, cut@)
     // Caution: **Bound the wait after the pipes close too.** A child can close both and run on (a
     // daemon, or a grandchild holding nothing), and a bare wait would outlast every timeout.
     $exit_code: I32? = .none
     if timed_out
-        kspl_proc_kill(h)
+        kspl_proc_kill(handle)
     else if ended
-        exit_code = .some(kspl_proc_wait(h))
+        exit_code = .some(kspl_proc_wait(handle))
     else
-        exit_code = wait_until(h, deadline)
+        exit_code = wait_until(handle, deadline_us)
     return Run_result::{
         .exit_code = exit_code,
         .stdout_data = arena.dup_str(out.slice()),
@@ -201,10 +212,29 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
         .output_cut = cut,
     }
 
+#cfg(!freestanding)
+priv fn read_ready(handle: I64, mask: I32, chunk: U8$[], cap: Sz, out: Str_builder$@,
+    err: Str_builder$@, out_open: Bool$@, err_open: Bool$@, cut: Bool$@): Sz //<
+        //< Reads once from each open output that `mask` marks ready; returns the bytes read
+    $got: Sz = 0
+    if out_open$ && (mask & STDIO_OUT) != 0
+        n: = kspl_proc_read(handle, chunk.ptr, chunk.len, 0)
+        out_open$ = take_into(out, chunk, n, cap, cut)
+        got += Sz::n if n > 0 else 0
+    if err_open$ && (mask & STDIO_ERR) != 0
+        n: = kspl_proc_read_err(handle, chunk.ptr, chunk.len, 0)
+        err_open$ = take_into(err, chunk, n, cap, cut)
+        got += Sz::n if n > 0 else 0
+    return got
+
+priv const DRAIN_MAX: Sz = 1 << 20 //< the most read without waiting once the time is up
+    //< **Bounded, as a process the child left can write for good.** A full pipe holds less than
+    //< this on every OS (1 MiB is Linux's default ceiling), so all the child wrote is read.
+
 priv const PIPE_GRACE_MS: I32 = 100 //< how long outputs are read once the child itself has ended
     //< **Everything the child wrote is in the pipes when it ends.** So this waits only for what
-    //< it started and left holding them. See "A child's outputs are read briefly past its end" in
-    //< std/docs/DESIGN-system.md.
+    //< it started and left holding them. At its end, what the pipes hold is read without waiting.
+    //< See "A child's outputs are read briefly past its end" in std/docs/DESIGN-system.md.
 
 pub struct Job //< one of many children to start
     pub argv: U8[][] //< the executable and its arguments

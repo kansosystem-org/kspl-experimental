@@ -5,7 +5,6 @@ import "std/bignat" + { Bignat }
 import "std/buf" { Buf_writer }
 import "std/chars"
 import "std/ds"
-import "std/io"
 import "std/math"
 import "std/mem" + { Arena }
 import "std/str" + { Str_builder }
@@ -598,10 +597,8 @@ fn test_builder_writes_its_own_bytes(ksplc: U8[], arena: Arena$@) //< ksplc runs
         300000, 1 << 20, arena) catch panic("the child must start")
     sys.unset_env("MALLOC_PERTURB_") catch panic("unset_env should succeed")
     sys.unset_env("MallocScribble") catch panic("unset_env should succeed")
-    if !r.exited_with(0) || !r.stdout_data.equals("ok")
-        io.err().s(r.stderr_data)
-    assert(r.exited_with(0) && r.stdout_data.equals("ok"),
-        "each write must read its source before the old buffer is freed")
+    sys_test.assert_run(r.exited_with(0) && r.stdout_data.equals("ok"), r@,
+        "each write must read its source before the old buffer is freed", arena)
     verdict.pass("Written onto itself, as it grows or not, a builder keeps every byte.")
 
 // ==========================================

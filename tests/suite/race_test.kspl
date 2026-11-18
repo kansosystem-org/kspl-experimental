@@ -31,6 +31,9 @@ priv const OPT_FOR_RUN: U8[] = "-O1" //< for a program whose run takes longer th
 priv const OPT_FOR_BUILD: U8[] = "-O0" //< for one whose build takes longer than its run
     //< **ksplc is one**: its C takes 75 s to build at `-O1` and 9 s at `-O0`, for a session of a
     //< few seconds (measured). The sanitizer watches every access at `-O0` too.
+    //< **So are the tests of std, ksplc and kstls, and ksai's chat server.** Their C took 2 to 23 s
+    //< of one CPU at `-O1` and under 3 s at `-O0`, and their runs mostly wait (measured). Caution:
+    //< **Not ksagent's tests**: at `-O0` their run took twice as long, longer than the build saved.
 priv const OPT_FOR_SPIN: U8[] = "-O0" //< for a program that races a loop spinning on a flag
     //< **At `-O1` the C compiler drops a loop that only reads a plain variable**, and the read
     //< with it. So a flag left plain by mistake has no read left to race.
@@ -345,22 +348,16 @@ struct Program //< one program the gate builds, with the sanitizer where it is w
         //< thread. Watched, it took 60 s of that test's 103 s here, and on a CI runner the test
         //< passed its limit.
 
-// The longest builds stand first, so none of them starts last.
+// **The longest builds stand first**, so none of them starts last: ksplc's translation, then
+// the C builds at `opt_for_run`.
 priv const PROGRAMS: Program[_] = ::{
     Program::{ .stem = "ksplc", .pkg = "", .entry = "ksplc/main.kspl", .opt = OPT_FOR_BUILD,
         .define = "", .watched = true },
+    Program::{ .stem = "ksagent", .pkg = "ksagent", .entry = "ksagent/tests/main.kspl",
+        .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "ksai_6", .pkg = "lib/ksai", .entry = "lib/ksai/tests/main.kspl",
         .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "ksai_5", .pkg = "lib/ksai", .entry = "lib/ksai/tests/examples_main.kspl",
-        .opt = OPT_FOR_RUN, .define = "", .watched = true },
-    Program::{ .stem = "std_0", .pkg = "std", .entry = "std/tests/main.kspl", .opt = OPT_FOR_RUN,
-        .define = MARK_AFTER_OPEN, .watched = true },
-    Program::{ .stem = "ksagent", .pkg = "ksagent", .entry = "ksagent/tests/main.kspl",
-        .opt = OPT_FOR_RUN, .define = "", .watched = true },
-    Program::{ .stem = "ksai_4", .pkg = "lib/ksai",
-        .entry = "lib/ksai/examples/chat_server/main.kspl", .opt = OPT_FOR_RUN, .define = "",
-        .watched = true },
-    Program::{ .stem = "ksplc_0", .pkg = "ksplc", .entry = "ksplc/tests/main.kspl",
         .opt = OPT_FOR_RUN, .define = "", .watched = true },
     Program::{ .stem = "ksai_2", .pkg = "lib/ksai",
         .entry = "lib/ksai/examples/code_complete/main.kspl", .opt = OPT_FOR_RUN, .define = "",
@@ -368,8 +365,15 @@ priv const PROGRAMS: Program[_] = ::{
     Program::{ .stem = "ksai_0", .pkg = "lib/ksai",
         .entry = "lib/ksai/examples/llama_engine/main.kspl", .opt = OPT_FOR_RUN, .define = "",
         .watched = true },
+    Program::{ .stem = "std_0", .pkg = "std", .entry = "std/tests/main.kspl", .opt = OPT_FOR_BUILD,
+        .define = MARK_AFTER_OPEN, .watched = true },
+    Program::{ .stem = "ksplc_0", .pkg = "ksplc", .entry = "ksplc/tests/main.kspl",
+        .opt = OPT_FOR_BUILD, .define = "", .watched = true },
+    Program::{ .stem = "ksai_4", .pkg = "lib/ksai",
+        .entry = "lib/ksai/examples/chat_server/main.kspl", .opt = OPT_FOR_BUILD, .define = "",
+        .watched = true },
     Program::{ .stem = "kstls", .pkg = "lib/kstls", .entry = "lib/kstls/tests/main.kspl",
-        .opt = OPT_FOR_RUN, .define = "", .watched = true },
+        .opt = OPT_FOR_BUILD, .define = "", .watched = true },
     Program::{ .stem = "ksai_3", .pkg = "lib/ksai",
         .entry = "lib/ksai/examples/car_pilot/main.kspl", .opt = OPT_FOR_RUN, .define = "",
         .watched = false },
@@ -573,12 +577,15 @@ fn main(): I32
     defer $deps: = Str_builder()
     $runs: = List<|Raced|>(arena)
     builds: = build_programs(work, deps@, arena)
-    race_tests(work, builds@, runs@, arena)
-    race_ksai(work, builds@, runs@, arena)
-    race_ksai_pool(work, builds@, runs@, arena)
-    race_kstls(work, builds@, runs@, arena)
+    // **The runs that take longest stand first**, so none of them starts last and runs alone. Two
+    // CPUs run them two at a time (`verdict.jobs`). ksagent's tests take longest, mostly waiting
+    // on their stand-in server; then ksai's examples, std's tests and ksai's pool (measured).
     race_ksagent(work, builds@, runs@, arena)
+    race_ksai(work, builds@, runs@, arena)
+    race_tests(work, builds@, runs@, arena)
+    race_ksai_pool(work, builds@, runs@, arena)
     race_lsp(work, builds@, runs@, arena)
+    race_kstls(work, builds@, runs@, arena)
     run_all_raced(runs@, work, arena)
     check_covered(deps.slice(), arena)
     return ksplc_harness.finish()

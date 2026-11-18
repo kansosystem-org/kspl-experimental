@@ -89,7 +89,8 @@ fn test_child_waits_bounded(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
         r: =
             subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "exec >&- 2>&-; sleep 30" }, "", 300,
             1024, arena) catch panic("the child must start")
-        assert(r.exit_code.is_none(), "a child that closed its outputs and runs on times out")
+        sys_test.assert_run(r.exit_code.is_none(), r@,
+            "a child that closed its outputs and runs on times out", arena)
     verdict.pass("Each wait ended at its timeout, and a write to an ended child failed as closed.")
 
 priv const NAMING_SRC: U8[] = //< a child that says its name and the script it runs from
@@ -112,7 +113,8 @@ fn test_script_names_itself(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
         subproc.run_capture(sys_test.child_argv(ksplc, "naming_probe", NAMING_SRC, arena), "",
         300000, 4096, arena) catch panic("the child must start")
     lines: = r.stdout_data.lines(arena)
-    assert(r.exited_with(0) && lines.len >= 2, "the child must run and say two lines")
+    sys_test.assert_run(r.exited_with(0) && lines.len >= 2, r@,
+        "the child must run and say two lines", arena)
     assert(lines.get(0).equals("naming_probe"), "program_name has no folder and no extension")
     assert(lines.get(1).ends_with("naming_probe.kspl"), "script_path is the script ksplc ran")
     verdict.pass("A script knows its own path, and its name for messages is its bare name.")
@@ -283,7 +285,8 @@ fn test_many_arguments(arena: Arena$@) //<
         argv.push("x")
     r: = subproc.run_capture(argv.slice(), "", 60000, 4096, arena) catch
         panic("a child with 300 arguments must start")
-    assert(r.exited_with(0) && r.stdout_data.equals("300\n"), "the child counts all 300 arguments")
+    sys_test.assert_run(r.exited_with(0) && r.stdout_data.equals("300\n"), r@,
+        "the child counts all 300 arguments", arena)
     verdict.pass("A child with 300 arguments started and counted every one.")
 
 priv const ARGS_ECHO_SRC: U8[] = //< a child that puts out each argument after its name in brackets
@@ -340,9 +343,10 @@ fn test_run_many_frees_slots_early(arena: Arena$@) //<
     first: = rs.get(0) catch panic("the long job must start")
     second: = rs.get(1) catch panic("the quick job must start")
     third: = rs.get(2) catch panic("the marking job must start")
-    assert(first.stdout_data.trim_end().equals("seen"),
-        "the third job ran in the slot the second freed, before the first ended")
-    assert(second.exited_with(0) && third.exited_with(0), "the results keep the jobs' order")
+    sys_test.assert_run(first.stdout_data.trim_end().equals("seen"), first@,
+        "the third job ran in the slot the second freed, before the first ended", arena)
+    sys_test.assert_run(second.exited_with(0), second@, "the results keep the jobs' order", arena)
+    sys_test.assert_run(third.exited_with(0), third@, "the results keep the jobs' order", arena)
     verdict.pass("The slot a quick job freed went to the next job while the long one still ran.")
 
 fn test_time_limit_ends_the_whole_run(arena: Arena$@) //<
@@ -363,7 +367,8 @@ fn test_time_limit_ends_the_whole_run(arena: Arena$@) //<
     r: =
         subproc.run_capture(U8[][]::{ "/bin/sh", "-c", nested }, "", 300, 1024, arena)
         catch panic("the child must start")
-    assert(r.exit_code.is_none(), "the child waiting on its own child times out")
+    sys_test.assert_run(r.exit_code.is_none(), r@, "the child waiting on its own child times out",
+        arena)
     sys.sleep_ms(1500)
     assert(!fs.exists(mark), "the child's own child is killed with it at the time limit")
     // The orphan keeps the outputs open for 30 s, then leaves its mark. **No mark yet shows
@@ -374,15 +379,50 @@ fn test_time_limit_ends_the_whole_run(arena: Arena$@) //<
         subproc.run_capture(U8[][]::{ "/bin/sh", "-c",
         arena.text().s("echo before; (sleep 30; touch \"\{orphan\}\") & exit 3").take() }, "", 60000,
         1024, arena) catch panic("the child must start")
-    assert(left.exited_with(3),
-        "a child that ended in time gives its own code, though its outputs stay open")
-    assert(left.stdout_data.trim_end().equals("before"),
-        "what the child wrote before its end is kept")
+    sys_test.assert_run(left.exited_with(3), left@,
+        "a child that ended in time gives its own code, though its outputs stay open", arena)
+    sys_test.assert_run(left.stdout_data.trim_end().equals("before"), left@,
+        "what the child wrote before its end is kept", arena)
     assert(!fs.exists(orphan), "run_capture returns at the child's end, not when its outputs close")
     fs.remove_path(dir) catch {}
     verdict
         .pass("A time limit killed the child's own child too, and a child whose outputs stayed open \
             returned its own code at its end.")
+
+fn test_capture_reads_all_past_its_time(arena: Arena$@) //<
+    //< What an ended child wrote is read whole, though the time is up when the reader looks
+    //< **The reader looks only after the time is up**, as when this program waited for the CPU
+    //< longer than the grace. Before it read what was in the pipes, it returned them empty.
+    verdict.start("[Sys] run_capture reads all an ended child wrote, though its time is up...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines")
+        return
+    // **Each output takes more than one read** (4096 bytes), and fits a pipe on every POSIX OS
+    // (16 KiB at the least), so the child ends with all of it still unread.
+    sh: = "head -c 12000 /dev/zero; head -c 5000 /dev/zero 1>&2; exit 4"
+    $child: = subproc.spawn_piped(U8[][]::{ "/bin/sh", "-c", sh }, "")
+        catch panic("the child must start")
+    child.close_stdin()
+    give_up: = sys.mono_us() + 60000000I64
+    for child.exit_code().is_none() && sys.mono_us() < give_up
+        sys.sleep_ms(1)
+    // The deadline is already past. capture_until reaps the child and frees its handle.
+    r: = subproc.capture_until(child.handle, sys.mono_us(), 65536, arena)
+    child.handle = 0
+    whole: =
+        r.exited_with(4) && r.stdout_data.len == 12000 && r.stderr_data.len == 5000
+    said_got: = arena.text()
+        .s("got exit code \{r.exit_code.unwrap_or(-1)\}, \{r.stdout_data.len\} bytes of stdout and \
+            \{r.stderr_data.len\} of stderr").take()
+    verdict.check("both outputs are read whole, and the child's own code kept", whole, said_got)
+    // **The read past the time is bounded**: a process the child left writes without end. Once
+    // the pipes close, it dies at its next write. Unbounded, the read would never return.
+    endless: =
+        subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "head -c 1000000000 /dev/zero & exit 5" },
+        "", 60000, 1024, arena) catch panic("the child must start")
+    verdict.check("a writer left behind does not hold the read past the grace",
+        endless.exited_with(5),
+        arena.text().s("got exit code \{endless.exit_code.unwrap_or(-1)\}").take())
 
 priv fn said(got: subproc.Wait_end?): U8[] //< how a wait came back, as a word; an ended one's code
     w: = got.unwrap_or(.ended(-1))
@@ -531,7 +571,7 @@ fn test_limit_reaches_a_starters_own_group(ksplc: U8[], arena: Arena$@) //< kspl
     built: =
         subproc.run_capture(U8[][]::{ ksplc, "build", src_path, exe }, "", 300000, 1 << 16, arena)
         catch panic("ksplc must start to build the starter")
-    assert(built.exited_with(0), "the starter must build")
+    sys_test.assert_run(built.exited_with(0), built@, "the starter must build", arena)
     gate: = arena.text().s(exe).s("; true").take()
     $limited: =
         subproc.spawn_limited(U8[][]::{ "/bin/sh", "-c", gate }, "", 3000)
@@ -582,7 +622,7 @@ fn test_pipe_reaches_child_of_closed_parent(ksplc: U8[], arena: Arena$@) //< ksp
     built: =
         subproc.run_capture(U8[][]::{ ksplc, "build", src_path, exe }, "", 300000, 1 << 16, arena)
         catch panic("ksplc must start to build the relay")
-    assert(built.exited_with(0), "the relay must build")
+    sys_test.assert_run(built.exited_with(0), built@, "the relay must build", arena)
     for closing in U8[][]::{ "<&-", "<&- >&-" }
         sh: = arena.text().s("exec '").s(exe).s("' ").s(closing).take()
         r: =
@@ -624,7 +664,7 @@ fn test_failed_start_reported_by_closed_parent(ksplc: U8[], arena: Arena$@) //< 
     built: =
         subproc.run_capture(U8[][]::{ ksplc, "build", src_path, exe }, "", 300000, 1 << 16, arena)
         catch panic("ksplc must start to build the probe")
-    assert(built.exited_with(0), "the probe must build")
+    sys_test.assert_run(built.exited_with(0), built@, "the probe must build", arena)
     for closing in U8[][]::{ "<&-", "<&- >&-", "<&- >&- 2>&-" }
         sh: = arena.text().s("exec '").s(exe).s("' ").s(closing).take()
         r: =
@@ -717,14 +757,14 @@ fn test_bare_name_skips_empty_path_entries(ksplc: U8[], arena: Arena$@) //< kspl
     chmod: =
         subproc.run_capture(U8[][]::{ "/bin/chmod", "755", tool }, "", 60000, 256, arena) catch
             panic("chmod must start")
-    assert(chmod.exited_with(0), "the tool must be made executable")
+    sys_test.assert_run(chmod.exited_with(0), chmod@, "the tool must be made executable", arena)
     src_path: = arena.text().s(base).s("/probe.kspl").take()
     probe: = arena.text().s(base).s("/probe").take()
     io.write_file(src_path, PATH_PROBE_SRC) catch panic("the probe's source must be writable")
     built: =
         subproc.run_capture(U8[][]::{ ksplc, "build", src_path, probe }, "", 300000, 1 << 16, arena)
         catch panic("ksplc must start to build the probe")
-    assert(built.exited_with(0), "the probe must build")
+    sys_test.assert_run(built.exited_with(0), built@, "the probe must build", arena)
 
     // Run in the tool's own folder, PATH's empty entries must not find it there.
     verdict.check("empty PATH entries do not name the current folder",

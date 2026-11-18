@@ -1,0 +1,80 @@
+//< A fixed workload whose counted instructions `make perf-log` judges, built and run
+//< It does what the compiler and the servers do most: it sorts, fills and reads a map with text
+//< keys, builds text, writes and reads JSON, and searches with a pattern. **Every input is fixed**:
+//< it reads no clock, no file and no environment, starts no thread, and draws from a seeded
+//< `Prng`. So the same build runs the same instructions on every run. It prints one checksum and
+//< exits 1 where the checksum is not `WANT_SUM`, so a broken run is not read as a fast one.
+//< Caution: **A change here changes both counts.** It is the compiler's input and the program
+//< run. Take the baseline again in the same commit, with `make perf-log PERF_UPDATE=1` ("note
+//< 16" in `docs/SPEC-gates.md`).
+import "std/chars" as _chars
+import "std/ds" { List, Map }
+import "std/io"
+import "std/json"
+import "std/mem" { Arena }
+import "std/prng" { Prng }
+import "std/regex" { Regex }
+import "std/seq" as _seq
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+
+priv const COUNT: Sz = 100000 //< the items each part works on
+priv const SEED: U64 = 0x5EED_0F_C0FFEEU64 //< the one seed of every number drawn
+priv const WANT_SUM: I64 = 214773592583I64 //< the checksum a correct run prints
+
+priv fn sorted_sum(rng: Prng$@, arena: Arena$@): I64 //< sorts drawn numbers; sums them by place
+    $xs: = List<|I64|>(arena)
+    for _i in Range.asc(COUNT)
+        xs.push(rng.below(1000000))
+    sorted: = xs.order_by(fn(left: I64@, right: I64@; ): I32 {
+        return (-1 if left$ < right$ else (1 if left$ > right$ else 0));
+    }, arena)
+    $sum: I64 = 0
+    for i in Range.asc(sorted.len)
+        sum += sorted.get(i) * I64::(i % 7 + 1)
+    return sum
+
+priv fn map_sum(arena: Arena$@): I64 //< fills a map with text keys, then reads every key twice
+    $map: = Map<|U8[], I64|>(arena)
+    for i in Range.asc(COUNT)
+        map.set(arena.text().s("key-\{i\}").take(), i)
+    $sum: I64 = 0
+    for round in Range.asc(2)
+        for i in Range.asc(COUNT)
+            if v: = map.get(arena.text().s("key-\{(i + round) % COUNT\}").take())
+                sum += v
+    return sum
+
+priv fn json_sum(arena: Arena$@): I64 //< writes an array of objects as JSON, reads it back
+    $jb: = json.Json_builder(arena)
+    $items: = jb.arr()
+    for i in Range.asc(COUNT)
+        items = items
+            .push(jb.obj().set("id", jb.int_val(i))
+            .set("name", jb.str_val(arena.text().s("item \{i\}").take())).build())
+    defer $out: = Str_builder()
+    items.build().dump(out@, 0)
+    doc: = json.parse(out.slice(), arena) catch
+        return -1I64
+    $sum: I64 = 0
+    for v in doc.val.arr_list(arena)
+        if id: = v.get("id").as_int64()
+            sum += id
+    // A pattern costs the most per byte, so it searches an eighth of the text.
+    text: = out.slice()
+    return sum + pattern_hits(text.sub(0, text.len / 8), arena)
+
+priv fn pattern_hits(text: U8[], arena: Arena$@): I64 //< counts a pattern's matches in the text
+    defer re: = Regex.compile("\"item [0-9]*7\"") catch
+        return -1I64
+    return re.find_all(text, arena).len
+
+fn main(): I32 //< runs every part and checks the checksum
+    defer arena: = Arena(1024 * 1024)
+    $rng: = Prng(SEED)
+    sum: = sorted_sum(rng@, arena) + map_sum(arena) + json_sum(arena)
+    io.out().s("perf_work: checksum \{sum\}\n")
+    if sum != WANT_SUM
+        io.out().s("perf_work: the checksum is not \{WANT_SUM\}: the run is wrong\n")
+        return 1
+    return 0

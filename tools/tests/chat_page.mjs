@@ -88,6 +88,36 @@ function stopTree(child) {
   try { process.kill(-child.pid, "SIGTERM"); } catch (_) { /* already gone */ }
 }
 
+// What a request that the local server never answers meets, put into the page before each case
+// that needs it (a reload takes it away). The page gives each request 15 s (`WAIT_MS` in
+// kssrv/page/client.js). `window.unanswered(how)` ends such a request after 300 ms, so a check
+// need not wait 15 s. It ends only where the page gave the request a limit: a request with none
+// never ends, as on the page. `window.limits` holds each limit the page asked for.
+// Caution: **Cut only the request made to go unanswered; every other one keeps the page's 15 s.**
+// When the cut held for every request, one read answered in over 300 ms on a loaded runner failed
+// too. The page then never sent the save after it, and the late save's checks failed.
+// `window.slowly(fetch)` makes each request about an ask file answer after 400 ms, so that
+// mistake fails every run, not only on a loaded runner.
+const UNANSWERED = `(() => {
+  if (window.unanswered) return;
+  const plain = AbortSignal.timeout;
+  const given = new WeakSet();
+  window.limits = new Set();
+  AbortSignal.timeout = (ms) => {
+    window.limits.add(ms);
+    const signal = plain.call(AbortSignal, ms);
+    given.add(signal);
+    return signal;
+  };
+  window.unanswered = (how) => new Promise((_, no) => {
+    if (!given.has(how.signal)) return;
+    const cut = plain.call(AbortSignal, 300);
+    cut.addEventListener("abort", () => no(cut.reason));
+  });
+  window.slowly = (fetch) => (url, how = {}) => (String(url).includes("ask.jsonl") ?
+    new Promise((done) => setTimeout(done, 400)).then(() => fetch(url, how)) : fetch(url, how));
+})()`;
+
 const RENDER_CASES = [
   ["**bold** and *em* and `code`", "<p><strong>bold</strong> and <em>em</em> and <code>code</code></p>"],
   ["2 * 3 * 4 and snake_case_name", "<p>2 * 3 * 4 and snake_case_name</p>"],
@@ -312,11 +342,16 @@ async function main() {
     // again each second, a press whose release met the new button was no click, and the focus on
     // it was lost. Each click is counted, and held back so it stops nothing. The text part gets a
     // fixed height here, so the button stands still under the pointer while the text grows.
+    // Caution: **Scroll the log to its end at once, as the page's next draw would.** The fixed
+    // height makes the log longer. Left as it was, the next draw scrolled the button 30 px away
+    // between a press and its release, and that press was no click.
     await d.js(`(() => {
       const style = document.head.appendChild(document.createElement("style"));
       style.id = "still";
       style.textContent = '.turn[data-id="${await d.js(`${turn(1)}.dataset.id`)}"] .part ' +
         "{ height: 12rem; overflow: hidden; }";
+      const log = document.getElementById("log");
+      log.scrollTop = log.scrollHeight;
       window.stopButton = ${turn(1)}.querySelector(".actions button");
       window.stopClicks = 0;
       window.countStop = (e) => {
@@ -327,6 +362,8 @@ async function main() {
     })()`);
     const PRESSES = 16;
     const drawnBefore = await d.js(grown);
+    const top = "Math.round(window.stopButton.getBoundingClientRect().top)";
+    const topBefore = await d.js(top);
     for (let k = 0; k < PRESSES; k++) {
       const [x, y] = await d.js("(() => { const r = window.stopButton.getBoundingClientRect(); " +
         "return [r.left + r.width / 2, r.top + r.height / 2]; })()");
@@ -336,6 +373,8 @@ async function main() {
       await browser.page("Input.dispatchMouseEvent", { type: "mouseReleased", ...press });
       await wait(100);
     }
+    check(await d.js(top) === topBefore, "Stop stands still under the pointer through the presses",
+      `top ${topBefore} then ${await d.js(top)}`);
     check(await d.js(grown) > drawnBefore && await d.js("window.stopClicks") === PRESSES &&
       await d.js(`window.stopButton === ${turn(1)}.querySelector(".actions button")`),
       `each of ${PRESSES} presses on Stop while the answer grows is a click on the same button`,
@@ -354,18 +393,16 @@ async function main() {
       document.getElementById("still").remove()`);
     // **A stop whose save gets no answer must not promise a resend**: the page sends it once. The
     // first press's save never reaches the server; the second reaches it, but its answer never
-    // comes back. The page's limit is cut to 300 ms, so the check need not wait its 15 s.
+    // comes back. Each ends after 300 ms (`UNANSWERED`), so the check need not wait the page's 15 s.
     const stopNotice = "document.getElementById('notice').textContent";
+    await d.js(UNANSWERED);
     await d.js(`(() => {
-      const plain = window.stopFetch = window.fetch;
-      window.stopTimeout = AbortSignal.timeout;
-      AbortSignal.timeout = () => window.stopTimeout.call(AbortSignal, 300);
-      const never = (how) => new Promise((_, no) =>
-        how.signal.addEventListener("abort", () => no(how.signal.reason)));
+      window.stopFetch = window.fetch;
+      const plain = window.slowly(window.stopFetch);
       window.fetch = (url, how = {}) => {
         if (how.method !== "PUT") return plain(url, how);
         if (window.stopPut === "late") plain(url, { ...how, signal: undefined });
-        return never(how);
+        return window.unanswered(how);
       };
       window.stopPut = "drop";
     })()`);
@@ -381,7 +418,7 @@ async function main() {
       await d.js(stateOf(1)));
     check(await d.until(`!${stopNotice}.includes('may not be saved')`, 15000),
       "once the stop stands in the ask file, the notice clears", await d.js(stopNotice));
-    await d.js("window.fetch = window.stopFetch; AbortSignal.timeout = window.stopTimeout");
+    await d.js("window.fetch = window.stopFetch");
     check(await d.until(`(() => { const t = ${turn(1)};
       return t.querySelector('.badge').textContent === 'Stopped' && t.querySelector('.sources') === null &&
         t.querySelector('.unchecked') !== null; })()`, 15000),
@@ -467,47 +504,45 @@ async function main() {
       "the page goes on: the next question is answered", await d.js(stateOf(broke + 1)));
 
     // A request the local server takes and never answers ends at the page's time limit, the page
-    // says so, and the next look that gets through clears the notice. The limit is cut to 300 ms
-    // here, so the check need not wait the page's 15 s; the limit the page asked for is recorded.
-    // A request with no limit would never end, and the notice would never come.
+    // says so, and the next look that gets through clears the notice. Such a request ends after
+    // 300 ms here (`UNANSWERED`), so the check need not wait the page's 15 s; the limit the page
+    // asked for is recorded. A request with no limit would never end, and the notice would never come.
     const notice = "document.getElementById('notice').textContent";
+    await d.js(UNANSWERED);
     await d.js(`(() => {
       const plain = window.fetch;
-      window.plainTimeout = AbortSignal.timeout;
-      window.limits = new Set();
-      AbortSignal.timeout = (ms) => { window.limits.add(ms); return window.plainTimeout.call(AbortSignal, 300); };
+      window.limits.clear();
       window.fetch = (url, how = {}) => (window.hang && String(url).startsWith("/api/stat") ?
-        new Promise((_, no) => how.signal && how.signal.addEventListener("abort", () => no(how.signal.reason))) :
-        plain(url, how));
+        window.unanswered(how) : plain(url, how));
       window.hang = true;
     })()`);
     check(await d.until(`${notice}.includes('did not answer within 15 seconds')`, 15000),
       "a request the local server never answers ends, and the page says so", await d.js(notice));
     check(await d.js("[...window.limits].join()") === "15000", "every request asks for a 15 s limit",
       await d.js("[...window.limits].join()"));
-    await d.js("window.hang = false; AbortSignal.timeout = window.plainTimeout");
+    await d.js("window.hang = false");
     check(await d.until(`!${notice}.includes('did not answer')`, 15000),
       "the next look that gets through clears the notice", await d.js(notice));
 
     // A question whose save the local server never answers. **Its text must not be lost**, the
     // notice must not promise a resend the page does not make, and asking it again must write it
     // once. `window.put` sets what the page's save meets: "drop" never reaches the server, "late"
-    // reaches it but its answer never comes back, as when the server is slow. The limit is cut to
-    // 300 ms as above.
+    // reaches it but its answer never comes back, as when the server is slow. Each ends after
+    // 300 ms, as above; every request about the ask file that gets an answer takes 400 ms.
     const box = "document.getElementById('text').value";
     const times = (text) => disk(`${name}.ask.jsonl`).split(text).length - 1;
+    await d.js(UNANSWERED);
     await d.js(`(() => {
-      const plain = window.plainFetch = window.fetch;
-      AbortSignal.timeout = () => window.plainTimeout.call(AbortSignal, 300);
-      const never = (how) => new Promise((_, no) =>
-        how.signal.addEventListener("abort", () => no(how.signal.reason)));
+      window.plainFetch = window.fetch;
+      const plain = window.slowly(window.plainFetch);
       window.fetch = (url, how = {}) => {
-        if (how.method === "PUT" && window.put === "drop") return never(how);
+        if (how.method === "PUT" && window.put === "drop") return window.unanswered(how);
         if (how.method === "PUT" && window.put === "late") {
           plain(url, { ...how, signal: undefined });
-          return never(how);
+          return window.unanswered(how);
         }
-        return window.hang && String(url).startsWith("/api/stat") ? never(how) : plain(url, how);
+        return window.hang && String(url).startsWith("/api/stat") ? window.unanswered(how) :
+          plain(url, how);
       };
       window.put = "drop";
     })()`);
@@ -561,7 +596,7 @@ async function main() {
     check(await d.until(`document.querySelectorAll('.turn').length === ${before + 3}`, 15000) &&
       questionsSaved() === before + 3, "each of the three questions shows once",
       `${await count()} turns, ${questionsSaved()} questions saved`);
-    await d.js("window.fetch = window.plainFetch; AbortSignal.timeout = window.plainTimeout");
+    await d.js("window.fetch = window.plainFetch");
 
     // Lines ksagent passes over are named on the page with ksagent's own reasons.
     const askFile = path.join(root, `${name}.ask.jsonl`);

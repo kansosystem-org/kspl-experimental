@@ -330,6 +330,16 @@ Caution: **Stamp it too when a page lets go of its hold** (`table_drop` in `kssr
 
 No test makes the wait fail. `poll` refuses only on a limit of the OS or on memory, and a test cannot bring either about in the server.
 
+### A panic ends the server; the service manager restarts it
+
+**A panic stops the whole process, and kssrv does not catch it or restart itself.** A panic means a check inside kssrv found its own state wrong. A connection's slot, the table or the heap count may then be wrong too. Serving on from that state could hand one client another's bytes, or a file outside the root.
+
+**Starting it again is the service manager's job**: systemd on Linux, a service wrapper on Windows ("Keep it running as a service" in [kssrv](../README.md#keep-it-running-as-a-service)). It starts a new process, so nothing from the old state survives. It also restarts the server after a signal, after ten failed waits (`MAX_POLL_FAILURES`) and after a reboot. A restart inside kssrv could do none of these.
+
+* **A crash loop is bounded by the manager's limits**: the README's unit stops after five starts in a minute and shows the unit as failed. A loop inside kssrv would need limits of its own, and its log would hide them.
+* **A second process that watches the first is not added.** It would be a service manager written again, one more program to keep running, and it could crash too.
+* **What it gives up**: run by hand, a crashed kssrv stays down until a person starts it. The servers that ksmd and ksagent start are replaced at the next opening, as their launcher does not reuse a server that no longer answers.
+
 ## Files and the API
 
 Kssrv serves files from under its root and answers JSON under `/api/`. Every path is checked so that no request reaches a file outside the root.

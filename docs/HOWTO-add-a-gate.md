@@ -23,9 +23,10 @@
    | `.a` or `.b` | `false` | either | Linux and Windows, in that job; macOS too if `macos` is true |
    | `.a` or `.b` | `true` | either | That job's Linux run alone; macOS too if `macos` is true |
    | `.linux` | `false` | either | Linux alone (its tool is only in Linux's image, or the answer cannot differ by platform) |
+   | `.linux_race` | `false` | either | Linux alone, in the job that holds `test-race`: a gate that must not share a runner with `test-sanitize`, or a long one that `linux` has no time for |
    | `.none` | `false` | `true` | macOS alone |
 
-   A gate for Linux alone goes in `.linux`, unless that job would then end after the others. Then it goes in the shorter shared job, with `linux_only`.
+   A gate for Linux alone goes in `.linux` or `.linux_race`, whichever ends sooner. If both would then end after the others, it goes in the shorter shared job, with `linux_only`.
 
    The runner refuses at start a row no set runs, and `macos` with `par = .synced` (macOS's `make` has no `--output-sync`).
 

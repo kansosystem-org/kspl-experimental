@@ -22,6 +22,7 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 #   test-pytools: python3-numpy (without it, the Linux round fails)
 #   test-ksmd-desktop: desktop-file-utils, shared-mime-info, libglib2.0-bin (gio)
 #   the HTTPS download below (Chromium): ca-certificates
+#   perf-log: valgrind (Cachegrind counts the instructions it judges; without it the gate fails)
 # No pip: nothing here installs from it (the AI helpers' own venv brings its own).
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -41,6 +42,7 @@ RUN apt-get update && apt-get install -y \
     shared-mime-info \
     libglib2.0-bin \
     gcc-mingw-w64-x86-64-win32 \
+    valgrind \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Fetch over IPv4: wget ---

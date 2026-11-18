@@ -58,12 +58,19 @@ jobs:
       matrix:
         # What runs is the gate table's (`Set` and `gates` in tools/ci_gates.kspl); a shard
         # missing here stops running unseen (tests/support/conventions_ci.kspl guards it).
-        target: [ci-shard-a, ci-shard-b, ci-shard-linux]
+        target: [ci-shard-a, ci-shard-b, ci-shard-linux, ci-shard-linux-race]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The token stays out of .git/config, where any later step could read it.
           persist-credentials: false
+      # The same gate takes up to three times as long on one runner as on another. The machine's
+      # name tells a slow runner from slow code ("Where CI's time goes, and what shrinks it" in
+      # docs/DESIGN-repository.md).
+      - name: Name the machine
+        run: |
+          lscpu | grep -E '^(Model name|CPU\(s\)|Thread\(s\) per core):'
+          free -m | head -2
       # cacheFrom needs authentication to pull a private package, so this runs on every round.
       - name: Log in to GHCR
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
@@ -132,13 +139,18 @@ jobs:
     defaults:
       run:
         shell: msys2 {0}
+    # The runner image installs Chrome, which the browser gates in ci-shard-a take from Program
+    # Files. **A missing browser fails them** rather than skipping, as on Linux: an image that
+    # drops Chrome would otherwise leave the pages unchecked on Windows in silence.
+    env:
+      KSMD_REQUIRE_BROWSER: "1"
     strategy:
       # **Do not cut one short** (as linux above).
       fail-fast: false
       matrix:
-        # **No Linux-only shard here**: no qemu, wasm or browser on this runner (`Shard.linux` in
-        # tools/ci_gates.kspl, and `Gate.linux_only` for such gates in the two shared shards); and
-        # no finer split, as start-up costs about a shard at a multiplier of two.
+        # **No Linux-only shard here**: no qemu, sanitizer or BLAS run on this runner
+        # (`Shard.linux` in tools/ci_gates.kspl, and `Gate.linux_only` for such gates in the two
+        # shared shards); and no finer split, as start-up costs about a shard at a multiplier of two.
         target: [ci-shard-a, ci-shard-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

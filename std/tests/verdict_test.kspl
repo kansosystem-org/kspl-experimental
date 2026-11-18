@@ -166,8 +166,8 @@ fn test_verdict_names_what_fits(ksplc: U8[], arena: Arena$@)
     verdict.start("[Verdict] a `RESULT:` line naming more than its room holds test...")
     r: = run_child(ksplc, "overflows", OVERFLOWS_MAIN, arena)
     lines: = r.stdout_data.lines(arena)
-    assert(r.exited_with(1) && lines.len == 301,
-        "each failure puts its line out, and the run ends on 1")
+    sys_test.assert_run(r.exited_with(1) && lines.len == 301, r@,
+        "each failure puts its line out, and the run ends on 1", arena)
     last: = lines.get(lines.len - 1)
     assert(last.starts_with("RESULT: SOME FAILED (300) -> a check whose name"),
         "the count on the line stays whole")
@@ -419,8 +419,9 @@ fn test_log_keeps_a_heavy_line_through_a_kill(ksplc: U8[], arena: Arena$@) //< k
     r: =
         subproc.run_capture(sys_test.child_argv(ksplc, "log_killed", KILLED_SRC, arena), "", 300000,
         4096, arena) catch panic("the child must start")
-    assert(r.exit_code.is_some(), "the child must start and come to an end")
-    assert(r.exited_with(137), "the child must end by SIGKILL, before any exit path")
-    assert(r.stdout_data.equals("c: W: last words"),
-        "Log: a warning written through at is out before the program dies")
+    sys_test.assert_run(r.exit_code.is_some(), r@, "the child must start and come to an end", arena)
+    sys_test.assert_run(r.exited_with(137), r@,
+        "the child must end by SIGKILL, before any exit path", arena)
+    sys_test.assert_run(r.stdout_data.equals("c: W: last words"), r@,
+        "Log: a warning written through at is out before the program dies", arena)
     verdict.pass("a warning written through at reached the reader though the run was killed.")

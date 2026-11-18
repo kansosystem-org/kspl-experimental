@@ -139,7 +139,8 @@ browser-path:
 	@printf '%s\n' "$(KSMD_BROWSER)"
 # Where it is 1, finding no browser is a failure rather than a SKIP, so a round that lost the tool
 # does not stay green. From the root it is 1 on Linux, whose image holds a browser
-# (`REQUIRE_SWITCHES` in the root's `mk/test.mk`); here it is off unless given.
+# (`REQUIRE_SWITCHES` in the root's `mk/test.mk`), and in CI's Windows job, whose runner holds
+# Chrome (`.github/workflows/ci.yml`); here it is off unless given.
 KSMD_REQUIRE_BROWSER ?=
 # The local server that serves the page to the checks that open and save files. It is another
 # package, so it is passed in; from the root, `make test-ksmd-browser` builds it and passes it.

@@ -133,6 +133,7 @@ priv fn check_cli( //< checks one program's command line against its specificati
                 scan.push_unique(mentioned@, w)
                 if is_option(cut_at_any(w, "=<\"`"))
                     scan.push_unique(written@, cut_at_any(w, "=<\"`"))
+    collect_command_options(spec, names, written@, arena)
     for line in spec.lines(arena)
         if line.starts_with("#")
             for w in scan.find_all(line, "`", "`", arena)
@@ -200,6 +201,31 @@ priv fn check_cli_all(arena: Arena$@) //< checks every program's command line, k
         doc_seen, "shapes", doc_bad@,
         "the option is written in a document but not declared in ksplc/cli.kspl: mend the document, \
             or declare it")
+
+priv fn collect_command_options( //<
+    //< The options on each command line that starts the program
+    //< **Every option on the line counts**, not only the one right after the name, so a service
+    //< unit's `ExecStart=` or a sample command cannot name an option the program lacks. **The
+    //< name must start the command**: at the line's start, after a `/` or after a backquote. Met
+    //< as an argument (`install -o kssrv`), it starts nothing. The line ends at a comment, a
+    //< backquote, a pipe, a `;`, a `&` or a bracket: past one, the words are another program's.
+    spec: U8[],
+    names: U8[][], //< how the spec writes the program before an argument (`kssrv `)
+    written: List<|U8[]|>$@, //< where each option found is added
+    arena: Arena$@,
+)
+    for line in spec.lines(arena)
+        for name in names
+            if at: = line.find_str(name)
+                before: = line.sub(0, at)
+                if before.trim_spaces().len > 0 && !before.ends_with("/") &&
+                    !before.ends_with("`")
+                    continue
+                tail: = cut_at_any(line.sub_from(at + name.len), "#`|;&()")
+                for word in tail.split(' ', arena)
+                    opt: = cut_at_any(word, "=<\"")
+                    if is_option(opt)
+                        scan.push_unique(written, opt)
 
 priv fn cut_at_any(text: U8[], seps: U8[]): U8[] //<
     //< The text before the first separator (the trailing spaces are dropped)

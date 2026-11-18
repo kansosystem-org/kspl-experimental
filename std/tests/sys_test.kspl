@@ -140,8 +140,9 @@ fn test_env_empty(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     r: =
         subproc.run_capture(U8[][]::{ "env", "KSPL_TEST_ENV_EMPTY=", ksplc, "run", src }, "",
         300000, 4096, arena) catch panic("`env` must start the child")
-    assert(r.exited_with(0), "the child must run")
-    assert(r.stdout_data.equals("set to []\n"), "a variable set to the empty text reads as set")
+    assert_run(r.exited_with(0), r@, "the child must run", arena)
+    assert_run(r.stdout_data.equals("set to []\n"), r@,
+        "a variable set to the empty text reads as set", arena)
     verdict.pass("A variable set to the empty text reads as the empty text, not as unset.")
 
 // Caution: **Do not rely on the absolute value** of the monotonic clock; it has no fixed origin.
@@ -175,7 +176,8 @@ fn test_cpu_count_affinity(ksplc: U8[], arena: Arena$@) //<
         arena) catch
             verdict.skip("taskset is not installed")
             return
-    assert(r.stdout_data.equals("one cpu\n"), "a process pinned to one CPU counts one")
+    assert_run(r.stdout_data.equals("one cpu\n"), r@, "a process pinned to one CPU counts one",
+        arena)
     verdict.pass("A process pinned to one CPU counts one.")
 
 fn test_mono_clock()
@@ -443,7 +445,7 @@ fn stops_with( //< whether a child stopped and said why, its argv given whole
 fn run_to_end(argv: U8[][], arena: Arena$@): subproc.Run_result //<
     //< Runs a child and stops the test unless it started and came to an end
     r: = subproc.run_capture(argv, "", 300000, 1 << 20, arena) catch panic("the child must start")
-    assert(r.exit_code.is_some(), "the child must start and come to an end")
+    assert_run(r.exit_code.is_some(), r@, "the child must start and come to an end", arena)
     return r
 
 fn expect_output( //< stops the test unless a child put out `want` and ended on `want_code`
@@ -516,8 +518,29 @@ fn test_can_run() //< that the answer to "can it be started" is correct per envi
 // std/sys: run_capture's result for a clean exit, stdout apart from stderr, a non-zero exit code,
 // a kill on timeout, and an absent executable.
 // ==========================================
-priv const FINISH_CAP_MS: I32 = 60000 //< the cap on a child that must finish of itself
+const FINISH_CAP_MS: I32 = 60000 //< the cap on a child that must finish of itself
     //< Generous, as only a stalled child reaches it; one that ends returns at once.
+    //< **Give it to every child a check needs to end.** A runner busy with the race gate can
+    //< take seconds to start even `ls`, and a short limit then fails the check.
+
+fn assert_run(ok: Bool, run: subproc.Run_result@, what: U8[], arena: Arena$@) //<
+    //< Stops the test where `ok` fails, after writing how the run ended and all it wrote
+    //< **A failed check shows what the child gave**, so a failure on a loaded machine can be read.
+    if ok
+        return
+    io.err().s("FAIL ").s(what).s("\n  got: ").s(told(run, arena)).c('\n')
+    assert(false, "the run gave what is written above")
+
+priv fn told(run: subproc.Run_result@, arena: Arena$@): U8[] //< how a run ended and what it wrote
+    b: = arena.text()
+    if code: = run.exit_code
+        b.s("exit code \{code\}")
+    else
+        b.s("no exit code (stopped at its limit)")
+    b.s(", stdout \"").s(run.stdout_data).s("\", stderr \"").s(run.stderr_data).s("\"")
+    if run.output_cut
+        b.s(", cut at the cap")
+    return b.take()
 
 fn test_run_capture(arena: Arena$@)
     verdict.start("[Sys] running a subprocess (run_capture)...")
@@ -532,38 +555,39 @@ fn test_run_capture(arena: Arena$@)
     ok_argv: = U8[][]::{ "/bin/echo", "hello", "kspl" }
     ok: = subproc.run_capture(ok_argv, "", FINISH_CAP_MS, 65536, arena)
         catch panic("echo should spawn")
-    assert(ok.exit_code.is_some(), "echo should spawn and finish normally")
-    assert(ok.exited_with(0), "echo should exit with status 0")
-    assert(ok.stdout_data.equals("hello kspl\n"), "echo stdout should be captured verbatim")
-    assert(ok.stderr_data.len == 0, "echo should produce no stderr output")
+    assert_run(ok.exited_with(0), ok@, "echo exits 0", arena)
+    assert_run(ok.stdout_data.equals("hello kspl\n"), ok@, "echo's stdout is captured verbatim",
+        arena)
+    assert_run(ok.stderr_data.len == 0, ok@, "echo writes no stderr", arena)
 
     split_argv: = U8[][]::{ "/bin/sh", "-c", "echo out_line; echo err_line 1>&2; exit 3" }
     split: = subproc.run_capture(split_argv, "", FINISH_CAP_MS, 65536, arena)
         catch panic("the child must start")
-    assert(split.exited_with(3), "nonzero exit code must be propagated verbatim")
+    assert_run(split.exited_with(3), split@, "a nonzero exit code is passed on verbatim", arena)
     split_ok: =
         split.stdout_data.equals("out_line\n") && split.stderr_data.equals("err_line\n")
-    assert(split_ok, "stdout/stderr must never be mixed up with each other")
+    assert_run(split_ok, split@, "stdout and stderr are never mixed up", arena)
 
     // /bin/pwd resolves symbolic links, and macOS's /tmp is one to /private/tmp, so the cwd is "/",
     // which is never a link.
     cwd_argv: = U8[][]::{ "/bin/pwd" }
     cwd_r: = subproc.run_capture(cwd_argv, "/", FINISH_CAP_MS, 65536, arena)
         catch panic("the child must start")
-    cwd_ok: = cwd_r.stdout_data.equals("/\n")
-    assert(cwd_ok, "cwd override must change the child's working directory")
+    assert_run(cwd_r.stdout_data.equals("/\n"), cwd_r@,
+        "cwd override changes the child's working directory", arena)
 
     // What it wrote, as one text: standard output, then standard error, each `\r\n` folded to `\n`.
     mixed_argv: = U8[][]::{ "/bin/sh", "-c", "printf 'a\\r\\nb\\r'; printf 'e\\r\\n' 1>&2" }
     mixed: = subproc.run_capture(mixed_argv, "", FINISH_CAP_MS, 65536, arena)
         catch panic("the child must start")
-    assert(mixed.text(arena).equals("a\nb\re\n"),
-        "text folds each \\r\\n, keeps a lone \\r, and lays standard error after standard output")
+    assert_run(mixed.text(arena).equals("a\nb\re\n"), mixed@,
+        "text folds each \\r\\n, keeps a lone \\r, and lays standard error after standard output",
+        arena)
 
     slow_argv: = U8[][]::{ "/bin/sh", "-c", "sleep 2" }
     slow: = subproc.run_capture(slow_argv, "", 150, 65536, arena)
         catch panic("the child must start")
-    assert(slow.exit_code.is_none(), "a process exceeding timeout_ms must be reported as timed_out")
+    assert_run(slow.exit_code.is_none(), slow@, "a child past timeout_ms has no exit code", arena)
 
     // Caution: **Do not start a process when an argument contains a NUL.** The C side splits there,
     // adding an argument nobody wrote (`--INJECTED`) and losing the last (`should-be-last`).
@@ -575,8 +599,8 @@ fn test_run_capture(arena: Arena$@)
     empty_arg: =
         subproc.run_capture(empty_arg_argv, "", FINISH_CAP_MS, 65536, arena)
         catch panic("an empty argument must not stop the start")
-    empty_ok: = empty_arg.stdout_data.equals(" x\n")
-    assert(empty_ok, "an empty argument is legitimate and must still be passed through")
+    assert_run(empty_arg.stdout_data.equals(" x\n"), empty_arg@,
+        "an empty argument is legitimate and is passed through", arena)
 
     verdict
         .pass("confirmed a clean exit, stream separation, a non-zero exit, a timeout, and the \
@@ -605,12 +629,13 @@ fn test_run_many(arena: Arena$@)
     slow: = rs.get(0) catch panic("the slow job must start")
     quick: = rs.get(1) catch panic("the quick job must start")
     oops: = rs.get(2) catch panic("the failing job must start")
-    assert(slow.stdout_data.trim_end().equals("slow"),
-        "even for the slow one the order stays the input's")
-    assert(quick.stdout_data.trim_end().equals("quick"), "the second item")
-    assert(oops.exited_with(3), "the exit code can be obtained")
-    assert(oops.stderr_data.trim_end().equals("oops"), "standard error is separate")
-    assert(oops.stdout_data.len == 0, "they are not mixed")
+    assert_run(slow.stdout_data.trim_end().equals("slow"), slow@,
+        "even for the slow one the order stays the input's", arena)
+    assert_run(quick.stdout_data.trim_end().equals("quick"), quick@, "the second item", arena)
+    assert_run(oops.exited_with(3), oops@, "the exit code can be obtained", arena)
+    assert_run(oops.stderr_data.trim_end().equals("oops"), oops@, "standard error is separate",
+        arena)
+    assert_run(oops.stdout_data.len == 0, oops@, "they are not mixed", arena)
 
     mixed: = Job[]::{
         Job::{ .argv = U8[][]::{ "kspl_test_missing_parallel_program" }, .cwd = "" },
@@ -622,20 +647,22 @@ fn test_run_many(arena: Arena$@)
         missing = true
     assert(recovered.len == 2 && missing, "a failed start keeps its result and consumes no slot")
     after: = recovered.get(1) catch panic("the job after a failed start must start")
-    assert(after.exited_with(0) && after.stdout_data.equals("aft"),
-        "a zero slot count runs serially and keeps the output cap after a failed start")
+    assert_run(after.exited_with(0) && after.stdout_data.equals("aft"), after@,
+        "a zero slot count runs serially and keeps the output cap after a failed start", arena)
     // **A cut output says so**, or a file cut short passes for the whole one.
-    assert(after.output_cut, "an output past the cap is reported cut")
+    assert_run(after.output_cut, after@, "an output past the cap is reported cut", arena)
     quick_whole: = rs.get(1) catch panic("the quick job must start")
-    assert(!quick_whole.output_cut, "an output within the cap is not reported cut")
+    assert_run(!quick_whole.output_cut, quick_whole@, "an output within the cap is not reported cut",
+        arena)
     one: =
         subproc.run_capture(U8[][]::{ "/bin/echo", "after" }, "", verdict.DEFAULT_TIMEOUT_MS, 3,
         arena) catch panic("the child must start")
-    assert(one.stdout_data.equals("aft") && one.output_cut, "run_capture reports its cut too")
+    assert_run(one.stdout_data.equals("aft") && one.output_cut, one@,
+        "run_capture reports its cut too", arena)
     whole: =
         subproc.run_capture(U8[][]::{ "/bin/echo", "after" }, "", verdict.DEFAULT_TIMEOUT_MS, 16,
         arena) catch panic("the child must start")
-    assert(!whole.output_cut, "and reports no cut for an output within the cap")
+    assert_run(!whole.output_cut, whole@, "and reports no cut for an output within the cap", arena)
     empty: = subproc.run_many(Job[]::{}, 1, verdict.DEFAULT_TIMEOUT_MS, 16, work, arena)
     assert(empty.len == 0, "no jobs give no results")
 
@@ -656,7 +683,8 @@ fn test_run_many(arena: Arena$@)
     fs.remove_path(barrier) catch {}
     for i in Range.asc(3)
         child: = overlapping.get(i) catch panic("each barrier child must start")
-        assert(child.exited_with(0), "all three jobs run before any waits for another to finish")
+        assert_run(child.exited_with(0), child@,
+            "all three jobs run before any waits for another to finish", arena)
 
     // A job past its limit is killed with what it wrote by then, and the one behind it still
     // answers. Caution: **Keep the sleep far beyond the limit**, so waiting it out shows as time.
@@ -669,10 +697,13 @@ fn test_run_many(arena: Arena$@)
     cut: = subproc.run_many(stuck, 1, 3000, 4096, work, arena)
     stuck_run: = cut.get(0) catch panic("the stuck job must start")
     behind: = cut.get(1) catch panic("the job behind it must start")
-    assert(stuck_run.exit_code.is_none(), "it comes back with no code, stopped at its limit")
-    assert(stuck_run.stdout_data.trim_end().equals("begun"), "with what it wrote by then")
-    assert(behind.exit_code.is_some() && behind.stdout_data.trim_end().equals("after"),
-        "the job behind it still runs")
+    assert_run(stuck_run.exit_code.is_none(), stuck_run@,
+        "it comes back with no code, stopped at its limit", arena)
+    assert_run(stuck_run.stdout_data.trim_end().equals("begun"), stuck_run@,
+        "with what it wrote by then", arena)
+    assert_run(behind.exit_code.is_some() &&
+        behind.stdout_data.trim_end().equals("after"), behind@, "the job behind it still runs",
+        arena)
     verdict
         .pass("confirmed the order stays the input's, the streams are separate, three jobs overlap, \
             an output past the cap is reported cut, and a job past its limit is killed.")
@@ -772,7 +803,8 @@ fn test_relative_program_with_cwd(ksplc: U8[], arena: Arena$@) //< ksplc is the 
     r: =
         subproc.run_capture(U8[][]::{ rel, "info", "keywords" }, dir, 60000, 4096, arena) catch
             panic("a relative program path must be read from the working directory given")
-    assert(r.exited_with(0) && r.stdout_data.len > 0, "the program found there must run")
+    assert_run(r.exited_with(0) && r.stdout_data.len > 0, r@, "the program found there must run",
+        arena)
     verdict.pass("./<program> with a working directory runs the program in that directory.")
 
 // ==========================================
@@ -834,16 +866,17 @@ fn expect_endings( //< runs the four children and checks how each one ended
 )
     c: = subproc.run_capture(crash, "", 300000, 1 << 16, arena)
         catch panic("the crashing child must start")
-    assert(c.exit_code.is_some(), "the crashing child must start and come to an end")
-    assert(c.exited_with(139), "a crash must read as 128 + SIGSEGV on every OS")
+    assert_run(c.exit_code.is_some(), c@, "the crashing child must start and come to an end", arena)
+    assert_run(c.exited_with(139), c@, "a crash must read as 128 + SIGSEGV on every OS", arena)
     a: = subproc.run_capture(abort, "", 300000, 1 << 16, arena)
         catch panic("the aborting child must start")
-    assert(a.exit_code.is_some(), "the aborting child must start and come to an end")
-    assert(a.exited_with(134), "a panic must read as 128 + SIGABRT on every OS")
+    assert_run(a.exit_code.is_some(), a@, "the aborting child must start and come to an end", arena)
+    assert_run(a.exited_with(134), a@, "a panic must read as 128 + SIGABRT on every OS", arena)
     three: = subproc.run_capture(exit_three, "", 300000, 1 << 16, arena)
         catch panic("the child exiting 3 must start")
-    assert(three.exit_code.is_some(), "the child exiting 3 must start and end")
-    assert(three.exited_with(3), "an exit(3) must read as 3 on every OS, not as an abort")
+    assert_run(three.exit_code.is_some(), three@, "the child exiting 3 must start and end", arena)
+    assert_run(three.exited_with(3), three@,
+        "an exit(3) must read as 3 on every OS, not as an abort", arena)
     $child: = subproc.spawn_piped(exit_minus_one, "") catch panic("the child must start")
     deadline: = sys.mono_us() + 300000000I64
     $code: I32 = 0
@@ -891,12 +924,12 @@ fn test_child_holds_no_file(ksplc: U8[], arena: Arena$@) //<
         assert(replaced, "a file closed while a child started before runs can be replaced")
     else if fs.exists("/proc/self/fd")
         listing: =
-            subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "ls -l /proc/self/fd" }, "", 5000, 65536,
-            arena) catch panic("the child must start")
+            subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "ls -l /proc/self/fd" }, "",
+            FINISH_CAP_MS, 65536, arena) catch panic("the child must start")
         file.free()
-        assert(listing.exited_with(0), "the child must list its open files")
-        assert(listing.stdout_data.find_str("held.txt").is_none(),
-            "a child does not hold a file it was not handed")
+        assert_run(listing.exited_with(0), listing@, "the child must list its open files", arena)
+        assert_run(listing.stdout_data.find_str("held.txt").is_none(), listing@,
+            "a child does not hold a file it was not handed", arena)
     else
         file.free()
         verdict
@@ -919,9 +952,9 @@ fn test_fs_stat_fifo() //<
     fs.remove_path(fifo) catch {}
     defer arena: = Arena(4096)
     made: =
-        subproc.run_capture(U8[][]::{ "mkfifo", fifo }, "", 10000, 4096, arena)
+        subproc.run_capture(U8[][]::{ "mkfifo", fifo }, "", FINISH_CAP_MS, 4096, arena)
         catch panic("mkfifo must start")
-    assert(made.exited_with(0), "mkfifo should make a FIFO under out/tmp")
+    assert_run(made.exited_with(0), made@, "mkfifo should make a FIFO under out/tmp", arena)
     info: = fs.stat(fifo) catch panic("stat should succeed for a FIFO")
     assert(info.kind == fs.File_kind.other, "a FIFO's metadata should report neither kind")
     assert(!fs.is_dir(fifo), "a FIFO is no directory")

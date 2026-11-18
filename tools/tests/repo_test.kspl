@@ -168,9 +168,19 @@ fn test_the_shards_part_ci() //< `ci` takes every gate this host can answer
         a: = ci_gates.Set.ci_shard_a.runs(g)
         b: = ci_gates.Set.ci_shard_b.runs(g)
         linux: = ci_gates.Set.ci_shard_linux.runs(g)
-        assert(ci_gates.Set.ci.runs(g) == (a || b || linux),
-            "Linux's ci runs the union of all three workflow sections")
-        assert(!(a && b) && !(a && linux) && !(b && linux), "no gate is in more than one section")
+        race: = ci_gates.Set.ci_shard_linux_race.runs(g)
+        assert(ci_gates.Set.ci.runs(g) == (a || b || linux || race),
+            "Linux's ci runs the union of all four workflow sections")
+        $sections: Sz = 0
+        for runs in Bool[_]::{ a, b, linux, race }
+            if runs
+                sections += 1
+        assert(sections <= 1, "no gate is in more than one section")
+        // The two sanitizers' gates stay in two jobs, so a two-core runner holds one at a time.
+        if g.log.equals("race")
+            assert(race, "test-race runs in the Linux job of its own")
+        if g.log.equals("sanitize")
+            assert(linux, "test-sanitize runs in the other Linux job")
         for host in U8[][]::{ "win32", "darwin" }
             shared: =
                 ci_gates.Set.ci_shard_a.runs(g, host) ||
@@ -183,7 +193,7 @@ fn test_the_shards_part_ci() //< `ci` takes every gate this host can answer
             ((a || b) && !ci_gates.Set.ci_shard_a.runs(g, "win32") &&
             !ci_gates.Set.ci_shard_b.runs(g, "win32")),
             "a gate a shared job runs on Linux alone stands in a shared job, and Windows' skips it")
-        if g.shard == ci_gates.Shard.linux && g.not_on.len == 0
+        if g.shard.linux_alone() && g.not_on.len == 0
             assert(ci_gates.Set.ci.runs(g, "win32") && ci_gates.Set.ci.runs(g, "darwin"),
                 "ci runs a Linux-only gate on every host unless its row says it cannot")
         if ci_gates.Set.ci.runs(g, "win32") &&
@@ -196,6 +206,11 @@ fn test_the_shards_part_ci() //< `ci` takes every gate this host can answer
         if g.log.equals("perf") || g.log.equals("ksos_posix") || g.log.equals("ksmd_desktop")
             assert(!ci_gates.Set.ci.runs(g, "win32"),
                 "a gate that cannot answer on Windows stays out of its ci")
+        // The Windows runner has Chrome, so a page's fault there shows before a person meets it.
+        if g.log.equals("ksmd_browser") || g.log.equals("ksagent_chat")
+            assert(ci_gates.Set.ci_shard_a.runs(g, "win32") ||
+                ci_gates.Set.ci_shard_b.runs(g, "win32"),
+                "a browser gate runs in a shared job on Windows too")
     assert(win_extra > 0, "ci on Windows adds gates the workflow leaves to Linux")
     verdict
         .pass("ci runs every section on Linux, and elsewhere adds each Linux-only gate the host can \

@@ -6,10 +6,11 @@
 //< **The narrow pass runs only when the change reaches `ksplc/`**, and always in GitHub's jobs
 //< (`change_reaches` in `tools/ci_gates.kspl`). It is two thirds of the suite's time, and only a
 //< change to the formatter or the reader can break it. Left out, it is a `SKIP` line.
-//< Caution: **The files run as batches** (`ksplc_harness.run_all`); one process at a time is far
-//< too slow.
+//< Caution: **Each `ksplc fmt` takes `FILES_PER_RUN` copies**, and the runs go side by side
+//< (`ksplc_harness.run_all`). One process per file spent a quarter of the suite's time starting.
 //< Its failure case: `tests/suite/fmt_tree_test.kspl#PARTINGS`, texts that part on a line.
 import "ksplc/tests/support/harness" as ksplc_harness
+import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
@@ -21,15 +22,90 @@ import "std/verdict"
 import "tests/support/harness"
 import "tools/ci_gates"
 
-priv fn fmt_job(rel: U8[], style: U8[], arena: Arena$@): subproc.Job //<
-    //< The child that formats `rel` to its output, under `style` (`--style=`) unless it is empty
-    $argv: = List<|U8[]|>(arena)
-    argv.push(ksplc_harness.ksplc_exe())
-    argv.push("fmt")
-    if style.len > 0
-        argv.push(arena.text().s("--style=").s(style).take())
-    argv.push(rel)
-    return subproc.Job::{ .argv = argv.slice(), .cwd = harness.root() }
+priv const FILES_PER_RUN: Sz = 32 //< the copies one `ksplc fmt` formats, as `make fmt` hands them
+
+priv struct Formatted //< one text after `ksplc fmt`: what it became, or why it did not format
+    ok: Bool
+    text: U8[] //< the formatted text where `ok`; otherwise the line that says why
+
+priv const FAILED_HEAD: U8[] = "fmt failed on " //< the line before a run's list of failed files
+priv const FAILED_ITEM: U8[] = "  -> " //< how that list names one file
+
+priv fn fmt_texts(texts: List<|U8[]|>@, names: List<|U8[]|>@, style: U8[], name: U8[],
+    arena: Arena$@): List<|Formatted|> //<
+        //< Formats each text under `style` (`--style=`) unless it is empty; one result per text
+        //< `names` says what to call each text, where a line says why it did not format.
+        //< **Each text is a copy formatted in place**, `<k>.kspl` in a folder of its own, so one
+        //< process takes many and the outputs stay apart. **A run that fails on one file formats
+        //< the rest**, and lists the failed ones last (`ksplc/main.kspl`). Caution: **A run that
+        //< ends with no such list fails every copy it held** (a crash, a timeout): a copy left
+        //< unformatted would read as formatted.
+    dir: = harness.sandbox(name)
+    $copies: = List<|U8[]|>(arena)
+    $why: = List<|U8[]|>(arena) // why the k-th text did not format; empty where it did
+    for k in Range.asc(texts.len)
+        copy: = fs.join(dir, arena.text().s("\{k\}.kspl").take(), arena)
+        copies.push(copy)
+        $said: U8[] = ""
+        io.write_file(copy, texts.get(k)) catch
+            said = arena.text().s("its copy cannot be written to ").s(copy).take()
+        why.push(said)
+    $jobs: = List<|subproc.Job|>(arena)
+    for $at: Sz = 0; at < texts.len; at += FILES_PER_RUN
+        $argv: = List<|U8[]|>(arena)
+        argv.push(ksplc_harness.ksplc_exe())
+        argv.push("fmt")
+        argv.push("--in-place")
+        if style.len > 0
+            argv.push(arena.text().s("--style=").s(style).take())
+        for k in Range(at, math.min(at + FILES_PER_RUN, texts.len), 1)
+            argv.push(copies.get(k))
+        jobs.push(subproc.Job::{ .argv = argv.slice(), .cwd = harness.root() })
+    runs: = ksplc_harness.run_all(jobs.slice(), name)
+    for n in Range.asc(runs.len)
+        r: = runs.get(n)
+        if r.exited_with(0)
+            continue
+        listed: = r.out.find_str(FAILED_HEAD).is_some()
+        at: = n * FILES_PER_RUN
+        for k in Range(at, math.min(at + FILES_PER_RUN, texts.len), 1)
+            if why.get(k).len == 0 &&
+                (!listed || failed_in(r.out, copies.get(k), arena))
+                said: = naming_line(r.out, copies.get(k), arena)
+                why.set(k, said.replace(copies.get(k), names.get(k), arena))
+    $out: = List<|Formatted|>(arena)
+    for k in Range.asc(texts.len)
+        if why.get(k).len > 0
+            out.push(Formatted::{ .ok = false, .text = why.get(k) })
+            continue
+        got: = io.read_file(copies.get(k), arena) catch
+            out
+                .push(Formatted::{ .ok = false,
+                .text = arena.text().s("its copy cannot be read back from ").s(copies.get(k)).take() })
+            continue
+        out.push(Formatted::{ .ok = true, .text = got })
+    return out
+
+priv fn failed_in(out: U8[], copy: U8[], arena: Arena$@): Bool //<
+    //< whether a run's list of failed files names this copy
+    $after: = false
+    for line in out.lines(arena)
+        if line.find_str(FAILED_HEAD).is_some()
+            after = true
+        else if after && line.starts_with(FAILED_ITEM) &&
+            line.sub_from(FAILED_ITEM.len).equals(copy)
+            return true
+    return false
+
+priv fn naming_line(out: U8[], copy: U8[], arena: Arena$@): U8[] //<
+    //< The first line of a run's output that names this copy, else its first line that is not empty
+    for line in out.lines(arena)
+        if line.find_str(copy).is_some()
+            return line
+    for line in out.lines(arena)
+        if line.trim_spaces().len > 0
+            return line
+    return "it ended with no word"
 
 priv fn first_difference(left: U8[], right: U8[]): Sz //<
     //< The first line (1-based) where two texts differ, or 0 where they are the same
@@ -86,24 +162,24 @@ priv const FMT_SPECS: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/", ":!kspl
 
 priv fn check_formatted(rels: List<|U8[]|>@, arena: Arena$@)
     $bad: = List<|U8[]|>(arena)
-    $jobs: = List<|subproc.Job|>(arena)
+    $srcs: = List<|U8[]|>(arena)
     for rel in rels
-        jobs.push(fmt_job(rel, "", arena))
-    rs: = ksplc_harness.run_all(jobs.slice(), "fmt_tree")
+        srcs.push(harness.read_under_root(rel))
+    rs: = fmt_texts(srcs@, rels, "", "fmt_tree", arena)
     // Caution: **Compare with the source itself, not with a second formatting.** A wrong reading
     // is as stable as a right one. So a fixed point of the output passes a moved comment.
     for k in Range.asc(rels.len)
         rel: = rels.get(k)
         r: = rs.get(k)
-        if !r.exited_with(0)
-            bad.push(arena.text().s(rel).s(": it does not format").take())
+        if !r.ok
+            bad
+                .push(arena.text().s(rel).s(": it does not format: ").s(r.text).take())
             continue
-        src: = harness.read_under_root(rel)
-        at: = first_difference(src, r.out)
+        at: = first_difference(srcs.get(k), r.text)
         if at > 0
             bad
                 .push(arena.text().s(rel).s(":\{at\}: it formats as `")
-                .s(line_of(r.out, at, arena)).s("`").take())
+                .s(line_of(r.text, at, arena)).s("`").take())
     verdict.check_list("a source is already formatted", rels.len, "sources", bad@,
         "a file not yet formatted: run `make fmt`. It formats with the seed and this check with the \
             compiler under test, so after a change to ksplc's formatter run `make commit-seed` \
@@ -138,45 +214,51 @@ priv fn check_narrow(rels: List<|U8[]|>@, arena: Arena$@)
                 GitHub's jobs always run it")
         return
     $bad: = List<|U8[]|>(arena)
-    $jobs: = List<|subproc.Job|>(arena)
-    for k in Range.asc(rels.len)
-        jobs.push(fmt_job(rels.get(k), narrow_style(k, arena), arena))
-    firsts: = ksplc_harness.run_all(jobs.slice(), "fmt_narrow")
-    // **The output is formatted again from a file**, which also reads it as a source. This gate
-    // does not trust the formatter's own read-back check.
-    dir: = harness.sandbox("fmt_narrow")
-    $again: = List<|subproc.Job|>(arena)
-    $which: = List<|Sz|>(arena) // the source each second formatting started from
-    for k in Range.asc(rels.len)
-        first: = firsts.get(k)
-        said: = narrow_name(rels, k, arena)
-        if !first.exited_with(0)
-            bad
-                .push(arena.text().s(said).s(": it does not format: ")
-                .s(line_of(first.out, 1, arena)).take())
-            continue
-        copy: = fs.join(dir, arena.text().s("\{k\}.kspl").take(), arena)
-        io.write_file(copy, first.out) catch
-            bad
-                .push(arena.text().s(said).s(": its output cannot be written to ").s(copy).take())
-            continue
-        again.push(fmt_job(copy, narrow_style(k, arena), arena))
-        which.push(k)
-    seconds: = ksplc_harness.run_all(again.slice(), "fmt_narrow_again")
-    for n in Range.asc(which.len)
-        k: = which.get(n)
-        said: = narrow_name(rels, k, arena)
-        second: = seconds.get(n)
-        if !second.exited_with(0)
-            bad
-                .push(arena.text().s(said).s(": its output does not format again: ")
-                .s(line_of(second.out, 1, arena)).take())
-            continue
-        at: = first_difference(firsts.get(k).out, second.out)
-        if at > 0
-            bad
-                .push(arena.text().s(said).s(": formatting again changes line \{at\} to `")
-                .s(line_of(second.out, at, arena)).s("`").take())
+    // **One width at a time**: a run takes one `--style`, and each source has its own width.
+    for w in Range.asc(NARROW_LIMITS.len)
+        $which: = List<|Sz|>(arena) // the sources formatted at this width
+        $srcs: = List<|U8[]|>(arena)
+        $names: = List<|U8[]|>(arena)
+        for k in Range.asc(rels.len)
+            if k % NARROW_LIMITS.len == w
+                which.push(k)
+                srcs.push(harness.read_under_root(rels.get(k)))
+                names.push(rels.get(k))
+        style: = narrow_style(w, arena)
+        firsts: =
+            fmt_texts(srcs@, names@, style, arena.text().s("fmt_narrow_\{w\}").take(), arena)
+        // **The output is formatted again from a file**, which also reads it as a source. This
+        // gate does not trust the formatter's own read-back check.
+        $outs: = List<|U8[]|>(arena)
+        $again_of: = List<|Sz|>(arena) // the place in `which` each second formatting started from
+        $again_names: = List<|U8[]|>(arena)
+        for n in Range.asc(which.len)
+            said: = narrow_name(rels, which.get(n), arena)
+            first: = firsts.get(n)
+            if !first.ok
+                bad
+                    .push(arena.text().s(said).s(": it does not format: ").s(first.text).take())
+                continue
+            outs.push(first.text)
+            again_of.push(n)
+            again_names.push(rels.get(which.get(n)))
+        seconds: =
+            fmt_texts(outs@, again_names@, style,
+            arena.text().s("fmt_narrow_again_\{w\}").take(), arena)
+        for m in Range.asc(again_of.len)
+            n: = again_of.get(m)
+            said: = narrow_name(rels, which.get(n), arena)
+            second: = seconds.get(m)
+            if !second.ok
+                bad
+                    .push(arena.text().s(said).s(": its output does not format again: ")
+                    .s(second.text).take())
+                continue
+            at: = first_difference(firsts.get(n).text, second.text)
+            if at > 0
+                bad
+                    .push(arena.text().s(said).s(": formatting again changes line \{at\} to `")
+                    .s(line_of(second.text, at, arena)).s("`").take())
     verdict.check_list(NARROW_CHECK, rels.len, "sources", bad@,
         "the formatter broke a line where the indentation reader does not join it, or its second \
             pass moves what the first wrote: mend `ksplc/fmt/` or `ksplc/parse/layout.kspl`, not \

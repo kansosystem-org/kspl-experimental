@@ -56,6 +56,86 @@ To make a certificate for a test, with OpenSSL 1.1.1 or later:
 
 To take the passphrase off a key, run `openssl pkey -in locked.pem -out key.pem`, type the passphrase once, then `chmod 600 key.pem`. `openssl x509 -in cert.pem -noout -enddate` prints when a certificate expires.
 
+## Keep it running as a service
+
+**After a panic, kssrv stops and does not start itself again.** For a site that must stay up, let the service manager of the OS start it and restart it. The reason is "A panic ends the server; the service manager restarts it" in [`kssrv/docs/DESIGN-server.md`](docs/DESIGN-server.md#a-panic-ends-the-server-the-service-manager-restarts-it).
+
+### On Linux, with systemd
+
+1. Make an account for the server alone, and install the program:
+
+   ```sh
+   sudo useradd --system --no-create-home --shell /usr/sbin/nologin kssrv
+   sudo install -m 755 out/kssrv.exe /usr/local/bin/kssrv
+   ```
+
+2. Give the key to that account, readable by it alone. kssrv does not start with a key that others can read, or that another account owns:
+
+   ```sh
+   sudo mkdir -p /etc/kssrv
+   sudo cp fullchain.pem privkey.pem /etc/kssrv/
+   sudo chown kssrv:kssrv /etc/kssrv/privkey.pem
+   sudo chmod 600 /etc/kssrv/privkey.pem
+   ```
+
+3. Write this unit to `/etc/systemd/system/kssrv.service`. Change the port, the folder and the file names to yours. Keep the folder out of `/home`, which the unit hides:
+
+   ```ini
+   [Unit]
+   Description=kssrv web server
+   After=network-online.target
+   Wants=network-online.target
+   # At most 5 starts in 60 seconds; then the unit stays failed until a person acts.
+   StartLimitIntervalSec=60
+   StartLimitBurst=5
+
+   [Service]
+   User=kssrv
+   Group=kssrv
+   ExecStart=/usr/local/bin/kssrv 443 /srv/www --cert=/etc/kssrv/fullchain.pem --key=/etc/kssrv/privkey.pem
+   Restart=on-failure
+   RestartSec=2
+   # Ports below 1024 need this capability, and the server gets no other.
+   AmbientCapabilities=CAP_NET_BIND_SERVICE
+   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+   NoNewPrivileges=true
+   ProtectSystem=strict
+   ProtectHome=true
+   PrivateTmp=true
+   ReadOnlyPaths=/srv/www /etc/kssrv
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+4. Start it now and at each boot: `sudo systemctl enable --now kssrv`. `journalctl -u kssrv` shows its log.
+
+**What each line buys:**
+
+* **`Restart=on-failure`** starts the server again after a panic, a signal, or an exit code other than 0. `systemctl stop` is not a failure, so a stop stays a stop.
+* **`StartLimitBurst` bounds a crash loop.** A key that kssrv refuses fails each start at once. After five tries in a minute, systemd stops trying and `systemctl status kssrv` shows why.
+* **The rest takes away what kssrv never needs.** It writes no file and starts no program facing outward. So the whole file system can be read-only for it, `/tmp` its own, and `/home` hidden.
+* **Leave out `--cert` and `--key` for plain HTTP**, and the key's steps with them.
+
+**A renewed certificate takes effect at the next start.** Copy the new files as in step 2, then run `sudo systemctl restart kssrv`. A renewal tool's deploy hook can do both.
+
+### On Windows
+
+**kssrv is a console program, with no Windows service of its own.** Windows's service manager cannot start it directly. Task Scheduler restarts a task only when it fails to start, not when it ends with an error. A service wrapper fills the gap. WinSW, for example, restarts the program with this in its XML file:
+
+```xml
+<service>
+  <id>kssrv</id>
+  <name>kssrv</name>
+  <description>kssrv web server</description>
+  <executable>C:\kssrv\kssrv.exe</executable>
+  <arguments>443 C:\www --cert=C:\kssrv\fullchain.pem --key=C:\kssrv\privkey.pem</arguments>
+  <onfailure action="restart" delay="10 sec"/>
+</service>
+```
+
+**On Windows kssrv does not check who can read the key**, since an ACL decides that. Give the service's account alone the right to read the key file.
+
 ## What is here
 
 | File | What it holds |

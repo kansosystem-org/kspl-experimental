@@ -100,6 +100,17 @@ priv fn fetch_plain(port: I32, raw: U8[], arena: Arena$@): U8[] //<
         got.s(U8[]::{ .ptr = buf@, .len = n })
     return got.take()
 
+priv fn without_date(answer: U8[], arena: Arena$@): U8[] //<
+    //< an answer with its `Date:` line left out
+    //< **Two answers fetched one after the other can fall in different seconds**, and then differ
+    //< in that line alone. Every other byte must still match.
+    at: = answer.find_str("\r\nDate: ").unwrap_or(answer.len)
+    if at == answer.len
+        return answer
+    rest: = answer.sub_from(at + 2)
+    end: = rest.find_str("\r\n").unwrap_or(rest.len)
+    return arena.text().s(answer.sub(0, at)).s(rest.sub_from(end)).take()
+
 priv fn closing(line: U8[], arena: Arena$@): U8[] //< `METHOD /path` as a request that closes
     sp: = line.find_char(' ').unwrap_or(0)
     return client.raw(line.sub(0, sp), line.sub_from(sp + 1), "Connection: close\r\n", "", arena)
@@ -115,7 +126,8 @@ fn cases(tls_port: I32, plain_port: I32, srv: Running$@, arena: Arena$@) //<
         over_tls: = fetch_tls(tls_port, raw, arena).unwrap_or("(the TLS fetch failed)")
         over_plain: = fetch_plain(plain_port, raw, arena)
         verdict.check(arena.text().s("over HTTPS it answers as over HTTP: \{t\}").take(),
-            over_tls.equals(over_plain) && over_plain.len > 0,
+            without_date(over_tls, arena).equals(without_date(over_plain, arena)) &&
+            over_plain.len > 0,
             arena.text().s(client.short(over_tls)).s(" / ").s(client.short(over_plain)).take())
     keepalive_case(tls_port, arena)
     records_cases(tls_port, plain_port, arena)
@@ -164,7 +176,7 @@ priv fn records_cases(port: I32, plain_port: I32, arena: Arena$@) //<
         U8[][]::{ post.sub(0, head_end), post.sub_from(head_end) }, arena).unwrap_or("(no answer)")
     over_plain: = fetch_plain(plain_port, post, arena)
     verdict.check("a head and its body, in two records in one write, are answered over TLS",
-        split.equals(over_plain) && over_plain.len > 0,
+        without_date(split, arena).equals(without_date(over_plain, arena)) && over_plain.len > 0,
         arena.text().s(client.short(split)).s(" / ").s(client.short(over_plain)).take())
     kept: = client.raw("GET", "/style.css", "", "", arena)
     two: = batched(port, U8[][]::{ kept, closing("GET /sub/one.txt", arena) }, arena)
