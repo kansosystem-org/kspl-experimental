@@ -2,9 +2,9 @@
 // page appends it to the ask file, `ksagent watch` (started by the opener with `--show`) asks a
 // stand-in model server, the answer grows in the live file, and the checked answer replaces it.
 // The cases: each control's name, the regions and Tab's order, read from the browser's
-// accessibility tree; the Markdown reader alone, on usual and on hostile text; asking;
-// the answer growing; the checked answer; a stopped answer; a model's answer holding markup,
-// shown as text; Japanese,
+// accessibility tree, and what axe-core finds, empty and with an answer; the Markdown reader
+// alone, on usual and on hostile text; asking; the answer growing; the checked answer; a stopped
+// answer; a model's answer holding markup, shown as text; Japanese,
 // with an Excel source placed by its sheet and row;
 // a save that meets another tab's write; a reload; a turn the reader cannot show; a question whose
 // save is never answered, or answered late; lines ksagent
@@ -17,6 +17,7 @@
 import { spawn, spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { accessible, planted } from "../../ksmd/tests/browser/axe.mjs";
 import { launch } from "../../ksmd/tests/browser/cdp.mjs";
 import { SHIFT, driver, verdict, wait, waitFor } from "../../ksmd/tests/browser/drive.mjs";
 import { markupRunsNothing, policyListsItsScripts } from "../../ksmd/tests/browser/policy.mjs";
@@ -255,6 +256,10 @@ async function main() {
     const lists = await withRoles(browser.page, ["list"]);
     check(lists.length === 1, "the conversations are a list",
       lists.join(" "));
+    // What a check written by hand would miss, found by axe-core (`ksmd/tests/browser/axe.mjs`):
+    // first that it finds a planted fault, then that it finds none in the empty conversation.
+    await planted(d.js);
+    await accessible(d.js, "an empty conversation");
     // Tab from the page's first control reaches the box to ask in, then Ask, in that order.
     await d.js("document.getElementById('new').focus()");
     const stops = ["new"];
@@ -320,6 +325,7 @@ async function main() {
         t.querySelector('.sources code').textContent === 'rules/leave.md' &&
         t.querySelector('.unchecked') === null && t.querySelector('.badge').textContent === 'Sources checked'; })()`,
       15000), "it shows bold text, a list, a table and its checked source, and nothing unchecked");
+    await accessible(d.js, "a checked answer, with its table and its source");
     const turns = await withRoles(browser.page, ["article"]);
     check(turns.includes("article:How much paid leave does a new employee get?"),
       "a turn is an article, named by its question", turns.join(" "));

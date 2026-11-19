@@ -8,7 +8,7 @@ Caution: **When you add a file that declares an origin, add it here too.** A sou
 
 * **A file carrying a license's own words is listed here.** Such words are an `SPDX-License-Identifier`, a `Copyright (c)` line or a license's grant. Code copied with its header brings its terms with it.
 * **Every file listed here exists**, so a rename cannot leave a notice pointing at nothing.
-* **A file owing a notice is outside what the release ships.** The release's zip holds `LICENSE.md` but not this file. So no such file may stand in what the zip takes (`RELEASED` in `tests/support/conventions_notice.kspl`). Today they stand under `lib/ksos/`, `lib/ksai/` and `ksagent/`, which it does not take.
+* **A file owing a notice is outside what the release ships.** The release's zip holds `LICENSE.md` but not this file. So no such file may stand in what the zip takes (`RELEASED` in `tests/support/conventions_notice.kspl`). Today they stand under `lib/ksos/`, `lib/ksai/`, `ksagent/` and `ksmd/tests/`, which it does not take.
 * **Every binary file is listed under "Binary files" with where it comes from.** A model's weights inherit the license of the model that they were converted from.
 
 ## Raspberry Pi pico-sdk / pico-examples (BSD-3-Clause)
@@ -286,6 +286,89 @@ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+## axe-core (MPL-2.0)
+
+* Origin: `https://github.com/dequelabs/axe-core`, the file `axe.min.js` of the npm package `axe-core` 4.14.0
+* Copyright holder: Deque Systems, Inc.
+* License: the Mozilla Public License 2.0, `https://mozilla.org/MPL/2.0/`. The parts it bundles are under MIT and ISC (their notices are below)
+
+**The file is copied unchanged**, with its own notice at its head. So the browser checks run the same checker on every machine, with no download. Only the checks use it; no page the packages build holds it. Its SHA-256 is checked before each run (`ksmd/tests/browser/axe.mjs`).
+
+| File | What it originates from |
+| :-- | :-- |
+| `ksmd/tests/browser/axe.min.js` | the whole file, as the package ships it |
+
+The notices of the parts it bundles, from the package's `LICENSE-3RD-PARTY.txt`:
+
+```text
+-----------------------------------------------------------------------------
+                              MIT License
+  Applies to:
+  - colorjs.io; Copyright (c) 2021 Lea Verou, Chris Lilley
+  - core-js-pure; Copyright (c) 2014-2023 Denis Pushkarev
+  - css-selector-parser; Copyright (c) 2013 Dulin Marat
+  - doT.js; Copyright (c) 2011 Laura Doktorova
+      Software includes portions from jQote2 Copyright (c) 2010 aefxx,
+      http://aefxx.com/ licensed under the MIT license.
+  - emoji-regex; Copyright (c) Mathias Bynens <https://mathiasbynens.be/>
+  - es6-iterator; Copyright (c) 2013-2017 Mariusz Nowak (www.medikoo.com)
+  - es6-promise;
+      Copyright (c) 2014 Yehuda Katz, Tom Dale, Stefan Penner and contributors
+  - event-emitter; Copyright (C) 2012-2015 Mariusz Nowak (www.medikoo.com)
+  - is-promise; Copyright (c) 2014 Forbes Lindesay
+  - lru-queue; Copyright (C) 2014 Mariusz Nowak (www.medikoo.com)
+  - typedarray;
+      Copyright (c) 2010, Linden Research, Inc.
+      Copyright (c) 2012, Joshua Bell
+  - weakmap-polyfill; Copyright (c) 2015-2021 polygonplanet
+-----------------------------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+-----------------------------------------------------------------------------
+                              ISC License
+  Applies to:
+  - d; Copyright (c) 2013-2019, Mariusz Nowak, @medikoo, medikoo.com
+  - es5-ext; Copyright (c) 2011-2022, Mariusz Nowak, @medikoo, medikoo.com
+  - es6-symbol; Copyright (c) 2013-2019, Mariusz Nowak, @medikoo, medikoo.com
+  - es6-weak-map; Copyright (c) 2013-2018, Mariusz Nowak, @medikoo, medikoo.com
+  - ext; Copyright (c) 2011-2022, Mariusz Nowak, @medikoo, medikoo.com
+  - memoizee; Copyright (c) 2012-2018, Mariusz Nowak, @medikoo, medikoo.com
+  - next-tick; Copyright (c) 2012-2020, Mariusz Nowak, @medikoo, medikoo.com
+  - timers-ext; Copyright (c) 2013-2018, Mariusz Nowak, @medikoo, medikoo.com
+  - type; Copyright (c) 2019, Mariusz Nowak, @medikoo, medikoo.com
+-----------------------------------------------------------------------------
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
 ```
 
 ## Public-domain origins

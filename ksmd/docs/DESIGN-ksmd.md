@@ -673,6 +673,20 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **Where it was checked:** `make test-ksmd-open` runs the launcher on Linux, without a browser. No gate checks a double-click; it was checked by hand on Windows only, not on macOS.
 
+### Checking a file without the page
+
+**`ksmd --check` reads, assembles and calculates a file with the page's own code**, `report` in `ksmd/port/check.kspl`. Whoever wrote the file, often a model with no browser, sees what the page would show. The rules are "Checking a file" in [`SPEC-file-format.md`](SPEC-file-format.md#checking-a-file).
+
+| Decision | Why |
+| :-- | :-- |
+| **A value is written as the file writes a cell**, text in quotes | A model reads the kind at once: the text `"6"` is a common mistake for the number `6`. A text that holds a line break stays on one line |
+| **A cell's error leaves the exit code at 0; a problem in the view makes it 1** | An error is a value a file can hold on purpose. A missing include is never meant, and the page marks it at its clause |
+| **Every problem prints, not only the first** | A writer fixes them in one round. The reader still stops at a source's first refusal |
+| **Only the file named is calculated** | Each source calculates on its own, so an included file prints the same when checked itself. Its table names would otherwise need its path in front |
+| **`today()` is today's date in UTC, unless `--today` names one** | std reads no time zone. The page's local date differs only near midnight, and `--today` gives a fixed answer |
+| **No document's own functions run** | Running one needs the person's allowance, which only the page asks for. A call shows `#BLOCKED!`, so a correct name does not read as unknown |
+| **A workspace on disk is read through `fs.join_under`**, as the local server reads it (`Disk`) | A link along a path is refused as the page sees it refused. ksmd's tests read their scratch folders through `Disk` too |
+
 ### A part file that an interrupted save leaves
 
 **A `<name>.<16 hex digits>.part` file beside a source is left as it is.** `fs.replace_file` writes it before the rename, so it stays only after a crash. The source then still holds its old text, and the draft the text being saved. The page cannot see the part file and no request deletes one, so a person deletes it.

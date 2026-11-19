@@ -67,6 +67,7 @@ flowchart LR
     D --> S9["9: starting with no PC"]
     B --> S9
     S9 --> L["12: the IR remote"]
+    L --> C["13: the whole car"]
 ```
 
 | # | What it brings up | How you know it worked |
@@ -88,12 +89,13 @@ flowchart LR
 | [9](#stage-9--the-car-keeps-its-policy-and-starts-alone) | Starting with no PC, on the policy kept in the car | With no kssrv, the wheels turn at power-on |
 | [10](#stage-10--showing-the-state-as-ws2812-light) | The WS2812 LEDs as a window needing no cable | The `[led]` colours, by eye |
 | [12](#stage-12--driving-it-from-the-ir-remote-alone) | Driving by the IR remote alone | The keys change how it drives |
+| [13](#stage-13--checking-the-whole-car-in-one-run) | Every part above in one run, with a verdict for each | The summary line |
 
-**"Tuning line following", after stage 12, is not a stage**: it holds what stages 7, 9 and 12 share when the car follows a line. **Wireless is not among the stages** ("WiFi (CYW43439) — not implemented in this design" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
+**"Tuning line following", after stage 13, is not a stage**: it holds what stages 7, 9 and 12 share when the car follows a line. **Wireless is not among the stages** ("WiFi (CYW43439) — not implemented in this design" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
 **`make ksos-rp2040-board` is one firmware for stages 2b, 4, 5c, 6d, 8 and 10.** It prints lines tagged `[tag]` for each stage in turn, one lap in about 20 seconds (how to read them: the heading of [`demo/rp2040/rp2040_board_probe.kspl`](../demo/rp2040/rp2040_board_probe.kspl)). `make ksos-rp2040-net` is one firmware for 6a, 6b and 6c.
 
-Caution: **Do not add the stages that turn the wheels (3, 7, 9, 12) to the board firmware.** They need the wheels lifted before writing, and the board firmware runs connected on the desk.
+Caution: **Do not add the stages that turn the wheels (3, 7, 9, 12, 13) to the board firmware.** They need the wheels lifted before writing, and the board firmware runs connected on the desk.
 
 **Stage 2 is split** because USB cannot enumerate until the clock is right, so 2a checks the clock by the buzzer's pitch. **Stage 5 is split** by the tools each part needs. I2C (5c) comes last because it needs the ultrasonic module swapped for the LED matrix.
 
@@ -530,6 +532,8 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 | A panic | Speed 0 gives 0 on both pins of every wheel (`stops_test.kspl`) | That the hook is set, and the PWM reaching the wheels |
 | The speed cap | No wheel goes over `motor.CAP` (`lib/ksos/tests/motor_test.kspl`) | The wheels' real speed |
 
+**Stage 13 checks part of the car's column in one run, with a verdict for each part.** It covers the IR receiver, a held key let go, and the panic hook. The other stops still need the firmware that carries them.
+
 ## Stage 8 — leaving a record inside the device
 
 **The sensors' time series and the received policy are kept in an append-only record** ([ksdb](../../ksdb/README.md)) in the QSPI flash's last 64KB. This stage checks that the record survives a power cut.
@@ -904,6 +908,111 @@ Stage 7's firmware stops on any button; this one does not. Why: "Why the IR remo
 ### The speed is slower than Freenove's tutorial's
 
 Freenove's tutorial drives at 50 to 80%. **To raise the speed, change `motor.CAP` in `lib/ksos/boards/freenove_4wd_pico/motor.kspl`**, the one cap. Why: "Why the IR remote firmware drives as it does" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
+
+## Stage 13 — checking the whole car in one run
+
+**Goal: one run that gives each part of the car a verdict.** The car check firmware asks for each part in turn over the Serial Monitor. It prints `PASS`, `FAIL` or `SKIPPED` for each part, then one summary line:
+
+```
+car-check: 16 pass, 1 fail, 1 skipped
+```
+
+**Run it once the stages it covers work on their own.** Each part's row below names its stage, where a FAIL is fixed. The check needs no kssrv and no policy.
+
+### What to prepare
+
+| What | What it is for |
+| :-- | :-- |
+| The battery, charged and switched on | The buzzer and the wheels |
+| A USB cable and the Serial Monitor (stage 2b) | The prompts and the verdicts |
+| The bundled IR remote | Every answer: **▶ is yes, 9 is no** |
+| A box or stand, wheels in the air | Every part that moves |
+| A strip of white paper, under 2cm wide | The line sensors |
+| A lamp or daylight | The light sensors, which need light that a hand can shade |
+| The LED matrix or the ultrasonic module on the GPIO 4/5 connector | The one plugged in is checked, and the other is `SKIPPED (shares GPIO 4/5)` |
+
+### How to run it
+
+1. Build the firmware:
+
+   ```sh
+   make ksos-rp2040-car-check     # -> out/ksos_rp2040/ksos_rp2040_car_check.uf2
+   ```
+
+2. Write it as in stage 1.
+3. Replug USB without BOOTSEL, and open the Serial Monitor at once. The firmware waits up to 8 seconds for the port, then starts.
+4. Answer each prompt as the table below says.
+5. Read the summary line at the end. Every verdict is printed again just before it.
+
+**A prompt that waits prints itself again every 10 seconds**, so a Serial Monitor opened late still sees it.
+
+### What each prompt means
+
+**The parts run in this order.** A part's line reads `[check] <part>: PASS`, with a reason in brackets after `FAIL` or `SKIPPED`.
+
+| Part | The prompt, and what to do | `PASS` when | On `FAIL` |
+| :-- | :-- | :-- | :-- |
+| `battery` | None: the firmware reads the battery | `bat=` lies from `BATTERY_LOW_MV` (6.774V) to full charge plus 0.4V (8.8V) | Charge it or switch it on; stage 4 |
+| `remote` | `press ▶ on the remote`, within 60 seconds | ▶'s code arrives | `ir=0/0/0` means nothing reaches the receiver: stage 5b, and "Reading the report line when the remote does nothing" in stage 12 |
+| The stand | Put the car on the stand, then press ▶, within 120 seconds | No verdict of its own. **9, or no answer, skips every part that moves** | — |
+| `line_left`, `line_middle`, `line_right` | Hold the strip flat about 1cm below the named sensor, where the floor would be, without touching it. Within 20 seconds each. Left and right are the car's, seen from behind | That sensor alone changes from the reading at rest | Read `last change line=` against `rest line=` as "Reading a line sensor's FAIL" below says |
+| `light_left`, `light_right` | Shade the named sensor with a hand, within 20 seconds each | It falls by 30% or more, and further than the other | `too dark to judge`: turn a light on. Otherwise stage 4 |
+| `matrix` | A smiling face shows: ▶ if you see it, 9 if not | ▶ | Stage 5c |
+| `ultrasonic` | Hold a hand about 10cm in front of it, within 20 seconds | The distance falls by 50mm or more | `no echo` is the wiring: stage 5a |
+| `leds` | The eight LEDs light green: ▶ if all eight are lit | ▶ | Stage 10 |
+| `buzzer` | It beeps every 1.5 seconds: ▶ if you hear it | ▶ | Stage 1. Hold the key a moment: a beep can hide a short press |
+| `servo` | The head swings between 60 and 120 degrees: ▶ if it swings | ▶ | "The servos" in [`SPEC-board.md`](SPEC-board.md) |
+| `wheel_front_left`, `wheel_back_left`, `wheel_back_right`, `wheel_front_right` | That wheel turns forward for 1 second, then back: ▶ if only that wheel turned so | ▶ | Stage 3: another wheel turning means `board.MOTOR_PIN_A/B`, and the wrong direction means `board.WHEEL_POLARITY`. That wheel staying still means the kick: "To start it, raise the kick, not the speed cap" below |
+| `held_key` | Hold ✚, then let go within 3 seconds. All four wheels turn forward while it is held | A repeat arrived, and the wheels stopped within 350ms of the last signal | "It runs only while a key is held" in stage 12 |
+| `panic` | ▶ to start. After the restart, answer whether all wheels stopped at once | ▶ | The panic hook that `boot.motors_up` sets; "The panic part, and the restart after it" below |
+
+**An answer that does not come within 60 seconds is a `FAIL`.** After any `FAIL`, fix the part at its stage, then run the whole check again.
+
+| `SKIPPED` because | What it means |
+| :-- | :-- |
+| `shares GPIO 4/5` | The other module is plugged in on that connector |
+| `needs the remote, which did not answer` | The `remote` part failed, so nothing can be asked |
+| `moves, and the stand was not confirmed` | 9, or no answer, at the stand |
+| `moves, and a key stopped an earlier motion` | A key stopped a motion earlier in this run. That part's own line is `FAIL (stopped by a key …)` |
+
+### Reading a line sensor's FAIL
+
+**The line sensors are reflective** ("Line tracking" in [`SPEC-board.md`](SPEC-board.md)). White a short way below reads 0. Nothing beneath reads 1, so the car on its stand rests at `line=7`. Two mistakes in holding the paper look like a fault:
+
+* **Paper pressed against a sensor reads 1, as black does.** Hold it about 1cm below, where the floor would be.
+* **A wide sheet reaches a neighbour.** The sensors sit 20 to 25mm apart, so use a strip under 2cm wide.
+
+The `FAIL` line gives `rest line=` and `last change line=`:
+
+| `last change line=` | What it means | What to do |
+| :-- | :-- | :-- |
+| The same as `rest line=` | The sensor saw no white: the paper was too close, too far, or too narrow | Hold it again as above. Still nothing: the trimmer, in stage 4 |
+| Another sensor's bit, or two bits | The strip reached a neighbour, or left and right are swapped | Hold a narrower strip. Still the other side's bit: `board.LINE_SENSOR_SWAPPED`, in stage 4 |
+
+### How it keeps the car safe
+
+* **Nothing moves before ▶ at the stand.** The watchdog is armed only then, as in stage 9.
+* **Every motion runs at `motor.CAP` (20%) and has its own time limit**: 1 second each way per wheel, 3 seconds for the held key, and 1 second before the panic.
+* **Every motion starts with the same kick**: three times the speed for 40ms. A wheel step starts its wheel alone through `motor.start_wheel`, both forward and back. The held key and the panic part start through `motor.drive`. Without the kick, a wheel alone at 20% can stay still. The kick's reason is "To start it, raise the kick, not the speed cap" below.
+* **A motion starts only once the remote has been quiet for `check.QUIET_US` (250ms)**. That is longer than the gap between a held key's repeats. The ▶ that answered may still be held, and its repeats would stop the motion it started. Keep holding a key, and the line `let go of the remote` asks you to let go.
+* **Any key stops a turning wheel at once.** That part then fails with `stopped by a key`, and no part moves again in this run. That `FAIL` says nothing about the part: run the check again without touching the remote while it moves.
+* **The decisions come from the code the other firmwares use.** The held key goes through `stops.hold`, and the wheels through `motor`.
+
+### The panic part, and the restart after it
+
+**The panic part comes last, since a panic ends the firmware.** Before it, the firmware prints every verdict so far and the summary line.
+
+1. Press ▶ to start it, or 9 to skip it. Let go of ▶ at once: the wheels start once the remote is quiet.
+2. Watch the wheels: they turn for 1 second, then the firmware panics on purpose.
+3. The panic hook stops every wheel at once. About 3 seconds later the watchdog restarts the chip.
+4. Open the Serial Monitor again: the restart drops the port.
+5. Answer the line that starts `[check] restarted after the deliberate panic`: press ▶ if all wheels stopped at once, 9 if not.
+
+**The verdicts survive the restart inside the panic's own message.** A panic writes its message to RAM that start-up does not clear (`.noinit_panic`). Stage 9 reads the same record. The car check's message holds one character for each part's verdict. After the restart, the firmware reads that message back. One line then gives the earlier verdicts' summary and the question, every 10 seconds for up to 5 minutes. After the answer, the firmware prints every verdict and the summary line.
+
+Caution: **Do not switch the car off or unplug it between the panic and the answer.** Power loss clears that RAM, and the next start runs the whole check again.
+
+**Wheels that keep turning until the restart mean the hook is missing**: the watchdog's restart stopped them. The check arms the watchdog for 3 seconds here, three times the usual 1 second, so that the delay shows. Answer 9.
 
 ## Tuning line following
 

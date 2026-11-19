@@ -74,8 +74,10 @@ function ksmdDiagram(ks) {
     return b;
   }
 
-  function picker(cls, title, list, now) {
+  // A list to pick from: its name, which a screen reader says, and its tooltip, which says more.
+  function picker(cls, name, title, list, now) {
     const pick = ks.el("select", cls);
+    pick.setAttribute("aria-label", name);
     pick.title = title;
     for (const [value, name] of list) pick.appendChild(new Option(name, value, false, value === now));
     return pick;
@@ -91,8 +93,8 @@ function ksmdDiagram(ks) {
       bar.appendChild(button(label, `Draw ${kind === "arrow" ? "an arrow" : "a line"}: drag from one shape to another`,
         { tool: kind }));
     }
-    bar.appendChild(picker("diagram-colour", "The colour of lines and words: of what is drawn next, and of the chosen part", COLOURS, colour));
-    bar.appendChild(picker("diagram-fill", "The ground of shapes: of what is drawn next, and of the chosen shape", FILLS, fill));
+    bar.appendChild(picker("diagram-colour", "Colour", "The colour of lines and words: of what is drawn next, and of the chosen part", COLOURS, colour));
+    bar.appendChild(picker("diagram-fill", "Fill", "The ground of shapes: of what is drawn next, and of the chosen shape", FILLS, fill));
     for (const [act, label, title] of [["text", "Text…", "Write the chosen part's words; a double-click on it does too"],
       ["mono", "Mono", "Give the chosen shape's words a fixed-width font, as a screen's mock-up"],
       ["delete", "Delete", "Take the chosen part away; a shape's arrows go with it"],

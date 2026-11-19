@@ -122,11 +122,13 @@ KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
  * **Use lstat, not stat**, which follows the link and answers "not a link".
  * Caution: **Do not mix -1 with 0.** A step that could not be peeked passing as "not a link" opens
  * a road out of the root. Refusing is the caller's part (has_link_on_path in std/fs.kspl).
- * A path that is not there is 0 (the function that creates one comes through here). */
+ * A path that is not there is 0 (the function that creates one comes through here). **So is a path
+ * that cannot be copied**: no OS call can take it, so no file stands there. -1 is only an answer
+ * the OS was asked for and could not give, on both sides. */
 KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     char path[KSPL_PATH_CAP];
     struct stat st;
-    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 0;
     if (lstat(path, &st) != 0) {
         return (errno == ENOENT || errno == ENOTDIR) ? 0 : -1;
     }
@@ -170,6 +172,8 @@ KSPL_LINK I32 kspl_real_path(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
 
 /* Copies one file to a name that does not stand yet, with the source's permission bits (for
  * std/fs.kspl's copy_tree). 0 = done, 1 = the source cannot be opened, -1 = refused.
+ * **A source path that cannot be copied is 1**, as a missing file is: it names no file. A
+ * destination that cannot be is -1, as any refused destination is.
  * **The bits are the copy's from its first byte.** Created wider and narrowed afterwards, a private
  * file would stand readable by others while it is written. Where the narrowing fails, it would
  * stay so for good. O_EXCL makes it new, so a link planted at the name is not followed. The umask
@@ -182,7 +186,7 @@ KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, 
     char to[KSPL_PATH_CAP];
     struct stat st;
     int ok = 1;
-    if (!kspl_to_cstr(from_ptr, from_len, from, sizeof(from))) return -1;
+    if (!kspl_to_cstr(from_ptr, from_len, from, sizeof(from))) return 1;
     if (!kspl_to_cstr(to_ptr, to_len, to, sizeof(to))) return -1;
     int in = open(from, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     if (in < 0) return 1;

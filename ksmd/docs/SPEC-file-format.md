@@ -4,6 +4,8 @@
 
 **Every rule here holds for ksmd's reader and writer.** The reader opens a file; the writer saves one. How the editing page changes a document, and its keys, are in [`SPEC-editing-page.md`](SPEC-editing-page.md).
 
+**To check a file you wrote, run `ksmd --check <file>`.** It prints whether ksmd refuses the file, and what each formula calculates, with no browser ("Checking a file" below).
+
 ## The rows, and what they start from
 
 **Many rules carry rows: a small input, and what ksmd does with it.** ksmd's own tests read each row from this file and check it, so a row is a promise.
@@ -15,6 +17,7 @@
 | "It saves as:" and a second `ksmd` block | The writer saves the first source as the second, byte for byte |
 | "It is refused at line L, column C." | The reader refuses the source at that place |
 | "It reads as:" and a `text` block | The reader builds the structure that the outline shows |
+| "It copies as Markdown:" and a `markdown` block | Copy as Markdown gives the second block, byte for byte ("Copying as Markdown" below) |
 
 * **A `ksmd` block with none of these sentences after it is an example**, not a row.
 * **Lines and columns count from 1.** Line 1 is the version line. A column counts characters, not bytes.
@@ -35,16 +38,19 @@ In a table, a backslash before `|` inside a cell makes a literal `|`.
 
 **The rows calculate in a table named `t`, in a document opened on 2026-10-23.** Its cell A1 holds 2, A2 holds 3, B1 holds `"Pens"` and B2 holds `"Ink"`.
 
+**A block that copies as Markdown calculates its own tables**, in a document opened on that date.
+
 **A path row reads its path from a file in the folder `plans`**, just under the workspace's root.
 
-**An `Opened` row opens a file of the workspace above its table.**
+**An `Opened` row opens a file of the workspace above its table.** A check row checks one: the sentence "`ksmd --check <path>` ends with code N and prints:", then a `text` block.
 
 * **A workspace is the fenced blocks labelled `ksmd` and a path**, such as ` ```ksmd parts/one.ksmd `. Each holds the text of the file at that path from the workspace's root.
-* **It runs from the nearest heading or `Opened` table above, down to the table.** No other file stands in it.
+* **It runs from the nearest heading or `Opened` table above, down to the row.** No other file stands in it.
 * **`Shows` is the view's text, in reading order, with `, ` between its parts.** A paragraph's or a heading's text is one part, and so is each data cell of a table, as it shows. Other blocks add nothing. `refused` means that the file itself does not open.
 * **`Problem at` is the problem's place, as `file:line:column`.** After it, each include clause that leads there follows a `<`, innermost first. `none` means the file opens with no problem.
 * **`The reason says` holds words of the problem's message**, and is empty under `none`.
-* **A row's file gives one problem at most.**
+* **An `Opened` row's file gives one problem at most.**
+* **A check row promises that exit code, and that output byte for byte.** "Checking a file" below sets what the command prints.
 
 **An outline names each part with these words:**
 
@@ -2856,6 +2862,189 @@ Wrong
 * **The clauses count in the order the page shows them**, the included ones in their place.
 * **Where two files give one name, the first clause on the page is called.**
 
+## Copying as Markdown
+
+**The editing page's File ▸ Copy as Markdown puts the whole document on the clipboard as Markdown**, as GitHub reads it. A paste into another program then keeps the headings, lists, links and tables. The command is in "Opening and saving" in [`SPEC-editing-page.md`](SPEC-editing-page.md#opening-and-saving).
+
+**`ksmd --markdown <file>` prints the same Markdown**, with no browser. It reads the file as `--check` does ("Checking a file" below), with `--workspace` and `--today` alike. The tables show their values on that date.
+
+* **A file the reader refuses prints no Markdown.** Its reason goes to standard error, and the exit code is 1.
+* **A problem in the file's view goes to standard error**, in `--check`'s form, after the Markdown is printed. The exit code is then 1, else 0.
+* **`--markdown` with `--check` ends with code 2**, as a command line the launcher cannot take.
+
+| A part of the document | The Markdown it gives |
+| :-- | :-- |
+| A heading, a paragraph, a quote, a divider | `#` to `######` and a space; the text; `> ` before each line; `---` |
+| Strong emphasis, emphasis, inline code, a link | `**text**`, `*text*`, backticks as the file writes them, `[label](destination)` |
+| A hard break | `\` at the line's end |
+| A list item | `- `, `1. `, `- [ ] ` or `- [x] `, then its text |
+| A code block | A fence of backticks and its label. The fence is at least three, and longer than any run of backticks inside |
+| A table | Its caption as a paragraph, then a pipe table of the values its cells show |
+| An image | `![alt](src)`, then its caption as a paragraph |
+| A chart, a diagram, an include | One line in emphasis that says it is not copied |
+| A blank line, the document's settings, a functions clause | Nothing |
+
+**Text reads back as the same text.** A backslash goes before each character that Markdown would read as markup:
+
+* **`\`, a backtick, `*`, `[`, `]`, `~` and `|`, wherever they stand.**
+* **`_`, unless a letter or a digit stands on each side of it**, so `a_b` stays as it is.
+* **`<` before a letter, `/`, `!` or `?`**, and `&` before a character reference such as `&amp;`.
+* **A block marker at a line's start**: `#`, `>`, `-` or `+` before a space, a line of `=`, and the `.` or `)` after a number.
+* **A heading's last `#`, and `!` straight before a link.**
+
+**Spaces at a mark's inner edge stand outside it**, since Markdown opens and closes a mark only next to text. Spaces at a line's start and end are left out, as the file leaves them out.
+
+Caution: **Strong or emphasised text that Markdown cannot close where it stands shows its asterisks.** One case is strong text that ends in punctuation straight before a letter, as in `**a.**b`.
+
+**Looks are not copied.** Colours, alignment, sizes, notes and column widths give nothing, and coloured text gives its text alone.
+
+**A list keeps its nesting and its kinds of item.**
+
+* **Every numbered item is written `1.`**, and Markdown numbers the items.
+* **A nested item is indented to the text of the item above it**: two spaces under `- `, and three under `1. `.
+* **A list straight after another list takes `*` and `1)` as its markers.** Markdown would otherwise join the two lists into one.
+
+**A table gives what the page shows.**
+
+* **Each cell gives its shown value**: a number in its format, a date, `true` or `false`, or an error's mark. A formula is not kept.
+* **The column names make the header row**, and a row of `---` follows them.
+* **A line break in a cell becomes `<br>`**, since a row of a pipe table stands on one line.
+* **Every row and every column is written, also one that a filter or a closed group hides.** Markdown cannot hide a row.
+* **A merged column gives its value in every row**, as Markdown has no merged cells.
+* **A cell's link holds the text that the cell shows.**
+
+**An image gives its path as the document writes it**, relative to the document. The picture is not on the clipboard, and the shapes drawn over it give nothing.
+
+**A chart, a diagram or an include gives one line**, so that a reader sees that something is missing:
+
+* **A chart**: `*Not copied: the chart "Spending".*` with its title, or `*Not copied: a chart.*` without one.
+* **A diagram**: `*Not copied: the diagram "Flow".*` with its caption, or `*Not copied: a diagram.*` without one.
+* **An include**: `*Not copied: the included file "notes.ksmd".*` with its path as written.
+
+```ksmd
+%ksmd 2
+
+# Plan for C\#
+
+Some **bold**, *soft*, `code` and [the site](https://example.org).\
+\# Not a heading, a_b, _c_ and [red]{color="#c00000"} words.
+
+1\. Not a list, <b>, &amp;, R&D, 1 | 2 and ~x~.
+
+Hello![x](https://example.org) and** spaced **words.
+
+> A quote
+```
+
+It copies as Markdown:
+
+```markdown
+# Plan for C\#
+
+Some **bold**, *soft*, `code` and [the site](https://example.org).\
+\# Not a heading, a_b, \_c\_ and red words.
+
+1\. Not a list, \<b>, \&amp;, R&D, 1 \| 2 and \~x\~.
+
+Hello\![x](https://example.org) and **spaced** words.
+
+> A quote
+```
+
+```ksmd
+%ksmd 2
+
+1. First
+  - [ ] Open
+  - [x] Done
+1. Second
+
+- Next list
+```
+
+It copies as Markdown:
+
+```markdown
+1. First
+   - [ ] Open
+   - [x] Done
+1. Second
+
+* Next list
+```
+
+```ksmd
+%ksmd 2
+
+:::table name="costs" caption="Costs" formats=",grouped:2," merge="A" groups="rows 2 closed"
+| "item" | "cost" | "note" |
+| "Pens | ink" | 1234.5 | "a\nb" |
+| "Pens | ink" | =B1*2 | "Results" {link="https://example.com/r"} |
+| "Ink" | =1/0 | 2026-10-23 |
+:::
+
+:::chart table="costs" kind="bar" labels="item" values="cost" title="Spending"
+:::
+
+:::include path="notes.ksmd"
+:::
+
+:::diagram size="200,100"
+box id="a" at="20,20" size="50,50"
+:::
+```
+
+It copies as Markdown:
+
+```markdown
+Costs
+
+| item | cost | note |
+| --- | --- | --- |
+| Pens \| ink | 1,234.50 | a<br>b |
+| Pens \| ink | 2,469.00 | [Results](https://example.com/r) |
+| Ink | #DIV/0! | 2026-10-23 |
+
+*Not copied: the chart "Spending".*
+
+*Not copied: the included file "notes.ksmd".*
+
+*Not copied: a diagram.*
+```
+
+````ksmd
+%ksmd 2
+
+:::document numbers=1
+:::
+
+```kspl
+x: = 1
+```
+
+---
+
+\
+
+:::image src="shots/build window.png" alt="The build window" caption="The window"
+draw shape="rect" from="120,40" to="420,120"
+:::
+````
+
+It copies as Markdown:
+
+````markdown
+```kspl
+x: = 1
+```
+
+---
+
+![The build window](<shots/build window.png>)
+
+The window
+````
+
 ## Limits
 
 **A source past a limit of this table is refused when read.** A diagram's, a drawing's and the settings' own limits are in their sections.
@@ -2879,3 +3068,101 @@ Wrong
 * **A formula nested deeper than 64 levels calculates as `#SYNTAX!`.** A calculation error is a cell's value, and does not stop a save.
 * **The view counts a source's text when the source is read, refused or not.** It counts it again at each later include of it.
 * **An include that would pass a view limit is a problem at its clause**, found before its blocks join the view.
+
+## Checking a file
+
+**`ksmd --check <file>` reads a file as the editing page opens it, and prints what each formula calculates.** It needs no browser and no server. So whoever wrote the file, a person or a model, sees what ksmd refuses and what it calculates.
+
+* **The command is ksmd's launcher**: `out/ksmd.exe` after `make ksmd`, or `ksmd` after `make install`.
+* **The workspace is found as an opening finds it**: the nearest folder above the file that holds `.ksmd-workspace`, else the file's own folder. `--workspace=<folder>` names it instead.
+* **Includes and images are read from the workspace**, and a link along a path is refused, as the local server refuses it.
+* **`today()` gives today's date in UTC**, or the date that `--today=<date>` names, such as `--today=2026-10-23`. The page takes the computer's local date instead.
+* **No document's own functions are built or run.** A call to one shows `#BLOCKED!`, as on the page before you allow its file.
+
+**The output goes to standard output, and the exit code says how the file stands:**
+
+| The file | What it prints | Exit code |
+| :-- | :-- | :-- |
+| The reader refuses it | One line: `<file>:<line>:<column>: <reason>` | 1 |
+| It opens, with a problem in its view | A line for each problem, then a line for each formula, then the count | 1 |
+| It opens with no problem | A line for each formula, then the count | 0 |
+
+* **A command line that the launcher cannot take ends with code 2**, with the reason and the usage on standard error. `--today` without `--check` or `--markdown` is one, and so is `--check` with `--show`, `--list` or `--stop`.
+* **A name that does not end in `.ksmd`, or a path where no file stands, ends with code 1.** The reason goes to standard error.
+
+**Each line of the output takes one form:**
+
+| Line | Form |
+| :-- | :-- |
+| A problem | `<file>:<line>:<column>: <reason>`. Where the problem lies in an included file, `(included from <file>:<line>:<column>)` follows, with each further include clause after a `<`, innermost first |
+| A formula | `<table>.<cell> = <value>`, such as `t.D1 = 6` |
+| The count | `ok` where no problem stands, else the problems, such as `1 problem`. Then a `:`, and the file's tables, formulas and errors: `ok: 1 table, 3 formulas, 1 error` |
+
+* **A file's path is its path from the workspace's root**, as the page names it.
+* **A problem is an include, an image or a functions clause that the view cannot show** ("The assembled view" above). The page opens such a file, and shows the problem at its clause.
+* **A cell is named as a formula in another table names it.** The lines follow the tables in order, each table row by row, from the left.
+* **A value is written as a cell of the file writes it.** A number shows as in a column with no format. Text stands in quotes with its escapes, so the text `"6"` reads apart from the number `6`.
+* **An error is its mark, then `: ` and its reason**, as the page's tooltip gives it.
+* **An error in a cell leaves the exit code at 0.** The error is the cell's value, and a file can hold one on purpose, such as a share of a total that is still empty.
+* **Only the file named is calculated.** An included file's formulas print when you check that file. Its problems print here too.
+
+**In this workspace, `report.ksmd` includes `budget.ksmd`, and a file that includes a missing one:**
+
+```ksmd budget.ksmd
+%ksmd 2
+
+:::table name="t"
+| "Item" | "Price" | "Count" | "Total" |
+| "Pens" | 2 | 3 | =B1*C1 |
+| "Ink" | 4 | 0 | =B2/C2 |
+| =A1&" each" | =today() | =B1>1 | =sum(D1:D2) |
+:::
+```
+
+```ksmd report.ksmd
+%ksmd 2
+
+:::include path="budget.ksmd"
+:::
+
+:::include path="parts/notes.ksmd"
+:::
+```
+
+```ksmd parts/notes.ksmd
+%ksmd 2
+
+:::include path="gone.ksmd"
+:::
+```
+
+```ksmd bad.ksmd
+%ksmd 2
+
+#bad
+```
+
+`ksmd --check budget.ksmd` ends with code 0 and prints:
+
+```text
+t.D1 = 6
+t.D2 = #DIV/0!: C2, the divisor, is 0 or empty
+t.A3 = "Pens each"
+t.B3 = 2026-10-23
+t.C3 = true
+t.D3 = #DIV/0!: D2 shows #DIV/0!
+ok: 1 table, 6 formulas, 2 errors
+```
+
+`ksmd --check report.ksmd` ends with code 1 and prints:
+
+```text
+parts/notes.ksmd:3:1: no file stands at this path. Correct the path; ksmd does not create the file (included from report.ksmd:6:1)
+1 problem: 0 tables, 0 formulas, 0 errors
+```
+
+`ksmd --check bad.ksmd` ends with code 1 and prints:
+
+```text
+bad.ksmd:3:1: a heading is one to six '#', a space and its text. Write '\#' for a literal '#'
+```

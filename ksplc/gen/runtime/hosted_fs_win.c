@@ -203,7 +203,8 @@ KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
     return false;
 }
 
-/* Whether that path itself is a link. The meanings of 1/0/-1 are the same as the POSIX side's.
+/* Whether that path itself is a link. The meanings of 1/0/-1 are the same as the POSIX side's:
+ * **a path kspl_path_to_wide cannot convert is 0**, as one not there (empty, not UTF-8, too long).
  * Caution: **Do not settle it by `FILE_ATTRIBUTE_REPARSE_POINT` alone.** OneDrive's and Dropbox's
  * not-yet-downloaded files raise it too. So **under a root inside OneDrive no file could be
  * read**. What is looked at is **a name surrogate** (links and junctions alone). FindFirstFileW's
@@ -220,7 +221,7 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     DWORD attr;
     WIN32_FIND_DATAW fd;
     HANDLE h;
-    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return -1;
+    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return 0;
     attr = GetFileAttributesW(path);
     if (attr == INVALID_FILE_ATTRIBUTES) {
         DWORD e = GetLastError();
@@ -289,7 +290,8 @@ KSPL_LINK I32 kspl_long_name(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
     return (I32)len;
 }
 
-/* The POSIX side's meanings. Windows keeps no permission bits. Who can read the copy is the ACL it
+/* The POSIX side's meanings: a source path that cannot be converted is 1, as a missing file is.
+ * Windows keeps no permission bits. Who can read the copy is the ACL it
  * takes from its folder, as a file kspl_create_owned makes. What is carried over is the read-only
  * mark, put on once the contents are in (a read-only file takes no writes). CREATE_NEW makes it
  * new. A directory, which needs FILE_FLAG_BACKUP_SEMANTICS, does not open. */
@@ -300,7 +302,7 @@ KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, 
     HANDLE in, out;
     char *buf;
     int ok = 1;
-    if (!kspl_path_to_wide(from_ptr, from_len, from, KSPL_WPATH_CAP)) return -1;
+    if (!kspl_path_to_wide(from_ptr, from_len, from, KSPL_WPATH_CAP)) return 1;
     if (!kspl_path_to_wide(to_ptr, to_len, to, KSPL_WPATH_CAP)) return -1;
     in = CreateFileW(from, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);

@@ -194,7 +194,13 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
 
 **Every part of the page works with keys alone, and a screen reader reads a table as a grid.** Each choice below follows the spreadsheets' keys and WAI-ARIA's patterns, so a person brings what they already know.
 
-**A table is a `grid`, on the HTML table the page already draws.** Its letters and names are column headers, its row numbers row headers, and its cells grid cells. The cells of the chosen range carry `aria-selected`. Nothing is drawn twice for a screen reader: the grid is the table a person sees.
+**The document is a text box inside the page's `main` region.** A screen reader goes to it by that region, as it goes to the menu bar and the status bar. A text box cannot be a region itself, so the region holds it.
+
+**Every control has a name of its own**, which a screen reader says. A tooltip alone is not one, and a field's example text goes once something is typed. So the lists and fields of Page setup, and the colour lists of a diagram and a drawing, each carry a name.
+
+**`make test-ksmd-browser` runs axe-core, an automated accessibility checker, on the page.** It runs on a document with a table, a chart and a diagram, in both schemes, and with a menu and two dialogs open. Any violation fails the gate.
+
+**A table is a `grid`, on the HTML table the page already draws.** Its letters and names are column headers, its row numbers row headers, and its cells grid cells. The cells of the chosen range carry `aria-selected`. Nothing is drawn twice for a screen reader: the grid is the table a person sees. The two corners above the row numbers head nothing, so each is a plain grid cell. A header with no words would be read out as an empty one.
 
 * **The focus stands in a text box over the chosen cell** ("Ranges of cells" below gives why). So that box's name is what a screen reader says: the cell's value and address, such as `6, C1`. Its description holds the formula, the error's reason, the note and the link. A name of `Cell C1` alone would make a listener open each cell to learn its value.
 * **A range is said through a hidden live region in the status bar**, such as `B1:C2 chosen`, each time it changes. The focus stays on the range's first cell, so nothing else says how far a range reaches. One cell says nothing there, since its box already says it.
@@ -421,6 +427,20 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
 * **Text that starts with `=`, `+`, `-`, `@`, a tab or a CR gets a `'` before it, and is quoted.** A spreadsheet would run such text as a formula, and a formula can open a link or start a program. A number is never changed, so `-5` stays a number.
 * **The file is UTF-8 with a byte order mark.** Without one, a spreadsheet can read the bytes in the computer's own code page, and text outside ASCII comes out wrong.
 * **The file is named after the table**, with the characters a file name cannot hold made `_`.
+
+## Copying the document as Markdown
+
+**File ▸ Copy as Markdown lets a document go on in another program with its structure.** A plain copy loses headings, lists and links, and a PDF keeps the look but cannot be edited. Markdown is what chats, code hosts and most editors take, and some of them export it to Word. What each part becomes is "Copying as Markdown" in [`SPEC-file-format.md`](SPEC-file-format.md#copying-as-markdown).
+
+* **The editor writes the Markdown, not the page's script** (`ksmd/syntax/markdown.kspl`). It is a function from the model and its calculated values to text, so the specification's rows check it. A command outside the page can write the same text.
+* **A cell gives the text the page shows of it**, through the function the page shows it with (`write_shown` in `ksmd/calc/value.kspl`). A formula means nothing outside ksmd, and its value is what the reader saw.
+* **A line break in a cell becomes `<br>`.** A row of a pipe table stands on one line, and a break there would end the table. A backslash break does not work inside a cell, and GitHub and most editors show `<br>` as a break.
+* **Every row is written, as Export as CSV writes it.** Markdown cannot hide a row, and a total under a filtered table would otherwise not add up.
+* **A chart, a diagram and an include leave a line that says they are not copied.** A part dropped without a word leaves the reader unable to tell that anything is missing.
+* **An image keeps its path, not its bytes.** A picture as a data URL makes the paste large, and many editors refuse one. Beside the document's folder, the path still finds the file.
+* **Only what Markdown would read as markup is escaped.** A backslash before every punctuation mark is safe, but the text then reads badly where Markdown is shown as it stands.
+* **The clipboard holds `text/plain` alone.** A program that reads Markdown takes it from plain text, and an HTML copy beside it would make a rich editor take the HTML instead.
+* **Read-only leaves the command on**, as a copy changes nothing. Copy formula and Copy as Markdown put their text on the clipboard through one helper (`ks.copyText` in `ksmd/port/web/handlers.js`).
 
 ## Find and replace
 
@@ -808,5 +828,5 @@ sequenceDiagram
 * Choosing a diagram's shape, drawing one and joining two take the pointer. The arrow keys only move a shape already chosen.
 * Drawing on an image or a chart, choosing a shape there and moving it take the pointer. On a chosen shape, the keys only do Delete, which takes it away, and Esc, which lets it go.
   * Why: a shape stands at points of the picture's own pixels. Keys would need a mark that moves over the picture to set each corner, and the page has none yet.
-* The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked. What a screen reader is given is checked by the page's names, roles and states.
+* The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked. What a screen reader is given is checked by the page's names, roles and states, and by axe-core in the states the checks open.
 * A person switching tabs in a desktop browser is not checked: the checks send the focus event themselves, and hide the page by script.

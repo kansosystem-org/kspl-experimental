@@ -480,6 +480,17 @@ With only the outbound calls wide, `sys.args()[0]` is invalid UTF-8 on a child's
 
 **So a third-party tool is given relative paths, with their base directory as `cwd`.** The OS sets `cwd` without going through `argv`, so non-ASCII in it survives. That is why every function that starts a child takes a `cwd`, `spawn_wait` / `spawn_async` included. CMake's Ninja generator makes the same move.
 
+**Text that is not UTF-8 has no UTF-16 form, so Windows refuses it where POSIX hands the bytes on.** POSIX names, values and arguments are bytes; Windows's are UTF-16. The conversion uses `MB_ERR_INVALID_CHARS`, so a stray byte or a lone surrogate's encoding fails. It is not replaced with U+FFFD: a changed name would name another file. Windows also holds no environment value past 32,767 UTF-16 units.
+
+| Text | POSIX | Windows |
+| :-- | :-- | :-- |
+| A path that is not UTF-8 | Handed on as bytes. Linux's ext4 and tmpfs take it; macOS's APFS refuses it | Refused before the OS, as "A path that reaches no file fails as a refusal" says |
+| An environment value that is not UTF-8 | `sys.set_env` takes it, and `sys.get_env` gives it back whole | `sys.set_env` fails with `Env_error.refused` |
+| An environment value past 32,767 UTF-16 units | Taken. Linux then starts no child while one variable is past 128 KiB (`MAX_ARG_STRLEN`) | `sys.set_env` fails with `Env_error.refused` |
+| A program argument that is not UTF-8 | It reaches the child as bytes | The start fails with `spawn_failed`, and `subproc.start_error` gives 1113 (`ERROR_NO_UNICODE_TRANSLATION`) |
+
+The Windows answers come from `kspl_win_to_wide` / `kspl_win_wide_dup` in `ksplc/gen/runtime/hosted.c`, and `kspl_win_command_line` in `ksplc/gen/runtime/hosted_spawn_win.c`.
+
 **The C standard's path functions are not used.** `fopen` and `rename` are narrow, so `std/fs`'s `rename_path` and `std/io`'s `open` go through `kspl_rename_cstr` / `kspl_fopen_cstr`. `std/libc`'s `fopen` / `rename` carry a mark that says not to use them; they stay as companions of `fclose` / `fread`.
 
 **An OS function is not declared directly with `extern`, because its declaration differs per environment.** `shutdown` is `int shutdown(int, int)` on POSIX and `int shutdown(SOCKET, int)` on Windows, where `SOCKET` is 64-bit unsigned. A declaration that matches one fails to compile on the other (winsock2.h: `conflicting types for 'shutdown'`).
@@ -503,6 +514,45 @@ Note: One difference remains. POSIX renames a directory over an empty one, while
 **The prefix goes on in the one place where a path becomes UTF-16 for the OS**, so no function can miss it. The path is resolved first, and the form never comes back to KSPL (Rust's `fs::canonicalize` returns it, which not every tool reads). The rules are at `kspl_path_to_wide` in `ksplc/gen/runtime/hosted_fs_win.c`.
 
 Note: **A child's working directory stays under 260**, since the OS keeps a process's current directory within MAX_PATH unless the program opts in. `kspl_proc_start` in `ksplc/gen/runtime/hosted_spawn_win.c` passes the directory as it is.
+
+### An empty path is refused before the OS sees it
+
+**Every file function refuses an empty path in std, the same way on every OS.** The OSes differ: POSIX finds nothing there, and Windows's `GetFullPathNameW` cannot resolve it at all. Left to them, one call answered differently on each OS.
+
+| Function | Its answer to an empty path |
+| :-- | :-- |
+| A function of `std/fs` that fails with `Fs_error` | `invalid_path` |
+| `fs.exists`, `fs.is_dir`, `fs.is_executable`, `fs.can_run`, `fs.is_link` | false, since no file stands there |
+| `fs.dir_trust`, `fs.secret_trust` | `missing` |
+| `io.read_file`, `io.read_file_capped`, `io.open`, `io.write_file` | `invalid_arg` |
+
+`check_path` in `std/fs.kspl` and `fopen_checked` in `std/io.kspl` make the check, each the one place its module checks a path. **A path holding a NUL gets the same answer**, since C would read only the part before it.
+
+**Three places read an empty path as a folder, on purpose:**
+
+* `fs.absolute` reads it as the working directory.
+* `fs.write_tree` reads an empty `dir` as the working directory.
+* `fs.join_under` reads an empty `rel` as the root itself ("A path from outside goes through one door", below).
+
+### A path that reaches no file fails as a refusal
+
+**Two more kinds of path reach no file: one with a name too long, and on Windows one that is not UTF-8.** The limit is 255 bytes on Linux, and 255 UTF-16 units on Windows (`name_too_long_on` in `std/fs.kspl`). No variant of `Fs_error` or `Io_error` names these causes. Each function fails as it does when the OS refuses it:
+
+| Function | Its answer |
+| :-- | :-- |
+| `fs.stat`, `fs.mtime_ns`, `fs.long_name`, `fs.read_dir`, `fs.walk_files`, the source of `fs.copy_tree` and of `fs.copy_file` | `not_found` |
+| `fs.exists`, `fs.is_dir`, `fs.is_executable`, `fs.can_run`, `fs.is_link` | false |
+| `fs.dir_trust`, `fs.secret_trust` | `missing` |
+| `fs.mkdir`, `fs.remove_path`, `fs.rename_path`, `fs.replace_file`, the destination of `fs.copy_file`, `File_lock.take` | `operation_failed` |
+| `fs.mkdir_all` | `mkdir_failed`, naming the first level it could not make |
+| `io.read_file`, `io.open` to read | `file_not_found`, naming the path |
+| `io.write_file`, `io.open` to write | `write_failed`, naming the path |
+
+**Why no variant of its own:** the runtime hands std a yes or no, not the OS's error number. The reason is at `Fs_error` in `std/fs.kspl`.
+
+**A path the runtime cannot convert names no file.** No OS call can take it, so `kspl_is_link` answers "not a link" and `kspl_copy_file` "no source" on both sides of the runtime.
+
+**`fs.is_link` gives false for a name too long where nothing stands.** `lstat` fails with `ENAMETOOLONG`, so the runtime cannot tell. The rule is in "A path stays under the root by refusal, not comparison", below.
 
 ### A path from outside goes through one door
 
@@ -552,12 +602,12 @@ Caution: **Do not look at `FILE_ATTRIBUTE_REPARSE_POINT` alone on Windows.** One
 | `kspl_is_link` returns | Meaning | `stays_under` |
 | :-- | :-- | :-- |
 | 1 | A link | Refuses |
-| 0 | Not a link | Goes on |
+| 0 | Not a link, or a path no OS call can take | Goes on |
 | -1 | Cannot tell | Refuses |
 
 The LLVM backend's degenerate case is -1 too. Made 0, it would land on the unsafe side.
 
-**A step longer than the file system holds is the one exception: it names nothing.** The OS cannot look it up, so `kspl_is_link` cannot tell. The check then asks whether anything stands there, and where nothing does, the path goes on, as absent. So a web server answers 404 for such a name, as for any other name not there, not 403.
+**A step longer than the file system holds is the one exception: it names nothing.** The OS cannot look it up, so `kspl_is_link` cannot tell. `fs.is_link` then asks whether anything stands there, and where nothing does, it answers false. So the path goes on, as absent, and a web server answers 404 for such a name, not 403. Every step below it names nothing either, and is passed the same way.
 
 * **Each OS counts in its own unit** (`fs.name_too_long_on`): 255 bytes on Linux and macOS, 255 UTF-16 units on Windows. 100 kana are 300 bytes, too long on Linux but not on Windows. The count takes the OS as a parameter, so a test on Linux checks both answers.
 * **The length alone does not let a step through.** A file system that holds longer names finds the link, and it is refused as before.
@@ -579,6 +629,8 @@ The LLVM backend's degenerate case is -1 too. Made 0, it would land on the unsaf
 | :-- | :-- |
 | `is_link` | true |
 | `is_dir` / `exists` | false |
+
+**A path that names no file is not one it cannot tell.** An empty path, one std refuses, one the runtime cannot convert and one through a step too long all give false.
 
 **Each answer is the one that makes the caller hold back.** The predicate asks "is it a link", but the caller needs "can it be followed". True from `is_link` means "do not follow it". So `stays_under` does not leave the root, and a check's clean-up does not remove beyond its workspace. False from `is_dir` and `exists` means "nothing usable is there", so the caller does not go into a path it could not see. Do not copy one function's choice into the other.
 

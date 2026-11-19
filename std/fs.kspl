@@ -54,8 +54,10 @@ pub enum Fs_error //< why a filesystem operation failed
     //< `std/io.kspl`). Only the predicates (`exists` / `is_dir`) do not fail, so they return
     //< `Bool`. Splitting `operation_failed` further would need errno passed up from the C code
     //< (ksplc/gen/runtime/hosted_fs.c). Do not split into variants what the code cannot tell apart.
+    //< **A name too long fails as the OS's refusal** ("A path that reaches no file fails as a
+    //< refusal" in `std/docs/DESIGN-system.md`).
     not_found //< the named path does not exist, or could not be opened
-    invalid_path //< a path the OS cannot take, such as one containing a NUL
+    invalid_path //< a path std refuses before the OS sees it: empty, too long or with a NUL
     operation_failed //< the OS refused; it cannot tell whether it exists, permission, or no parent
     too_deep //< a walk reached the depth limit (see `MAX_WALK_DEPTH`)
     held_elsewhere //< another holder has the lock (only `File_lock.try_take`, which does not wait)
@@ -101,7 +103,11 @@ priv fn count_lookup() //< counts one lookup (`lookups`)
 priv fn check_path(path: U8[]): Void!Fs_error //< refuses what the OS cannot take as a path
     //< It checks only the length and an inner NUL, which C reads as the end (each operation checks
     //< whether the path exists). The runtime refuses both as well; this names the cause.
-    if path.len > MAX_PATH_LEN || path.contains_nul()
+    //< **An empty path is refused here too**, so every function answers it alike on every OS. The
+    //< OSes do not: POSIX finds nothing there, while Windows cannot resolve it at all.
+    //< Caution: **Do not call this where an empty path means a folder**: `absolute` reads it as
+    //< the working directory, `write_tree` as its `dir` and `join_under` as the root.
+    if path.len == 0 || path.len > MAX_PATH_LEN || path.contains_nul()
         throw .invalid_path
 
 pub fn stat(path: U8[]): File_info!Fs_error //< what the OS reports about a path, following links
@@ -185,12 +191,33 @@ pub fn is_dir(path: U8[]): Bool //< whether it is a directory; a link to one cou
 
 pub fn is_link(path: U8[]): Bool //< whether it is a link, without following it
     //< **`is_dir` cannot tell**: it follows the link. A tree walk must **first decide whether it
-    //< can follow the link**. A path that does not exist gives false (the functions that create
-    //< paths call this).
+    //< can follow the link**. **A path that names no file gives false**: one that does not exist
+    //< (the functions that create paths call this), an empty one, one std refuses, one Windows
+    //< cannot convert, and one with a step too long to stand where nothing stands. **A path it
+    //< cannot look up for another reason gives true** ("A link test answers true when it cannot
+    //< tell" in `std/docs/DESIGN-system.md`).
     check_path(path) catch
-        return true
+        return false
     count_lookup()
-    return kspl_is_link(path.ptr, path.len) != 0
+    switch kspl_is_link(path.ptr, path.len)
+    case 0
+        return false
+    case 1
+        return true
+    default
+        // **A step longer than the OS allows names nothing, nor does anything below it.** The OS
+        // cannot look it up, so the runtime cannot tell, yet no file can stand there. Where
+        // something does stand (a file system with longer names), the runtime finds the link.
+        return !(has_step_too_long(path, sys.is_windows()) && !exists(path))
+
+priv fn has_step_too_long(path: U8[], windows: Bool): Bool //< whether a step is too long to stand
+    $start: = sys.root_len_on(path, windows)
+    for start < path.len
+        end: = sys.segment_end(path, start)
+        if name_too_long_on(path.sub(start, end - start), windows)
+            return true
+        start = end + 1
+    return false
 
 priv const MAX_NAME_BYTES: Sz = 765 //< the longest name in UTF-8: Windows's 255 UTF-16 units
 
@@ -398,7 +425,7 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
 
 priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     //< Whether any segment along `root/rel` is a link
-    //< A segment it cannot check counts as a link, save one too long to stand (`name_too_long_on`).
+    //< A segment it cannot check counts as a link, save one too long to stand (`is_link`).
     //< **The root itself is not checked**: a root that is a link is normal (macOS's `/tmp`).
     //< Caution: **Check every segment.** Checking only the last lets a link in the middle through.
     //< **Check the prefixes of the path `join` gives, the path the OS opens**, not segments joined
@@ -415,18 +442,13 @@ priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
         seg: = right.sub(start, end - start)
         start = end + 1
         prefix: = whole.sub(0, base + end)
-        if seg.len == 0 || !is_link(prefix)
-            continue
-        // **A step longer than the OS allows names nothing, nor does anything below it.** The OS
-        // cannot look it up, so `is_link` cannot tell, yet no file can stand there to serve. Where
-        // something does stand (a file system with longer names), the link check holds.
-        if name_too_long_on(seg, sys.is_windows()) && !exists(prefix)
-            return false
-        return true
+        if seg.len > 0 && is_link(prefix)
+            return true
     return false
 
 priv const MAX_NAME_UNITS: Sz = 255 //< the longest name the common file systems hold
-    //< In bytes on Linux and macOS (`NAME_MAX`), in UTF-16 units on Windows (NTFS, exFAT).
+    //< In bytes on Linux and macOS (`NAME_MAX`), in UTF-16 units on Windows (NTFS, exFAT). A
+    //< longer name fails as the OS refuses it, which `Fs_error` describes.
 
 fn name_too_long_on(name: U8[], windows: Bool): Bool //<
     //< Whether one name is longer than the file system holds, on Windows or on POSIX
@@ -581,7 +603,8 @@ pub fn mkdir_all(path: U8[]): Void!Fs_error //< creates every missing level (`mk
     //< throws** `mkdir_failed` with the segment it could not create.
     //< Caution: **`\` separates on every OS**: on POSIX a path holding one fails, `invalid_path`.
     //< Split there, `a\b` would make a folder `a` that the OS never opens as part of `a\b`.
-    if path.len == 0 || has_posix_backslash(path)
+    check_path(path)!
+    if has_posix_backslash(path)
         throw .invalid_path
     // The root (`sys.root_len`) is assumed to exist: `mkdir("D:")` always fails on Windows.
     $from: = sys.root_len(path)
@@ -855,6 +878,8 @@ pub fn copy_file( //< copies one file's contents and its permission bits to a ne
     from_path: U8[], //< the file to copy
     to_path: U8[], //< the new file; its folder must exist
 ): Void!Fs_error //< `not_found` where the source cannot be opened
+    //< **A source that reaches no file gives `not_found` on every OS**, one Windows cannot convert
+    //< included. A destination the OS refuses gives `operation_failed`.
     check_path(from_path)!
     check_path(to_path)!
     switch kspl_copy_file(from_path.ptr, from_path.len, to_path.ptr, to_path.len)

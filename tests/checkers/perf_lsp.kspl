@@ -1,0 +1,347 @@
+//< Plays a fixed editor session to the language server's worker, so `make perf-log` can count it
+//< Usage: `ksplc run tests/checkers/perf_lsp.kspl <work_dir> <program> [<word>...]`. The words
+//< start ksplc through Cachegrind, the last being ksplc; this adds `lsp-worker`. It reads a clock
+//< only to give up on a worker that hangs. **Every answer is checked**: a worker that answered
+//< nothing would be cheap and pass.
+//< **The worker alone is counted**, started directly. It holds every analysis and answer; the
+//< supervisor only relays bytes, and kills its worker once `shutdown` is answered, so under
+//< Cachegrind the worker's count would be lost at random.
+//< Caution: **A change here changes the count.** Take the baseline again in the same commit
+//< ("note 16" in `docs/SPEC-gates.md`).
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { is_missing }
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" + { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+
+// **The same messages go in the same order on every run**, each after the last one's end: the
+// worker ends each message with a completion marker, and the next goes only once it came. So no
+// edit is merged with another, and the work never depends on timing.
+priv const UNITS: Sz = 12 //< how many groups of declarations each document holds
+    //< About 30 lines each, so a document is about 400 lines: the size of a mid-sized file of the
+    //< tree. Most of each analysis is the std modules they import, so the count follows how many
+    //< analyses the session asks for (ten) more than the documents' size.
+
+priv const RELS: U8[][3] = ::{ "geo.kspl", "stats.kspl", "app.kspl" } //<
+    //< The documents, in the order they are opened: each imports the ones before it
+priv const EDITS: Sz = 3 //< how many times `app.kspl` is changed, with a hover after each
+priv const LAST: Sz = UNITS - 1 //< the group the hovers and jumps ask about
+
+priv const ANSWER_WAIT_MS: I32 = 600000 //< the cap on waiting for one message's end
+    //< Cachegrind runs a program tens of times slower; the cap only stops a worker that hangs.
+priv const EXIT_WAIT_US: I64 = 600000000I64 //< the cap on waiting for the worker to end
+
+priv const DONE_MARK: U8[] = "\0__KSPL_WORKER_DONE__\0" //<
+    //< what ends the worker's answer to one message
+    //< Caution: **The canonical source is `WORKER_DONE_TAG` in `ksplc/lsp/msg.kspl`**, written
+    //< between two NULs; change it and change this. Read wrong, the first wait runs to its cap.
+priv const ALIVE_MARK: U8[] = "\0__KSPL_WORKER_ALIVE__\0" //< the worker's sign of life, dropped
+    //< It comes once a second of a long analysis, so how many come depends on time. Each is a few
+    //< hundred instructions against hundreds of millions.
+
+// ==========================================
+// The documents. **Generated, not read from the tree**: a tree file edited for another reason would
+// move the count. Only the std modules they import are read from the disk.
+// ==========================================
+
+priv fn geo_text(arena: Arena$@): U8[] //< points and boxes, with their methods
+    b: = arena.text().s("//< Points and boxes\nimport \"std/ds\" { List }\n\n")
+    for k in Range.asc(UNITS)
+        b.s("struct Point\{k\} //< a point in the plane\n    x: I64\n    y: I64\n\n")
+            .s("impl Point\{k\}\n")
+            .s("    fn plus(r: Self@, other: Point\{k\}): Point\{k\} //< the sum of two points\n")
+            .s("        return Point\{k\}::{ .x = r.x + other.x, .y = r.y + other.y }\n\n")
+            .s("    fn dot(r: Self@, other: Point\{k\}): I64 //< the dot product\n")
+            .s("        return r.x * other.x + r.y * other.y\n\n")
+            .s("fn area\{k\}(low: Point\{k\}, high: Point\{k\}): I64 //< the area of the box\n")
+            .s("    width: = high.x - low.x\n    height: = high.y - low.y\n")
+            .s("    if width < 0I64 || height < 0I64\n        return 0I64\n    return width * \
+                height\n\n")
+            .s("fn spread\{k\}(items: List<|Point\{k\}|>@): I64 //< the sum of each point's \
+                square\n").s("    $total: I64 = 0\n    for i in Range.asc(items.len)\n")
+            .s("        p: = items.get(i)\n        total += p.dot(p)\n    return total\n\n")
+    return b.take()
+
+priv fn stats_text(arena: Arena$@): U8[] //< sums over lists of points, using `geo`
+    b: = arena.text().s("//< Sums over points\nimport \"geo\"\nimport \"std/ds\" { List }\n")
+        .s("import \"std/mem\" { Arena }\n\n")
+    for k in Range.asc(UNITS)
+        b.s("struct Tally\{k\} //< what a walk over the points found\n")
+            .s("    count: Sz\n    area: I64\n    best: I64\n\n")
+            .s("fn total\{k\}(items: List<|geo.Point\{k\}|>@): Tally\{k\} //< walks the points \
+                once\n").s("    $t: = Tally\{k\}::{ .count = 0, .area = 0I64, .best = 0I64 }\n")
+            .s("    for i in Range.asc(items.len)\n        p: = items.get(i)\n")
+            .s("        a: = geo.area\{k\}(geo.Point\{k\}::{ .x = 0I64, .y = 0I64 }, p)\n")
+            .s("        t.count += 1\n        t.area += a\n        if a > t.best\n")
+            .s("            t.best = a\n    return t\n\n")
+            .s("fn grid\{k\}(count: Sz, arena: Arena$@): List<|geo.Point\{k\}|> //< points on a \
+                line\n")
+            .s("    $out: = List<|geo.Point\{k\}|>(arena)\n    for i in Range.asc(count)\n")
+            .s("        out.push(geo.Point\{k\}::{ .x = i, .y = i * 2 })\n").s("    return out\n\n")
+    return b.take()
+
+priv fn app_text(edit: Sz, arena: Arena$@): U8[] //<
+    //< the program using both; `edit` changes its sizes
+    b: = arena.text().s("//< Uses the sums\nimport \"geo\"\nimport \"stats\"\nimport \"std/io\"\n")
+        .s("import \"std/mem\" { Arena }\n\n")
+    for k in Range.asc(UNITS)
+        b.s("fn report\{k\}(arena: Arena$@): I64 //< the sums over one grid\n")
+            .s("    pts: = stats.grid\{k\}(\{k + edit + 3\}, arena)\n")
+            .s("    t: = stats.total\{k\}(pts@)\n").s("    io.out().s(\"\{k\} done\\n\")\n")
+            .s("    return t.best + geo.spread\{k\}(pts@)\n\n")
+    b.s("fn main(): I32\n    arena: = Arena(64 * 1024)\n    $sum: I64 = 0\n")
+    for k in Range.asc(UNITS)
+        b.s("    sum += report\{k\}(arena)\n")
+    return b.s("    return 0 if sum > 0I64 else 1\n").take()
+
+// ==========================================
+// Talking to the worker: one message, then everything up to its completion marker
+// ==========================================
+
+struct Worker //< the worker under Cachegrind, what it sent past the last marker, and the faults
+    child: subproc.Piped_child
+    acc: Str_builder
+    next_id: I32
+    top: U8[]
+    faults: List<|U8[]|>
+
+impl Worker
+    priv fn uri(r: Self@, rel: U8[], arena: Arena$@): U8[]
+        return lsp_client.uri_of(r.top, rel, arena)
+
+    priv fn send(r: Self$@, method: U8[], params: json.Value, id: I32, arena: Arena$@):
+        json.Value[] //<
+            //< Sends one message and returns every message the worker answered it with
+            //< Empty where the worker did not end its answer; the fault then says why.
+        defer $frame: = Str_builder()
+        jsonrpc.frame_into(frame@, jsonrpc.encode(method, params, id, arena))
+        r.child.write(frame.slice(), ANSWER_WAIT_MS) catch
+            r
+                .fault(arena.text().s(method).s(": the worker took no message").take())
+            return json.Value[]::{ .ptr = null, .len = 0 }
+        buf: = U8$[]::{ .ptr = U8$@::arena.alloc(64 * 1024), .len = 64 * 1024 }
+        $at: = r.acc.slice().find_str(DONE_MARK)
+        for at.is_none()
+            got: = r.child.read(buf, ANSWER_WAIT_MS) catch
+                r
+                    .fault(arena.text().s(method).s(": the worker did not end its answer").take())
+                return json.Value[]::{ .ptr = null, .len = 0 }
+            r.acc.s(buf.sub(0, got))
+            at = r.acc.slice().find_str(DONE_MARK)
+        end: = at.unwrap_or(0)
+        defer $body: = Str_builder()
+        body.s(r.acc.slice().sub(0, end).replace(ALIVE_MARK, "", arena))
+        rest: = arena.dup_str(r.acc.slice().sub_from(end + DONE_MARK.len))
+        r.acc.clear()
+        r.acc.s(rest)
+        $out: = List<|json.Value|>(arena)
+        for
+            got: = jsonrpc.take_frame(body@, jsonrpc.MAX_BODY_BYTES, arena) catch
+                r
+                    .fault(arena.text().s(method).s(": a frame cannot be read").take())
+                break
+            text: = got.unwrap_or("")
+            if text.len == 0
+                break
+            msg: = json.parse(text, arena) catch
+                r
+                    .fault(arena.text().s(method).s(": an answer is not JSON").take())
+                continue
+            out.push(msg.val)
+        return out.slice()
+
+    priv fn ask(r: Self$@, method: U8[], params: json.Value, arena: Arena$@): json.Value //<
+        //< A request's result; `null` where none came
+        r.next_id += 1
+        id: = r.next_id
+        for msg in r.send(method, params, id, arena)
+            if msg.get("id").as_int().unwrap_or(-1) == id
+                return msg.get("result")
+        r.fault(arena.text().s(method).s(": no answer to id \{id\}").take())
+        return .null_val
+
+    priv fn tell(r: Self$@, method: U8[], params: json.Value, rel: U8[], arena: Arena$@) //<
+        //< A didOpen or didChange of `rel`, whose diagnostics must come back empty
+        uri: = r.uri(rel, arena)
+        $seen: = false
+        for msg in r.send(method, params, -1, arena)
+            if !msg.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
+                continue
+            p: = msg.get("params")
+            if !p.get("uri").as_str().unwrap_or("").equals(uri)
+                continue
+            seen = true
+            if !is_missing(p.get("diagnostics").get_at(0))
+                r
+                    .fault(arena.text().s(method).s(" of ").s(rel).s(": ")
+                    .s(lsp_client.dump(p.get("diagnostics"), arena)).take())
+        if !seen
+            r
+                .fault(arena.text().s(method).s(" of ").s(rel).s(": no diagnostics came").take())
+
+    priv fn hover(r: Self$@, rel: U8[], src: U8[], spot: Spot, arena: Arena$@) //<
+        //< A hover at `spot`, whose text must hold `spot.want`
+        got: = r.ask("textDocument/hover", r.at(rel, src, spot, arena), arena)
+        text: = got.get("contents").get("value").as_str().unwrap_or("")
+        if text.find_str(spot.want).is_none()
+            r
+                .fault(arena.text().s("a hover on `").s(spot.name).s("` in ").s(rel)
+                .s(" did not name `").s(spot.want).s("`: '").s(text).s("'").take())
+
+    priv fn jump(r: Self$@, rel: U8[], src: U8[], spot: Spot, to_rel: U8[], to_src: U8[],
+        to_line: U8[], arena: Arena$@) //<
+            //< A go-to-definition at `spot`, which must land in `to_rel` on the line starting `to_line`
+        got: = r.ask("textDocument/definition", r.at(rel, src, spot, arena), arena)
+        landed: = got.get("uri").as_str().unwrap_or("")
+        line: = got.get("range").get("start").get("line").as_int().unwrap_or(-1)
+        want: = line_of(to_src, to_line)
+        if !landed.equals(r.uri(to_rel, arena)) || want < 0 || line != want
+            r
+                .fault(arena.text().s("a jump from `").s(spot.name).s("` in ").s(rel)
+                .s(" landed at ").s(lsp_client.dump(got, arena)).take())
+
+    priv fn fault(r: Self$@, what: U8[])
+        r.faults.push(what)
+
+    priv fn at(r: Self$@, rel: U8[], src: U8[], spot: Spot, arena: Arena$@): json.Value //<
+        //< The params pointing at `spot` in `rel`, on the second letter of its `name`
+        if at: = start_of(src, spot.line)
+            col: = src.sub_from(at).find_str(spot.name).unwrap_or(0) + 1
+            line: = src.sub(0, at).count_str("\n")
+            return lsp_client.at_pos(r.uri(rel, arena), line, col, arena)
+        r
+            .fault(arena.text().s(rel).s(" has no line starting '").s(spot.line).s("'").take())
+        return lsp_client.at_pos(r.uri(rel, arena), 0, 0, arena)
+
+struct Spot //< a place in a document, found by its text
+    line: U8[] //< the start of its line, first found
+    name: U8[] //< what stands there, first found in that line
+    want: U8[] //< a piece the hover's answer must hold
+
+priv fn spot(line: U8[], name: U8[], want: U8[]): Spot //<
+    //< a place on `name`, in the line starting `line`
+    return Spot::{ .line = line, .name = name, .want = want }
+
+priv fn start_of(src: U8[], start: U8[]): Sz? //< where the first line starting `start` starts
+    $at: Sz = 0
+    for at < src.len
+        if src.sub_from(at).starts_with(start)
+            return .some(at)
+        nl: = src.sub_from(at).find_str("\n")
+        if nl.is_none()
+            break
+        at += nl.unwrap_or(0) + 1
+    return .none
+
+priv fn line_of(src: U8[], start: U8[]): I32 //<
+    //< the first line starting `start`, from 0; -1 for none
+    if at: = start_of(src, start)
+        return I32::src.sub(0, at).count_str("\n")
+    return -1
+
+priv fn play(worker: Worker$@, arena: Arena$@) //< the session, start to `shutdown`
+    $b: = Json_builder(arena)
+    init: = worker.ask("initialize", b.obj().build(), arena)
+    if is_missing(init.get("capabilities").get("hoverProvider"))
+        worker.fault("initialize: no hover among the capabilities")
+    geo: = geo_text(arena)
+    stats: = stats_text(arena)
+    $app: = app_text(0, arena)
+    texts: = U8[][]::{ geo, stats, app }
+    for i in Range.asc(RELS.len)
+        worker.tell("textDocument/didOpen",
+            lsp_client.did_open(worker.uri(RELS[i], arena), texts[i], arena), RELS[i], arena)
+    k: = arena.text().s("\{LAST\}").take()
+    report_line: = arena.text().s("fn report").s(k).take()
+    total_call: = arena.text().s("    t: = stats.total").s(k).take()
+    total_name: = arena.text().s("total").s(k).take()
+    spread_call: = arena.text().s("    return t.best + geo.spread").s(k).take()
+    spread_name: = arena.text().s("spread").s(k).take()
+    area_call: = arena.text().s("        a: = geo.area").s(k).take()
+    area_name: = arena.text().s("area").s(k).take()
+    // Each jump and hover names another document than the last, so the worker analyses it again.
+    worker.hover("app.kspl", app, spot(total_call, total_name, "Tally"), arena)
+    worker.jump("app.kspl", app, spot(total_call, total_name, ""), "stats.kspl", stats,
+        arena.text().s("fn ").s(total_name).take(), arena)
+    worker.hover("stats.kspl", stats, spot(area_call, area_name, "I64"), arena)
+    worker.jump("stats.kspl", stats, spot(area_call, area_name, ""), "geo.kspl", geo,
+        arena.text().s("fn ").s(area_name).take(), arena)
+    worker.hover("app.kspl", app, spot(spread_call, spread_name, "I64"), arena)
+    worker.hover("geo.kspl", geo, spot("        return r.x * other.x", "other", "Point"), arena)
+    worker.hover("app.kspl", app, spot(report_line, report_line.sub_from(3), "Arena"), arena)
+    uri: = worker.uri("app.kspl", arena)
+    for e in Range.asc(EDITS)
+        app = app_text(e + 1, arena)
+        worker.tell("textDocument/didChange", changed(uri, app, e + 2, arena), "app.kspl", arena)
+        worker.hover("app.kspl", app, spot(total_call, total_name, "Tally"), arena)
+    if !is_missing(worker.ask("shutdown", .null_val, arena))
+        worker.fault("shutdown: the result is not null")
+    // **No `exit` follows**: the worker ends at `shutdown`. `exit` is the supervisor's to read.
+
+priv fn changed(uri: U8[], text: U8[], version: Sz, arena: Arena$@): json.Value //<
+    //< The params of a didChange carrying the whole text
+    $b: = Json_builder(arena)
+    td: = b.obj().set("uri", b.str_val(uri)).set("version", b.int_val(version)).build()
+    change: = b.obj().set("text", b.str_val(text)).build()
+    return b.obj().set("textDocument", td)
+        .set("contentChanges", b.arr().push(change).build()).build()
+
+fn main(): I32
+    defer arena: = Arena(64 * 1024 * 1024)
+    argv: = sys.args()
+    if argv.len < 3
+        io.err()
+            .s("usage: ksplc run tests/checkers/perf_lsp.kspl <work_dir> <program> [<word>...]\n")
+        return 2
+    dir: = fs.absolute(argv.get(1), arena) catch
+        return failed("the work folder cannot be named", argv.get(1))
+    top: = fs.join(dir, "ws", arena)
+    cache: = fs.join(dir, "cache", arena)
+    fs.mkdir_all(top) catch
+        return failed("the workspace cannot be made", top)
+    // **Std is named in the environment**: the worker rejects `--std-dir=`, and it runs in the
+    // workspace, so the path must be absolute. Make runs this from the root.
+    std_dir: = fs.absolute("std", arena) catch
+        return failed("std cannot be named", "std")
+    sys.set_env("KSPLC_STD_DIR", std_dir) catch
+        return failed("KSPLC_STD_DIR cannot be set", std_dir)
+    sys.set_env("KSPLC_CACHE_DIR", cache) catch
+        return failed("KSPLC_CACHE_DIR cannot be set", cache)
+    $command: = List<|U8[]|>(arena)
+    for i in Range.asc(argv.len - 2)
+        command.push(arena.dup_str(argv.get(i + 2)))
+    command.push("lsp-worker")
+    child: = subproc.spawn_piped_shared_err(command.slice(), "") catch
+        return failed("the worker did not start", command.get(0))
+    $w: = Worker::{ .child = child, .acc = Str_builder(), .next_id = 0, .top = top,
+        .faults = List<|U8[]|>(arena) }
+    defer w.acc.free()
+    play(w@, arena)
+    w.child.close_stdin()
+    if w.faults.len > 0
+        w.child.kill()
+        return failed("an answer was wrong", lsp_client.join(w.faults@, arena))
+    deadline: = sys.mono_us() + EXIT_WAIT_US
+    for sys.mono_us() < deadline
+        if code: = w.child.exit_code()
+            if code != 0
+                return failed("the worker did not exit cleanly",
+                    arena.text().s("\{code\}").take())
+            io.out().s("[perf_lsp] \{RELS.len\} documents, \{EDITS\} edits: every answer right; ")
+                .s("the worker stopped\n")
+            return 0
+        sys.sleep_ms(10)
+    w.child.kill()
+    return failed("the worker did not end after `exit`", "")
+
+priv fn failed(what: U8[], why: U8[]): I32 //< says why the run failed; the exit code
+    io.err().s("[perf_lsp] FAIL: ").s(what).s("\n").s(why).s("\n")
+    return 1

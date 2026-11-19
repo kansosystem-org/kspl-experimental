@@ -16,6 +16,7 @@
 | Save | File ▸ Save (`Ctrl`+`S`). A document with no file yet asks where it goes |
 | Save under another name | File ▸ Save as… (`Ctrl`+`Shift`+`S`) |
 | Print, or save a PDF | File ▸ Print or save as PDF… (`Ctrl`+`P`) |
+| Paste the document into another program, with its headings, lists and tables | File ▸ Copy as Markdown, then paste. What each part becomes is "Copying as Markdown" in [`SPEC-file-format.md`](SPEC-file-format.md#copying-as-markdown) |
 | Set the paper, the header and the footer | File ▸ Page setup… ("Page setup, numbers and references" below) |
 
 **Unsaved edits are kept as a draft in this browser.** The menu bar then reads "Not saved. A draft is held in this browser."
@@ -25,7 +26,9 @@
 
 **When another program changes the file, the page says so and writes nothing.** Its notice offers to replace the file with your version, or to load the file's version and keep yours as a draft.
 
-**Opened from the file `ksmd.html` alone, without the local server, the page opens and saves no file.** Its File menu then holds Page setup and Print alone.
+**Opened from the file `ksmd.html` alone, without the local server, the page opens and saves no file.** Its File menu then holds Page setup, Print and Copy as Markdown alone.
+
+**Copy as Markdown copies the whole document as it stands, also in Read-only.** A table gives the values its cells show. The status bar then names what Markdown could not carry: the charts, diagrams and included files, and the shapes drawn on images.
 
 ## The window
 
@@ -467,6 +470,7 @@ A function returns `F64`, `I64`, `Bool`, `U8[]` or `Value`. It may throw a `Calc
 | Save as… | `Ctrl`+`Shift`+`S` |
 | Page setup… |  |
 | Print or save as PDF… | `Ctrl`+`P` |
+| Copy as Markdown |  |
 
 ### Edit
 

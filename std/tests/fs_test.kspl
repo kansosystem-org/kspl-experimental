@@ -540,6 +540,7 @@ fn test_fs_long_path()
     // A predicate cannot fail, so it returns false (not the answer for a truncated, different
     // path).
     assert(!fs.exists(long_path), "an over-long path is not found by exists either")
+    assert(!fs.is_link(long_path), "an over-long path names no file, so it is not a link")
     // A path exactly at the bound is accepted (the two sides together pin an off-by-one).
     at_limit: = long_path.sub(0, fs.MAX_PATH_LEN)
     $at_limit_invalid: = false
@@ -570,11 +571,133 @@ fn test_fs_inner_nul()
         default {}
     assert(saw_invalid, "an mkdir on a path holding a NUL is refused with invalid_path")
     assert(!fs.exists(dir), "the part before the NUL is not created")
+    assert(!fs.is_link(b.slice()), "a path holding a NUL names no file, so it is not a link")
     // The runtime refuses it too, so a call std/fs does not check is not cut either.
     defer $sh: = Str_builder()
     sh.s("/bin/sh").c(0U8).s("x")
     assert(!fs.is_executable(sh.slice()), "the runtime refuses a path holding a NUL")
     verdict.pass("a path holding a NUL is refused, both by std/fs and by the runtime.")
+
+priv fn named(why: fs.Fs_error): U8[] //< the variant's name, which a test compares
+    switch why
+    case .not_found
+        return "not_found"
+    case .invalid_path
+        return "invalid_path"
+    case .operation_failed
+        return "operation_failed"
+    case .mkdir_failed
+        return "mkdir_failed"
+    default
+        return "another"
+
+priv fn io_named(why: io.Io_error): U8[] //< the variant's name, which a test compares
+    switch why
+    case .file_not_found
+        return "file_not_found"
+    case .write_failed
+        return "write_failed"
+    case .invalid_arg
+        return "invalid_arg"
+    default
+        return "another"
+
+priv fn open_refusal(path: U8[], mode: U8[]): U8[] //< how `io.open` fails, by the variant's name
+    $file: = io.open(path, mode) catch e
+        return io_named(e)
+    file.free()
+    return "no failure"
+
+fn test_fs_empty_path(arena: Arena$@) //<
+    //< An empty path names no file, and std refuses it before the OS sees it
+    //< The answers are "An empty path is refused before the OS sees it" in
+    //< `std/docs/DESIGN-system.md`: `invalid_path`, false, `missing` or `invalid_arg`, the same on
+    //< every OS.
+    verdict.start("[Fs] an empty path...")
+    $got: U8[] = ""
+    got = "no failure"
+    fs.stat("") catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "stat must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.mtime_ns("") catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "mtime_ns must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.long_name("", arena) catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "long_name must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.read_dir("", arena) catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "read_dir must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.walk_files("", fs.skip_none, arena) catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "walk_files must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.copy_tree("", "out/tmp/kspl_test_empty_path_to", fs.skip_none, arena) catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "copy_tree must refuse an empty source as invalid_path")
+    assert(!fs.exists("") && !fs.is_dir("") && !fs.is_executable("") && !fs.can_run(""),
+        "nothing stands at an empty path")
+    assert(!fs.is_link(""), "an empty path names no file, so it is not a link on any OS")
+    assert(fs.dir_trust("") == .missing && fs.secret_trust("") == .missing,
+        "an empty path is a missing folder and a missing file")
+    got = "no failure"
+    fs.mkdir("") catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "mkdir must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.remove_path("") catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "remove_path must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.rename_path("", "out/tmp/kspl_test_empty_path_to") catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "rename_path must refuse an empty source as invalid_path")
+    got = "no failure"
+    fs.replace_file("", "x", .kept) catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "replace_file must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.copy_file("", "out/tmp/kspl_test_empty_path_to") catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "copy_file must refuse an empty source as invalid_path")
+    got = "no failure"
+    fs.File_lock.take("") catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "a lock must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.mkdir_all("") catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "mkdir_all must refuse an empty path as invalid_path")
+    got = "no failure"
+    fs.mkdir_unique("", "x", arena) catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "mkdir_unique must refuse an empty base as invalid_path")
+    got = "no failure"
+    fs.write_unique("", "x", "", "x", arena) catch e
+        got = named(e)
+    assert(got.equals("invalid_path"), "write_unique must refuse an empty base as invalid_path")
+    got = "no failure"
+    io.read_file("", arena) catch e
+        got = io_named(e)
+    assert(got.equals("invalid_arg"), "read_file must refuse an empty path as invalid_arg")
+    got = "no failure"
+    io.write_file("", "x") catch e
+        got = io_named(e)
+    assert(got.equals("invalid_arg"), "write_file must refuse an empty path as invalid_arg")
+    for mode in U8[][2]::{ "r", "w" }
+        assert(open_refusal("", mode).equals("invalid_arg"),
+            "open must refuse an empty path as invalid_arg, to read and to write")
+    // The exceptions read an empty path as a folder: the working one, or the root.
+    here: = fs.absolute("", arena) catch "failed"
+    assert(sys.is_absolute(here), "absolute reads an empty path as the working directory")
+    under: = fs.join_under("out/tmp", "", .allowed, arena) catch "refused"
+    assert(under.equals("out/tmp"), "join_under reads an empty rel as the root itself")
+    assert(!fs.exists("out/tmp/kspl_test_empty_path_to"), "nothing is made from an empty path")
+    verdict.pass("An empty path was refused up front, the same on every OS, and made nothing.")
 
 priv const DEEP_ROOT: U8[] = "out/tmp/kspl_test_debug_deep"
 

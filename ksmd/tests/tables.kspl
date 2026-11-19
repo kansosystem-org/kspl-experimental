@@ -120,6 +120,10 @@ priv fn cells()
     set(ed@, 0, 0, 0, "+.5")
     saves("a '+' in front stays text, as for any typed number", ed@, arena,
         "%ksmd 2\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"+.5\" | =A1*3 |\n:::\n")
+    // A point after an exponent is no number's: only digits stand before a point left bare.
+    set(ed@, 0, 0, 0, "1e5.")
+    saves("a point after an exponent stays text", ed@, arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"1e5.\" | =A1*3 |\n:::\n")
     // Text typed in quotes follows a formula's rule: `\` is itself and `""` is a quote. The file
     // keeps JSON's escapes for a text cell.
     set(ed@, 0, 0, 0, "\"C:\\new\"")
@@ -705,11 +709,11 @@ priv fn pasting()
     ed.undo()
     saves("one undo takes the whole paste away", ed@, arena, before)
     $spaced: = List<|List<|U8[]|>|>(arena)
-    spaced.push(row3("  Revenue", " 1,234.5 ", " .5 ", arena))
+    spaced.push(row3("  Revenue", " 1,234. ", " .5 ", arena))
     ed.paste_cells(0, 0, 0, spaced@) catch e
         verdict.check("pasting spaced values", false, e.message())
-    saves("a pasted text keeps its spaces, and a number reads without them", ed@, arena,
-        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| \"  Revenue\" | 1234.5 | 0.5 \
+    saves("a pasted text keeps its spaces; 1,234. reads as typed 1234. does", ed@, arena,
+        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| \"  Revenue\" | 1234 | 0.5 \
             |\n:::\n")
     ed.undo()
     $dated: = List<|List<|U8[]|>|>(arena)

@@ -68,6 +68,10 @@ export function drafts({ tab, withTab, idle, said, noticed, choose, typeAtEnd, s
       const offered = (d) => d.js("Array.from(document.querySelectorAll('#notice button'))" +
         ".some((b) => !b.closest('[hidden]') && b.textContent.startsWith('Bring them back'))");
       const a = await tab(ctx, "?doc=live.ksmd");
+      // **The browser lets a closed tab's lock go after the close returns**, so the next tab waits
+      // until it has: opened at once, it found the lock still held on a slow Windows runner.
+      const heldLocks = "navigator.locks.query().then((q) => q.held.length)";
+      let before = 0;
       try {
         await typeAtEnd(a, 0, " Kept.");
         await held(a);
@@ -75,9 +79,15 @@ export function drafts({ tab, withTab, idle, said, noticed, choose, typeAtEnd, s
           check(!await offered(b), "a second tab does not offer the draft of a tab still open");
         });
         check((await state(a)).includes("draft"), "and the first tab still holds it", await state(a));
+        before = await a.js(heldLocks);
       } finally {
         await ctx.browser.closeTab(a.page);
       }
+      await withTab(ctx, "?doc=top.ksmd", async (w) => {
+        // `w` holds a lock of its own, in place of the closed tab's.
+        check(await w.until(`${heldLocks}.then((n) => n <= ${before})`),
+          "the closed tab's lock is let go", await w.js(heldLocks));
+      });
       await withTab(ctx, "?doc=live.ksmd", async (c) => {
         check(await offered(c), "once that tab closes, its draft is offered");
         await choose(c, "Discard them");

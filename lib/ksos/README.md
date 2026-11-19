@@ -159,6 +159,7 @@ Every RP2040 demo is a separate small firmware, so a fault can be narrowed down.
 | :-- | :-- |
 | `make ksos-rp2040-car-pilot` | The car receives a policy and disconnects. It then makes decisions locally. |
 | `make ksos-rp2040-car-ir` | driving it with a remote |
+| `make ksos-rp2040-car-check` | Every part of the car in one run, with a verdict for each. Put the car on a stand first |
 
 The images link different code: `board` and `net` use LED matrix I2C, RTC, ARP/ICMP, atomics and 64-bit shift helpers, which `car-pilot` lacks. Only `car-ir` uses `__aeabi_llsr` and `__lshrdi3`. The link gate checks each image's symbol dependencies.
 
@@ -210,6 +211,7 @@ This table is the canonical record of checks on the real car: a Freenove 4WD car
 | Ultrasound (`ksos/drivers/rp2040/hcsr04`) | ✅ (moving a hand closer reduced the measured distance; stage 5a) |
 | IR receiving (`ksos/drivers/rp2040/ir_nec`) | ✅ (a different command per button, repeats counted while held; stage 5b) |
 | Driving from the IR remote alone (`rp2040_car_ir_probe`) | **not confirmed** beyond reception and key assignments: wheel motion, face output, and each mode (stage 12) |
+| Checking the whole car in one run (`rp2040_car_check_probe`) | ✅ (17 pass with the LED matrix, and 17 with the ultrasonic; the verdicts survived the panic's restart; stage 13) |
 | I2C (`ksos/drivers/rp2040/i2c`) and the LED matrix (`ht16k33`) | ✅ (0x71 answered and a band moved; stage 5c) |
 | USB Ethernet (`rp2040/usb_cdc`'s CDC-NCM part) | ✅ (a network adapter beside the COM port, `alt=1 link=up`; stage 6a) |
 | Receiving a policy and deciding inside the car (`rp2040_car_pilot_probe`) | ✅ It received a policy, disconnected, and kept deciding after `kssrv` stopped. **One inference takes around 10 ms** (stage 7) |

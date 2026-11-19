@@ -2,22 +2,25 @@
 //< **Nothing here copies a rule**: each row's question and answer are read from the text, and run
 //< in this process through ksmd's reader, writer and calculator. A failure names the row's line,
 //< and says what the code gave against what the text says.
-//< The rows take nine forms: five table headings (`TABLE_FORMS`), three sentences after a `ksmd`
-//< block (`SAVES_SAYS`, `REFUSED_SAYS`, `READS_SAYS`), and `OPENED_HEAD`, which opens a workspace
-//< of file blocks (`FILE_LABEL`). A `ksmd` block that no sentence follows is an example.
+//< The rows take eleven forms: five table headings (`TABLE_FORMS`), four sentences after a
+//< `ksmd` block (`BLOCK_FORMS` and `REFUSED_SAYS`), and two over a workspace of file blocks
+//< (`FILE_LABEL`): `OPENED_HEAD`, which opens its files, and `CHECK_SAYS`, which checks one as
+//< `ksmd --check` does. A `ksmd` block that no sentence follows is an example.
 //< **The gate checks itself too**: a text with no rows, a form with none, or a malformed row fails
 //< the reading. The fixture's rows that must fail, and one row of each form judged again with its
 //< answer changed, must fail on their line: a gate that cannot fail stays green as things break.
 import "ksmd/base/source" { Source }
 import "ksmd/calc/calc"
-import "ksmd/calc/formula" { Positions, from_version_1, write_formula }
+import "ksmd/calc/formula" { from_version_1 }
 import "ksmd/calc/reason" { write_reason }
 import "ksmd/files/files" { resolve_text }
 import "ksmd/model/format" { Number_format, format_of, show, show_plain, shows_numbers }
-import "ksmd/model/model" { Block, Document, Table }
+import "ksmd/model/model" { Document }
+import "ksmd/syntax/markdown"
 import "ksmd/syntax/reader"
 import "ksmd/syntax/writer"
-import "ksmd/tests/claims_view" { Named, opened, shown }
+import "ksmd/tests/claims_outline" { outline }
+import "ksmd/tests/claims_view" { Named, checking, opened, shown }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -67,10 +70,12 @@ priv enum Form //< what a row asks, and how its answer is checked
     saves //< what the writer saves a `ksmd` block as
     refused //< where the reader refuses a `ksmd` block
     reads //< the outline of the model a `ksmd` block reads into
+    copies //< the Markdown a `ksmd` block copies as, its tables calculated on `TODAY`
     opened //< what the view of a workspace's file shows, and its problem
+    checked //< what `ksmd --check` prints of a workspace's file, and its exit code
 
-priv const FORMS: Form[9] = ::{ .shows, .reason, .format, .version_1, .path, .saves, .refused,
-    .reads, .opened } //< every form, in the order a missing one is named
+priv const FORMS: Form[11] = ::{ .shows, .reason, .format, .version_1, .path, .saves, .refused,
+    .reads, .copies, .opened, .checked } //< every form, in the order a missing one is named
 
 priv struct Table_form //< a table form's heading row, and the form of its rows
     head: U8[] //< as `heading_of` writes it: `| A | B |`
@@ -94,22 +99,37 @@ priv const OPENED_HEAD: U8[] = "| Opened | Shows | Problem at | The reason says 
     //< The heading of the table that opens files of the workspace above it
 priv const FILE_LABEL: U8[] = "ksmd " //< a fence's label, then a path: a file of the workspace
 priv const NO_PROBLEM: U8[] = "none" //< an `Opened` row's place where the file opens with none
+priv const CHECK_SAYS: U8[] = "`ksmd --check " //<
+    //< A line starting so is a check row's sentence, `CHECK_FORM`, and must be one
+priv const CODE_SAYS: U8[] = "` ends with code " //< between that sentence's path and its code
+priv const PRINTS_SAYS: U8[] = " and prints:" //< that sentence's end
+priv const CHECK_FORM: U8[] = "`ksmd --check <path>` ends with code N and prints:" //<
+    //< that sentence's form
 
 priv const REFUSED_WORD: U8[] = "refused" //< a `Written` row's answer for a path refused
-priv const SAVES_SAYS: U8[] = "It saves as:" //< after a block: the next `ksmd` block is its save
-priv const READS_SAYS: U8[] = "It reads as:" //< after a block: the next `text` block, its outline
+priv struct Block_form //< a sentence after a `ksmd` block, and the block that holds its answer
+    says: U8[]
+    form: Form
+    label: U8[] //< the label of the answer's fence
+
+priv const BLOCK_FORMS: Block_form[3] = ::{
+    Block_form::{ .says = "It saves as:", .form = .saves, .label = "ksmd" },
+    Block_form::{ .says = "It reads as:", .form = .reads, .label = "text" },
+    Block_form::{ .says = "It copies as Markdown:", .form = .copies, .label = "markdown" },
+} //< the sentences whose answer is the next block: the save, the outline, the Markdown
 priv const REFUSED_SAYS: U8[] = "It is refused at line " //< after a block: where it is refused
 priv const COLUMN_SAYS: U8[] = ", column " //< between that sentence's line and its column
 priv const REFUSED_FORM: U8[] = "It is refused at line L, column C." //< that sentence's form
-priv const SENTENCE_STARTS: U8[][3] = ::{ "It saves as", "It reads as", "It is refused" } //<
-    //< A line after a `ksmd` block starting so is meant as a row's sentence, and must be one
+priv const SENTENCE_STARTS: U8[][4] = ::{ "It saves as", "It reads as", "It copies as",
+    "It is refused" } //<
+        //< A line after a `ksmd` block starting so is meant as a row's sentence, and must be one
 
 priv struct Row //< one row of the specification, and the answer it names
     line: Sz //< its line, from 1: the table row's, or the line opening its first block
     form: Form
     given: U8[] //< the formula, entry, written path, or the first block's source
     want: U8[] //< the answer: the shown text, the reason's words, the path, the saved source
-    also: U8[] //< a format row's second answer, for -0.125
+    also: U8[] //< a format row's second answer, for -0.125; a check row's exit code
     at_line: Sz //< where a refused block is refused, from 1
     at_column: Sz
     says: U8[] //< an `Opened` row's words of its problem's message; empty where it has none
@@ -217,13 +237,17 @@ impl Form
         case .path
             return TABLE_FORMS[4].head
         case .saves
-            return SAVES_SAYS
+            return BLOCK_FORMS[0].says
         case .refused
             return REFUSED_FORM
         case .reads
-            return READS_SAYS
+            return BLOCK_FORMS[1].says
+        case .copies
+            return BLOCK_FORMS[2].says
         case .opened
             return OPENED_HEAD
+        case .checked
+            return CHECK_FORM
 
 priv fn row_name(reading: Reading@, row: Row@, arena: Arena$@): U8[] //<
     //< `<name>:<line>: ` and the row's question and answer, in short
@@ -245,8 +269,12 @@ priv fn row_name(reading: Reading@, row: Row@, arena: Arena$@): U8[] //<
         b.s("the ksmd block is refused at line \{row.at_line\}, column \{row.at_column\}")
     case .reads
         b.s("the ksmd block reads as the outline after it")
+    case .copies
+        b.s("the ksmd block copies as the Markdown after it")
     case .opened
         b.s("opening `").s(row.given).s("` shows ").s(row.want).s(", its problem at ").s(row.also)
+    case .checked
+        b.s("checking `").s(row.given).s("` ends with code ").s(row.also).s(" and prints its block")
     return b.take()
 
 // ==========================================
@@ -281,6 +309,9 @@ priv fn read_rows(name: U8[], text: U8[], arena: Arena$@): Reading //<
             continue
         if line.starts_with("|")
             i = table_rows(reading@, lines@, i, arena)
+            continue
+        if line.starts_with(CHECK_SAYS)
+            i = check_row(reading@, lines@, i, arena)
             continue
         i += 1
     if reading.rows.len == 0
@@ -339,9 +370,11 @@ priv fn block_row(reading: Reading$@, lines: List<|U8[]|>@, open: Sz, ticks: Sz,
         .at_column = 0, .says = "", .files = reading.files }
     at: = next_line(lines, close + 1)
     said: = lines.get(at).trim_spaces() if at < lines.len else ""
-    if said.equals(SAVES_SAYS) || said.equals(READS_SAYS)
-        row.form = .saves if said.equals(SAVES_SAYS) else .reads
-        label: = "ksmd" if row.form == .saves else "text"
+    for kind in BLOCK_FORMS
+        if !said.equals(kind.says)
+            continue
+        row.form = kind.form
+        label: = kind.label
         second: = next_line(lines, at + 1)
         if second == lines.len
             problem(reading, at,
@@ -370,8 +403,9 @@ priv fn block_row(reading: Reading$@, lines: List<|U8[]|>@, open: Sz, ticks: Sz,
     for start in SENTENCE_STARTS
         if said.starts_with(start)
             problem(reading, at,
-                arena.text().s("this is not one of the sentences a row takes: '").s(SAVES_SAYS)
-                .s("', '").s(READS_SAYS).s("' or '").s(REFUSED_FORM).c('\'').take(), arena)
+                arena.text().s("this is not one of the sentences a row takes: '")
+                .s(BLOCK_FORMS[0].says).s("', '").s(BLOCK_FORMS[1].says).s("', '")
+                .s(BLOCK_FORMS[2].says).s("' or '").s(REFUSED_FORM).c('\'').take(), arena)
             return at + 1
     return close + 1
 
@@ -394,6 +428,35 @@ priv fn file_block(reading: Reading$@, lines: List<|U8[]|>@, open: Sz, ticks: Sz
         return close + 1
     reading.files
         .push(Named::{ .path = path, .text = block_text(lines, open, close, arena) })
+    return close + 1
+
+priv fn check_row(reading: Reading$@, lines: List<|U8[]|>@, at: Sz, arena: Arena$@): Sz //<
+    //< Reads the check row whose sentence is at `at`, over the workspace above it; returns the
+    //< index of the line after its `text` block
+    said: = lines.get(at).trim_spaces()
+    rest: = said.sub_from(CHECK_SAYS.len)
+    path_end: = rest.find_str(CODE_SAYS).unwrap_or(0)
+    code: = rest.sub_from(path_end + CODE_SAYS.len)
+    if path_end == 0 || code.len != PRINTS_SAYS.len + 1 || !code[0].is_digit() ||
+        !code.sub_from(1).equals(PRINTS_SAYS)
+        problem(reading, at,
+            arena.text().s("this is not a check row's sentence: '").s(CHECK_FORM).c('\'').take(),
+            arena)
+        return at + 1
+    if reading.files.len == 0
+        problem(reading, at, "no file block stands above this sentence, under its heading", arena)
+        return at + 1
+    open: = next_line(lines, at + 1)
+    ticks: = fence_of(lines.get(open)).unwrap_or(0) if open < lines.len else 0
+    close: = fence_close(lines, open, ticks)
+    if ticks == 0 ||
+        !lines.get(open).sub_from(ticks).trim_spaces().equals("text") || close == lines.len
+        problem(reading, at, "no closed ```text block follows this", arena)
+        return at + 1
+    reading.rows
+        .push(Row::{ .line = at + 1, .form = .checked, .given = rest.sub(0, path_end),
+        .want = block_text(lines, open, close, arena), .also = code.sub(0, 1), .at_line = 0,
+        .at_column = 0, .says = "", .files = reading.files })
     return close + 1
 
 priv struct Place //< a line and a column, from 1
@@ -628,8 +691,23 @@ priv fn judged(row: Row@, arena: Arena$@): U8[] //<
             return why
         got: = outline(doc@, arena)
         return "" if got.equals(row.want) else gave_block(got, row.want, arena)
+    case .copies
+        doc: = read_block(row.given, arena) catch why
+            return why
+        values: = calc.calculate(doc@, TODAY, arena)
+        defer $out: = Str_builder()
+        _left: = markdown.write(doc@, values@, out@)
+        return ("" if out.slice().equals(row.want)
+            else gave_block(out.slice(), row.want, arena))
     case .opened
         return opening(row, arena)
+    case .checked
+        got: = checking(row.files, row.given, TODAY, arena)
+        code: = "0" if got.clean else "1"
+        if got.prints.equals(row.want) && code.equals(row.also)
+            return ""
+        return arena.text().s("the code ends with code ").s(code).s(" and prints:\n")
+            .s(got.prints).s("the text says code ").s(row.also).s(" and:\n").s(row.want).take()
 
 priv fn gave(got: U8[], want: U8[], arena: Arena$@): U8[] //< what the code gave, and the text said
     return arena.text().s("the code gives `").s(got).s("`; the text says `").s(want).s("`").take()
@@ -708,154 +786,6 @@ priv fn opening(row: Row@, arena: Arena$@): U8[] //<
         .s(row.says).take()
 
 // ==========================================
-// The outline of a model, for "It reads as"
-// ==========================================
-
-priv fn outline(doc: Document@, arena: Arena$@): U8[] //<
-    //< One node of the model to a line, each child two spaces in from its parent
-    //< The words: `heading N`, `paragraph`, `quote`, `list`, `item`, `numbered item`,
-    //< `ticked item`, `unticked item`, `code block "language"`, `divider`, `blank`,
-    //< `table "name"`, `caption "…"`, `row`, `cell …`, `image "path"`, `alt "…"`, `include "path"`,
-    //< `functions "path"`, `chart`, `diagram`, `document`; within a line of text, `text "…"`,
-    //< `code "…"`, `break`, `strong`, `emphasis`, `link "target"` and `colour "#rrggbb"`; and
-    //< `note "…"`. A text in quotes writes `"`, `\` and a newline as `\"`, `\\` and `\n`.
-    defer $out: = Str_builder()
-    for i in Range.asc(doc.blocks.len)
-        block_outline(doc, doc.blocks.get(i), out@, arena)
-    return arena.dup_str(out.slice())
-
-priv fn node(depth: Sz, word: U8[], out: Str_builder$@) //< starts a node's line at `depth`
-    for _ in Range.asc(depth)
-        out.s("  ")
-    out.s(word)
-
-priv fn quoted(text: U8[], out: Str_builder$@) //< ` "text"`, with its escapes
-    out.s(" \"")
-    for ch in text
-        if ch == '"' || ch == '\\'
-            out.c('\\').c(ch)
-        else if ch == '\n'
-            out.s("\\n")
-        else
-            out.c(ch)
-    out.c('"')
-
-priv fn leaf(depth: Sz, word: U8[], text: U8[], out: Str_builder$@) //< `word "text"` on its line
-    node(depth, word, out)
-    quoted(text, out)
-    out.c('\n')
-
-priv fn block_outline(doc: Document@, block: Block, out: Str_builder$@, arena: Arena$@) //<
-    //< One block and what it holds, from the outline's left edge
-    switch block.kind
-    case .paragraph, .quote
-        node(0, "paragraph" if block.kind == .paragraph else "quote", out)
-        out.c('\n')
-        inline_outline(doc, block.first, block.count, 1, out)
-    case .heading
-        node(0, "heading", out)
-        out.s(" \{block.level\}\n")
-        inline_outline(doc, block.first, block.count, 1, out)
-    case .code
-        node(0, "code block", out)
-        if block.label.len > 0
-            quoted(block.label, out)
-        out.c('\n')
-        leaf(1, "text", block.text, out)
-    case .list
-        node(0, "list\n", out)
-        for i in Range.asc(block.count)
-            item: = doc.items.get(block.first + i)
-            $word: = "numbered item" if item.ordered else "item"
-            if item.check == .open
-                word = "unticked item"
-            else if item.check == .done
-                word = "ticked item"
-            node(1 + item.depth, word, out)
-            out.c('\n')
-            inline_outline(doc, item.first, item.count, 2 + item.depth, out)
-    case .divider
-        node(0, "divider\n", out)
-    case .blank
-        node(0, "blank\n", out)
-    case .table
-        table_outline(doc, doc.tables[block.first]@, out, arena)
-    case .include
-        leaf(0, "include", block.text, out)
-    case .functions
-        leaf(0, "functions", block.text, out)
-    case .image
-        image: = doc.images.get(block.first)
-        leaf(0, "image", image.src, out)
-        if image.alt.len > 0
-            leaf(1, "alt", image.alt, out)
-        if image.caption.len > 0
-            leaf(1, "caption", image.caption, out)
-    case .chart
-        node(0, "chart\n", out)
-    case .document
-        node(0, "document\n", out)
-    case .diagram
-        node(0, "diagram\n", out)
-    if block.note.len > 0
-        leaf(1, "note", block.note, out)
-
-priv fn inline_outline(doc: Document@, first: Sz, count: Sz, from: Sz, out: Str_builder$@) //<
-    //< A run of inline nodes from depth `from`; a mark's nodes stand one deeper than it
-    $depth: = from
-    for i in Range.asc(count)
-        n: = doc.inlines.get(first + i)
-        switch n.kind
-        case .text
-            leaf(depth, "text", n.text, out)
-        case .code
-            leaf(depth, "code", n.text, out)
-        case .hard_break
-            node(depth, "break\n", out)
-        case .emphasis_start, .strong_start
-            node(depth, "emphasis\n" if n.kind == .emphasis_start else "strong\n", out)
-            depth += 1
-        case .link_start
-            if n.text.len > 0
-                node(depth, "link", out)
-                quoted(n.text, out)
-                if n.color.len > 0
-                    out.s(" colour")
-                    quoted(n.color, out)
-            else
-                node(depth, "colour", out)
-                quoted(n.color, out)
-            out.c('\n')
-            depth += 1
-        case .emphasis_end, .strong_end, .link_end
-            depth -= 1
-
-priv fn table_outline(doc: Document@, table: Table@, out: Str_builder$@, arena: Arena$@) //<
-    //< A table: its caption, then its heading row and each data row, with their cells
-    leaf(0, "table", table.name, out)
-    if table.caption.len > 0
-        leaf(1, "caption", table.caption, out)
-    width: = table.columns.len
-    at: = Positions(doc, arena)
-    for row in Range.asc(table.rows.len + 1)
-        node(1, "row\n", out)
-        for column in Range.asc(width)
-            cell: = table.cells[row * width + column]
-            node(2, "cell", out)
-            if cell.kind == .text
-                quoted(cell.text, out)
-            else if cell.kind == .number || cell.kind == .date
-                out.c(' ').s(cell.text)
-            else if cell.kind == .formula
-                out.s(" =")
-                write_formula(doc, table, cell, at@, 0, 0, out)
-            out.c('\n')
-            if cell.link.len > 0
-                leaf(3, "link", cell.link, out)
-            if cell.note.len > 0
-                leaf(3, "note", cell.note, out)
-
-// ==========================================
 // The reading's own cases
 // ==========================================
 
@@ -877,7 +807,7 @@ priv struct Bad //< a text that must not read as rows alone, and what is wrong w
     what: U8[]
     text: U8[]
 
-priv const BAD: Bad[7] = ::{
+priv const BAD: Bad[9] = ::{
     Bad::{ .what = "a heading row that starts as a form's but is none",
         .text = "| Formula | Show |\n| :-- | :-- |\n| `=A1` | `2` |\n" },
     Bad::{ .what = "a row whose cell is not one text in backticks",
@@ -893,6 +823,11 @@ priv const BAD: Bad[7] = ::{
         .text =
         "```ksmd a.ksmd\n%ksmd 2\n```\n\n| Opened | Shows | Problem at | The reason says |\n| :-- | \
             :-- | :-- | :-- |\n| `a.ksmd` | `A` | none | a cycle |\n" },
+    Bad::{ .what = "a check row with no file block above it",
+        .text = "`ksmd --check a.ksmd` ends with code 0 and prints:\n\n```text\nok\n```\n" },
+    Bad::{ .what = "a check row's sentence with no exit code",
+        .text =
+        "```ksmd a.ksmd\n%ksmd 2\n```\n\n`ksmd --check a.ksmd` prints:\n\n```text\nok\n```\n" },
 } //< one of each malformed row or heading the reading must refuse
 
 priv fn reading_cases(arena: Arena$@) //<
@@ -903,7 +838,7 @@ priv fn reading_cases(arena: Arena$@) //<
         none.problems.len > 0 && missing(none@) == FORMS.len && !none.states_start,
         joined(none.problems@, arena))
     one: = read_rows("one form", ONE_FORM, arena)
-    verdict.check("a text with rows of one form misses the other eight",
+    verdict.check("a text with rows of one form misses the other ten",
         one.problems.len == 0 && one.rows.len == 1 && missing(one@) == FORMS.len - 1,
         joined(one.problems@, arena))
     for bad in BAD

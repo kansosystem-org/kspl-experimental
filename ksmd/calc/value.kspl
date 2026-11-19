@@ -1,11 +1,12 @@
 //< A value a formula calculates, and the arithmetic, comparisons and conversions between values
 //< `ksmd/calc/calc.kspl` reads a formula and calls these; they hold no state, so the same values
 //< always give the same result.
-import "ksmd/base/dates" { BEFORE_DATES, in_range }
+import "ksmd/base/dates" { BEFORE_DATES, in_range, write_date, write_date_with }
 import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/formula" { Token_kind }
-import "ksmd/model/format" { shows_same }
+import "ksmd/model/format" { Number_format, show, show_plain, shows_numbers, shows_same }
 import "std/mem" { Arena }
+import "std/str" { Str_builder }
 import "std/str" // `text`
 import "std/strnum"
 
@@ -151,6 +152,29 @@ fn equal_keys(key: Value, cell: Value): Bool //< whether a cell's value is the k
         return key.boolean == cell.boolean
     default
         return false
+
+fn write_shown(value: Value, format: Number_format, out: Str_builder$@) //<
+    //< The text a cell shows of its value in `format`: a number in the format, a date as
+    //< `2026-10-23` or `2026/10/23`, `true` or `false`, text as it is, an error's mark
+    //< **The page shows a cell through this**, so every other text of a cell agrees with it.
+    switch value.kind
+    case .empty {}
+    case .number
+        if shows_numbers(format)
+            show(value.number, format, out)
+        else
+            show_plain(value.number, out)
+    case .date
+        if format.kind == .slash_date
+            write_date_with(I64::value.number, '/', out)
+        else
+            write_date(I64::value.number, out)
+    case .text
+        out.s(value.text)
+    case .boolean
+        out.s("true" if value.boolean else "false")
+    case .error
+        out.s(value.error.mark())
 
 fn arithmetic(left: Value, right: Value, op: Token_kind): Value //<
     //< Two numbers joined by an operator; the left error comes first

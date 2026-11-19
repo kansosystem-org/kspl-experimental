@@ -11,7 +11,7 @@ const COMMANDS = [
   ["file-open", "Open…", "Ctrl+O"], ["file-save", "Save", "Ctrl+S"],
   ["file-save-as", "Save as…", "Ctrl+Shift+S"],
   ["page-setup", "Page setup…"],
-  ["print", "Print or save as PDF…", "Ctrl+P"],
+  ["print", "Print or save as PDF…", "Ctrl+P"], ["copy-markdown", "Copy as Markdown"],
   ["undo", "Undo", "Ctrl+Z"], ["redo", "Redo", "Ctrl+Y"],
   ["cut", "Cut", "Ctrl+X"], ["copy", "Copy", "Ctrl+C"], ["copy-formula", "Copy formula"],
   ["paste", "Paste", "Ctrl+V"],
@@ -102,7 +102,7 @@ const TABLE_GROUPS = [
 // The menu bar: each menu's name and its items. "-" is a line between groups, and [name, items] a
 // flyout. Every command stands in one of them, so the quick access bar's chooser lists them all.
 const MENUS = [
-  ["File", ["file-open", "file-save", "file-save-as", "-", "page-setup", "print"]],
+  ["File", ["file-open", "file-save", "file-save-as", "-", "page-setup", "print", "copy-markdown"]],
   ["Edit", ["undo", "redo", "-", "cut", "copy", "copy-formula", "paste", "paste-values", "-", "find", "replace",
     "-", ["AutoCorrect", ["auto-dates", "auto-links", "auto-brackets"]]]],
   ["View", ["contents", "-", "width-full", "width-reading", "one-line", "-", "zoom-in", "zoom-out",
@@ -142,6 +142,7 @@ const ICONS = {
   "file-save": `<path d="M2.5 2.5h9l2 2v9h-11z M5 2.5v3h5.5v-3 M4.5 13.5v-4h7v4"/>`,
   "file-save-as": `<path d="M2.5 2.5h8l2 2v3 M2.5 2.5v11h5 M5 2.5v3h4.5v-3 M9 14.5l.5-2 4-4 1.5 1.5-4 4z"/>`,
   print: `<path d="M4.5 6V2.5h7V6 M4.5 11.5h-2v-5.5h11v5.5h-2 M4.5 9.5h7v4.5h-7z"/>`,
+  "copy-markdown": `<path d="M5.5 5.5h8v9h-8z M3 11V2.5h7.5 M7.5 12.5v-4l2 2 2-2v4"/>`,
   undo: `<path d="M5 3.5L2 6.5l3 3 M2 6.5h7.5a3.5 3.5 0 0 1 0 7H6"/>`,
   redo: `<path d="M11 3.5l3 3-3 3 M14 6.5H6.5a3.5 3.5 0 0 0 0 7H10"/>`,
   cut: `<circle cx="4.5" cy="12" r="2"/><circle cx="11.5" cy="12" r="2"/><path d="M6 10.5L11 2 M10 10.5L5 2"/>`,

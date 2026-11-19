@@ -3,7 +3,6 @@
 //< rows and names Each is one step of undo, recorded by comparing the tables with copies made
 //< before it.
 import "ksmd/base/dates" { date_of, is_date, write_date, ymd_of }
-import "ksmd/base/marker" { is_decimal }
 import "ksmd/base/source" { Source }
 import "ksmd/calc/calc" { calculate }
 import "ksmd/calc/formula" { Positions, bind, closing, find_table, shift_formula, write_formula }
@@ -879,7 +878,7 @@ priv fn pasted(text: U8[], read: Reading, arena: Arena$@): U8[] //<
     //< `read` reads one. Anything else stays as it was, its spaces too, as typed text keeps them.
     t: = text.trim_spaces()
     kind: = value_of(t, read, arena).kind
-    if is_decimal(t) || kind == .number || kind == .date
+    if kind == .number || kind == .date
         return t
     i: Sz = 1 if t.starts_with("-") else 0
     $digits: Sz = 0
@@ -899,7 +898,7 @@ priv fn pasted(text: U8[], read: Reading, arena: Arena$@): U8[] //<
     rest: = t.sub_from(j)
     b.s(rest)
     joined: = arena.dup_str(b.slice())
-    return joined if is_decimal(joined) else text
+    return joined if value_of(joined, read, arena).kind == .number else text
 
 priv fn write_typed(value: calculated.Value, out: Str_builder$@) //<
     //< A calculated value as text typed into a cell puts it: a number as it shows without a

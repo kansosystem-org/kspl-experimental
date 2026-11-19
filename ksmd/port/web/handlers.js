@@ -172,6 +172,39 @@ function ksmdCommands(ks) {
   ks.handle(["file-open", "file-save", "file-save-as"],
     (name) => (ks.fileCommand ? ks.fileCommand(name) : null), { looks: true });
   ks.handle("print", () => window.print(), { looks: true });
+
+  // Puts text on the clipboard as plain text, through the browser's own copy, which a press on a
+  // menu item may start without asking. Returns false, after saying so, where the browser refuses.
+  // The copy event takes the text before the cells' own copy could (`range.js`).
+  ks.copyText = (text) => {
+    const put = (e) => {
+      e.clipboardData.setData("text/plain", text);
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    document.addEventListener("copy", put, true);
+    try {
+      if (document.execCommand("copy")) return true;
+      ks.say("The browser did not let the page copy.");
+      return false;
+    } finally {
+      document.removeEventListener("copy", put, true);
+    }
+  };
+  // Copy as Markdown puts the whole document on the clipboard as Markdown, written by the editor
+  // (`ksmd/syntax/markdown.kspl`), and says what Markdown could not carry.
+  ks.handle("copy-markdown", () => {
+    const len = ks.call("ksmd_web_markdown");
+    if (ks.stopped) return null;
+    const got = JSON.parse(ks.out(len));
+    if (!ks.copyText(got.text)) return null;
+    const count = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
+    const left = [[got.charts, "chart"], [got.diagrams, "diagram"], [got.includes, "included file"]]
+      .filter(([n]) => n > 0).map(([n, one]) => count(n, one));
+    if (got.drawn > 0) left.push(`the shapes drawn on ${count(got.drawn, "image")}`);
+    ks.say(`Copied the document as Markdown.${left.length > 0 ? ` Not copied: ${left.join(", ")}.` : ""}`);
+    return null;
+  }, { looks: true });
   ks.handle("read-only", () => ks.setReadOnly(!ks.readOnly), { looks: true });
   ks.handle(["width-full", "width-reading"], (name) => ks.setWidth(name === "width-reading"),
     { looks: true });

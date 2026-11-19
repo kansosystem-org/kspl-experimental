@@ -1,0 +1,336 @@
+//< Writes a document as Markdown, as GitHub reads it, for a paste into another program
+//< Prose keeps its structure, and a table writes the values its cells show, from `values`. What
+//< Markdown has no form for writes nothing, or a line saying that it is not copied (`Left_out`).
+//< Text escapes what Markdown would read as markup, so a paste reads back as the same text. The
+//< forms are "Copying as Markdown" in `ksmd/docs/SPEC-file-format.md`.
+import "ksmd/base/marker" { leading, run_of_digits }
+import "ksmd/calc/calc" { Results }
+import "ksmd/calc/value" { write_shown }
+import "ksmd/model/model" { Block, Document, Inline_kind, MAX_NESTING }
+import "ksmd/syntax/writer" { is_blank_end, write_code }
+import "std/chars"
+import "std/str" { Str_builder }
+
+struct Left_out //< what a copy could not carry, by kind; a chart, a diagram and an include each
+    //< leave a line that says so
+    charts: Sz
+    diagrams: Sz
+    includes: Sz
+    drawn: Sz //< the images whose drawn shapes are left out; the image itself is written
+
+fn write(doc: Document@, values: Results@, out: Str_builder$@): Left_out //<
+    //< Appends the whole document as Markdown, a blank line between blocks
+    //< `values` are the document's calculated values (`calc.calculate`), which its tables show.
+    $left: = Left_out::{ .charts = 0, .diagrams = 0, .includes = 0, .drawn = 0 }
+    $first: = true
+    $after_list: = false
+    for b in Range.asc(doc.blocks.len)
+        block: = doc.blocks.get(b)
+        // A blank line, the settings and a functions clause show nothing a reader needs.
+        if block.kind == .blank || block.kind == .document || block.kind == .functions
+            continue
+        if !first
+            out.c('\n')
+        first = false
+        write_block(doc, block, values, after_list, left@, out)
+        after_list = block.kind == .list
+    return left
+
+priv fn write_block(doc: Document@, block: Block, values: Results@, after_list: Bool,
+    left: Left_out$@, out: Str_builder$@) //<
+        //< One block, ending in a newline
+        //< `after_list` says that a list was written just before it.
+    switch block.kind
+    case .paragraph
+        write_inlines(doc, block.first, block.count, "", false, out)
+    case .heading
+        for _ in Range.asc(block.level)
+            out.c('#')
+        out.c(' ')
+        write_inlines(doc, block.first, block.count, "", true, out)
+    case .quote
+        out.s("> ")
+        write_inlines(doc, block.first, block.count, "> ", false, out)
+    case .list
+        write_list(doc, block, after_list, out)
+    case .code
+        write_fenced(block.label, block.text, out)
+    case .divider
+        out.s("---\n")
+    case .table
+        write_table(doc, block.first, values, out)
+    case .image
+        image: = doc.images.get(block.first)
+        out.s("![")
+        write_text(image.alt, false, 0, out)
+        out.s("](")
+        write_destination(image.src, out)
+        out.s(")\n")
+        if image.caption.len > 0
+            out.c('\n')
+            write_text(image.caption, true, 0, out)
+            out.c('\n')
+        if image.drawings.len > 0
+            left.drawn += 1
+    case .chart
+        left.charts += 1
+        not_copied("the chart", "a chart", doc.charts[block.first].title, out)
+    case .diagram
+        left.diagrams += 1
+        not_copied("the diagram", "a diagram", doc.diagrams[block.first].caption, out)
+    case .include
+        left.includes += 1
+        not_copied("the included file", "", block.text, out)
+    case .blank, .document, .functions {}
+
+priv fn not_copied(named: U8[], unnamed: U8[], name: U8[], out: Str_builder$@) //<
+    //< `*Not copied: the chart "Sales".*`, or `*Not copied: a chart.*` where it has no name
+    out.s("*Not copied: ")
+    if name.len == 0
+        out.s(unnamed)
+    else
+        out.s(named).s(" \"")
+        write_text(name, false, 0, out)
+        out.c('"')
+    out.s(".*\n")
+
+priv fn write_list(doc: Document@, block: Block, after_list: Bool, out: Str_builder$@) //<
+    //< One item to a line, a nested one indented to its parent's text, as Markdown nests it
+    //< A list straight after a list takes `*` and `1)`, so Markdown does not join the two.
+    $text_at: Sz[MAX_NESTING] = ::{}
+    for i in Range.asc(block.count)
+        item: = doc.items.get(block.first + i)
+        indent: = text_at[item.depth - 1] if item.depth > 0 else 0
+        for _ in Range.asc(indent)
+            out.c(' ')
+        marker: = ("1)" if after_list else "1.") if item.ordered else "*" if after_list else "-"
+        out.s(marker).c(' ')
+        text_at[item.depth] = indent + marker.len + 1
+        if item.check != .none
+            out.s("[ ] " if item.check == .open else "[x] ")
+        write_inlines(doc, item.first, item.count, "", false, out)
+
+priv fn write_fenced(label: U8[], text: U8[], out: Str_builder$@) //<
+    //< A fence one backtick longer than the longest run inside, and at least three, so no line of
+    //< the code can close it
+    $ticks: Sz = 3
+    $run: Sz = 0
+    for c in text
+        run = run + 1 if c == '`' else 0
+        if run >= ticks
+            ticks = run + 1
+    for _ in Range.asc(ticks)
+        out.c('`')
+    out.s(label).c('\n').s(text)
+    for _ in Range.asc(ticks)
+        out.c('`')
+    out.c('\n')
+
+priv fn write_table(doc: Document@, at: Sz, values: Results@, out: Str_builder$@) //<
+    //< The caption as a paragraph, then a pipe table: the names, a row of dashes, and each data
+    //< row's values as its cells show them. Every row and column is written, hidden or not.
+    table: = doc.tables[at]@
+    if table.caption.len > 0
+        write_text(table.caption, true, 0, out)
+        out.s("\n\n")
+    width: = table.columns.len
+    defer $shown: = Str_builder()
+    for row in Range.asc(table.rows.len + 1)
+        out.c('|')
+        for column in Range.asc(width)
+            out.c(' ')
+            if row == 0
+                write_text(table.cells[column].text, false, 0, out)
+            else
+                shown.clear()
+                write_shown(values.at(at, row - 1, column), table.format_at(row - 1, column),
+                    shown@)
+                link: = table.cells[table.at(row - 1, column)].link
+                if link.len > 0 && shown.slice().len > 0
+                    out.c('[')
+                    write_text(shown.slice(), false, 0, out)
+                    out.s("](")
+                    write_destination(link, out)
+                    out.c(')')
+                else
+                    write_text(shown.slice(), false, 0, out)
+            out.s(" |")
+        out.c('\n')
+        if row == 0
+            out.c('|')
+            for _ in Range.asc(width)
+                out.s(" --- |")
+            out.c('\n')
+
+priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, lead: U8[], heading: Bool,
+    out: Str_builder$@) //<
+        //< A run of inline nodes, then the line's end; `lead` starts each line after a hard break
+        //< Spaces at a line's edges and a hard break at the end are left out, as the writer leaves
+        //< them out. Spaces at a mark's inner edge stand outside it, where Markdown can open it.
+    for count > 0 && is_blank_end(doc.inlines.get(first + count - 1))
+        count -= 1
+    $bare: = true //< nothing is written on this line yet
+    $moved: Sz = 0 //< the leading spaces of the next text, already written before its marks
+    $after: U8[] = "" //< the trailing spaces of the text before, written after its marks close
+    $link: U8[] = "" //< the destination of the brackets open now; empty for coloured text
+    for i in Range.asc(count)
+        node: = doc.inlines.get(first + i)
+        next: = doc.inlines.get(first + i + 1) if i + 1 < count else node
+        last: = i + 1 == count || next.kind == .hard_break
+        switch node.kind
+        case .text
+            $text: = node.text.sub_from(moved)
+            moved = 0
+            if bare
+                text = text.trim_start()
+            if last
+                text = text.trim_end()
+            else if is_close(next.kind)
+                after = text.sub_from(text.trim_end().len)
+                text = text.trim_end()
+            if text.len == 0
+                continue
+            // A `#` ending a heading would close it, and `!` before brackets would make an image.
+            $end: U8 = 0
+            if heading && i + 1 == count
+                end = '#'
+            else if next.kind == .link_start && next.text.len > 0
+                end = '!'
+            write_text(text, bare && !heading, end, out)
+            bare = false
+        case .code
+            write_code(node.text, out)
+            bare = false
+        case .hard_break
+            out.s("\\\n").s(lead)
+            bare = true
+        case .emphasis_start, .strong_start, .link_start
+            if i == 0 || !is_open(doc.inlines.get(first + i - 1).kind)
+                inside: = text_inside(doc, first + i, first + count)
+                if inside < first + count
+                    spaces: = doc.inlines.get(inside).text
+                    moved = leading(spaces)
+                    if !bare
+                        out.s(spaces.sub(0, moved))
+            if node.kind == .link_start
+                link = node.text
+            if node.kind != .link_start || link.len > 0
+                out
+                    .s("*" if node.kind == .emphasis_start
+                    else "**" if node.kind == .strong_start else "[")
+                bare = false
+        case .emphasis_end, .strong_end, .link_end
+            if node.kind != .link_end
+                out.s("*" if node.kind == .emphasis_end else "**")
+            else if link.len > 0
+                out.s("](")
+                write_destination(link, out)
+                out.c(')')
+            if !is_close(next.kind) || i + 1 == count
+                if !last
+                    out.s(after)
+                after = ""
+    out.c('\n')
+
+priv fn is_open(kind: Inline_kind): Bool //< a mark's start: emphasis, strong, or brackets
+    return kind == .emphasis_start || kind == .strong_start || kind == .link_start
+
+priv fn is_close(kind: Inline_kind): Bool //< a mark's end
+    return kind == .emphasis_end || kind == .strong_end || kind == .link_end
+
+priv fn text_inside(doc: Document@, from: Sz, end: Sz): Sz //<
+    //< The text node that a run of marks' starts at `from` opens on, or `end` where none does
+    $i: = from
+    for i < end && is_open(doc.inlines.get(i).kind)
+        i += 1
+    return i if i < end && doc.inlines.get(i).kind == .text else end
+
+priv fn write_text(text: U8[], line_start: Bool, end: U8, out: Str_builder$@) //<
+    //< Text, with a backslash before each byte Markdown would read as markup
+    //< At a line's start a block marker is escaped too. `end` is a byte escaped where it ends the
+    //< text, or 0. A line break becomes `<br>`, as a row of a pipe table is one line.
+    $from: Sz = 0
+    if line_start && text.len > 0
+        from = write_marker(text, out)
+    for i in Range(from, text.len, 1)
+        c: = text[i]
+        if c == '\r' || c == '\n'
+            if c == '\r' || i == 0 || text[i - 1] != '\r'
+                out.s("<br>")
+            continue
+        if is_markup(text, i) || end != 0 && c == end && i + 1 == text.len
+            out.c('\\')
+        out.c(c)
+
+priv fn write_marker(text: U8[], out: Str_builder$@): Sz //<
+    //< Escapes a block marker that starts the text; returns how many bytes it wrote
+    c: = text[0]
+    next: = text[1] if text.len > 1 else ' '
+    marker: =
+        c == '#' || c == '>' ||
+        (c == '-' || c == '+') && (next == ' ' || next == '\t' || next == '-') ||
+        c == '=' && text.trim_end().len == run_of(text, '=')
+    if marker
+        out.c('\\').c(c)
+        return 1
+    digits: = run_of_digits(text)
+    if digits == 0 || digits >= text.len || text[digits] != '.' && text[digits] != ')'
+        return 0
+    if digits + 1 < text.len && text[digits + 1] != ' ' && text[digits + 1] != '\t'
+        return 0
+    out.s(text.sub(0, digits)).c('\\').c(text[digits])
+    return digits + 1
+
+priv fn run_of(text: U8[], byte: U8): Sz //< how many times `byte` repeats at the start
+    $n: Sz = 0
+    for n < text.len && text[n] == byte
+        n += 1
+    return n
+
+priv fn is_markup(text: U8[], i: Sz): Bool //<
+    //< Whether the byte at `i` would read as markup anywhere on a line
+    //< `_` between two letters or digits is not, nor `<` that starts no tag, nor `&` that starts
+    //< no character reference such as `&amp;`.
+    c: = text[i]
+    switch c
+    case '\\', '`', '*', '[', ']', '~', '|'
+        return true
+    case '_'
+        return !(i > 0 && is_word(text[i - 1]) && i + 1 < text.len && is_word(text[i + 1]))
+    case '<'
+        return i + 1 < text.len &&
+            (is_word(text[i + 1]) || text[i + 1] == '/' || text[i + 1] == '!' ||
+            text[i + 1] == '?')
+    case '&'
+        return is_reference(text.sub_from(i + 1))
+    default
+        return false
+
+priv fn is_word(byte: U8): Bool //< an ASCII letter or digit
+    return byte.is_digit() || byte.is_upper() || byte.is_lower()
+
+priv fn is_reference(rest: U8[]): Bool //<
+    //< Whether the text after a `&` reads as a character reference: a name or `#` and a number,
+    //< then `;`
+    $i: Sz = 0
+    if rest.starts_with("#")
+        i = 2 if rest.starts_with("#x") || rest.starts_with("#X") else 1
+    $n: Sz = 0
+    for i + n < rest.len && is_word(rest[i + n])
+        n += 1
+    return n > 0 && i + n < rest.len && rest[i + n] == ';'
+
+priv fn write_destination(dest: U8[], out: Str_builder$@) //<
+    //< A link's or an image's destination; in `<` and `>` where it holds a space or a bracket
+    //< A backslash and `|` are escaped, so the destination reads back whole, in a table too.
+    $angled: = false
+    for c in dest
+        angled = angled || c == ' ' || c == '(' || c == ')' || c == '<' || c == '>'
+    if angled
+        out.c('<')
+    for c in dest
+        if c == '\\' || c == '|' || angled && (c == '<' || c == '>')
+            out.c('\\')
+        out.c(c)
+    if angled
+        out.c('>')

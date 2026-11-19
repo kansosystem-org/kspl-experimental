@@ -1,0 +1,701 @@
+//< Checking the whole Freenove 4WD car in one run, with a verdict for each part
+//< It walks a person through each part over the Serial Monitor, prints PASS, FAIL or SKIPPED for
+//< each, and ends with one summary line. The steps are stage 13 of
+//< lib/ksos/docs/TUTORIAL-bring-up.md.
+
+// ==========================================
+// **Every verdict is decided in `ksos/demo/rp2040/common/check`**, with no hardware, so
+// `lib/ksos/tests/check_test.kspl` checks it on the host. This file reads, asks and moves.
+// Caution: **Nothing moves before the person confirms the stand with ▶** (`check.Run.gate`).
+// **Any key stops a wheel at once**, and then no part moves again in this run.
+// **A motion starts only once the remote is quiet** (`wait_quiet`): the key that answered may
+// still be held, and its repeats would stop it.
+// The panic part is last: its message carries every verdict through the watchdog's restart.
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/boards/freenove_4wd_pico/face"
+import "ksos/boards/freenove_4wd_pico/head"
+import "ksos/boards/freenove_4wd_pico/motor"
+import "ksos/boards/freenove_4wd_pico/range"
+import "ksos/boards/freenove_4wd_pico/track"
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/buzzer"
+import "ksos/demo/rp2040/common/check"
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/demo/rp2040/common/stops"
+import "ksos/drivers/mmio"
+import "ksos/drivers/rp2040/adc"
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/gpio"
+import "ksos/drivers/rp2040/ir_nec" as ir
+import "ksos/drivers/rp2040/timer"
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/drivers/rp2040/watchdog"
+import "ksos/drivers/rp2040/ws2812"
+import "ksos/kernel/task" + { Task }
+import "std/buf" { Buf_writer }
+import "std/panic_record" { take_panic_record }
+
+$tcb_check: Task
+// The task stack: the measured worst path, with room to spare.
+// **How it was measured**: this firmware's C, compiled for the RP2040 with clang's -fstack-usage.
+// Every frame is static, and all of them together come to about 3 KB, so no path is deeper.
+// Measure again after a change to the parts or to the toolchain.
+$stack_check: U8[4096]
+$ln: con.Line
+$run: check.Run
+
+const TAG: U8[] = "[check]" //< what every line of this firmware starts with
+
+const TICK_US: U32 = 1000 //< one turn of the waiting loop [us]
+    //< **Keep it under 1.5ms**, as the car-ir firmware's `IR_POLL_US`: a later look at the
+    //< receiver cuts an NEC frame's leader short, and the frame is refused.
+
+// --- how long each step waits for the person [ms]. **Generous**: a person reads the prompt,
+// finds the remote and puts it down again ---
+const REMOTE_MS: U32 = 60000
+const STAND_MS: U32 = 120000
+const ANSWER_MS: U32 = 60000
+const SENSOR_MS: U32 = 20000
+const PROMPT_AGAIN_MS: U32 = 10000 //< how often a waiting prompt is printed again
+    //< A Serial Monitor opened late still sees what is asked.
+
+// --- the motion. **Each motion is short, at `motor.CAP`, and bounded by its own time** ---
+const CHECK_SPEED: I32 = motor.CAP //< the speed of every wheel motion [%]
+    //< At the cap, just above `board.WHEEL_MIN_PERCENT`, a wheel turns and stays slow.
+const WHEEL_MS: U32 = 1000 //< how long one wheel turns each way [ms]
+const WHEEL_PAUSE_MS: U32 = 300 //< the pause between forward and back [ms]
+const HOLD_LIMIT_MS: U32 = 3000 //< how long the held key may drive at most [ms]
+const SPIN_MS: U32 = 1000 //< how long the wheels turn before the deliberate panic [ms]
+const PANIC_WATCHDOG_MS: U32 = 3000 //< the watchdog's timeout for the panic part [ms]
+    //< **Three times `boot.CAR_WATCHDOG_MS`**, so a missing panic hook shows: the wheels then
+    //< turn on for three seconds before the restart stops them.
+const RESTART_ANSWER_MS: U32 = 300000 //< how long the question after the panic waits [ms]
+    //< Long enough to find the new serial port and open it again.
+
+const SERVO_LOW: I32 = 60 //< the head's sweep, inside its range of motion [degrees]
+const SERVO_HIGH: I32 = 120
+const SERVO_STEP_MS: U32 = 600 //< how long the head stays at each end [ms]
+const BEEP_EVERY_MS: U32 = 1500 //< how often the buzzer part beeps [ms]
+const READ_EVERY_MS: U32 = 100 //< how often a sensor part reads its sensor [ms]
+    //< **At least 72ms for the ultrasonic**: one measurement and the wait after it.
+
+// The receiver's counts, for a remote that does not answer.
+$ir_ok: U32 = 0
+$ir_repeat: U32 = 0
+$ir_bad: U32 = 0
+$leds_up: Bool = false
+$adc_up: Bool = false
+
+struct Key //< what one tick brought from the remote
+    seen: Bool //< a frame came: a new press or a repeat
+    repeat: Bool //< it was a repeat, which carries no key
+    cmd: U32 //< the key of a new press
+
+priv fn tick(): Key //< one turn of every wait: USB, the watchdog and the remote
+    //< **Every wait in this firmware goes through here**, so each one keeps USB running, feeds
+    //< the watchdog, and sees a key.
+    usb.poll_once()
+    watchdog.feed()
+    $k: = Key::{ .seen = false, .repeat = false, .cmd = 0 }
+    if !ir.is_idle(board.IR_RECEIVER)
+        f: = ir.try_receive(board.IR_RECEIVER)
+        if f.ok
+            k.seen = true
+            k.repeat = f.repeat
+            k.cmd = f.cmd
+            if f.repeat
+                ir_repeat += 1
+            else
+                ir_ok += 1
+        else
+            ir_bad += 1
+    timer.delay_us(TICK_US)
+    return k
+
+priv fn elapsed_ms(since_us: U32): U32
+    return timer.elapsed_us(since_us) / 1000
+
+priv fn pump(ms: U32) //< waits `ms` milliseconds through `tick`, ignoring keys
+    start: = timer.now_us()
+    for elapsed_ms(start) < ms
+        _k: = tick()
+
+priv fn send() //< sends the line, waiting a little for room so that it is not dropped
+    $waited: U32 = 0
+    for !con.can_flush() && waited < 100
+        _k: = tick()
+        waited += 1
+    _sent: = ln.flush()
+
+priv fn say(text: U8[])
+    ln.reset()
+    ln.str(TAG)
+    ln.str(" ")
+    ln.str(text)
+    send()
+
+priv fn begin(part: check.Part, verdict: check.Verdict) //< starts a part's verdict line
+    //< The caller may add a detail in brackets, then calls `send`.
+    ln.reset()
+    ln.str(TAG)
+    ln.str(" ")
+    ln.str(part.variant_name())
+    ln.str(": ")
+    ln.str(verdict.word())
+
+priv fn record(part: check.Part, verdict: check.Verdict, detail: U8[]) //<
+    //< keeps and prints a verdict
+    run.set(part, verdict)
+    begin(part, verdict)
+    if detail.len > 0
+        ln.str(" (")
+        ln.str(detail)
+        ln.str(")")
+    send()
+
+priv fn ir_counts() //< appends the receiver's counts, as stage 12's report line has them
+    ln.str("ir=")
+    ln.u32(ir_ok)
+    ln.str("/")
+    ln.u32(ir_repeat)
+    ln.str("/")
+    ln.u32(ir_bad)
+
+// ---------------------------------------------------------
+// Asking the person
+// ---------------------------------------------------------
+
+enum Show //< what a question keeps doing while it waits
+    nothing
+    face
+    beep
+    sweep
+
+impl Show
+    priv fn tick_shown(r: Self, start_us: U32, last_beep_us: U32$@) //< one tick of what is shown
+        switch r
+        case .nothing {}
+        case .face
+            face.show()
+        case .beep
+            if timer.elapsed_us(last_beep_us$) >= BEEP_EVERY_MS * 1000
+                last_beep_us$ = timer.now_us()
+                buzzer.tone(buzzer.BEEP_HZ, buzzer.BEEP_MS)
+        case .sweep
+            at_low: = (elapsed_ms(start_us) / SERVO_STEP_MS) % 2 == 0
+            head.set_angle(SERVO_LOW if at_low else SERVO_HIGH)
+
+priv fn ask(question: U8[], show: Show, limit_ms: U32): check.Verdict //<
+    //< Asks until ▶ (pass) or 9 (fail); `untested` when the time runs out
+    //< Any other key keeps the question open.
+    say(question)
+    start: = timer.now_us()
+    $last_beep: U32 = start - BEEP_EVERY_MS * 1000
+    $last_prompt: = start
+    for elapsed_ms(start) < limit_ms
+        k: = tick()
+        if k.seen && !k.repeat
+            v: = check.answer(k.cmd)
+            if v != check.Verdict.untested
+                return v
+        show.tick_shown(start, last_beep@)
+        if elapsed_ms(last_prompt) >= PROMPT_AGAIN_MS
+            last_prompt = timer.now_us()
+            say(question)
+    return .untested
+
+priv fn ask_part(part: check.Part, question: U8[], show: Show) //< a part judged by the person
+    switch ask(question, show, ANSWER_MS)
+    case .pass
+        record(part, .pass, "")
+    case .fail
+        record(part, .fail, "9 pressed")
+    default
+        record(part, .fail, "no answer in 60 s")
+
+priv fn gated(part: check.Part): Bool //< whether `part` runs; a skipped one is recorded here
+    g: = run.gate(part)
+    if g == check.Gate.run
+        return true
+    record(part, .skipped, g.reason())
+    return false
+
+// ---------------------------------------------------------
+// The parts, in `check.Part`'s order
+// ---------------------------------------------------------
+
+priv fn battery_part()
+    bat: = adc.read_pin_avg(board.BATTERY_PIN, board.BATTERY_SAMPLES)
+    mv: = board.battery_mv(bat.value) if adc_up && bat.ok else 0
+    v: = check.battery(mv)
+    run.set(.battery, v)
+    begin(.battery, v)
+    ln.str(" (bat=")
+    ln.u32_milli(mv)
+    ln.str("V; passes from ")
+    ln.u32_milli(board.BATTERY_LOW_MV)
+    ln.str("V to ")
+    ln.u32_milli(board.BATTERY_FULL_MV + check.BATTERY_FULL_MARGIN_MV)
+    ln.str("V)")
+    send()
+
+priv fn remote_part()
+    question: = "press ▶ on the remote"
+    say(question)
+    start: = timer.now_us()
+    $last_prompt: = start
+    for elapsed_ms(start) < REMOTE_MS
+        k: = tick()
+        if k.seen && !k.repeat
+            if k.cmd == check.KEY_YES
+                run.remote_ok = true
+                run.set(.remote, .pass)
+                begin(.remote, .pass)
+                ln.str(" (")
+                ir_counts()
+                ln.str(")")
+                send()
+                return
+            ln.reset()
+            ln.str(TAG)
+            ln.str(" got key 0x")
+            ln.hex2(k.cmd)
+            ln.str(" - press ▶")
+            send()
+        if elapsed_ms(last_prompt) >= PROMPT_AGAIN_MS
+            last_prompt = timer.now_us()
+            say(question)
+    run.set(.remote, .fail)
+    begin(.remote, .fail)
+    ln.str(" (no ▶ in 60 s; ")
+    ir_counts()
+    ln.str(": all 0 = nothing reaches the receiver)")
+    send()
+
+priv fn stand_part() //< the gate before anything moves; it gets no verdict of its own
+    if !run.remote_ok
+        return
+    q: =
+        "put the car on a stand, wheels off the ground, then press ▶ (9: skip every part that \
+            moves)"
+    run.stand_ok = ask(q, .nothing, STAND_MS) == check.Verdict.pass
+    if !run.stand_ok
+        say("stand not confirmed - every part that moves is skipped")
+        return
+    // **Armed only here, where the wheels can first turn** (the reason is at `boot.motors_up`).
+    watchdog.arm(boot.CAR_WATCHDOG_MS) catch
+        say("FAILED to arm the watchdog - every part that moves is skipped")
+        run.stand_ok = false
+        return
+    say("stand confirmed")
+
+priv fn line_parts()
+    say("take everything away from under the three line sensors")
+    pump(3000)
+    rest: = track.read_bits()
+    ln.reset()
+    ln.str(TAG)
+    ln.str(" line sensors at rest: line=")
+    ln.u32(rest)
+    send()
+    say("left and right are the car's own, as seen from behind it")
+    for part in check.Part.variants()
+        if part.line_bit() != 0
+            line_part(part, rest)
+
+priv fn line_part(part: check.Part, rest: U32) //< one line sensor, seeing a strip of white paper
+    //< **The sensors are reflective** ("Line tracking" in `lib/ksos/docs/SPEC-board.md`). White a
+    //< short way below reads 0; paper pressed against one reads 1, as black does. A strip as wide
+    //< as the gap between two sensors reaches the neighbour too.
+    ln.reset()
+    ln.str(TAG)
+    ln.str(" hold a strip of white paper, under 2 cm wide, flat and about 1 cm below the ")
+    ln.str(part.variant_name())
+    ln.str(" sensor, where the floor would be, without touching it (20 s)")
+    send()
+    start: = timer.now_us()
+    $last: = rest
+    for elapsed_ms(start) < SENSOR_MS
+        _k: = tick()
+        now: = track.read_bits()
+        if check.line_alone(rest, now, part)
+            record(part, .pass, "")
+            return
+        if now != rest
+            last = now
+    begin(part, .fail)
+    run.set(part, .fail)
+    ln.str(" (rest line=")
+    ln.u32(rest)
+    ln.str(", last change line=")
+    ln.u32(last)
+    ln.str(" - the same means not seen: too close, too far or too narrow; another bit means a ")
+    ln.str("neighbour or a swap)")
+    send()
+
+priv fn light_parts()
+    say("keep both light sensors uncovered")
+    pump(2000)
+    rest_l: = adc.read_pin(board.LIGHT_SENSOR_LEFT).value
+    rest_r: = adc.read_pin(board.LIGHT_SENSOR_RIGHT).value
+    light_part(.light_left, board.LIGHT_SENSOR_LEFT, rest_l, board.LIGHT_SENSOR_RIGHT, rest_r)
+    light_part(.light_right, board.LIGHT_SENSOR_RIGHT, rest_r, board.LIGHT_SENSOR_LEFT, rest_l)
+
+priv fn light_part(part: check.Part, pin: U32, rest: U32, other_pin: U32, other_rest: U32)
+    if !adc_up
+        record(part, .fail, "the ADC did not start")
+        return
+    if rest < check.LIGHT_REST_MIN
+        begin(part, .fail)
+        run.set(part, .fail)
+        ln.str(" (too dark to judge: ")
+        ln.u32(rest)
+        ln.str(" at rest - turn a light on)")
+        send()
+        return
+    ln.reset()
+    ln.str(TAG)
+    ln.str(" shade the ")
+    ln.str(part.variant_name())
+    ln.str(" sensor with a hand (20 s)")
+    send()
+    start: = timer.now_us()
+    $lowest: = rest
+    for elapsed_ms(start) < SENSOR_MS
+        pump(READ_EVERY_MS)
+        now: = adc.read_pin(pin).value
+        other: = adc.read_pin(other_pin).value
+        if now < lowest
+            lowest = now
+        if check.light_dropped(rest, now, other_rest, other)
+            record(part, .pass, "")
+            return
+    begin(part, .fail)
+    run.set(part, .fail)
+    ln.str(" (rest=")
+    ln.u32(rest)
+    ln.str(", lowest=")
+    ln.u32(lowest)
+    ln.str(")")
+    send()
+
+priv fn matrix_part()
+    if !gated(.matrix)
+        return
+    face.Look.smile.set()
+    ask_part(.matrix, "the LED matrix shows a smiling face: ▶ if you see it, 9 if not", .face)
+    face.Look.off.set()
+    face.show()
+
+priv fn ultrasonic_part()
+    if !gated(.ultrasonic)
+        return
+    first: = range.read_mm()
+    if !check.sonar_answers(first)
+        record(.ultrasonic, .fail, "no echo - check the module on GPIO 4/5: TRIG 4, ECHO 5")
+        return
+    ln.reset()
+    ln.str(TAG)
+    ln.str(" ultrasonic reads ")
+    ln.u32(first)
+    ln.str("mm - hold a hand about 10 cm in front of it (20 s)")
+    send()
+    start: = timer.now_us()
+    $nearest: = first
+    for elapsed_ms(start) < SENSOR_MS
+        pump(READ_EVERY_MS)
+        now: = range.read_mm()
+        if now > 0 && now < nearest
+            nearest = now
+        if check.sonar_hand(first, now)
+            record(.ultrasonic, .pass, "")
+            return
+    begin(.ultrasonic, .fail)
+    run.set(.ultrasonic, .fail)
+    ln.str(" (first=")
+    ln.u32(first)
+    ln.str("mm, nearest=")
+    ln.u32(nearest)
+    ln.str("mm)")
+    send()
+
+priv fn leds_show(on: Bool) //< lights all eight LEDs green, or puts them out
+    $px: U32[8] = ::{}
+    for i in Range.asc(board.WS2812_COUNT)
+        px[i] = ws2812.rgb(false, on, false, board.WS2812_LEVEL) if on else 0
+    _sent: = ws2812.send(U32[]::px)
+
+priv fn leds_part()
+    if !gated(.leds)
+        return
+    if !leds_up
+        record(.leds, .fail, "the WS2812 output did not start")
+        return
+    leds_show(true)
+    ask_part(.leds, "the eight LEDs light green: ▶ if all eight are lit, 9 if not", .nothing)
+    leds_show(false)
+
+priv fn buzzer_part()
+    if !gated(.buzzer)
+        return
+    ask_part(.buzzer, "the buzzer beeps every 1.5 s: ▶ if you hear it, 9 if not", .beep)
+
+priv fn servo_part()
+    if !gated(.servo)
+        return
+    ask_part(.servo, "the head swings between 60 and 120 degrees: ▶ if it swings, 9 if not", .sweep)
+    head.set_angle(I32::board.SERVO_ANGLE_CENTER)
+
+priv fn turn_for(wheel: Sz, speed: I32, ms: U32): Bool //<
+    //< Turns one wheel alone for `ms`; false if a key stopped it
+    //< **It starts with `motor.drive`'s kick**: at `CHECK_SPEED` a wheel alone stays still without
+    //< it. Caution: **Any frame stops it at once**, a repeat included: a person reaching for the
+    //< remote means stop.
+    motor.start_wheel(wheel, speed)
+    start: = timer.now_us()
+    for elapsed_ms(start) < ms
+        if tick().seen
+            motor.stop()
+            return false
+    motor.stop()
+    return true
+
+priv fn wait_quiet() //< waits until the remote is quiet, before a motion starts
+    //< **The key that answered may still be held.** Its repeats would stop the motion it started.
+    //< Each frame restarts the wait (`check.quiet_to_start`); the first one also asks to let go.
+    $last: = timer.now_us()
+    $told: = false
+    for !check.quiet_to_start(last, timer.now_us())
+        if tick().seen
+            last = timer.now_us()
+            if !told
+                say("let go of the remote - the motion starts once it is quiet")
+                told = true
+
+priv fn stopped_by_key(part: check.Part)
+    motor.stop()
+    run.stopped = true
+    record(part, .fail, "stopped by a key - no part moves again in this run")
+
+priv fn wheel_part(part: check.Part)
+    if !gated(part)
+        return
+    ln.reset()
+    ln.str(TAG)
+    ln.str(" ")
+    ln.str(part.variant_name())
+    ln.str(" turns forward for 1 s, then back - any key stops it")
+    send()
+    pump(1000)
+    wait_quiet()
+    w: = part.wheel()
+    if !turn_for(w, CHECK_SPEED, WHEEL_MS) || !turn_for(w, 0, WHEEL_PAUSE_MS) ||
+        !turn_for(w, 0 - CHECK_SPEED, WHEEL_MS)
+        stopped_by_key(part)
+        return
+    ask_part(part, "▶ if only that wheel turned, forward then back, 9 if not", .nothing)
+
+priv fn held_key_part()
+    if !gated(.held_key)
+        return
+    say("hold ✚: all wheels turn forward while you hold it; let go within 3 s (▶ or 9 stops)")
+    // **Any key but ▶ and 9 starts it**: what is checked is the hold, not one key's code.
+    start: = timer.now_us()
+    $pressed: = false
+    for !pressed && elapsed_ms(start) < ANSWER_MS
+        k: = tick()
+        if k.seen && !k.repeat
+            if stops.stop_key(k.cmd)
+                record(.held_key, .skipped, "▶ or 9 pressed before driving")
+                return
+            pressed = true
+    if !pressed
+        record(.held_key, .fail, "no key in 60 s")
+        return
+    drive_while_held()
+
+priv fn drive_while_held() //< drives while the key is held, and judges the stop
+    //< **`stops.hold` decides when the press ended**, the same decision the car-ir firmware uses.
+    $last_us: = timer.now_us()
+    stops.hold.press(last_us)
+    motor.drive(CHECK_SPEED, 0, 0)
+    start: = last_us
+    $repeats: U32 = 0
+    for
+        k: = tick()
+        now: = timer.now_us()
+        if k.seen
+            if !k.repeat && stops.stop_key(k.cmd)
+                stopped_by_key(.held_key)
+                return
+            if k.repeat
+                stops.hold.repeat(now)
+                repeats += 1
+            else
+                stops.hold.press(now)
+            last_us = now
+        if stops.hold.ended(now)
+            motor.stop()
+            quiet: = now - last_us
+            v: = check.held_key(repeats, quiet)
+            run.set(.held_key, v)
+            begin(.held_key, v)
+            ln.str(" (repeats=")
+            ln.u32(repeats)
+            ln.str(", stopped ")
+            ln.u32(quiet / 1000)
+            ln.str("ms after the last signal; passes up to ")
+            ln.u32((stops.HOLD_TIMEOUT_US + check.HOLD_SLACK_US) / 1000)
+            ln.str("ms)")
+            send()
+            return
+        if elapsed_ms(start) >= HOLD_LIMIT_MS
+            motor.stop()
+            record(.held_key, .fail, "still held after 3 s - let go sooner")
+            return
+
+priv fn panic_part()
+    if !gated(.panic)
+        return
+    q: = "last part: the wheels turn, then the firmware panics on purpose. ▶ to start, 9 to skip"
+    if ask(q, .nothing, ANSWER_MS) != check.Verdict.pass
+        record(.panic, .skipped, "not started")
+        return
+    print_all()
+    say("the car restarts after the panic: open the serial port again, then answer its question")
+    wait_quiet()
+    motor.drive(CHECK_SPEED, 0, 0)
+    start: = timer.now_us()
+    for elapsed_ms(start) < SPIN_MS
+        if tick().seen
+            stopped_by_key(.panic)
+            return
+    $buf: U8[64] = ::{}
+    $w: = Buf_writer(U8$[]::buf)
+    run.carry(w@)
+    // **A longer timeout than the parts'**, so the wheels running on without the hook show.
+    watchdog.arm(PANIC_WATCHDOG_MS) catch
+        motor.stop()
+        record(.panic, .fail, "could not arm the watchdog for the restart")
+        return
+    panic(w.slice())
+
+priv fn after_panic() //< the restart after the deliberate panic: ask, then finish
+    // **One line carries the earlier verdicts and the question**, printed again every 10 s. The
+    // port drops at the restart, and a whole list queued before it opens again would fill the
+    // send queue. `finish` prints every verdict after the answer.
+    $buf: U8[160] = ::{}
+    $w: = Buf_writer(U8$[]::buf)
+    w.s("restarted after the deliberate panic; before it, ")
+    run.summary(w@)
+    w.s(". Did all wheels stop at once at the panic? ▶ yes, 9 no")
+    switch ask(w.slice(), .nothing, RESTART_ANSWER_MS)
+    case .pass
+        record(.panic, .pass, "")
+    case .fail
+        record(.panic, .fail, "9 pressed: the panic hook did not stop the wheels")
+    default
+        record(.panic, .fail, "no answer")
+
+priv fn print_all() //< every part's verdict, then the summary line
+    for part in check.Part.variants()
+        begin(part, run.get(part))
+        send()
+    $buf: U8[96] = ::{}
+    $w: = Buf_writer(U8$[]::buf)
+    run.summary(w@)
+    ln.reset()
+    ln.str(w.slice())
+    send()
+
+// ---------------------------------------------------------
+// Starting
+// ---------------------------------------------------------
+
+priv fn bring_up(): Void!mmio.Driver_error //< starts the peripherals
+    //< A failure here means the clocks or GPIO did not start: nothing else can run, or say so.
+    //< The other parts fail on their own line instead.
+    boot.clocks_and_gpio()!
+    gpio.clear(board.BUZZER_PIN)
+    gpio.init_analog(board.BATTERY_PIN)
+    gpio.init_analog(board.LIGHT_SENSOR_LEFT)
+    gpio.init_analog(board.LIGHT_SENSOR_RIGHT)
+    adc_up = true
+    adc.init() catch
+        adc_up = false
+    // It also sets the panic hook that stops the wheels: the panic part checks that hook.
+    boot.motors_up() catch {}
+    head.init()
+    track.init()
+    ir.init(board.IR_RECEIVER)
+    leds_up = true
+    ws2812.init(board.WS2812_PIN) catch
+        leds_up = false
+    // **The matrix first, then the ultrasonic** on the same pins: `range.init` takes them back.
+    run.matrix_found = true
+    face.init() catch
+        run.matrix_found = false
+        range.init()
+    usb.init() catch {}
+
+priv fn wait_console(ms: U32) //< waits for the Serial Monitor's port, at most `ms`
+    $waited: U32 = 0
+    for waited < ms && !usb.is_configured()
+        boot.pump(10)
+        waited += 10
+
+fn check_task(_arg: Void$@): Void
+    // Read why it started **before arming**, which leaves the mark again.
+    started_by: = watchdog.last_reset()
+    bring_up() catch
+        return
+    // **Take the record before `say_restart` does**: it may hold this check's own verdicts.
+    earlier: = take_panic_record()
+    wait_console(8000)
+    switch earlier
+    case .some(info)
+        switch check.resume(info.msg)
+        case .some(carried)
+            run = carried
+            after_panic()
+            finish()
+            return
+        case .none
+            con.say_restart(ln@, TAG, started_by)
+            con.say_panic(ln@, TAG, info)
+    case .none
+        con.say_restart(ln@, TAG, started_by)
+    say("car check - see stage 13 in lib/ksos/docs/TUTORIAL-bring-up.md")
+    battery_part()
+    remote_part()
+    stand_part()
+    line_parts()
+    light_parts()
+    matrix_part()
+    ultrasonic_part()
+    leds_part()
+    buzzer_part()
+    servo_part()
+    wheel_part(.wheel_front_left)
+    wheel_part(.wheel_back_left)
+    wheel_part(.wheel_back_right)
+    wheel_part(.wheel_front_right)
+    held_key_part()
+    panic_part()
+    finish()
+
+priv fn finish() //< prints every verdict and the summary, then keeps the port open
+    motor.stop()
+    watchdog.disarm()
+    say("done - every verdict:")
+    print_all()
+    for
+        _k: = tick()
+
+// The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
+priv fn park() {}
+
+extern fn ksos_main()
+    task.run_single_task(tcb_check@, U8$[]::stack_check, check_task, "check", park,
+        clocks.TICK_1MS_RELOAD)

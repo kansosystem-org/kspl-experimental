@@ -116,7 +116,7 @@ pub enum Env_error //< why an environment variable was not set or deleted
     empty_value //< `set_env` was given an empty value; `unset_env` is what deletes
     bad_name //< the name is empty, or holds `=` or a NUL, which no environment can store
     bad_value //< the value holds a NUL, where C ends the text
-    refused //< the OS did not take it (out of memory, say)
+    refused //< the OS did not take it: out of memory, or a value Windows cannot hold (`set_env`)
 
 // Overwrites an existing value. **A value set here is inherited by child processes, and by
 // grandchildren too**, so it does not apply to this launch only. **An empty value is refused.**
@@ -129,6 +129,8 @@ pub fn set_env( //< sets an environment variable, which children inherit
     //< **It stops the program while a thread `Thread.spawn` started still runs**: the C library
     //< does not order a change of the environment against another thread reading it. Set it
     //< before the threads start, or after `free` has waited for them.
+    //< **Windows refuses a value that is not UTF-8 or is past 32,767 UTF-16 units** (`refused`).
+    //< POSIX takes both as bytes, but Linux starts no child once one variable passes 128 KiB.
     name: U8[], //< the variable's name
     value: U8[], //< the value; empty is refused, since `unset_env` is what deletes
 ): Void!Env_error

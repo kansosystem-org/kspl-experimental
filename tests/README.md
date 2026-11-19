@@ -64,7 +64,8 @@ Each suite has a make target, `make test-<name>`, and its opening comment says w
 | Thing | How it is called |
 |---|---|
 | `tests/checkers/llvm_ir_abi_check.kspl` | `make test-llvm-abi` passes it the generated `.ll` files (LLVM's text form). They must include one whose `main` returns a Result, since no other program exercises the entry point's failure path |
-| `tests/checkers/perf_guard.kspl` | `make perf-log` (a gate of `make ci`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
+| `tests/checkers/perf_guard.kspl` | `make perf-log` (a gate of `make ci`) passes it the two translation logs it measures, cold and warm, and Cachegrind's four counts (reference values in `perf_baseline.json`) |
+| `tests/checkers/perf_lsp.kspl` | `make perf-log` runs it to play a fixed editor session to the language server's worker, which runs under Cachegrind |
 
 ## The fixture folders
 

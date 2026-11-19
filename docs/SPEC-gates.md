@@ -188,10 +188,10 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-ksos-posix (running on the POSIX host port) | ✅ | ➖(note 5) | ➖(note 5) |
 | test-ksos-link (bare-metal linking, `test-ksos-ramtext` with it) | ✅ | ➖(note 2) | ✅(note 6) |
 | test-ksos-qemu (bare-metal execution under QEMU) | ✅ | ➖(note 7) | ➖(note 7) |
-| test-ksmd-browser (the ksmd page edited in a browser, and served by `kssrv --local`) | ✅ | ➖(note 31) | ✅(note 31) |
+| test-ksmd-browser (the ksmd page edited in a browser, and served by `kssrv --local`; axe-core run on it) | ✅ | ➖(note 31) | ✅(note 31) |
 | test-ksmd-desktop (the `.desktop` entry `make ksmd` writes is valid, starts its program from a folder with a space, and installs) | ✅ | ➖(note 23) | ➖(note 23) |
 | test-ksmd-open (the ksmd launcher) | ✅ | ➖(note 32) | ➖(note 32) |
-| test-ksagent-chat (the launcher's model server, then ksagent's chat page in a browser, through kssrv and `ksagent watch`) | ✅ | ➖(note 33) | ✅(note 33) |
+| test-ksagent-chat (the launcher's model server, then ksagent's chat page in a browser, through kssrv and `ksagent watch`; axe-core run on it) | ✅ | ➖(note 33) | ✅(note 33) |
 | test-debug-line (the debug position points at the `.kspl`) | ✅ | ➖(note 2) | ✅(note 10) |
 | test-split (split compilation builds the same thing as a single TU) | ✅ | ➖(note 2) | ✅(note 11) |
 | test-layout-targets (every size ksplc folds is the target machine's, for each machine it knows) | ✅(note 24) | ➖(note 2) | ✅(note 24) |
@@ -213,7 +213,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-llvm-pkgs (kssrv's and kstls's tests on code the LLVM backend built) | ✅ | ➖(note 28) | ➖(note 28) |
 | test-blas (ksai's unit tests with `BLAS=1`) | ✅ | ➖(note 15) | ➖(note 15) |
 | kstls's own tests (the OpenSSL binding, from a copy by `test-extract`) | ✅ | ➖(note 2) | ✅(note 18) |
-| perf-log (peak memory, the tree types' sizes, and counted instructions of the compiler, a program and kssrv, judged by `perf_guard`) | ✅ | ➖(note 16) | ➖(note 16) |
+| perf-log (peak memory, the tree types' sizes, and counted instructions of the compiler, a program, kssrv and the language server, judged by `perf_guard`) | ✅ | ➖(note 16) | ➖(note 16) |
 | test-race (no data race that the tests reach, under ThreadSanitizer) | ✅ | ➖(note 2) | ➖(note 17) |
 | test-sanitize (the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls are clean under the memory and undefined-behaviour sanitizers) | ✅ | ➖(note 29) | ➖(note 29) |
 | test-holes (each known way to break memory or threads keeps its verdict today) | ✅ | ➖(note 34) | ➖(note 34) |
@@ -277,8 +277,8 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 15**: `make test-blas` runs ksai's unit tests with `BLAS=1`; ksai is the one package holding `#cfg(blas)`. It needs libopenblas, which the windows-ucrt64 and macOS runners lack. **`make lint` cannot replace it**, since only a real build shows whether the FFI is right: argument order, types, the library linked. So this is also where a library named by `##link` is seen linked.
 * **note 16**: `tests/checkers/perf_baseline.json` holds baselines (with tolerance factors) taken on the Linux CI's hardware, which would mislead elsewhere.
   * The verdict rests on the peak memory, the exact sizes of `Ast_node` and its list of children, and three counts of instructions. The build time is only recorded, as a ratio to the baseline (`tests/checkers/perf_guard.kspl` says why).
-  * **The counts stand in for speed.** Cachegrind counts the instructions of `tests/checkers/perf_work.kspl`, a fixed workload: once as stage1 translates it on an empty cache, once as the program built from it runs. The third count is kssrv, built as `make kssrv` ships it, answering the fixed requests of `kssrv/tests/workload.kspl`. Only the server runs under Cachegrind, and the workload stops it with `POST /api/stop`. Each count may be at most 1.1 times its baseline. GitHub's runners give no hardware counter to `perf stat`, so the gate needs `valgrind`, which the image holds. Without it, the gate fails.
-  * **Re-taking the baseline**: where a change costs more on purpose, run `make perf-log PERF_UPDATE=1` and commit the file with the change. It rewrites every value, the times among them, so take it on CI's image where you can. A change to `perf_work.kspl` or `kssrv/tests/workload.kspl` itself needs a new baseline too.
+  * **The counts stand in for speed.** Cachegrind counts the instructions of `tests/checkers/perf_work.kspl`, a fixed workload: once as stage1 translates it on an empty cache, once as the program built from it runs. The third count is kssrv, built as `make kssrv` ships it, answering the fixed requests of `kssrv/tests/workload.kspl`. Only the server runs under Cachegrind, and the workload stops it with `POST /api/stop`. The fourth count is stage1's language server worker, started directly, answering the fixed editor session of `tests/checkers/perf_lsp.kspl`. The worker holds all the analysis. The supervisor is left out: it kills the worker right after `shutdown`, so the worker's count would be lost at random. Each count may be at most 1.1 times its baseline. GitHub's runners give no hardware counter to `perf stat`, so the gate needs `valgrind`, which the image holds. Without it, the gate fails.
+  * **Re-taking the baseline**: where a change costs more on purpose, run `make perf-log PERF_UPDATE=1` and commit the file with the change. It rewrites every value, the times among them, so take it on CI's image where you can. A change to `perf_work.kspl`, `kssrv/tests/workload.kspl` or `perf_lsp.kspl` itself needs a new baseline too. To add one key alone, write it into the file by hand.
 * **note 17**: `test-race` builds the programs that start threads with clang's `-fsanitize=thread` and runs their tests (`tests/suite/race_test.kspl`). **Only Linux runs it**: Windows has no ThreadSanitizer, and macOS's runner is kept for what depends on its hardware (note 2).
   * **Only the C backend is built.** Through LLVM, `-fsanitize=thread` watches only the functions `--sanitize=thread` marks in the IR.
   * **It runs each program's tests once, on the schedule that run happens to take.** What it finds and what it does not:
@@ -306,6 +306,9 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 28**: `make LLVM=1 debug` holds neither kssrv nor kstls (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci` does.
 * **note 29**: `test-sanitize` builds the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls with clang's address, leak and undefined-behaviour sanitizers (`tests/suite/sanitize_test.kspl`). kssrv's tests start a server built the same way. ucrt64's clang holds no address sanitizer. macOS's runtime has no leak sanitizer on Apple silicon, and refuses to start when asked for one. So the suite says `SKIP` on both.
 * **note 31**: `test-ksmd-browser` drives ksmd's editing page in a headless Chromium (`ksmd/tests/browser/main.mjs`), then serves it with `kssrv --local` (`ksmd/tests/browser/served.mjs`).
+  * **axe-core, an automated accessibility checker, runs inside the page** in a few states (`ksmd/tests/browser/axe.mjs`). Any violation fails the gate, naming the rule and the element.
+    * **The checker is bundled** (`ksmd/tests/browser/axe.min.js`, listed in [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md)), so Linux and Windows run the same bytes with no download and no npm. Its SHA-256 is checked before it runs.
+    * **Its failure case runs first**: a button with no name, planted in the page, must be named by its rule and its element.
   * **The Windows job runs it in the Chrome that GitHub's runner image installs**, in Program Files. Its version moves with the image, while Linux's Chromium is pinned. `make ci` on a person's Windows takes Chrome from Program Files or the user's own folder.
   * **The macOS job does not run it**, as its minute costs ten times Linux's.
 * **note 32**: `test-ksmd-open` runs the cases its driver's header lists (`tools/tests/ksmd_launch.kspl`), with `--show`, so no browser starts. The launcher's lock is `flock` on Linux and macOS, and `LockFileEx` on Windows (`open_or_start` in `tools/opener.kspl`). **Only Linux runs the gate**, so launching and that lock are unchecked on Windows and macOS. The file association is checked on no platform.
@@ -318,6 +321,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
   * **The default seeds take a little over a minute on four cores.**
   * **The windows-ucrt64 runner has clang alone**, so there gcc's builds give a `SKIP` line, as in `test-equiv`.
 * **note 33**: `test-ksagent-chat` checks the launcher's model server with no browser (`tools/tests/chat_launch.mjs`), then drives ksagent's chat page in a headless Chromium (`tools/tests/chat_page.mjs`). Without a browser, only the second half is skipped. **Linux and Windows run the gate**, in the browser of note 31; macOS does not.
+  * axe-core runs on the chat page as on ksmd's (note 31): with its planted failure first, then empty, then with a checked answer and its source.
   * **On Windows, the launcher's cases that start a model server say `SKIP`**: their stand-in is a shell script, which Windows does not start as a program. A real `llama-server` checks them by hand.
 * **note 36**: `test-server-claims` builds kssrv and starts the run `claims` of kssrv's tests (`kssrv/tests/claims.kspl`) on `docs/SPEC-local-server.md`, then on kssrv's own specification ("kssrv — what a client can ask for").
   * **That run reads the specification's tables and sentences**, so neither side keeps a copy of the other. The specification also says which mode its rows start from: for local use, or facing outward. The run goes only with `--spec=`, since a copy of kssrv's folder alone does not hold the local server's specification (note 27).
@@ -411,7 +415,9 @@ Review checks what the gate cannot measure.
 
 ### Principle 3 - what is counted, and how
 
-**Every file written by hand has at most 1000 lines and is measured for size** (`.kspl`, `.c` / `.h`, and the page's `.html` / `.css` / `.js`). Only the generated `ksplc/seed.c` is left out.
+**Every file written by hand has at most 1000 lines and is measured for size** (`.kspl`, `.c` / `.h`, the page's `.html` / `.css` / `.js`, and Python, make and shell files). Only the generated `ksplc/seed.c` is left out.
+
+**A Markdown document has no line cap.** A reader looks a rule up by its heading, so a cap would split a specification by its count, not by its subject. Its sentences and headings are capped instead (Principle 7).
 
 **A function's length is lint's to measure** ([H0803], 300 lines), in KSPL source alone; C relies on the C compiler's warnings and on review. **Block nesting is limited to 8 levels**, with the function body at level 0 ([H0805]).
 

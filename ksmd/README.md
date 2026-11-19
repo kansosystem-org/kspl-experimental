@@ -17,6 +17,12 @@ From the repository root, `make ksmd` builds what a double-click needs: the page
 * **Which folder is the workspace, and the port it keeps:** "Opening a document from the desktop" in [`ksmd/docs/DESIGN-ksmd.md`](docs/DESIGN-ksmd.md#opening-a-document-from-the-desktop).
 * **On Windows, `make ksmd` and `make clean` first stop the servers the launcher left running**, since Windows cannot replace a running program's file. An open page keeps its edits as a draft; open the document again after the build.
 
+## Check a file without a browser
+
+After `make ksmd` from the repository root, `out/ksmd.exe --check notes.ksmd` prints whether ksmd refuses the file, and what each formula calculates. It starts no server and no browser, so a person or a model that wrote the file sees the answer at once. "Checking a file" in [`ksmd/docs/SPEC-file-format.md`](docs/SPEC-file-format.md#checking-a-file) sets what it prints.
+
+`out/ksmd.exe --markdown notes.ksmd` prints the document as Markdown, its tables showing their values, for a paste into a Markdown editor or a model's chat.
+
 ## Start ksmd on a folder by hand
 
 Without the launcher, start the local server yourself. The folder you name is the workspace: every document, include and image stays inside it.
@@ -75,10 +81,10 @@ flowchart BT
 | `base/` | Validated source bytes and their locations, the small scans the readers share, keys from a document, dates, and `name=value` attributes | nothing else in ksmd |
 | `model/` | The document: blocks, inline nodes, tables, and what a column or a cell carries (a look, a format, a colour rule, choices, groups) | `base` |
 | `calc/` | A formula, the values it calculates, and the calculation of every table | `base` `model` |
-| `syntax/` | The reader and the writer of the `.ksmd` source, clauses and inline markup among them | the three above |
+| `syntax/` | The reader and the writer of the `.ksmd` source, clauses and inline markup among them, and the Markdown a copy gives | the three above |
 | `files/` | How a path leads to a file, what a page fetched, the assembled view of includes, and image headers | the four above |
 | `edit/` | The editor: table edits, styled text, units of blocks, undo and redo, and every action | the four below `files/`; never `files/` |
-| `port/` | Where ksmd meets the outside. `web/` is the editing page: the wasm bridge, the view, and the page's scripts and style. `wasm*.kspl` and `own_build.kspl` build the page's wasm and a person's own functions. `table_writer.kspl` writes `calc/functions_table.kspl`. `desktop/` holds the file icon | all of the above |
+| `port/` | Where ksmd meets the outside. `web/` is the editing page: the wasm bridge, the view, and the page's scripts and style. `wasm*.kspl` and `own_build.kspl` build the page's wasm and a person's own functions. `check.kspl` is what `ksmd --check` and `ksmd --markdown` print. `table_writer.kspl` writes `calc/functions_table.kspl`. `desktop/` holds the file icon | all of the above |
 | `tests/` | The tests of the package's inside | all of the above |
 
 **`files/` and `edit/` stand side by side.** The editor changes one source and never reads a file, so it does not import `files/`; the page joins the two. Under one layer, a file may import any file of its own folder.
@@ -121,6 +127,7 @@ flowchart BT
 | [syntax/diagram.kspl](syntax/diagram.kspl) | A diagram's clause: its size and caption, one line per shape and per arrow, read and written back |
 | [syntax/settings.kspl](syntax/settings.kspl) | The document's own settings: the `:::document` clause, read, checked and written back |
 | [syntax/writer.kspl](syntax/writer.kspl) | Saves the model as canonical source |
+| [syntax/markdown.kspl](syntax/markdown.kspl) | Writes the document as Markdown, its tables as the values they show, for Copy as Markdown |
 | [files/files.kspl](files/files.kspl) | Which paths are refused by their text alone, and `Files`, where a document's files are read from |
 | [files/fetched.kspl](files/fetched.kspl) | The files a page fetched through the local server, and the ones it still lacks |
 | [files/assemble.kspl](files/assemble.kspl) | The assembled view: each included file in place, with where each block came from |
@@ -147,6 +154,7 @@ flowchart BT
 | [port/wasm.kspl](port/wasm.kspl) | Builds a KSPL entry file into a wasm32 module: the page's, and a person's own functions' |
 | [port/wasm_build.kspl](port/wasm_build.kspl) | Runs `port/wasm.kspl` for `ksmd/Makefile` to build the page's wasm |
 | [port/own_build.kspl](port/own_build.kspl) | Builds a file of a person's own functions for the page, run by the local server (`--builder`); `port/own/serve.kspl` is the module's fixed part |
+| [port/check.kspl](port/check.kspl) | What `ksmd --check` prints of a file: its refusal or its view's problems, and each formula's value; and what `ksmd --markdown` prints. `Disk` reads a workspace folder as the local server reads it |
 | [port/table_writer.kspl](port/table_writer.kspl) | Writes `calc/functions_table.kspl`, or checks that it is current (`make ksmd-functions`, `make debug-ksmd`) |
 | [tests/](tests/) | One file per subject, named for it, such as `document.kspl` for the reader and writer and `calculation.kspl` for values worked out by hand. `support.kspl` holds the helpers several files share. `main.kspl` checks source validation and runs them all. `measure.kspl` writes the three documents to measure. `fuzz_main.kspl` feeds broken documents to `read_prog.kspl`, from seeds such as `every_form.ksmd` |
 | [tests/browser/](tests/browser/) | The page in a headless Chromium over the DevTools protocol; `served.mjs` serves it with the local server (started by `kssrv.mjs`), and `measure.mjs` times it. `hostile.mjs` opens a document crafted to run script |

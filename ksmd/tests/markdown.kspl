@@ -1,0 +1,113 @@
+//< Copying a document as Markdown: the escapes that keep text the same, tables, fences, lists, and
+//< what is left out
+//< The forms a person reads are rows of `ksmd/docs/SPEC-file-format.md` ("Copying as Markdown"),
+//< which `claims.kspl` checks. These are the cases a row would only crowd.
+import "ksmd/calc/calc"
+import "ksmd/syntax/markdown" { Left_out }
+import "ksmd/syntax/markdown"
+import "ksmd/tests/support" { read }
+import "std/ds"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const H: U8[] = "%ksmd 2\n\n"
+
+fn run()
+    escapes()
+    tables()
+    blocks()
+
+priv fn copied(source: U8[], arena: Arena$@): U8[] //< the Markdown the source copies as
+    got: = copy_of(source, arena)
+    return got.text
+
+priv struct Copy
+    text: U8[]
+    left: Left_out
+
+priv fn copy_of(source: U8[], arena: Arena$@): Copy //< the Markdown, and what it left out
+    doc: = read(arena.text().s(H).s(source).take(), arena)
+    values: = calc.calculate(doc@, "2026-10-23", arena)
+    defer $out: = Str_builder()
+    left: = markdown.write(doc@, values@, out@)
+    return Copy::{ .text = arena.dup_str(out.slice()), .left = left }
+
+priv fn copies(what: U8[], source: U8[], want: U8[], arena: Arena$@) //<
+    //< The source copies as `want`
+    got: = copied(source, arena)
+    verdict.check(what, got.equals(want), got)
+
+priv fn escapes()
+    defer arena: = Arena(64 * 1024)
+    copies("a block marker that starts a line after a hard break is escaped",
+        "\\- a\\\n+ b\\\n\\> c\\\n===\\\n\\---\\\n2) d\\\n-5 e\n",
+        "\\- a\\\n\\+ b\\\n\\> c\\\n\\===\\\n\\---\\\n2\\) d\\\n-5 e\n", arena)
+    copies("a backslash before a hard break stays a backslash", "a\\\\\\\nb\n", "a\\\\\\\nb\n",
+        arena)
+    copies("`_` between two letters or digits stays; elsewhere it is escaped",
+        "snake_case_1 and _x_ and a__b\n", "snake_case_1 and \\_x\\_ and a\\_\\_b\n", arena)
+    copies("`*`, `[`, `]` and `~` are escaped everywhere",
+        "3\\*4, \\[1\\], ~x~ and \\*\\*no\\*\\*\n", "3\\*4, \\[1\\], \\~x\\~ and \\*\\*no\\*\\*\n",
+        arena)
+    copies("`<` is escaped where it starts a tag, and `&` where it starts a reference",
+        "2 < 3, <i>, </b>, <!x>, &copy;, &#169;, &#xA9; and R&D\n",
+        "2 < 3, \\<i>, \\</b>, \\<!x>, \\&copy;, \\&#169;, \\&#xA9; and R&D\n", arena)
+    copies("a heading's closing `#` run is kept as text", "## Issue \\#\\#\n", "## Issue #\\#\n",
+        arena)
+    copies("a heading's text that starts with a marker stays as it is", "# \\- one\n", "# - one\n",
+        arena)
+    copies("an item's text that would read as a tick box is escaped", "- \\[ \\] open\n- \\# x\n",
+        "- \\[ \\] open\n- \\# x\n", arena)
+    copies("`!` before a link is escaped; elsewhere it stays", "Hi! See![x](https://a.example)\n",
+        "Hi! See\\![x](https://a.example)\n", arena)
+    copies("a code span takes a run of backticks it does not hold", "`` a`b `` and `|`\n",
+        "``a`b`` and `|`\n", arena)
+    copies("a backslash in a destination is escaped, so it reads back whole",
+        "[a](https://a.example/x\\\\y)\n", "[a](https://a.example/x\\\\\\\\y)\n", arena)
+    copies("spaces inside marks stand outside them, and none is left at a line's edge",
+        "a** b **c *d *e\n\n** f** g\n", "a **b** c *d* e\n\n**f** g\n", arena)
+    copies("coloured text keeps its text, and a link its colour's text",
+        "[red]{color=\"#c00000\"} and [b](https://a.example){color=\"#c00000\"}\n",
+        "red and [b](https://a.example)\n", arena)
+
+priv fn tables()
+    defer arena: = Arena(64 * 1024)
+    copies("a line break of each kind is one `<br>`, and an empty cell is empty",
+        ":::table name=\"t\"\n| \"a\" | \"b\" |\n| \"x\\r\\ny\\rz\\nw\" | |\n:::\n",
+        "| a | b |\n| --- | --- |\n| x<br>y<br>z<br>w |  |\n", arena)
+    copies("a name is escaped as text is, and a `-` or `#` in a cell is not",
+        ":::table name=\"t\"\n| \"a|b\" | \"*c*\" |\n| \"- x\" | \"# y\" |\n:::\n",
+        "| a\\|b | \\*c\\* |\n| --- | --- |\n| - x | # y |\n", arena)
+    copies("a cell's own format stands over its column's, and a date takes its column's",
+        ":::table name=\"t\" formats=\"number:1,date:yyyy/mm/dd\"\n| \"a\" | \"b\" |\n| 2 \
+            {format=\"percent:0\"} | 2026-10-23 |\n| 2 | =today() |\n:::\n",
+        "| a | b |\n| --- | --- |\n| 200% | 2026/10/23 |\n| 2.0 | 2026/10/23 |\n", arena)
+    copies("true and false show as words, and a link on an empty value writes no brackets",
+        ":::table name=\"t\"\n| \"a\" | \"b\" |\n| =1<2 | \"\" {link=\"https://a.example\"} \
+            |\n:::\n", "| a | b |\n| --- | --- |\n| true |  |\n", arena)
+    copies("columns a closed group hides are written too",
+        ":::table name=\"t\" groups=\"columns B closed\"\n| \"a\" | \"b\" |\n| 1 | 2 |\n:::\n",
+        "| a | b |\n| --- | --- |\n| 1 | 2 |\n", arena)
+
+priv fn blocks()
+    defer arena: = Arena(64 * 1024)
+    copies("a code fence is longer than any run of backticks inside",
+        "````\nx\n```\n`````y\n````\n", "``````\nx\n```\n`````y\n``````\n", arena)
+    copies("a list after a list, a blank line between, takes the other markers",
+        "- a\n\n\\\n\n1. b\n", "- a\n\n1) b\n", arena)
+    copies("a nested item under a nested item is indented to its parent's text",
+        "1. a\n  1. b\n    - c\n", "1. a\n   1. b\n      - c\n", arena)
+    got: =
+        copy_of(":::image src=\"a.png\" alt=\"A\"\ndraw shape=\"line\" from=\"1,1\" \
+            to=\"2,2\"\n:::\n\n:::chart table=\"t\" kind=\"bar\" labels=\"a\" \
+            values=\"b\"\n:::\n\n:::diagram size=\"100,100\" caption=\"Flow\"\nbox id=\"a\" \
+            at=\"0,0\" size=\"50,50\"\n:::\n", arena)
+    verdict.check("what is not copied is counted, and each but the shapes leaves a line",
+        got.left.charts == 1 && got.left.diagrams == 1 && got.left.includes == 0 &&
+        got.left.drawn == 1 &&
+        got.text
+        .equals("![A](a.png)\n\n*Not copied: a chart.*\n\n*Not copied: the diagram \"Flow\".*\n"),
+        got.text)
+    copies("a document of a blank line and its settings alone copies as nothing",
+        ":::document numbers=1\n:::\n\n\\\n", "", arena)

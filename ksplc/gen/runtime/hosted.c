@@ -252,7 +252,10 @@ KSPL_UNUSED static int kspl_poll_whole(struct pollfd *fds, nfds_t n, I32 ms) {
 
 /* Copies a UTF-8 run to a UTF-16 NUL terminator.
  * Caution: **Returns 0 where it does not fit or holds a NUL.** Otherwise an operation on a
- * different path would come back as a success (the same reason as kspl_to_cstr). */
+ * different path would come back as a success (the same reason as kspl_to_cstr).
+ * Caution: **A text that is not empty needs room for one unit and the NUL.** Handed a size of 0,
+ * MultiByteToWideChar writes nothing and returns the size it needs. The NUL would then land past
+ * out. */
 KSPL_UNUSED static int kspl_win_to_wide(const char *utf8, Sz len, wchar_t *out, Sz out_cap) {
     int n;
     if (len < 0 || out_cap < 1) return 0;
@@ -260,7 +263,7 @@ KSPL_UNUSED static int kspl_win_to_wide(const char *utf8, Sz len, wchar_t *out, 
         out[0] = L'\0';
         return 1;
     }
-    if (memchr(utf8, '\0', (size_t)len) != NULL) return 0;
+    if (out_cap < 2 || memchr(utf8, '\0', (size_t)len) != NULL) return 0;
     if (len > 0x7FFFFFFF || out_cap - 1 > 0x7FFFFFFF) return 0;
     n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, (int)len, out, (int)(out_cap - 1));
     if (n <= 0) return 0;

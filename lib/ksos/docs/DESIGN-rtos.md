@@ -683,7 +683,7 @@ A range spanning pages is written page by page, with 0xFF in the bytes not touch
 
 **Without a watchdog, a program that stops answering leaves the motors at their last duty.** A panic already stops them through the panic hook, but a hang does not panic. An endless loop, a lock-up, or a fault inside a Flash window all leave the car driving with nothing deciding. (In a Flash window, the fault handler, being in Flash, cannot even be fetched.) The watchdog resets the chip when the program stops feeding it. The reset puts every peripheral back in reset, so the PWM pins fall back to their reset state and the motors stop.
 
-**Every firmware that drives the motors starts them with `motors_up`** in `lib/ksos/demo/rp2040/common/bringup.kspl`. It stops a watchdog left running, starts the motors stopped, and sets the panic hook that stops them. The firmware then arms the watchdog before its control loop and feeds it from there: the two cars and the motor bench sequence all do.
+**Every firmware that drives the motors starts them with `motors_up`** in `lib/ksos/demo/rp2040/common/bringup.kspl`. It stops a watchdog left running, starts the motors stopped, and sets the panic hook that stops them. The firmware then arms the watchdog before its control loop and feeds it from there. The two cars, the car check and the motor bench sequence all do.
 
 **What the driver does**, with the register addresses from the RP2040 datasheet's chapters "Watchdog" and "Power-On State Machine":
 

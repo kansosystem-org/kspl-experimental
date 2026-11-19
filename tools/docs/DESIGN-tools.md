@@ -180,6 +180,22 @@ ksmd needs a workspace that holds the document's includes, and one port for it o
 * **One folder spelt two ways is two workspaces**, such as another letter case on Windows or a path through a link.
 * **Each opening shows a new browser tab.** The opener cannot bring forward a tab that another program opened. Two tabs on one document keep two drafts, so nothing is lost.
 
+### Checking a `.ksmd` document without a browser
+
+**`--check` is a mode of ksmd's opener, and it opens nothing.** It finds the document and its workspace as an opening does (`document_at` in [`../ksmd.kspl`](../ksmd.kspl)). It hands both to ksmd's own check, `ksmd/port/check.kspl`, and prints what that writes. What it prints is "Checking a file" in [`ksmd/docs/SPEC-file-format.md`](../../ksmd/docs/SPEC-file-format.md#checking-a-file).
+
+| Decision | Why |
+| :-- | :-- |
+| **The opener takes the check, not a program of its own** | `ksmd` is already the command a person and a model know, with its workspace rules. A second program would need its own build, install and association |
+| **It is the option `--check`, not a word before the document** | A document named `check` still opens. The modes already are options (`--list`, `--stop-all`) |
+| **The reading and calculating stay in ksmd** | The page and the check then cannot differ. The opener adds only the workspace and the date |
+| **It needs neither kssrv nor the page** | It reads the workspace itself, through `fs.join_under`, as the server does. So it works where the page cannot be built |
+| **A wrong command line ends with code 2**, as `argparse` does | A caller tells a mistyped command from a file with a problem (code 1) |
+
+**The check takes its own options alone**, as each mode does: `--show`, `--list` and `--stop` beside it are refused. `--today` is refused without it.
+
+**What it gives up**: on Windows the opener is a windowing program, so a prompt typed by hand returns before the check ends. The section on the console above says why.
+
 ### Opening the chat page
 
 **Asking about a folder is one command, `make chat DIR=<folder>`, which runs `tools/ksagent_chat.kspl`, built as `out/ksagent_chat.exe`.** It makes sure a model server answers ("Starting the model server" below). It starts or reuses a local server that serves the chat page for the folder, and hands the URL to the browser. It then runs `ksagent watch` on the folder in the foreground, so one command both opens the page and answers it. **`make chat` hands it every option, empty where a setting is not given**, and the launcher makes every choice ("A run target writes every option out" in [`docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md)). `out/ksagent_chat.exe --help` names each default.

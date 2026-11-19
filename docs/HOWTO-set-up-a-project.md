@@ -245,5 +245,7 @@ update-desktop-database ~/.local/share/applications
 | Look at | What it tells you |
 | :-- | :-- |
 | **A run from a terminal** | `out/ksmd.exe <document>` prints why it refuses a document, such as a name not ending in `.ksmd` |
+| **`out/ksmd.exe --check <document>`** | It starts nothing, and prints whether ksmd refuses the document and what each formula gives. `--today=<date>` sets the date `today()` gives. "Checking a file" in [`ksmd/docs/SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md#checking-a-file) sets what it prints |
+| **`out/ksmd.exe --markdown <document>`** | It starts nothing, and prints the document as Markdown, as File ▸ Copy as Markdown copies it. "Copying as Markdown" in [`ksmd/docs/SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md#copying-as-markdown) sets what it prints |
 | **`out/tmp/ksmd.browser.log`** | What the browser printed when the launcher started it |
 | **`out/ksmd.exe --show <document>`** | It prints the whole URL, with the token after `#`; paste it into a browser. If the document opens, only the hand-over to the browser failed. Without `--show` no token is printed, since a double-click's output can reach others |

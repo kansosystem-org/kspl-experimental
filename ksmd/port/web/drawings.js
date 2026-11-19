@@ -72,6 +72,7 @@ function ksmdDrawings(ks) {
       bar.appendChild(b);
     }
     const pick = ks.el("select", "draw-colour");
+    pick.setAttribute("aria-label", "Colour");
     pick.title = "The colour of new shapes, and of the chosen one";
     for (const [value, name] of COLOURS) pick.appendChild(new Option(name, value, false, value === colour));
     bar.appendChild(pick);

@@ -52,11 +52,14 @@ $(KSMD_RES): $(KSMD_ICON_DIR)/ksmd.rc $(KSMD_ICON_DIR)/ksmd.ico | $(OUT_DIR)
 	$(WINDRES) --include-dir=$(KSMD_ICON_DIR) -O coff $(KSMD_ICON_DIR)/ksmd.rc -o $@
 endif
 
-$(KSMD_EXE): $(STAGE1_EXE) $(KSMD_RES) tools/ksmd.kspl $(OPENER_SRC)
+# **A file with the sources it was built from**: `--check` reads and calculates with ksmd's own code.
+$(KSMD_EXE): $(STAGE1_EXE) $(KSMD_RES) $(call kspl_unrecorded,$(GEN_DIR)/ksmd)
 	$(stop_ksmd_servers)
 	@echo "# BUILDING the launcher (out/ksmd.exe)"
-	$(call kspl_build,tools/ksmd.kspl,ksmd,,$(GUI_LDFLAGS) $(KSMD_RES))
+	$(call kspl_build,tools/ksmd.kspl,ksmd,--emit-deps=$(GEN_DIR)/ksmd.deps,$(GUI_LDFLAGS) $(KSMD_RES))
+	$(call kspl_dep_rules,$@,$(GEN_DIR)/ksmd)
 	@echo "# built -> $(KSMD_EXE)"
+-include $(GEN_DIR)/ksmd.d
 
 $(KSMD_BUILDER_EXE): $(STAGE1_EXE) $(KSMD_BUILDER_SRCS)
 	@echo "# BUILDING the builder of a page's own functions ($(KSMD_BUILDER_EXE))"
@@ -72,7 +75,7 @@ ksmd-open: ksmd-web $(KSSRV_EXE) $(KSMD_EXE) $(KSMD_BUILDER_EXE)
 # `--show`, so no browser starts (`tools/tests/ksmd_launch.kspl`). Its work folder is emptied first.
 KSMD_LAUNCH_WORK := $(TMP_DIR)/ksmd_launch_test
 
-## Gates|test-ksmd-open|Start the ksmd launcher on scratch workspaces: the workspace, its port, reuse, a taken port, two opens at once and the refusals
+## Gates|test-ksmd-open|Start the ksmd launcher on scratch workspaces: the workspace, its port, reuse, a taken port, two opens at once, the refusals and `--check`
 test-ksmd-open: $(KSSRV_EXE) $(KSMD_EXE) $(KSMD_BUILDER_EXE)
 	rm -rf "$(KSMD_LAUNCH_WORK)"
 	./$(STAGE1_EXE) run tools/tests/ksmd_launch.kspl $(KSMD_EXE) $(KSSRV_EXE) $(KSMD_BUILDER_EXE) \

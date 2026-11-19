@@ -3,7 +3,7 @@ import "std/chars" // `ends_with`
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena, dealloc }
+import "std/mem" { Arena, alloc, dealloc }
 import "std/str" // `lines` / `Str_builder`
 import "std/subproc"
 import "std/sys"
@@ -303,17 +303,49 @@ fn test_hard_arguments_arrive_whole(ksplc: U8[], arena: Arena$@) //< ksplc runs 
     //< **Each argument arrives as it was given**, through ksplc to the program it runs
     //< On Windows each start joins the arguments into one command line, and the child splits it
     //< again. A backslash before a quote, a trailing backslash and an empty argument are what a
-    //< wrong quoting rule loses or merges.
+    //< wrong quoting rule loses or merges. **Each one is copied to UTF-16 and back on the way**,
+    //< so characters outside the BMP (two units each) and a long argument go too.
     verdict.start("[Sys] arguments with quotes, backslashes, spaces and a tab arrive whole...")
+    long: = arena.text()
+    for _i in Range.asc(400)
+        long.s("\\\"😀")
+    long.s("\\\\")
+    hard: = U8[][]::{ "C:\\dir\\", "a\"b", "a\\\\\"b", "", "a b", "tab\there", "x\\", "😀𝄞 か",
+        "\\\\", "\"", "a\\\\", "\\\"", " ", "\"\"\\", long.take() }
     $argv: = List<|U8[]|>(arena)
     argv.push_all(sys_test.child_argv(ksplc, "args_echo", ARGS_ECHO_SRC, arena))
-    argv
-        .push_all(U8[][]::{ "C:\\dir\\", "a\"b", "a\\\\\"b", "", "a b", "tab\there", "x\\" })
-    r: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena) catch
+    argv.push_all(hard)
+    want: = arena.text()
+    for a in hard
+        want.c('[').s(a).c(']')
+    r: = subproc.run_capture(argv.slice(), "", 300000, 65536, arena) catch
         panic("the child echoing its arguments must start")
-    sys_test.expect_output(r, "the child echoing its arguments",
-        "[C:\\dir\\][a\"b][a\\\\\"b][][a b][tab\there][x\\]", 0, arena)
-    verdict.pass("Seven hard arguments reached the child through ksplc, each one whole.")
+    sys_test.expect_output(r, "the child echoing its arguments", want.take(), 0, arena)
+    verdict.pass("Fifteen hard arguments reached the child through ksplc, each one whole.")
+
+priv const NO_UNICODE_TRANSLATION: I32 = 1113 //< Windows's `ERROR_NO_UNICODE_TRANSLATION`
+
+fn test_argument_not_utf8(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //< **An argument that is not UTF-8 reaches the child as bytes on POSIX, and fails on Windows**
+    //< Windows's command line is UTF-16, which such bytes have no form in, so the start fails
+    //< before any child runs (`Spawn_error.spawn_failed`).
+    verdict.start("[Sys] an argument that is not UTF-8...")
+    stray: = arena.text().s("bad_").c(0xFFU8).take()
+    half: = arena.text().s("half_").c(0xEDU8).c(0xA0U8).c(0x80U8).take()
+    $argv: = List<|U8[]|>(arena)
+    argv.push_all(sys_test.child_argv(ksplc, "args_echo", ARGS_ECHO_SRC, arena))
+    argv.push(stray)
+    argv.push(half)
+    r: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena) catch
+        assert(sys.is_windows(), "POSIX must start a child with arguments that are not UTF-8")
+        assert(subproc.start_error() == NO_UNICODE_TRANSLATION,
+            "Windows must name the argument it cannot convert")
+        verdict.pass("Windows refused the arguments that are not UTF-8 at the start.")
+        return
+    assert(!sys.is_windows(), "Windows must refuse an argument that is not UTF-8")
+    want: = arena.text().c('[').s(stray).s("][").s(half).c(']').take()
+    sys_test.expect_output(r, "the child echoing its arguments", want, 0, arena)
+    verdict.pass("The arguments that are not UTF-8 reached the child as their bytes.")
 
 fn test_run_many_frees_slots_early(arena: Arena$@) //<
     //< A job that ends early frees its slot for the next, while an earlier job still runs
@@ -868,6 +900,29 @@ fn test_win_line_batch(arena: Arena$@) //<
     tail: = win_line(U8[][]::{ bat, "C:\\d\\" }, arena)
     assert(tail.equals("\"C:\\t\\x.bat\" \"C:\\d\\\\\""), "a trailing backslash is doubled")
     verdict.pass("a batch file's arguments stay quoted or are refused, under each spelling of it.")
+
+fn test_win_line_never_cut(arena: Arena$@) //<
+    //< A line too long for its buffer is refused, never cut, and nothing lands past the buffer
+    //< Each buffer comes from the heap at its exact size, so the address sanitizer reports a write
+    //< past it. A run of backslashes before a quote or the end counts twice.
+    verdict.start("[Sys] the Windows line fits its buffer whole or is refused...")
+    argv: = U8[][]::{ "C:\\t\\x.exe", "a\\\\\"b", "end\\\\", "😀\"𝄞", "", "\\\\\\\"" }
+    whole: = win_line(argv, arena)
+    assert(whole.len > 0, "the line must fit the test's own buffer")
+    defer $run: = str.Str_builder()
+    for a in argv
+        run.s(a).c(0U8)
+    for cap in Range.asc(whole.len + 256)
+        buf: = U8$@::alloc(cap)
+        if kspl_win_line_for(run.ptr, run.len, I32::argv.len, buf, I32::cap)
+            got: = U8[]::{ .ptr = buf, .len = cap }
+            end: = got.find_char(0U8).unwrap_or(cap)
+            assert(end < cap && got.sub(0, end).equals(whole),
+                "a line that fits must be the whole line, its NUL inside the buffer")
+        else
+            assert(cap < whole.len + 255, "a buffer with room to spare must take the line")
+        dealloc(Void$@::buf)
+    verdict.pass("Each buffer took the whole line or refused it, and none was written past.")
 
 // ==========================================
 // How a program is found and how it ended, on Windows

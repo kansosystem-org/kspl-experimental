@@ -8,9 +8,10 @@ import "ksmd/files/assemble" { Assembly, NONE, assemble_loaded }
 import "ksmd/files/fetched" { Fetched, Held }
 import "ksmd/files/files" { Loaded, Refusal, load, moved_path, resolve_text }
 import "ksmd/model/model" { Block_kind, Inline }
+import "ksmd/port/check" { Disk }
 import "ksmd/port/web/save_as"
 import "ksmd/syntax/writer"
-import "ksmd/tests/support" { Folder, opened }
+import "ksmd/tests/support" { opened, view_on_disk }
 import "ksmd/tests/support"
 import "std/chars"
 import "std/ds"
@@ -325,7 +326,7 @@ priv fn saves() //< a source saves its own text alone, and the next view shows i
     names: U8[][2] = ::{ "overview.ksmd", "notes.ksmd" }
     for name in names
         make_file(root, name, read(fs.join("examples", name, arena), arena), arena)
-    ws: = Folder::{ .root = root }
+    ws: = Disk::{ .root = root }
     notes: = loaded(ws@, "notes.ksmd", arena)
     edit_text(notes, 1, "Changed text.")
     edited: =
@@ -354,12 +355,12 @@ priv fn top_failures() //< only the opened document's own failure fails the asse
     defer arena: = Arena(64 * 1024)
     root: = workspace(arena)
     make_file(root, "bad.ksmd", "%ksmd 3\n", arena)
-    ws: = Folder::{ .root = root }
+    ws: = Disk::{ .root = root }
     verdict.check("a missing document is refused",
         refused_with(ws@, "missing.ksmd", .missing, arena), "")
     verdict.check("a document outside the workspace is refused",
         refused_with(ws@, "../x.ksmd", .outside, arena), "")
-    _view: = ws.assemble("bad.ksmd", arena) catch e
+    _view: = view_on_disk(ws@, "bad.ksmd", arena) catch e
         $where: = ""
         switch e
         case .invalid(at)
@@ -413,7 +414,7 @@ priv fn fetched_rounds() //< a page that fetches what each round lacks ends with
     make_file(root, "parts/two.ksmd", "%ksmd 2\n\n:::include path=\"../shared.ksmd\"\n:::\n", arena)
     make_file(root, "shared.ksmd", "%ksmd 2\n\nShared.\n", arena)
     make_file(root, "parts/cat.png", "only whether it stands is asked", arena)
-    ws: = Folder::{ .root = root }
+    ws: = Disk::{ .root = root }
     disk: = assembled(root, "top.ksmd", arena)
     top: = loaded(ws@, "top.ksmd", arena)
     $f: = Fetched(arena)
@@ -439,7 +440,7 @@ priv fn fetched_rounds() //< a page that fetches what each round lacks ends with
         arena.text().s("\{rounds\} rounds, \{asked\} asked").take())
     scratch.remove_tree(root, arena)
 
-priv fn answer(ws: Folder@, fetched: Fetched$@, path: U8[], image: Bool, arena: Arena$@) //<
+priv fn answer(ws: Disk@, fetched: Fetched$@, path: U8[], image: Bool, arena: Arena$@) //<
     //< What the local server answers for one path, held as the page holds it
     if image
         ws.check(path, arena) catch why
@@ -506,17 +507,17 @@ priv fn sized(bytes: Sz, arena: Arena$@): U8[] //< a valid source of exactly tha
     return arena.dup_str(b.slice())
 
 priv fn assembled(root: U8[], top: U8[], arena: Arena$@): Assembly //< a refusal stops the run
-    ws: = Folder::{ .root = root }
-    return ws.assemble(top, arena) catch
+    ws: = Disk::{ .root = root }
+    return view_on_disk(ws@, top, arena) catch
         panic("the opened document itself was refused")
 
-priv fn loaded(ws: Folder@, path: U8[], arena: Arena$@): Loaded //< a refusal stops the run
+priv fn loaded(ws: Disk@, path: U8[], arena: Arena$@): Loaded //< a refusal stops the run
     return load(ws, path, arena) catch
         panic("a source to edit was refused")
 
-priv fn refused_with(ws: Folder@, path: U8[], want: Refusal, arena: Arena$@): Bool //<
+priv fn refused_with(ws: Disk@, path: U8[], want: Refusal, arena: Arena$@): Bool //<
     //< Whether opening the document fails with that refusal
-    _view: = ws.assemble(path, arena) catch e
+    _view: = view_on_disk(ws, path, arena) catch e
         switch e
         case .refused(why)
             return why == want

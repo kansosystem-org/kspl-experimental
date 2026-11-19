@@ -421,6 +421,7 @@ $(foreach r,$(KSOS_NRF51_DEMOS),$(eval $(call qemu_demo_rule,nrf51,$(r),demo/nrf
 # QEMU has no RP2040, so here is build/link/objdump only (`lib/ksos/docs/DESIGN-rtos.md`).
 export UF2_HINT_COPY := (hold BOOTSEL down, connect USB, and copy it to the drive that appears)
 export UF2_HINT_MOTOR := (lift the wheels off before writing it)
+export UF2_HINT_CAR_CHECK := (open the Serial Monitor after writing it; nothing moves until you confirm the stand with the remote)
 export RP2040_LINK_NOTE := (for making the UF2 see ksos-rp2040-buzzer. An SWD probe is not needed)
 
 RP2040_DIR := port/rp2040
@@ -474,7 +475,9 @@ ksos-rp2040: $(RP2040_LINK_OBJS) | $(RP2040_OUT)
 # * net: enable internet connection sharing on the PC ("The setting on the PC side" in lib/ksos/docs/TUTORIAL-bring-up.md).
 # * car-pilot: lift the wheels off; kssrv is needed only while receiving (stage 7 there).
 # * car-ir: line tracking uses the policy in the records, so run car-pilot once first.
+# * car-check: have the remote and a stand ready (stage 13 there).
 ksos_rp2040_hint_motor := UF2_HINT_MOTOR
+ksos_rp2040_hint_car-check := UF2_HINT_CAR_CHECK
 rp2040_suffixes := $(call demo_suffixes,rp2040,rp2040_,_probe)
 KSOS_RP2040_DEMOS := $(foreach d,$(rp2040_suffixes),$(d)$(addprefix :,$(ksos_rp2040_hint_$(d))))
 

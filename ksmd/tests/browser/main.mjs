@@ -7,7 +7,8 @@
 // a diagram `diagrams.mjs`; help while a formula is typed, and its references' colours,
 // `formulas.mjs`; cells copied and pasted with their formulas or as values `pasting.mjs`; the
 // status bar `status.mjs`; the formula bar `bar.mjs`; the keys and what a screen reader is given
-// `keyboard.mjs`; a document crafted to run script `hostile.mjs`. Last, the run checks that the page
+// `keyboard.mjs`; a document crafted to run script `hostile.mjs`; the automated accessibility
+// checker, run in a few states, `axe.mjs`. Last, the run checks that the page
 // did nothing its Content-Security-Policy refuses.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
@@ -18,6 +19,7 @@
 import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
+import { accessible, planted } from "./axe.mjs";
 import { launch } from "./cdp.mjs";
 import { ALT, CTRL, H, SHIFT, cellText, check, driver, focusOf, verdict } from "./drive.mjs";
 import { served } from "./served.mjs";
@@ -77,8 +79,8 @@ const sections = {
       into.join(" "));
     check(await until("document.documentElement.dataset.files === 'none'") &&
       await js("Array.from(document.querySelectorAll('.files [data-cmd]')).filter((b) => !b.hidden)" +
-        ".map((b) => b.dataset.cmd).join() === 'page-setup,print'"),
-    "a page opened from a file offers Page setup and Print alone in File; a host gives it a source");
+        ".map((b) => b.dataset.cmd).join() === 'page-setup,print,copy-markdown'"),
+    "a page opened from a file offers Page setup, Print and Copy as Markdown alone in File; a host gives it a source");
     const names = await js("[document.querySelector('.menubar .doc-name').textContent, document.title, " +
       "getComputedStyle(document.documentElement).getPropertyValue('--print-name').trim()].join('|')");
     check(names === 'Untitled|Untitled - ksmd|"Untitled"',
@@ -616,6 +618,40 @@ const sections = {
       "a pipe in quoted text stays in its cell, and 0012 and =1+2 stay text");
     check(await js("document.querySelector('#doc pre').textContent.startsWith(':::include')"),
       "the fenced clause stays code");
+  },
+
+  // What a check written by hand would miss, found by axe-core (`axe.mjs`): first that it finds a
+  // planted fault, then that it finds none in each state a person meets most.
+  async axe() {
+    await planted(js);
+    await load(`${H}# Trip\n\nSee [site](https://kanso.example/x).\n\n- one\n- two\n\n## Budget\n\n` +
+      ':::table name="t"\n| "a" | "b" |\n| "x" | 1 |\n| "y" | =B1*2 |\n:::\n\n' +
+      ':::chart table="t" kind="bar" labels="a" values="b"\n:::\n\n' +
+      ':::diagram size="600,300"\nbox id="s1" at="20,20" size="100,60"\n' +
+      'box id="s2" at="300,20" size="100,60"\narrow from="s1" to="s2"\n:::\n');
+    // **Each state is checked once**, each with markup or colours of its own: a run takes about
+    // half a second. The scheme is set both ways, since a browser can take the dark one from the OS.
+    const scheme = (value) => page("Emulation.setEmulatedMedia",
+      { features: [{ name: "prefers-color-scheme", value }] });
+    await scheme("light");
+    await accessible(js, "a document with a table, a chart and a diagram, in the light scheme");
+    await scheme("dark");
+    await accessible(js, "the same document in the dark scheme");
+    await scheme("");
+    await click(".top-menu:has([data-cmd=print]) > .menu-name");
+    check(await until("!!document.querySelector('.top-menu:has([data-cmd=print]) .menu:not([hidden])')", 3000),
+      "the File menu opens");
+    await accessible(js, "the File menu open");
+    await press("Escape");
+    await click("#doc td[data-r='0'][data-c='1']");
+    await menu("insert-function");
+    check(await until("document.querySelector('.fx-dialog').open", 3000), "the dialog of functions opens");
+    await accessible(js, "the dialog of functions open");
+    await press("Escape");
+    await menu("page-setup");
+    check(await until("!!document.querySelector('.settings-panel:not([hidden])')", 3000), "Page setup opens");
+    await accessible(js, "Page setup open");
+    await press("Escape");
   },
 
   // A link opens in a tab of its own, and never takes the editor's tab away from the document.

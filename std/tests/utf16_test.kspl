@@ -1,0 +1,204 @@
+//< Tests of long and odd text Windows takes in UTF-16: names, environment values, command lines
+//< **Each runs on every OS.** On Windows the C runtime copies every one to UTF-16 and back in sized
+//< buffers, where no sanitizer runs ("Paths are UTF-8, converted to the wide API on Windows" in
+//< `std/docs/DESIGN-system.md`). Elsewhere the same calls go through the POSIX half.
+import "std/ds"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/sys"
+import "std/tests/scratch"
+import "std/verdict"
+
+priv fn made_whole(dir: U8[], name: U8[], arena: Arena$@): Bool //<
+    //< Whether a file could be made under `name` in the empty folder `dir`
+    //< **Where it could, it must list, read, give its long name and go by exactly that name.** A
+    //< name cut or changed on the way names another file, so the test stops there. **Where it
+    //< could not, it must fail as the OS's refusal** ("A path that reaches no file fails as a
+    //< refusal" in `std/docs/DESIGN-system.md`).
+    path: = fs.join(dir, name, arena)
+    io.write_file(path, "odd") catch e
+        switch e
+        case .write_failed(at)
+            assert(at.equals(path), "a refused name must fail naming its path")
+        default
+            panic("a name the OS refuses must fail as write_failed")
+        refused_as_missing(path, arena)
+        return false
+    listed: = fs.read_dir(dir, arena) catch panic("a folder holding a made file must list")
+    assert(listed.len == 1 && listed.get(0).equals(name),
+        "a made file must list by the name it was made under")
+    got: = io.read_file(fs.join(dir, listed.get(0), arena), arena)
+        catch panic("a made file must read through its listed name")
+    assert(got.equals("odd"), "a made file must read back what was written")
+    long: = fs.long_name(path, arena) catch panic("a made file must give its long name")
+    assert(long.equals(name), "a made file's long name must be the name it was made under")
+    fs.remove_path(path) catch panic("a made file must be removed by its name")
+    return true
+
+priv fn refused_as_missing(path: U8[], arena: Arena$@) //<
+    //< Stops the test unless each kind of call fails on `path` as the OS's refusal
+    //< A lookup finds nothing, a change is refused, and a read finds no file.
+    $looked: = false
+    fs.stat(path) catch e
+        switch e
+        case .not_found
+            looked = true
+        default {}
+    assert(looked, "a refused name must be not_found to stat")
+    $changed: = false
+    fs.mkdir(path) catch e
+        switch e
+        case .operation_failed
+            changed = true
+        default {}
+    assert(changed, "a refused name must be operation_failed to mkdir")
+    // Copied from, it is a missing source on every OS, as `copy_file` says.
+    $copied: = false
+    fs.copy_file(path, fs.join(sys.get_dir_name(path), "copy", arena)) catch e
+        switch e
+        case .not_found
+            copied = true
+        default {}
+    assert(copied, "a refused name must be not_found as a source to copy")
+    $read: = false
+    io.read_file(path, arena) catch e
+        switch e
+        case .file_not_found(at)
+            read = at.equals(path)
+        default {}
+    assert(read, "a refused name must be file_not_found to read, naming its path")
+
+fn test_fs_odd_names(arena: Arena$@) //<
+    //< Names outside the BMP and at the limit go whole; past it, or not UTF-8, as each OS says
+    //< On Windows each name is copied to UTF-16 and back (`kspl_win_to_wide` and
+    //< `kspl_win_from_wide` in `ksplc/gen/runtime/hosted.c`), a character outside the BMP as two
+    //< units. **A name that fits by the OS's own count must work, and a longer one must fail.**
+    //< Windows refuses a name that is not UTF-8; POSIX hands it to the file system, which decides
+    //< ("Paths are UTF-8, converted to the wide API on Windows" in `std/docs/DESIGN-system.md`).
+    verdict.start("[Fs] odd names: outside the BMP, at and past the limit, not UTF-8...")
+    root: = "out/tmp/kspl_test_odd_names"
+    scratch.remove_tree(root, arena)
+    fs.mkdir_all(root) catch panic("mkdir_all should succeed under out/tmp")
+    win: = sys.is_windows()
+    ascii: = arena.text()
+    for _i in Range.asc(255)
+        ascii.c('n')
+    at_limit: = ascii.take()
+    pairs: = arena.text() // 255 bytes, 126 UTF-16 units
+    for _i in Range.asc(63)
+        pairs.s("😀")
+    short_pairs: = pairs.s("abc").take()
+    units: = arena.text() // 255 UTF-16 units, 509 bytes
+    for _i in Range.asc(127)
+        units.s("😀")
+    long_pairs: = units.c('a').take()
+    names: = U8[][]::{ "😀𝄞 名前.txt", at_limit, short_pairs, long_pairs,
+        arena.text().s(at_limit).c('n').take() }
+    for name in names
+        made: = made_whole(root, name, arena)
+        if !fs.name_too_long_on(name, win)
+            assert(made, "a name that fits must make a file")
+        // Past 255 bytes alone, macOS's own file systems may still take it; Linux's do not.
+        else if win || fs.name_too_long_on(name, true)
+            assert(!made, "a name past the OS's limit must be refused")
+        // A name too long to stand, with nothing there, names no file: not a link, on every OS.
+        if !made
+            assert(!fs.is_link(fs.join(root, name, arena)), "a name too long is not a link")
+    // Bytes that are not UTF-8: a stray byte, a cut sequence, and a lone surrogate's encoding.
+    // Linux's ext4 and tmpfs take them and macOS's APFS refuses them, so POSIX passes either way.
+    stray: = arena.text().s("bad_").c(0xFFU8).c(0xFEU8).take()
+    cut: = arena.text().s("cut_").c(0xF0U8).c(0x9FU8).c(0x98U8).take()
+    half: = arena.text().s("half_").c(0xEDU8).c(0xA0U8).c(0x80U8).take()
+    for bad in U8[][3]::{ stray, cut, half }
+        made: = made_whole(root, bad, arena)
+        if win
+            assert(!made, "Windows must refuse a name that is not UTF-8")
+            assert(!fs.is_link(fs.join(root, bad, arena)),
+                "a name Windows cannot convert names no file, so it is not a link")
+    scratch.remove_tree(root, arena)
+    verdict.pass("Each name that fits went whole, and each past the limit failed as a refusal.")
+
+priv fn set_reads_whole(name: U8[], value: U8[]): Bool //<
+    //< Whether `set_env` took the value; where it did, `get_env` must give it back whole
+    sys.set_env(name, value) catch e
+        assert(e == sys.Env_error.refused, "a value with no NUL can only be refused by the OS")
+        return false
+    switch sys.get_env(name)
+    case .some(got)
+        assert(got.equals(value), "a value that was set must read back whole")
+    case .none
+        panic("a value that was set must be found")
+    return true
+
+fn test_env_odd_values(arena: Arena$@) //<
+    //< Values outside the BMP and long read back whole; past Windows's limit or not UTF-8, by OS
+    //< On Windows a value is copied to UTF-16 and back (`kspl_set_env` and `kspl_get_env` in
+    //< `ksplc/gen/runtime/hosted_spawn.c`), its size asked of the OS first. **A value Windows can
+    //< hold, 32,767 UTF-16 units, must read back whole.** Windows refuses one past it or not
+    //< UTF-8, and POSIX takes both as bytes (`sys.set_env`).
+    verdict.start("[Sys] environment values outside the BMP, long, and not UTF-8...")
+    name: = "KSPL_TEST_ENV_ODD"
+    pairs: = arena.text() // 16,000 UTF-16 units, 32,000 bytes
+    for _i in Range.asc(8000)
+        pairs.s("😀")
+    long: = pairs.take()
+    over: = arena.text() // 40,000 UTF-16 units, past Windows's limit
+    for _i in Range.asc(20000)
+        over.s("𝄞")
+    for value in U8[][2]::{ "𝄞 か \\\" ", long }
+        assert(set_reads_whole(name, value), "a value Windows can hold must be set")
+    win: = sys.is_windows()
+    stray: = arena.text().s("bad_").c(0xFFU8).take()
+    half: = arena.text().s("half_").c(0xEDU8).c(0xA0U8).c(0x80U8).take()
+    for odd in U8[][3]::{ over.take(), stray, half }
+        assert(set_reads_whole(name, odd) != win,
+            "Windows must refuse a value past its limit or not UTF-8, and POSIX must take it")
+    sys.unset_env(name) catch panic("unset_env should succeed")
+    verdict.pass("Each value Windows can hold read back whole, and the others as their OS says.")
+
+priv const WIN_LINE_MAX: Sz = 32767 //< Windows's limit on a command line, in UTF-16 units
+    //< Its NUL is counted, so the longest line has one unit less.
+
+priv fn utf16_units(text: U8[]): Sz //< how many UTF-16 units a UTF-8 text takes
+    //< A lead byte starts one unit, or two from `0xF0` (outside the BMP).
+    $units: Sz = 0
+    for b in text
+        if b < 0x80U8 || b >= 0xC0U8
+            units += 1
+        if b >= 0xF0U8
+            units += 1
+    return units
+
+priv fn starts_with_line(ksplc: U8[], units: Sz, arena: Arena$@): Bool //<
+    //< Whether ksplc starts with a Windows command line `units` UTF-16 units long, its NUL left out
+    //< The line is `"<ksplc>" "explain" "<arg>"`, where `arg` is characters outside the BMP. The
+    //< child refuses that code and ends at once.
+    arg_units: = units - utf16_units(ksplc) - 15
+    arg: = arena.text()
+    for _i in Range.asc(arg_units / 2)
+        arg.s("😀")
+    if arg_units % 2 == 1
+        arg.c('x')
+    argv: = U8[][]::{ ksplc, "explain", arg.take() }
+    _r: = subproc.run_capture(argv, "", 60000, 4096, arena) catch
+        return false
+    return true
+
+fn test_command_line_limit(ksplc: U8[], arena: Arena$@) //< ksplc is the child
+    //< A command line one unit under Windows's limit starts, and one at it fails, not cut
+    //< Windows counts the line in UTF-16 units after the conversion, its NUL included. **A line
+    //< past it must fail the start**: cut, the child would act on other arguments. POSIX has no
+    //< such limit on one argument this size.
+    verdict.start("[Sys] a command line at Windows's limit of 32,767 UTF-16 units...")
+    under: = starts_with_line(ksplc, WIN_LINE_MAX - 1, arena)
+    at: = starts_with_line(ksplc, WIN_LINE_MAX, arena)
+    assert(under, "a line of 32,766 units and its NUL must start on every OS")
+    if sys.is_windows()
+        assert(!at, "a line of 32,767 units and its NUL must fail on Windows, not be cut")
+        assert(subproc.start_error() != 0, "the failed start must leave a number")
+    else
+        assert(at, "POSIX must start a single argument of 64 KiB")
+    verdict.pass("The line under the limit started, and the one at it did as its OS promises.")

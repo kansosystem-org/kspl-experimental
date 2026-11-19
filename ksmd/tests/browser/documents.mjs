@@ -1,9 +1,9 @@
 // The document as a whole: its own settings (`:::document`), the numbers of its headings and
-// captions, the references that show them, and the repeated values a table shows once. Each is
-// driven through the browser's own input events, as `main.mjs` drives the rest, and checked by
-// the saved source and its undo.
+// captions, the references that show them, the repeated values a table shows once, and Copy as
+// Markdown. Each is driven through the browser's own input events, as `main.mjs` drives the rest,
+// and checked by the saved source and its undo, or by what the page put on the clipboard.
 // `documents(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
-import { CTRL, H, SHIFT, check } from "./drive.mjs";
+import { CTRL, H, SHIFT, cellText, check } from "./drive.mjs";
 
 
 export function documents({ page, js, press, type, click, menu, load, saves, source }) {
@@ -203,6 +203,31 @@ export function documents({ page, js, press, type, click, menu, load, saves, sou
       check(await marked() === JSON.stringify(["1:1", "2:1"]), "and the other column merges alone", await marked());
       await press("z", CTRL);
       await saves("undo turns it on again", table(' merge="A,B"'));
+    },
+
+    // File ▸ Copy as Markdown puts the whole document on the clipboard as Markdown, its cells as
+    // the page shows them, and says what Markdown could not carry. It is read from the copy event's
+    // data, as a headless browser has no clipboard; the patch is taken off again at once.
+    async copyMarkdown() {
+      await load(`${H}# Trip\n\nSee **this** and [site](https://kanso.example/x).\n\n` +
+        ':::table name="t" formats=",grouped:2"\n| "a" | "b" |\n| "x" | 1234.5 |\n| "y" | =B1*2 |\n:::\n\n' +
+        ':::chart table="t" kind="bar" labels="a" values="b"\n:::\n');
+      const shown = [await cellText(js, 0, 1), await cellText(js, 1, 1)];
+      await menu("read-only");
+      await js("window.copied = []; window.keptSet = DataTransfer.prototype.setData; " +
+        "DataTransfer.prototype.setData = function (type, text) { window.copied.push([type, text]); " +
+        "return window.keptSet.call(this, type, text); }");
+      await menu("copy-markdown");
+      const got = await js("DataTransfer.prototype.setData = window.keptSet; JSON.stringify(window.copied)");
+      await menu("read-only");
+      const want = `# Trip\n\nSee **this** and [site](https://kanso.example/x).\n\n| a | b |\n| --- | --- |\n` +
+        `| x | ${shown[0]} |\n| y | ${shown[1]} |\n\n*Not copied: a chart.*\n`;
+      check(shown.join(" ") === "1,234.50 2,469.00" && got === JSON.stringify([["text/plain", want]]),
+        "Copy as Markdown copies the document, in Read-only too, its cells as the page shows them",
+        `${shown.join(" ")} ${got}`);
+      const said = await js("document.getElementById('status').textContent");
+      check(said === "Copied the document as Markdown. Not copied: 1 chart.",
+        "and the page says what it could not copy", said);
     },
   };
 }

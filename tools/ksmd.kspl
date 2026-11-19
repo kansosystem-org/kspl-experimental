@@ -3,7 +3,10 @@
 //< It finds the document's workspace and that workspace's port (`tools/opener_aim.kspl`).
 //< `tools/opener.kspl` then reuses the server running for that workspace, or starts
 //< `kssrv --local` on the port or the next free one, and hands the URL to the browser.
-//< `--list`, `--stop=<folder>` and `--stop-all` tend the servers it left.
+//< `--list`, `--stop=<folder>` and `--stop-all` tend the servers it left. `--check` starts nothing:
+//< it prints what ksmd refuses in the document and what its formulas give (`ksmd/port/check.kspl`).
+//< `--markdown` prints the document as File, Copy as Markdown copies it.
+import "ksmd/port/check"
 import "std/argparse"
 import "std/fs"
 import "std/io"
@@ -25,21 +28,33 @@ fn main(): I32 //< opens one document in ksmd, starting the server and the brows
     io.set_line_buffered()
     defer arena: = Arena(64 * 1024)
     $show_only: = false
+    $check_only: = false
+    $markdown_only: = false
     $workspace_said: U8[] = ""
+    $today_said: U8[] = ""
     $stop_said: U8[] = ""
     p: = argparse.Parser
         .create(sys.program_name(),
-        "open a .ksmd document on a local server, or list and stop servers", arena)
+        "open a .ksmd document on a local server, check one, print one as Markdown, or list and \
+            stop servers", arena)
     p.positional("<the document's path>")
     p.str_opt("--workspace", workspace_said@,
         "the workspace folder (default: the nearest above holding .ksmd-workspace, else its own)")
     p.flag("--show", show_only@, "put the whole URL out, token included, and wait (no browser)")
+    p.flag("--check", check_only@,
+        "open nothing: print what ksmd refuses in it and what each formula gives")
+    p.flag("--markdown", markdown_only@,
+        "open nothing: print it as Markdown, as File, Copy as Markdown copies it")
+    p.str_opt("--today", today_said@,
+        "with --check or --markdown, the date today() gives, as 2026-10-23 (default: today's in \
+            UTC)")
     opener.tending_options(p, stop_said@)
     p.parse_or_exit()
     tending: = opener.tending(p)
+    if check_only || markdown_only || p.saw("--today")
+        return run_check(p, workspace_said, today_said, arena)
     if !tending && p.rest.len != 1
-        p.print_usage(io.err())
-        return 1
+        return misused(p, "name one document")
     where: = opener.where_from(sys.args().get(0), aim.KSMD, arena)
     if where.server.len == 0
         say().s("kssrv not found (`make ksmd` first)\n")
@@ -48,31 +63,20 @@ fn main(): I32 //< opens one document in ksmd, starting the server and the brows
     fs.mkdir_all(where.tmp) catch {}
     if tending
         return opener.tend_alone(p, where, stop_said, arena)
-    path: = p.rest.get(0)
-    if !aim.is_ksmd(path)
-        say().s("ksmd opens only a file whose name ends in .ksmd: \{path\}\n")
-        return 1
-    // Caution: **Find the workspace from one spelling of the path** (the reason is at `plain`).
-    file: = aim.plain(opener.full(path, arena), arena)
-    if file.len == 0
-        say().s("name the document without '..', from its own folder or in full: \{path\}\n")
-        return 1
-    info: = fs.stat(file) catch
-        say().s("there is no such file: \{path\}\n")
-        return 1
-    if info.kind != .file
-        say().s("this is not a file: \{path\}\n")
-        return 1
     if !fs.exists(where.page)
         say().s("there is no page: \{where.page\} (`make ksmd` first)\n")
         return 1
-    root: = root_for(file, workspace_said, arena)
-    if root.len == 0
+    path: = p.rest.get(0)
+    at: = document_at(path, workspace_said, arena) catch
         return 1
-    doc: = aim.doc_under(root, file)
+    root: = at.root
+    doc: = at.doc
+    if !aim.fits_note(root)
+        say().s("a folder whose name holds a line break cannot be served\n")
+        return 1
     // Caution: **Refuse here what the server refuses** (`fs.stays_under`, its own check). `fs.stat`
-    // above follows a link. So a document that is a link, or lies under one, would start a server
-    // and a browser, and the server would then refuse the page that document (403).
+    // in `document_at` follows a link. So a document that is a link, or lies under one, would
+    // start a server and a browser, and the server would then refuse the page that document (403).
     if !fs.stays_under(root, doc)
         say()
             .s("the server opens no link inside the workspace, and this document is one or lies \
@@ -94,9 +98,77 @@ fn main(): I32 //< opens one document in ksmd, starting the server and the brows
     open_url: = aim.url_for(opened.url, doc, sys.is_windows(), text@)
     return opener.hand_over(opened, open_url, doc, root, show_only, where, arena)
 
+priv fn run_check(parser: argparse.Parser$@, workspace_said: U8[], today_said: U8[],
+    arena: Arena$@): I32 //<
+        //< `--check`: prints what ksmd refuses in the document and what its formulas give. Or
+        //< `--markdown`: prints the document as Markdown, and what `--check` would refuse on
+        //< standard error. Either opens nothing. It returns 0 where the document is clean, 1 where
+        //< it is refused or has a problem, and 2 where the command line is wrong, as `argparse`
+        //< does.
+    markdown: = parser.saw("--markdown")
+    if !parser.saw("--check") && !markdown
+        return misused(parser, "--today goes with --check or --markdown")
+    if parser.saw("--check") && markdown
+        return misused(parser, "--check and --markdown each print the whole answer: name one")
+    flag: = "--markdown" if markdown else "--check"
+    if parser.saw("--show") || opener.tending(parser)
+        return misused(parser,
+            arena.text().s(flag)
+            .s(" opens nothing, so --show, --list, --stop and --stop-all do not go with it").take())
+    if parser.rest.len != 1
+        return misused(parser,
+            arena.text().s(flag).s(" takes one document").take())
+    today: = check.today_from(today_said, parser.saw("--today"), arena) catch
+        return misused(parser, "--today takes a date written as 2026-10-23")
+    at: = document_at(parser.rest.get(0), workspace_said, arena) catch
+        return 1
+    doc: = aim.slashed(at.doc, sys.is_windows(), arena)
+    defer $out: = Str_builder()
+    if markdown
+        defer $said: = Str_builder()
+        clean: = check.as_markdown(at.root, doc, today, out@, said@, arena)
+        io.err().s(said.slice())
+        io.out().s(out.slice())
+        return 0 if clean else 1
+    clean: = check.checked(at.root, doc, today, out@, arena)
+    io.out().s(out.slice())
+    return 0 if clean else 1
+
+priv fn misused(parser: argparse.Parser$@, why: U8[]): I32 //<
+    //< Says why the command line is wrong, then the usage, and returns 2, as `argparse` does
+    say().s(why).c('\n')
+    parser.print_usage(io.err())
+    return 2
+
+priv struct Document_at //< a document named on the command line, and the workspace it opens in
+    root: U8[] //< the workspace
+    doc: U8[] //< the document's path from the workspace (`aim.doc_under`)
+
+priv fn document_at(path: U8[], workspace_said: U8[], arena: Arena$@): Document_at? //<
+    //< The document `path` names, and its workspace; none, with the reason said, where it cannot
+    //< be opened
+    if !aim.is_ksmd(path)
+        say().s("ksmd opens only a file whose name ends in .ksmd: \{path\}\n")
+        return .none
+    // Caution: **Find the workspace from one spelling of the path** (the reason is at `plain`).
+    file: = aim.plain(opener.full(path, arena), arena)
+    if file.len == 0
+        say().s("name the document without '..', from its own folder or in full: \{path\}\n")
+        return .none
+    info: = fs.stat(file) catch
+        say().s("there is no such file: \{path\}\n")
+        return .none
+    if info.kind != .file
+        say().s("this is not a file: \{path\}\n")
+        return .none
+    root: = root_for(file, workspace_said, arena)
+    if root.len == 0
+        return .none
+    return .some(Document_at::{ .root = root, .doc = aim.doc_under(root, file) })
+
 priv fn root_for(file: U8[], said: U8[], arena: Arena$@): U8[] //<
-    //< The workspace to serve for `file`: the folder named, or `aim.workspace_of` its folder
-    //< **Empty, with the reason said, where none can be served.**
+    //< The workspace for `file`: the folder named, or `aim.workspace_of` its folder
+    //< **Empty, with the reason said, where the folder named cannot be the workspace.**
     $root: U8[] = ""
     if said.len > 0
         root = folder_said(said, arena)
@@ -110,7 +182,4 @@ priv fn root_for(file: U8[], said: U8[], arena: Arena$@): U8[] //<
             return ""
     else
         root = aim.workspace_of(aim.parent_of(file), arena)
-    if !aim.fits_note(root)
-        say().s("a folder whose name holds a line break cannot be served\n")
-        return ""
     return root

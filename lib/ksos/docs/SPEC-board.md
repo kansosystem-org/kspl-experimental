@@ -157,6 +157,8 @@ For example, an ADC value of 640 gives about 8.26V. The sample reads the ADC at 
 * Three sensors under the front, read as GPIO inputs. **White = 0 / black = 1**.
 * They pack into the three bits left<<2 | centre<<1 | right, which are branched on (`010` = only the centre is black = go straight).
 * **The sensors sit 20 to 25mm apart, about 100mm ahead of the point the car turns about.** Measured on this unit: a 20mm line cannot cover two neighbours, and a 50mm line covers all three.
+* **They are infrared reflective sensors.** White a short way below reflects their light back and reads 0. Nothing beneath, or black, reads 1, so a lifted car reads `line=7`.
+* **White paper pressed against a sensor also reads 1**: it blocks the light's way back. Seen on this unit at the first car check. At the second, a white strip held about 1 cm below each sensor read 0; nearer distances are not measured.
 * **Some units have the left and right sensors mounted swapped.**
 
 ## The WS2812 LEDs

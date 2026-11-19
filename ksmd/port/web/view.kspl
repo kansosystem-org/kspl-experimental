@@ -9,19 +9,19 @@
 //< Caution: **Change this and the scripts that read it together**: `core.js` names the kinds and
 //< letters, `view.js` reads the blocks, `table.js` a table's keys (`table`), and `chart.js`,
 //< `diagram.js` and `drawings.js` the rest.
-import "ksmd/base/dates" { write_date, write_date_with }
+import "ksmd/base/dates" { write_date }
 import "ksmd/base/keyed" { Keyed }
 import "ksmd/calc/calc" { Own_functions, Results }
 import "ksmd/calc/calc"
 import "ksmd/calc/reason" { write_reason }
-import "ksmd/calc/value" { Value }
+import "ksmd/calc/value" { Value, write_shown }
 import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/region" { Spot, Style, Unit, gather }
 import "ksmd/edit/styled" { Seg }
 import "ksmd/edit/typed" { number_as_text, numbers_column }
 import "ksmd/files/assemble" { Assembly, NONE }
 import "ksmd/model/choice" { colours_in, name_of }
-import "ksmd/model/format" { Number_format, no_format, show, show_plain, shows_numbers }
+import "ksmd/model/format" { Number_format, show_plain, shows_numbers }
 import "ksmd/model/group" { depths }
 import "ksmd/model/look" { is_plain }
 import "ksmd/model/model" { Block_kind, Chart, Diagram, Document, Drawing, Table, UNBOUND }
@@ -613,9 +613,7 @@ priv fn rows(grid: Table@, table: Sz, values: Results@, out: Str_builder$@) //<
         for c in Range.asc(grid.columns.len)
             if c > 0
                 out.c(',')
-            own: = grid.cells[grid.at(r, c)].look.format
-            column: = grid.formats[c] if grid.formats.len > 0 else no_format()
-            cell(values.at(table, r, c), own if own.kind != .none else column, out)
+            cell(values.at(table, r, c), grid.format_at(r, c), out)
         out.c(']')
     out.c(']')
 
@@ -821,10 +819,10 @@ priv fn cell(value: Value, format: Number_format, out: Str_builder$@) //<
         out.s("[\{CELL_EMPTY\}]")
     case .number
         out.s("[\{CELL_NUMBER\},\{value.number\},\"")
+        write_shown(value, format, out)
         if shows_numbers(format)
-            show(value.number, format, out)
             out.s("\",\"")
-        show_plain(value.number, out)
+            show_plain(value.number, out)
         out.s("\"]")
     case .text
         out.s("[\{CELL_TEXT\},")
@@ -835,7 +833,7 @@ priv fn cell(value: Value, format: Number_format, out: Str_builder$@) //<
         write_date(I64::value.number, out)
         if format.kind == .slash_date
             out.s("\",\"")
-            write_date_with(I64::value.number, '/', out)
+            write_shown(value, format, out)
         out.s("\"]")
     case .boolean
         out.s("[\{CELL_BOOL\},").s("\"true\"]" if value.boolean else "\"false\"]")

@@ -32,8 +32,10 @@ KSPL_LINK I32 kspl_proc_start_error(void) { return kspl_start_error; }
 static Bool kspl_win_build_cmdline(const U8 *argv_buf, Sz argv_buf_len, I32 argc, char *cmd,
     int cmd_cap) {
     if (argc <= 0) return false;
-    int limit = cmd_cap - 192; /* one argument's margin. At the limit it fails, not cuts */
-    int m = 0;
+    /* Caution: **Count in Sz, not int.** A run of backslashes counts twice, and an int sum of two
+     * counts near cmd_cap would wrap negative and pass the checks below. */
+    Sz limit = (Sz)cmd_cap - 192; /* one argument's margin. At the limit it fails, not cuts */
+    Sz m = 0;
     Sz off = 0;
     for (I32 i = 0; i < argc; i++) {
         if (off > argv_buf_len || m >= limit) return false;
@@ -48,8 +50,7 @@ static Bool kspl_win_build_cmdline(const U8 *argv_buf, Sz argv_buf_len, I32 argc
         Sz j = 0;
         while (j < alen) {
             if (m >= limit) return false;
-            int nbs = 0;
-            /* the run is bounded here: counted past the limit, nbs * 2 would wrap and pass */
+            Sz nbs = 0;
             while (j < alen && arg[j] == '\\') {
                 j++;
                 if (++nbs >= limit) return false;
@@ -57,17 +58,17 @@ static Bool kspl_win_build_cmdline(const U8 *argv_buf, Sz argv_buf_len, I32 argc
             if (j == alen) {
                 /* a trailing run of backslashes: doubled, the closing quote going right after */
                 if (m + nbs * 2 >= limit) return false;
-                for (int k = 0; k < nbs * 2; k++) cmd[m++] = '\\';
+                for (Sz k = 0; k < nbs * 2; k++) cmd[m++] = '\\';
                 break;
             } else if (arg[j] == '"') {
                 /* doubles the backslashes right before, and escapes the " itself as well */
                 if (m + nbs * 2 + 2 >= limit) return false;
-                for (int k = 0; k < nbs * 2 + 1; k++) cmd[m++] = '\\';
+                for (Sz k = 0; k < nbs * 2 + 1; k++) cmd[m++] = '\\';
                 cmd[m++] = arg[j];
                 j++;
             } else {
                 if (m + nbs + 1 >= limit) return false;
-                for (int k = 0; k < nbs; k++) cmd[m++] = '\\';
+                for (Sz k = 0; k < nbs; k++) cmd[m++] = '\\';
                 cmd[m++] = arg[j];
                 j++;
             }

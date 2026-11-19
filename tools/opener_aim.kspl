@@ -113,6 +113,16 @@ fn doc_under(root: U8[], path: U8[]): U8[] //< the document's path relative to t
         at += 1
     return path if at >= path.len else path.sub_from(at)
 
+fn slashed(doc: U8[], win: Bool, arena: Arena$@): U8[] //<
+    //< `doc_under`'s path as ksmd names a file, `/` between folders: on Windows each `\` becomes `/`
+    //< Elsewhere a `\` is a byte of a name, which ksmd then refuses, as the page would.
+    if !win
+        return doc
+    turned: = arena.text()
+    for c in doc
+        turned.c('/' if c == '\\' else c)
+    return turned.take()
+
 fn url_in_log(log: U8[]): U8[] //< the URL from the line kssrv printed, empty where there is none
     // Caution: **The level sits in the middle** (`kssrv: I: open `). Without the `I: `, the marker
     // matches nothing. The opener then waits 30 seconds for a server that is already up

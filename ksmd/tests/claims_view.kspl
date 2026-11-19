@@ -1,15 +1,16 @@
-//< What opening a file of a workspace gives, for the `Opened` rows of `ksmd/tests/claims.kspl`
+//< What opening or checking a file of a workspace gives, for the rows of `ksmd/tests/claims.kspl`
 //< A workspace is a few files held in memory, so the view is assembled as the page assembles it,
 //< through `assemble_loaded`, with no folder on disk. Its text is each paragraph's and heading's
-//< text and each table cell as it shows (`shown`), which the formula rows use too.
-import "ksmd/base/dates" { write_date }
+//< text and each table cell as it shows (`shown`), which the formula rows use too. A check row's
+//< answer is `report`'s, as `ksmd --check` prints it.
 import "ksmd/base/source" { Diagnostic }
 import "ksmd/calc/calc" { Results }
 import "ksmd/calc/calc"
-import "ksmd/calc/value" { Value }
+import "ksmd/calc/value" { Value, write_shown }
 import "ksmd/files/assemble" { Assembly, assemble_loaded }
 import "ksmd/files/files" { Files, Load_error, Refusal, load, resolve_text }
-import "ksmd/model/format" { show_plain }
+import "ksmd/model/format" { no_format }
+import "ksmd/port/check" { report }
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -45,23 +46,22 @@ fn opened(files: List<|Named|>, path: U8[], today: U8[], arena: Arena$@): Openin
         out.says = p.at.message
     return out
 
+struct Checking //< what checking a file of a workspace gives
+    prints: U8[] //< what `ksmd --check` prints
+    clean: Bool //< whether it ends with code 0
+
+fn checking(files: List<|Named|>, path: U8[], today: U8[], arena: Arena$@): Checking //<
+    //< Checks the file at `path` among `files`, on the date `today`
+    ws: = Workspace::{ .files = files }
+    defer $out: = Str_builder()
+    clean: = report(ws@, path, today, out@, arena)
+    return Checking::{ .prints = arena.dup_str(out.slice()), .clean = clean }
+
 fn shown(value: Value, arena: Arena$@): U8[] //<
     //< What a cell of no format shows of a value: a number's digits, a date, `true` or `false`,
-    //< text as it is, or an error's mark
+    //< text as it is, or an error's mark, as the page shows it (`write_shown`)
     defer $out: = Str_builder()
-    switch value.kind
-    case .empty
-        return ""
-    case .number
-        show_plain(value.number, out@)
-    case .date
-        write_date(I64::value.number, out@)
-    case .text
-        return value.text
-    case .boolean
-        return "true" if value.boolean else "false"
-    case .error
-        return value.error.mark()
+    write_shown(value, no_format(), out@)
     return arena.dup_str(out.slice())
 
 priv struct Workspace //< the files of a workspace, as a document's files

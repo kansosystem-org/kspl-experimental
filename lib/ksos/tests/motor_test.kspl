@@ -1,3 +1,4 @@
+import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/boards/freenove_4wd_pico/motor"
 import "std/math"
 import "std/verdict"
@@ -36,3 +37,22 @@ fn test_motor_cap_holds_per_wheel() //<
     assert(motor.divisor(c / 2, 0, c / 4) == c, "a small command is not scaled")
     assert(largest_wheel(c, 0, 0) == c, "straight ahead at the cap keeps the full cap")
     verdict.pass("No wheel goes over the cap, and a command within it is sent unchanged.")
+
+fn test_motor_kick_duty() //<
+    //< The kick is `board.KICK_GAIN` times the speed, the same way, capped as `duty` caps it
+    //< Caution: **A single wheel at `CAP` stays still without the kick.** The car check's wheel
+    //< step turned no wheel until `start_wheel` gave it one.
+    verdict.start("[ksos/motor] the kick from a standstill test...")
+    c: = motor.CAP
+    for wheel in Range.asc(board.WHEEL_COUNT)
+        k: = motor.kick_duty(wheel, c)
+        d: = motor.duty(wheel, c)
+        assert(k.a + k.b == U32::(c * board.KICK_GAIN), "the kick is KICK_GAIN times the speed")
+        assert((k.a > 0) == (d.a > 0) && (k.b > 0) == (d.b > 0), "the kick turns the same way")
+        back: = motor.kick_duty(wheel, 0 - c)
+        assert(back.a == k.b && back.b == k.a, "backwards, the kick is on the other pin")
+        top: = motor.kick_duty(wheel, motor.SPEED_MAX)
+        assert(top.a + top.b == U32::motor.SPEED_MAX, "the kick is capped as the duty is")
+        zero: = motor.kick_duty(wheel, 0)
+        assert(zero.a == 0 && zero.b == 0, "speed 0 gives no kick")
+    verdict.pass("the kick is KICK_GAIN times the speed, the same way, within the cap.")

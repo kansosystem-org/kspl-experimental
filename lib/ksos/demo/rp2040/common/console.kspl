@@ -11,7 +11,7 @@
 import "ksos/drivers/rp2040/usb_cdc" as usb
 import "ksos/drivers/rp2040/watchdog"
 import "std/buf" { Buf_writer }
-import "std/panic_record" { take_panic_record }
+import "std/panic_record" { Panic_info, take_panic_record }
 import "std/str" as _str
 import "std/strfmt" as _strfmt // `\{}` on a number, and its `:02x` / `:03`
 
@@ -116,12 +116,16 @@ fn say_restart(ln: Line$@, tag: U8[], why: watchdog.Reset_reason) //<
         say(ln, tag, "restarted by a reboot (boot ROM or debugger)")
     switch take_panic_record()
     case .some(info)
-        ln.reset()
-        ln.str(tag)
-        ln.str(" the run before panicked: ")
-        ln.str(info.msg)
-        _sent: = ln.flush()
+        say_panic(ln, tag, info)
     case .none {}
+
+fn say_panic(ln: Line$@, tag: U8[], info: Panic_info) //< says the panic the run before left
+    //< **For a caller that takes the record itself** to read it first, as the car check does.
+    ln.reset()
+    ln.str(tag)
+    ln.str(" the run before panicked: ")
+    ln.str(info.msg)
+    _sent: = ln.flush()
 
 fn can_flush(): Bool //< whether one line fits in the send queue
     //< Caution: **Ask before `flush`**, which discards a line that does not fit. A waiter calls

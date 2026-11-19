@@ -10,8 +10,9 @@ import "ksmd/edit/editor"
 import "ksmd/edit/editor_tables"
 import "ksmd/edit/region" { text_spot }
 import "ksmd/model/model" { Block_kind }
+import "ksmd/port/check" { Disk }
 import "ksmd/syntax/writer"
-import "ksmd/tests/support" { Folder }
+import "ksmd/tests/support" { view_on_disk }
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
@@ -46,7 +47,7 @@ fn main(): I32
         !write(folder, "large.ksmd", large.slice(), arena)
         io.err().s("a document cannot be written\n")
         return 1
-    ws: = Folder::{ .root = folder }
+    ws: = Disk::{ .root = folder }
     measure(ws@, "typical.ksmd")
     measure(ws@, "medium.ksmd")
     measure(ws@, "large.ksmd")
@@ -84,7 +85,7 @@ priv fn document(out: Str_builder$@, sections: Sz, tables: Sz, rows: Sz) //<
         out.s("| \"Sum\" | =sum(B1:B\{rows\}) | | =sum(D1:D\{rows\}) | |\n:::\n\n")
     out.s(":::include path=\"notes.ksmd\"\n:::\n\nThe last paragraph.\n")
 
-priv fn measure(ws: Folder@, name: U8[]) //< prints the middle time of each step on one document
+priv fn measure(ws: Disk@, name: U8[]) //< prints the middle time of each step on one document
     defer arena: = Arena(64 * 1024)
     $view: = List<|I64|>(arena)
     $values: = List<|I64|>(arena)
@@ -96,7 +97,7 @@ priv fn measure(ws: Folder@, name: U8[]) //< prints the middle time of each step
     for _ in Range.asc(RUNS)
         defer run: = Arena(1024 * 1024)
         $t: = sys.mono_us()
-        a: = ws.assemble(name, run) catch e
+        a: = view_on_disk(ws, name, run) catch e
             switch e
             case .invalid(at)
                 io.err().s(name).s(":\{at.line\}: ").s(at.message).c('\n')

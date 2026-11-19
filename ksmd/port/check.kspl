@@ -1,0 +1,202 @@
+//< What `ksmd --check` prints: whether ksmd refuses a file, its view's problems, and its formulas
+//< The file is read and its view assembled as the page does it (`load`, `assemble_loaded`), and its
+//< tables are calculated with `calculate`, so the check and the page cannot differ. `Disk` reads a
+//< workspace folder as the local server reads it for the page. The launcher, `tools/ksmd.kspl`,
+//< finds the workspace and prints the report. The rules are "Checking a file" in
+//< `ksmd/docs/SPEC-file-format.md`.
+import "ksmd/base/dates" { is_date, write_date }
+import "ksmd/base/marker" { write_column }
+import "ksmd/base/source" { Diagnostic }
+import "ksmd/calc/args" { Raw_args }
+import "ksmd/calc/calc" { Own_functions }
+import "ksmd/calc/calc"
+import "ksmd/calc/formula" { write_table_name }
+import "ksmd/calc/reason" { write_reason }
+import "ksmd/calc/value" { Value }
+import "ksmd/files/assemble" { Assembly, assemble_loaded }
+import "ksmd/files/files" { Files, Refusal, load, resolve_text }
+import "ksmd/model/format" { show_plain }
+import "ksmd/model/model" { Document }
+import "ksmd/syntax/markdown"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/sys"
+
+// **The launcher calls `checked`, `as_markdown` and `today_from`, outside this package, so [I0402]
+// is off here.**
+##lint(I0402 = off)
+
+priv const SECONDS_A_DAY: I64 = 86400I64
+
+pub fn checked( //< writes the report on the file at `path` in the workspace `root`; whether clean
+    root: U8[], //< the workspace folder on disk
+    path: U8[], //< the file, from `root`, `/` between folders
+    today: U8[], //< the date `today()` gives, written `2026-10-23`
+    out: Str_builder$@,
+    arena: Arena$@,
+): Bool
+    disk: = Disk::{ .root = root }
+    return report(disk@, path, today, out, arena)
+
+pub fn today_from(said: U8[], given: Bool, arena: Arena$@): U8[]? //<
+    //< The date `today()` gives: `said` where `--today` was given, today's in UTC where not
+    //< **None where `said` is no date**, so a mistyped date is refused, not taken for today.
+    //< UTC is not the local date the page takes: std reads no time zone.
+    if given
+        return .some(said) if is_date(said) else .none
+    defer $out: = Str_builder()
+    write_date(sys.wall_seconds() / SECONDS_A_DAY, out@)
+    return .some(arena.dup_str(out.slice()))
+
+struct Disk //< a workspace folder on disk, read as the local server reads it for the page
+    root: U8[]
+
+impl Disk
+    priv fn under_root(r: Self@, path: U8[], arena: Arena$@): U8[]!Refusal //<
+        //< Where a path from the root stands on disk, through the server's one door
+        //< (`fs.join_under`). **Each refusal there is a link's**, as the page reads the server's
+        //< refusal (`ksmd_web_hold`).
+        return fs.join_under(r.root, path, .allowed, arena) catch
+            throw .link
+
+impl Disk: Files
+    fn resolve(_r: Self@, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal
+        return resolve_text(folder, written, arena)
+
+    fn check(r: Self@, path: U8[], arena: Arena$@): Void!Refusal
+        info: = fs.stat(r.under_root(path, arena)!) catch
+            throw .missing
+        if info.kind != .file
+            throw .not_file
+
+    fn read(r: Self@, path: U8[], limit: Sz, arena: Arena$@): U8[]!Refusal
+        r.check(path, arena)!
+        return io.read_file_capped(r.under_root(path, arena)!, limit + 1, arena) catch
+            throw .unreadable
+
+fn report( //< writes what `ksmd --check` prints of the file `path` names; whether it is clean
+    //< Clean means the reader takes the file and its view holds no problem. A cell that shows an
+    //< error is a value, so it leaves the file clean.
+    files: Files,
+    path: U8[], //< the file, from the workspace's root, `/` between folders
+    today: U8[], //< the date `today()` gives, written `2026-10-23`
+    out: Str_builder$@,
+    arena: Arena$@,
+): Bool
+    seen: = viewed(files, path, today, out, arena) catch
+        return false
+    doc: = seen.doc@
+    $formulas: Sz = 0
+    $errors: Sz = 0
+    for t in Range.asc(doc.tables.len)
+        table: = doc.tables[t]@
+        for row in Range.asc(table.rows.len)
+            for column in Range.asc(table.columns.len)
+                if table.cells[table.at(row, column)].kind != .formula
+                    continue
+                value: = seen.results.at(t, row, column)
+                write_table_name(table.name, out)
+                out.c('.')
+                write_column(column, out)
+                out.s("\{row + 1\} = ")
+                write_value(value, t, doc, seen.results@, out)
+                out.c('\n')
+                formulas += 1
+                errors += 1 if value.kind == .error else 0
+    if seen.problems == 0
+        out.s("ok")
+    else
+        counted(seen.problems, "problem", out)
+    out.s(": ")
+    counted(doc.tables.len, "table", out)
+    out.s(", ")
+    counted(formulas, "formula", out)
+    out.s(", ")
+    counted(errors, "error", out)
+    out.c('\n')
+    return seen.problems == 0
+
+pub fn as_markdown( //< writes the file at `path` as Markdown, for `ksmd --markdown`; whether clean
+    //< The Markdown goes to `out`, as File, Copy as Markdown writes it, its tables showing their
+    //< values. What `--check` would say is wrong goes to `said`. A refused file writes no Markdown.
+    root: U8[], //< the workspace folder on disk
+    path: U8[], //< the file, from `root`, `/` between folders
+    today: U8[], //< the date `today()` gives, written `2026-10-23`
+    out: Str_builder$@,
+    said: Str_builder$@,
+    arena: Arena$@,
+): Bool
+    disk: = Disk::{ .root = root }
+    seen: = viewed(disk@, path, today, said, arena) catch
+        return false
+    markdown.write(seen.doc@, seen.results@, out)
+    return seen.problems == 0
+
+priv struct Seen //< a file read with its view, and its tables calculated
+    doc: Document
+    results: calc.Results
+    problems: Sz //< how many problems its view holds
+
+priv fn viewed(files: Files, path: U8[], today: U8[], said: Str_builder$@, arena: Arena$@): Seen? //<
+    //< Reads the file `path` names with its view, writes each refusal or problem to `said` with
+    //< its place, and calculates its tables. None where the reader refuses the file
+    top: = load(files, path, arena) catch e
+        switch e
+        case .refused(why)
+            said.s(path).s(": ").s(why.message()).c('\n')
+        case .invalid(at)
+            place(at, said)
+            said.s(": ").s(at.message).c('\n')
+        return .none
+    view: = assemble_loaded(files, top, arena)
+    for problem in view.problems
+        place(problem.at, said)
+        said.s(": ").s(problem.at.message)
+        for i in Range.asc(problem.chain.len)
+            said.s(" (included from " if i == 0 else " < ")
+            place(problem.chain.get(i), said)
+        said.s(")\n" if problem.chain.len > 0 else "\n")
+    $none: = Own_functions::{ .names = U8[][]::{}, .ask = unasked, .ctx = null,
+        .unknown = .blocked }
+    own: Own_functions@ = none@ if has_functions(view@) else null
+    results: = calc.calculate(top.doc@, today, arena, own)
+    return .some(Seen::{ .doc = top.doc, .results = results, .problems = view.problems.len })
+
+priv fn has_functions(view: Assembly@): Bool //< whether a functions clause stands in the view
+    for e in Range.asc(view.entries.len)
+        if view.block_of(e).kind == .functions
+            return true
+    return false
+
+priv fn unasked(_ctx: Void$@, _name: U8[], _args: Raw_args$@): Value //<
+    //< What a person's own function gives here: no names are known, so nothing asks it
+    return Value.failed(.blocked)
+
+priv fn place(at: Diagnostic, out: Str_builder$@) //< `file:line:column`
+    out.s(at.path).s(":\{at.line\}:\{at.column\}")
+
+priv fn counted(count: Sz, word: U8[], out: Str_builder$@) //< `1 table`, `2 tables`
+    out.s("\{count\} ").s(word)
+    if count != 1
+        out.c('s')
+
+priv fn write_value(value: Value, home: Sz, doc: Document@, results: calc.Results@,
+    out: Str_builder$@) //<
+        //< A value as a cell of the file writes it: text in quotes with its escapes, so `"6"` reads
+        //< apart from `6`. A number shows as in a column of no format; an error is its mark, then
+        //< its reason, as the page gives it.
+    switch value.kind
+    case .empty {}
+    case .number
+        show_plain(value.number, out)
+    case .text
+        out.c('"').escape_and_append(value.text).c('"')
+    case .date
+        write_date(I64::value.number, out)
+    case .boolean
+        out.s("true" if value.boolean else "false")
+    case .error
+        out.s(value.error.mark()).s(": ")
+        write_reason(value, home, doc, results, out)

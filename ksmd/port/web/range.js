@@ -773,19 +773,7 @@ function ksmdRange(ks) {
       ks.say("Choose one cell to copy what was typed in it.");
       return null;
     }
-    const text = typed();
-    // The copy event takes the text before the cells' own copy above could.
-    const put = (e) => {
-      e.clipboardData.setData("text/plain", text);
-      e.preventDefault();
-      e.stopImmediatePropagation();
-    };
-    document.addEventListener("copy", put, true);
-    try {
-      if (!document.execCommand("copy")) ks.say("The browser did not let the page copy.");
-    } finally {
-      document.removeEventListener("copy", put, true);
-    }
+    ks.copyText(typed());
     return null;
   }, { table: true, direct: true, looks: true });
 

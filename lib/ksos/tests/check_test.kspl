@@ -1,0 +1,196 @@
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/demo/rp2040/common/check"
+import "ksos/demo/rp2040/common/stops"
+import "std/buf" { Buf_writer }
+import "std/chars"
+import "std/ds"
+import "std/verdict"
+
+// ==========================================
+// The car check's verdicts and order, checked with no car.
+//
+// **The firmware reads the sensors, asks the person and moves the wheels; the verdicts are pure
+// functions** (`ksos/demo/rp2040/common/check`). This file checks those. The readings, the
+// person's answers and the panic's restart happen on the car.
+// ==========================================
+
+fn test_check_parts() //< The parts are counted right, and the panic comes last
+    verdict.start("[ksos/check] the parts and their order test...")
+    parts: = check.Part.variants()
+    assert(parts.len == check.PART_COUNT, "PART_COUNT counts every part")
+    assert(parts[parts.len - 1] == check.Part.panic, "the panic, which ends the firmware, is last")
+    // Each wheel part turns its own wheel, and each line part reads its own sensor.
+    $wheels: U32 = 0
+    $bits: U32 = 0
+    for part in parts
+        if part.wheel() < board.WHEEL_COUNT
+            wheels |= 1U32 << U32::part.wheel()
+        bits |= part.line_bit()
+        // Nothing that moves comes before the remote, which confirms the stand.
+        if part.moves()
+            assert(Sz::part > Sz::check.Part.remote, "a part that moves comes after the remote")
+            assert(part.needs_remote(), "a part that moves needs the remote, which can stop it")
+    assert(wheels == 0xF, "the four wheel parts turn the four wheels")
+    assert(bits == 7, "the three line parts read the three sensors")
+    verdict.pass("each part has its place, and the panic is last.")
+
+fn test_check_battery() //< The battery passes from the low mark to full charge plus the margin
+    verdict.start("[ksos/check] the battery's verdict test...")
+    full: = board.BATTERY_FULL_MV + check.BATTERY_FULL_MARGIN_MV
+    assert(check.battery(0) == check.Verdict.fail, "no reading fails")
+    assert(check.battery(board.BATTERY_LOW_MV - 1) == check.Verdict.fail, "under the low mark fails")
+    assert(check.battery(board.BATTERY_LOW_MV) == check.Verdict.pass, "the low mark passes")
+    assert(check.battery(board.BATTERY_FULL_MV) == check.Verdict.pass, "full charge passes")
+    assert(check.battery(full) == check.Verdict.pass, "the margin above full charge passes")
+    assert(check.battery(full + 1) == check.Verdict.fail, "past the margin fails")
+    verdict.pass("only a plausible battery reading passes.")
+
+fn test_check_line() //< A line sensor passes only when its own bit alone changed
+    verdict.start("[ksos/check] the line sensors' verdict test...")
+    // Lifted, the three sensors see nothing and read black (7).
+    assert(check.line_alone(7, 3, .line_left), "the left alone changed")
+    assert(check.line_alone(7, 5, .line_middle), "the middle alone changed")
+    assert(check.line_alone(7, 6, .line_right), "the right alone changed")
+    assert(!check.line_alone(7, 6, .line_left), "the right changing fails the left: a swap")
+    assert(!check.line_alone(7, 1, .line_left), "two changing fails")
+    assert(!check.line_alone(7, 7, .line_left), "nothing changing fails")
+    assert(!check.line_alone(7, 3, .battery), "a part with no sensor never passes")
+    verdict.pass("only the named sensor's change passes.")
+
+fn test_check_light() //< A light sensor passes when it falls by the margin, and more than the other
+    verdict.start("[ksos/check] the light sensors' verdict test...")
+    assert(check.light_dropped(1000, 600, 1000, 990), "a shaded sensor passes")
+    assert(check.light_dropped(1000, 700, 0, 0), "an other at 0 does not count as falling")
+    assert(!check.light_dropped(1000, 701, 1000, 1000), "under the margin fails")
+    assert(!check.light_dropped(1000, 600, 1000, 600), "both falling alike fails: a hand on both")
+    assert(!check.light_dropped(1000, 600, 500, 200), "the other falling further fails: a swap")
+    assert(!check.light_dropped(1000, 1200, 1000, 1000), "rising fails")
+    low: = check.LIGHT_REST_MIN - 1
+    assert(!check.light_dropped(low, 0, 1000, 1000), "too dark at rest fails")
+    verdict.pass("only the shaded sensor falling by the margin passes.")
+
+fn test_check_sonar() //< The ultrasonic answers with an echo, and a hand brings it down
+    verdict.start("[ksos/check] the ultrasonic's verdict test...")
+    assert(!check.sonar_answers(0), "no echo is the wiring")
+    assert(check.sonar_answers(3000), "no reflection still answers")
+    assert(check.sonar_hand(3000, 120), "a hand in front of nothing")
+    assert(check.sonar_hand(300, 300 - check.SONAR_DROP_MM), "exactly the drop passes")
+    assert(!check.sonar_hand(300, 300 - check.SONAR_DROP_MM + 1), "less than the drop fails")
+    assert(!check.sonar_hand(300, 0), "a lost echo is no hand")
+    verdict.pass("only an echo that a hand brings down passes.")
+
+fn test_check_answers() //< ▶ answers yes, 9 answers no, and any other key keeps waiting
+    verdict.start("[ksos/check] the remote's answers test...")
+    assert(check.answer(0x15) == check.Verdict.pass, "▶ is yes")
+    assert(check.answer(0x4A) == check.Verdict.fail, "9 is no")
+    assert(check.answer(0x40) == check.Verdict.untested, "✚ keeps the question open")
+    // The two answers are the remote-only car's stop keys, so 9 stops there and says no here.
+    assert(stops.stop_key(check.KEY_YES) && stops.stop_key(check.KEY_NO), "both answers stop")
+    verdict.pass("▶ and 9 answer, and no other key does.")
+
+fn test_check_held_key() //< The held key passes when repeats came and the stop was on time
+    verdict.start("[ksos/check] the held key's verdict test...")
+    timeout: = stops.HOLD_TIMEOUT_US
+    assert(check.held_key(0, timeout) == check.Verdict.fail, "no repeat fails")
+    assert(check.held_key(3, timeout) == check.Verdict.pass, "a stop at the timeout passes")
+    late: = timeout + check.HOLD_SLACK_US
+    assert(check.held_key(3, late) == check.Verdict.pass, "the slack passes")
+    assert(check.held_key(3, late + 1) == check.Verdict.fail, "past the slack fails")
+    verdict.pass("only a held key whose wheels stopped on time passes.")
+
+fn test_check_quiet_to_start() //< A motion starts only after the remote is quiet past a repeat
+    //< Caution: **The ▶ that started the panic part stopped it**: its repeats came after the wheels
+    //< started, and any frame during a motion stops it.
+    verdict.start("[ksos/check] the quiet wait before a motion test...")
+    // NEC repeats a held key about every 108ms; the wait must outlast that gap.
+    assert(check.QUIET_US > 108000, "the wait is longer than the repeat interval")
+    at: U32 = 5000000
+    assert(!check.quiet_to_start(at, at), "not at once after the answer")
+    assert(!check.quiet_to_start(at, at + 108000), "not while a held key's repeat is due")
+    assert(!check.quiet_to_start(at, at + check.QUIET_US - 1), "not before the wait is over")
+    assert(check.quiet_to_start(at, at + check.QUIET_US), "once the wait is over")
+    // The timer wraps after about 71 minutes.
+    late: U32 = 0xFFFFFF00
+    assert(!check.quiet_to_start(late, 0x100), "not across the wrap before the wait is over")
+    assert(check.quiet_to_start(late, check.QUIET_US), "across the wrap once it is over")
+    verdict.pass("a motion starts only after the remote is quiet for longer than a repeat.")
+
+fn test_check_gates() //< Nothing asks without the remote, and nothing moves without the stand
+    verdict.start("[ksos/check] which parts run test...")
+    $run: = check.Run()
+    assert(run.gate(.battery) == check.Gate.run, "the battery always runs")
+    assert(run.gate(.line_left) == check.Gate.run, "a sensor changed by hand needs no remote")
+    assert(run.gate(.leds) == check.Gate.no_remote, "a question needs the remote")
+    assert(run.gate(.wheel_back_left) == check.Gate.no_remote, "a wheel needs the remote first")
+    assert(run.gate(.matrix) == check.Gate.shares_pins, "no matrix: it is skipped")
+    assert(run.gate(.ultrasonic) == check.Gate.run, "no matrix: the ultrasonic runs")
+
+    run.remote_ok = true
+    assert(run.gate(.leds) == check.Gate.run, "with the remote, a question runs")
+    assert(run.gate(.servo) == check.Gate.no_stand, "with no stand, the head does not move")
+    assert(run.gate(.panic) == check.Gate.no_stand, "with no stand, the panic does not run")
+
+    run.stand_ok = true
+    assert(run.gate(.wheel_front_right) == check.Gate.run, "on the stand, a wheel runs")
+    run.stopped = true
+    assert(run.gate(.held_key) == check.Gate.stopped, "after a stop, nothing moves again")
+    assert(run.gate(.buzzer) == check.Gate.run, "after a stop, a question still runs")
+
+    run.matrix_found = true
+    assert(run.gate(.matrix) == check.Gate.run, "a matrix: it runs")
+    assert(run.gate(.ultrasonic) == check.Gate.shares_pins, "a matrix: the ultrasonic is skipped")
+    verdict.pass("each part runs only when what it needs is there.")
+
+priv fn sample_run(): check.Run //< a run with each verdict, the panic not yet answered
+    $run: = check.Run()
+    run.remote_ok = true
+    run.stand_ok = true
+    for part in check.Part.variants()
+        run.set(part, .pass)
+    run.set(.light_left, .fail)
+    run.set(.matrix, .skipped)
+    run.set(.panic, .untested)
+    return run
+
+fn test_check_summary() //< The summary line counts each verdict, and the parts not yet run
+    verdict.start("[ksos/check] the summary line test...")
+    $run: = sample_run()
+    $buf: U8[96] = ::{}
+    $w: = Buf_writer(U8$[]::buf)
+    run.summary(w@)
+    assert(w.slice().equals("car-check: 15 pass, 1 fail, 1 skipped, 1 not run"),
+        "the parts not yet run are counted")
+    run.set(.panic, .pass)
+    w.clear()
+    run.summary(w@)
+    assert(w.slice().equals("car-check: 16 pass, 1 fail, 1 skipped"), "a finished run has no rest")
+    verdict.pass("the summary line counts every part once.")
+
+fn test_check_carry() //< The verdicts survive the panic's message, and no other message resumes
+    verdict.start("[ksos/check] keeping the verdicts across the panic test...")
+    run: = sample_run()
+    $buf: U8[64] = ::{}
+    $w: = Buf_writer(U8$[]::buf)
+    run.carry(w@)
+    msg: = w.slice()
+    assert(!w.overflowed() && msg.len <= 128, "the message fits the panic record (128 bytes)")
+    switch check.resume(msg)
+    case .some(back)
+        for part in check.Part.variants()
+            assert(back.get(part) == run.get(part), "each verdict comes back")
+        assert(back.remote_ok && back.stand_ok, "the remote and the stand come back")
+        assert(!back.matrix_found, "a skipped matrix comes back skipped")
+    case .none
+        assert(false, "the carried message resumes")
+
+    assert(check.resume("index out of range").is_none(), "another panic does not resume")
+    assert(check.resume(msg.sub(0, msg.len - 1)).is_none(), "a short message does not resume")
+    $bad: U8[64] = ::{}
+    $b: = Buf_writer(U8$[]::bad)
+    b.s(msg)
+    bad[b.len - 1] = 'x'
+    assert(check.resume(b.slice()).is_none(), "a character no verdict writes does not resume")
+    bad[0] = 'C'
+    bad[b.len - 1] = '-'
+    assert(check.resume(b.slice()).is_none(), "another tag does not resume")
+    verdict.pass("only the check's own message brings its verdicts back.")

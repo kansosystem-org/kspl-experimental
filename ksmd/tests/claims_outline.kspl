@@ -1,0 +1,151 @@
+//< The outline of a model, which the rows "It reads as" of `ksmd/tests/claims.kspl` compare
+//< It is a file of its own, so the gate stays under the cap on a file's length. The words it writes
+//< are listed at `outline`, and in "The rows, and what they start from" in the specification.
+import "ksmd/calc/formula" { Positions, write_formula }
+import "ksmd/model/model" { Block, Document, Table }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+fn outline(doc: Document@, arena: Arena$@): U8[] //<
+    //< One node of the model to a line, each child two spaces in from its parent
+    //< The words: `heading N`, `paragraph`, `quote`, `list`, `item`, `numbered item`,
+    //< `ticked item`, `unticked item`, `code block "language"`, `divider`, `blank`,
+    //< `table "name"`, `caption "…"`, `row`, `cell …`, `image "path"`, `alt "…"`, `include "path"`,
+    //< `functions "path"`, `chart`, `diagram`, `document`; within a line of text, `text "…"`,
+    //< `code "…"`, `break`, `strong`, `emphasis`, `link "target"` and `colour "#rrggbb"`; and
+    //< `note "…"`. A text in quotes writes `"`, `\` and a newline as `\"`, `\\` and `\n`.
+    defer $out: = Str_builder()
+    for i in Range.asc(doc.blocks.len)
+        block_outline(doc, doc.blocks.get(i), out@, arena)
+    return arena.dup_str(out.slice())
+
+priv fn node(depth: Sz, word: U8[], out: Str_builder$@) //< starts a node's line at `depth`
+    for _ in Range.asc(depth)
+        out.s("  ")
+    out.s(word)
+
+priv fn quoted(text: U8[], out: Str_builder$@) //< ` "text"`, with its escapes
+    out.s(" \"")
+    for ch in text
+        if ch == '"' || ch == '\\'
+            out.c('\\').c(ch)
+        else if ch == '\n'
+            out.s("\\n")
+        else
+            out.c(ch)
+    out.c('"')
+
+priv fn leaf(depth: Sz, word: U8[], text: U8[], out: Str_builder$@) //< `word "text"` on its line
+    node(depth, word, out)
+    quoted(text, out)
+    out.c('\n')
+
+priv fn block_outline(doc: Document@, block: Block, out: Str_builder$@, arena: Arena$@) //<
+    //< One block and what it holds, from the outline's left edge
+    switch block.kind
+    case .paragraph, .quote
+        node(0, "paragraph" if block.kind == .paragraph else "quote", out)
+        out.c('\n')
+        inline_outline(doc, block.first, block.count, 1, out)
+    case .heading
+        node(0, "heading", out)
+        out.s(" \{block.level\}\n")
+        inline_outline(doc, block.first, block.count, 1, out)
+    case .code
+        node(0, "code block", out)
+        if block.label.len > 0
+            quoted(block.label, out)
+        out.c('\n')
+        leaf(1, "text", block.text, out)
+    case .list
+        node(0, "list\n", out)
+        for i in Range.asc(block.count)
+            item: = doc.items.get(block.first + i)
+            $word: = "numbered item" if item.ordered else "item"
+            if item.check == .open
+                word = "unticked item"
+            else if item.check == .done
+                word = "ticked item"
+            node(1 + item.depth, word, out)
+            out.c('\n')
+            inline_outline(doc, item.first, item.count, 2 + item.depth, out)
+    case .divider
+        node(0, "divider\n", out)
+    case .blank
+        node(0, "blank\n", out)
+    case .table
+        table_outline(doc, doc.tables[block.first]@, out, arena)
+    case .include
+        leaf(0, "include", block.text, out)
+    case .functions
+        leaf(0, "functions", block.text, out)
+    case .image
+        image: = doc.images.get(block.first)
+        leaf(0, "image", image.src, out)
+        if image.alt.len > 0
+            leaf(1, "alt", image.alt, out)
+        if image.caption.len > 0
+            leaf(1, "caption", image.caption, out)
+    case .chart
+        node(0, "chart\n", out)
+    case .document
+        node(0, "document\n", out)
+    case .diagram
+        node(0, "diagram\n", out)
+    if block.note.len > 0
+        leaf(1, "note", block.note, out)
+
+priv fn inline_outline(doc: Document@, first: Sz, count: Sz, from: Sz, out: Str_builder$@) //<
+    //< A run of inline nodes from depth `from`; a mark's nodes stand one deeper than it
+    $depth: = from
+    for i in Range.asc(count)
+        n: = doc.inlines.get(first + i)
+        switch n.kind
+        case .text
+            leaf(depth, "text", n.text, out)
+        case .code
+            leaf(depth, "code", n.text, out)
+        case .hard_break
+            node(depth, "break\n", out)
+        case .emphasis_start, .strong_start
+            node(depth, "emphasis\n" if n.kind == .emphasis_start else "strong\n", out)
+            depth += 1
+        case .link_start
+            if n.text.len > 0
+                node(depth, "link", out)
+                quoted(n.text, out)
+                if n.color.len > 0
+                    out.s(" colour")
+                    quoted(n.color, out)
+            else
+                node(depth, "colour", out)
+                quoted(n.color, out)
+            out.c('\n')
+            depth += 1
+        case .emphasis_end, .strong_end, .link_end
+            depth -= 1
+
+priv fn table_outline(doc: Document@, table: Table@, out: Str_builder$@, arena: Arena$@) //<
+    //< A table: its caption, then its heading row and each data row, with their cells
+    leaf(0, "table", table.name, out)
+    if table.caption.len > 0
+        leaf(1, "caption", table.caption, out)
+    width: = table.columns.len
+    at: = Positions(doc, arena)
+    for row in Range.asc(table.rows.len + 1)
+        node(1, "row\n", out)
+        for column in Range.asc(width)
+            cell: = table.cells[row * width + column]
+            node(2, "cell", out)
+            if cell.kind == .text
+                quoted(cell.text, out)
+            else if cell.kind == .number || cell.kind == .date
+                out.c(' ').s(cell.text)
+            else if cell.kind == .formula
+                out.s(" =")
+                write_formula(doc, table, cell, at@, 0, 0, out)
+            out.c('\n')
+            if cell.link.len > 0
+                leaf(3, "link", cell.link, out)
+            if cell.note.len > 0
+                leaf(3, "note", cell.note, out)

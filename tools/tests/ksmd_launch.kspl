@@ -2,8 +2,8 @@
 //< Usage: `ksmd_launch <launcher> <kssrv> <builder> <work folder>` (`make test-ksmd-open`). It
 //< copies the three programs into the work folder with a stand-in page beside them, and opens with
 //< `--show`, so no browser starts. It checks the workspace served, its port, the document's URL,
-//< the reuse of a running server, a taken port, two documents opened at once, the refusals and a
-//< note of servers it cannot read.
+//< the reuse of a running server, a taken port, two documents opened at once, the refusals, a
+//< note of servers it cannot read, and what `--check` prints and ends with.
 //< **Every server it started is stopped at the end** (`--stop-all`), whatever the checks found.
 import "std/chars"
 import "std/ds" { List }
@@ -234,6 +234,7 @@ priv fn check_links(launcher: U8[], ws: U8[], arena: Arena$@) //<
         return
     refused(launcher, U8[][]::{ alias }, "opens no link", arena)
     refused(launcher, U8[][]::{ fs.join(folder, "doc.ksmd", arena) }, "opens no link", arena)
+    refused(launcher, U8[][]::{ "--check", alias }, "passes through a link", arena)
 
 priv fn check_quiet(launcher: U8[], ws: U8[], token: U8[], work: U8[], arena: Arena$@) //<
     //< Without `--show`, the run puts out no token, and the browser gets it inside a page
@@ -286,6 +287,98 @@ priv fn check_quiet(launcher: U8[], ws: U8[], token: U8[], work: U8[], arena: Ar
     verdict.check("the browser is handed a page that holds the token",
         held.find_str(token).is_some(),
         arena.text().s("the stand-in browser was handed: ").s(handed).take())
+
+// A document whose include climbs to the marked folder, with formulas, one of them an error.
+priv const SUM: U8[] =
+    "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 6 | =A1*2 |\n| 0 | =A1/A2 |\n| \"Pens\" | \
+        =A3&\" each\" |\n| =today() | =A4+1 |\n:::\n\n:::include path=\"../note.ksmd\"\n:::\n"
+priv const SUM_PRINTS: U8[] =
+    "t.B1 = 12\nt.B2 = #DIV/0!: A2, the divisor, is 0 or empty\nt.B3 = \"Pens each\"\nt.A4 = \
+        2026-10-23\nt.B4 = 2026-10-24\nok: 1 table, 5 formulas, 1 error\n" //<
+            //< What `--check` prints of `SUM` on 2026-10-23, worked out by hand
+priv const SUM_MARKDOWN: U8[] =
+    "| a | b |\n| --- | --- |\n| 6 | 12 |\n| 0 | #DIV/0! |\n| Pens | Pens each |\n| 2026-10-23 | \
+        2026-10-24 |\n\n*Not copied: the included file \"../note.ksmd\".*\n" //<
+            //< What `--markdown` prints of `SUM` on 2026-10-23, worked out by hand
+
+priv fn check_run(launcher: U8[], args: U8[][], cwd: U8[], arena: Arena$@): subproc.Run_result //<
+    //< The launcher's run with `args`, from the folder `cwd`
+    return subproc.run_capture(argv_of(launcher, args, arena), cwd, TOOL_WAIT_MS, 64 * 1024, arena)
+        catch panic("the launcher must start")
+
+priv fn check_checks(launcher: U8[], work: U8[], arena: Arena$@) //<
+    //< `--check` opens nothing, finds the workspace as an opening does, and says what the formulas
+    //< give; a refusal or a problem ends with 1, a wrong command line with 2
+    ws: = fs.join(work, "checked", arena)
+    fs.write_tree(ws,
+        U8[][]::{ aim.MARK, "parts/sum.ksmd", "note.ksmd", "bad.ksmd", "holes.ksmd", "notes.txt" },
+        U8[][]::{ "", SUM, "%ksmd 2\n\nA note.\n", "%ksmd 2\n\n#bad\n",
+        "%ksmd 2\n\n:::include path=\"gone.ksmd\"\n:::\n", "not a document\n" }, arena)
+        catch panic("the checked workspace must be writable")
+    sum: =
+        check_run(launcher, U8[][]::{ "--check", "parts/sum.ksmd", "--today=2026-10-23" }, ws,
+        arena)
+    verdict.check("--check prints each formula's value and the count, and ends with 0",
+        sum.exited_with(0) && arena.dup_str(sum.stdout_data).equals(SUM_PRINTS) &&
+        sum.stderr_data.len == 0, sum.text(arena))
+    // **The marked folder is the workspace**: from `parts/` alone, the include climbs out of it.
+    narrow: =
+        check_run(launcher,
+        U8[][]::{ "--check", "parts/sum.ksmd",
+        arena.text().s("--workspace=").s(ws).s("/parts").take() }, ws, arena)
+    verdict.check("--workspace keeps its meaning: an include that climbs out of it is a problem",
+        narrow.exited_with(1) &&
+        arena.dup_str(narrow.stdout_data).starts_with("sum.ksmd:11:1: this path climbs out"),
+        narrow.text(arena))
+    bad: = check_run(launcher, U8[][]::{ "--check", "bad.ksmd" }, ws, arena)
+    verdict.check("a file the reader refuses prints its place and reason, and ends with 1",
+        bad.exited_with(1) &&
+        arena.dup_str(bad.stdout_data).starts_with("bad.ksmd:3:1: a heading is one to six '#'"),
+        bad.text(arena))
+    holes: = check_run(launcher, U8[][]::{ "--check", "holes.ksmd" }, ws, arena)
+    said: = arena.dup_str(holes.stdout_data)
+    problem: = said
+        .equals("holes.ksmd:3:1: no file stands at this path. Correct the path; ksmd does not \
+            create the file\n1 problem: 0 tables, 0 formulas, 0 errors\n")
+    verdict.check("an include of a missing file is a problem, and ends with 1",
+        holes.exited_with(1) && problem, holes.text(arena))
+    named: = check_run(launcher, U8[][]::{ "--check", "notes.txt" }, ws, arena)
+    verdict.check("--check takes only a .ksmd file, and ends with 1",
+        named.exited_with(1) && named.text(arena).find_str("ends in .ksmd").is_some(),
+        named.text(arena))
+    for args in U8[][][]::{ U8[][]::{ "--check" },
+        U8[][]::{ "--check", "bad.ksmd", "note.ksmd" },
+        U8[][]::{ "--check", "--show", "bad.ksmd" },
+        U8[][]::{ "--today=2026-10-23", "bad.ksmd" },
+        U8[][]::{ "--check", "--today=2026-13-01", "bad.ksmd" }, U8[][]::{ "--markdown" },
+        U8[][]::{ "--check", "--markdown", "bad.ksmd" } }
+        wrong: = check_run(launcher, args, ws, arena)
+        name: = arena.text().s("a wrong command line ends with 2:")
+        for arg in args
+            name.c(' ').s(arg)
+        verdict.check(name.take(), wrong.exited_with(2) && wrong.stdout_data.len == 0,
+            wrong.text(arena))
+
+priv fn markdown_checks(launcher: U8[], work: U8[], arena: Arena$@) //<
+    //< `--markdown` prints the document as Copy as Markdown copies it, its tables' values on the
+    //< date given; what `--check` refuses goes to standard error and ends with 1
+    ws: = fs.join(work, "checked", arena)
+    sum: =
+        check_run(launcher, U8[][]::{ "--markdown", "parts/sum.ksmd", "--today=2026-10-23" }, ws,
+        arena)
+    verdict.check("--markdown prints the document's Markdown, and ends with 0",
+        sum.exited_with(0) && arena.dup_str(sum.stdout_data).equals(SUM_MARKDOWN) &&
+        sum.stderr_data.len == 0, sum.text(arena))
+    holes: = check_run(launcher, U8[][]::{ "--markdown", "holes.ksmd" }, ws, arena)
+    verdict.check("a problem goes to standard error beside the Markdown, and ends with 1",
+        holes.exited_with(1) &&
+        arena.dup_str(holes.stderr_data).starts_with("holes.ksmd:3:1: no file stands at this path")
+        && arena.dup_str(holes.stdout_data).starts_with("*Not copied: "), holes.text(arena))
+    bad: = check_run(launcher, U8[][]::{ "--markdown", "bad.ksmd" }, ws, arena)
+    verdict.check("a file the reader refuses prints no Markdown, and ends with 1",
+        bad.exited_with(1) && bad.stdout_data.len == 0 &&
+        arena.dup_str(bad.stderr_data).starts_with("bad.ksmd:3:1: a heading is one to six '#'"),
+        bad.text(arena))
 
 priv fn same_port_pair(work: U8[], arena: Arena$@): U8[][2] //<
     //< Two folders under `work` whose workspaces get the same port, so two runs compete for it
@@ -408,6 +501,8 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
     refused(launcher, U8[][]::{ fs.join(ws, "none.ksmd", arena) }, "no such file", arena)
     refused(launcher, U8[][]::{ "--stop=../x" }, "to stop without '..'", arena)
     check_links(launcher, ws, arena)
+    check_checks(launcher, work, arena)
+    markdown_checks(launcher, work, arena)
     listed: =
         subproc.run_capture(U8[][]::{ launcher, "--list" }, "", TOOL_WAIT_MS, 64 * 1024, arena)
         catch panic("the launcher must start")

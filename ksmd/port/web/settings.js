@@ -127,28 +127,33 @@ function ksmdSettings(ks) {
         footer: footer.value.trim(), numbers: Number(numbers.value), tl: tl.value.trim(), fl: fl.value.trim() };
       ks.act("ksmd_web_settings", ks.put(JSON.stringify(s)));
     });
-    const pick = (cls, options, value) => {
+    // Each list and field has a name of its own, which a screen reader says: a field's example
+    // text goes once something is typed.
+    const pick = (cls, name, options, value) => {
       const sel = ks.el("select", cls);
+      sel.setAttribute("aria-label", name);
       for (const [v, label] of options) sel.add(new Option(label, v));
       sel.value = String(value);
       return sel;
     };
-    const field = (cls, value, hint) => {
+    const field = (cls, name, value, hint) => {
       const input = document.createElement("input");
+      input.setAttribute("aria-label", name);
       input.type = "text";
       input.className = cls;
       input.value = value;
       input.placeholder = hint;
       return input;
     };
-    const paperSel = pick("settings-paper", [["", "The browser's paper"], ...PAPERS.map((p) => [p, p])], now.paper);
-    const orient = pick("settings-orientation", [["0", "Portrait"], ["1", "Landscape"]], now.land);
-    const header = field("settings-header", now.header, "Header, as [Confidential]");
-    const footer = field("settings-footer", now.footer, "Footer, as No.123 ({page}/{pages})");
-    const numbers = pick("settings-numbers", [["0", "No numbers"],
+    const paperSel = pick("settings-paper", "Paper",
+      [["", "The browser's paper"], ...PAPERS.map((p) => [p, p])], now.paper);
+    const orient = pick("settings-orientation", "Orientation", [["0", "Portrait"], ["1", "Landscape"]], now.land);
+    const header = field("settings-header", "Header", now.header, "Header, as [Confidential]");
+    const footer = field("settings-footer", "Footer", now.footer, "Footer, as No.123 ({page}/{pages})");
+    const numbers = pick("settings-numbers", "Heading numbers", [["0", "No numbers"],
       ...[1, 2, 3, 4, 5, 6].map((n) => [String(n), `Number headings from level ${n}`])], now.numbers);
-    const tl = field("settings-tl", now.tl, "Word before a table's number: Table");
-    const fl = field("settings-fl", now.fl, "Word before an image's number: Figure");
+    const tl = field("settings-tl", "Word before a table's number", now.tl, "Word before a table's number: Table");
+    const fl = field("settings-fl", "Word before an image's number", now.fl, "Word before an image's number: Figure");
     for (const part of [paperSel, orient, header, footer, numbers, tl, fl]) {
       const row = document.createElement("div");
       row.appendChild(part);

@@ -2,10 +2,10 @@
 //< CI performance guard: checks whether memory use or counted work has grown markedly
 //< It reads the lines that ksplc prints to the log when self-hosting: "Compile time", "System Peak
 //< Memory", "AST Arena headroom", "AST Node bytes" and "AST Kids bytes". It also reads the
-//< instructions Cachegrind counted: ksplc translating `tests/checkers/perf_work.kspl`, the program
-//< built from it, and kssrv answering `kssrv/tests/workload.kspl`. All are compared against
-//< tests/checkers/perf_baseline.json.
-//< Caution: **The peak memory, the two exact type sizes and the three counts decide. Do not remove
+//< instructions Cachegrind counted: ksplc translating `perf_work.kspl` here, the program built from
+//< it, kssrv answering `kssrv/tests/workload.kspl`, and the language server's worker answering the
+//< session of `perf_lsp.kspl` here. All are compared against `perf_baseline.json` here.
+//< Caution: **The peak memory, the two exact type sizes and the four counts decide. Do not remove
 //< any.** The peak covers **everything coarsely**, in steps of one chunk. The sizes of the tree's
 //< two types hold the node to the byte, and a node that grows can hide under the peak's 30% slack.
 //< The peak is our own count, not RSS: the most bytes `std/mem.kspl` held from malloc at once. The
@@ -104,6 +104,9 @@ priv struct Baseline //< holds cold, warm and the counted work together
     serve_ir: I64 //< kssrv answering `kssrv/tests/workload.kspl`'s requests, start to stop
         //< **Kept apart from `Work`**: it counts another program on another input. The workload
         //< program reaches neither the server's reading of requests nor its file serving.
+    lsp_ir: I64 //< the language server's worker answering `tests/checkers/perf_lsp.kspl`'s session
+        //< **Kept apart from `Work` too**: translating a file reaches neither the editor's
+        //< requests nor the analysis again after each edit.
 
 // The baseline's JSON keys. **A key is the field's name**, and writing and reading both use these.
 priv const COLD_KEY: U8[] = "cold"
@@ -115,6 +118,8 @@ priv const COMPILE_IR_KEY: U8[] = "compile_instructions"
 priv const RUN_IR_KEY: U8[] = "run_instructions"
 priv const SERVE_KEY: U8[] = "serve"
 priv const SERVE_IR_KEY: U8[] = "server_instructions"
+priv const LSP_KEY: U8[] = "lsp"
+priv const LSP_IR_KEY: U8[] = "worker_instructions"
 
 priv const VALUE_CEILING: I64 = 1_000_000_000_000_000I64 //< the cap on a readable value
     //< It is a petabyte, or thirty thousand years in ms; no indicator reaches it.
@@ -227,7 +232,8 @@ priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
         jb.obj().set(COMPILE_IR_KEY, jb.int_val(cur.work.compile_ir))
         .set(RUN_IR_KEY, jb.int_val(cur.work.run_ir)).build())
         .set(SERVE_KEY,
-        jb.obj().set(SERVE_IR_KEY, jb.int_val(cur.serve_ir)).build()).build()
+        jb.obj().set(SERVE_IR_KEY, jb.int_val(cur.serve_ir)).build())
+        .set(LSP_KEY, jb.obj().set(LSP_IR_KEY, jb.int_val(cur.lsp_ir)).build()).build()
     doc.dump(out@, 2)
     out.c('\n')
     io.write_file(path, out.slice()) catch
@@ -283,7 +289,8 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
         .warm = read_metrics(root.val, WARM_KEY)!,
         .work = Work::{ .compile_ir = read_number(work, WORK_KEY, COMPILE_IR_KEY)!,
         .run_ir = read_number(work, WORK_KEY, RUN_IR_KEY)! },
-        .serve_ir = read_number(root.val.get(SERVE_KEY), SERVE_KEY, SERVE_IR_KEY)! }
+        .serve_ir = read_number(root.val.get(SERVE_KEY), SERVE_KEY, SERVE_IR_KEY)!,
+        .lsp_ir = read_number(root.val.get(LSP_KEY), LSP_KEY, LSP_IR_KEY)! }
 
 priv fn ratio_text(base: I64, cur: I64, arena: Arena$@): U8[] //< the ratio against the baseline
     //< Where the baseline is 0 it cannot divide, so it returns `n/a`.
@@ -305,12 +312,13 @@ priv fn limit_fires(): Bool //<
         12I64 * base / 10I64 > work_limit(base) && base <= work_limit(base)
 
 priv fn report_work(base: Baseline, cur: Baseline): Bool //<
-    //< Prints the three counts and returns whether each is within its limit
-    //< Caution: **Always print all three**; one short circuit leaves the others out of the log.
+    //< Prints the four counts and returns whether each is within its limit
+    //< Caution: **Always print all four**; one short circuit leaves the others out of the log.
     compile_ok: = report_count("compiler's", base.work.compile_ir, cur.work.compile_ir)
     run_ok: = report_count("program's", base.work.run_ir, cur.work.run_ir)
     serve_ok: = report_count("server's", base.serve_ir, cur.serve_ir)
-    return compile_ok && run_ok && serve_ok
+    lsp_ok: = report_count("language server's", base.lsp_ir, cur.lsp_ir)
+    return compile_ok && run_ok && serve_ok && lsp_ok
 
 priv fn report_count(kind: U8[], base: I64, cur: I64): Bool //< prints one count against its limit
     limit: = work_limit(base)
@@ -375,7 +383,7 @@ fn main(): I32 //<
     //< Compares a build's cost against the baseline
     //< Usage: `make perf-log` (the proper entry point), or
     //< `ksplc run tests/checkers/perf_guard.kspl --cold=<log> --warm=<log> --compile-count=<log>
-    //< --run-count=<log> --serve-count=<log> [--update]`
+    //< --run-count=<log> --serve-count=<log> --lsp-count=<log> [--update]`
     //<
     //< Caution: **Let `make perf-log` produce the logs.** It measures on an empty cache (cold) and
     //< again on the same cache (warm), **against separate baselines**. A hit in the AST disk cache
@@ -401,6 +409,9 @@ fn main(): I32 //<
     $serve_log: U8[] = ""
     p.str_required("--serve-count", serve_log@,
         "Cachegrind's log of kssrv answering kssrv/tests/workload.kspl")
+    $lsp_log: U8[] = ""
+    p.str_required("--lsp-count", lsp_log@,
+        "Cachegrind's log of the language server's worker answering tests/checkers/perf_lsp.kspl")
     p.flag("--update", update@, "rewrite the baseline with these measurements")
     p.parse_or_exit()
     cold: = parse_log(cold_log, arena) catch
@@ -413,8 +424,11 @@ fn main(): I32 //<
         return 2
     serve_ir: = parse_count(serve_log, arena) catch
         return 2
+    lsp_ir: = parse_count(lsp_log, arena) catch
+        return 2
     cur: = Baseline::{ .cold = cold.metrics, .warm = warm.metrics,
-        .work = Work::{ .compile_ir = compile_ir, .run_ir = run_ir }, .serve_ir = serve_ir }
+        .work = Work::{ .compile_ir = compile_ir, .run_ir = run_ir }, .serve_ir = serve_ir,
+        .lsp_ir = lsp_ir }
 
     // Caution: **Run this check on a baseline rewrite too.** `--update` measures the values again,
     // but a type's size is fixed — let through on a rewrite, a change to a fixed value is recorded
@@ -440,7 +454,8 @@ fn main(): I32 //<
         io.out().s("[perf_guard] baseline written: cold \{cur.cold.compile_ms:,\} ms / ")
             .s("\{cur.cold.peak_bytes:,\} peak, warm \{cur.warm.compile_ms:,\} ms / ")
             .s("\{cur.warm.peak_bytes:,\} peak, instructions \{cur.work.compile_ir:,\} compiling / ")
-            .s("\{cur.work.run_ir:,\} running / \{cur.serve_ir:,\} serving\n")
+            .s("\{cur.work.run_ir:,\} running / \{cur.serve_ir:,\} serving / ")
+            .s("\{cur.lsp_ir:,\} in the language server\n")
         return 0
     base: = read_baseline(path, arena) catch
         return 2

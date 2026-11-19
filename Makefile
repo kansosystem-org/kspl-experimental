@@ -309,18 +309,21 @@ perf_run = KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) -
 # it. The second sees code that ksplc generates slower, before the seed is baked again. **kssrv is
 # counted too**, built as `make kssrv` ships it, answering the fixed requests of
 # `kssrv/tests/workload.kspl`. Only the server runs under Cachegrind: the workload starts it.
+# **The language server's worker is counted too**, stage1's as the compile count's, over the fixed
+# editor session of `$(PERF_LSP)`. Only the worker runs under Cachegrind: the session starts it.
 # $(call perf_count,<name>,<command>[,<what starts it>]): one counted run, Cachegrind's log
 # `$(LOG_DIR)/perf_<name>.log`.
 PERF_WORK := tests/checkers/perf_work.kspl
+PERF_LSP := tests/checkers/perf_lsp.kspl
 perf_count = { command -v valgrind > /dev/null || { echo "perf-log needs valgrind to count \
 	instructions: install it, as .devcontainer/Dockerfile does"; exit 1; }; } && \
 	$(3) valgrind --tool=cachegrind --cache-sim=no --cachegrind-out-file=/dev/null \
 	--log-file=$(LOG_DIR)/perf_$(1).log $(2); rc=$$?; grep 'I *refs' $(LOG_DIR)/perf_$(1).log; \
 	exit $$rc
 # PERF_UPDATE=1 takes every baseline again from this run ("note 16" in docs/SPEC-gates.md).
-## Measure-and-inspect|perf-log|Measure translation's time and memory; count the instructions of a fixed workload and of kssrv
+## Measure-and-inspect|perf-log|Measure translation's time and memory; count the instructions of a fixed workload, of kssrv and of the language server
 perf-log: $(STAGE1_EXE) $(SEED_EXE) kssrv | $(OUT_DIR)
-	@rm -rf $(TMP_DIR)/perf_cache $(TMP_DIR)/perf_work_cache $(TMP_DIR)/perf_serve
+	@rm -rf $(TMP_DIR)/perf_cache $(TMP_DIR)/perf_work_cache $(TMP_DIR)/perf_serve $(TMP_DIR)/perf_lsp
 	@echo "# MEASURING cold (empty cache)"
 	@$(call perf_run,cold)
 	@echo "# MEASURING warm (same cache, 2nd run)"
@@ -335,9 +338,13 @@ perf-log: $(STAGE1_EXE) $(SEED_EXE) kssrv | $(OUT_DIR)
 	@echo "# COUNTING kssrv's instructions on the requests of kssrv/tests/workload.kspl"
 	@$(call perf_count,serve_count,$(KSSRV_EXE), \
 	  ./$(STAGE1_EXE) run $(KSPL_FLAGS) kssrv/tests/workload.kspl $(TMP_DIR)/perf_serve)
+	@echo "# COUNTING the language server worker's instructions on the session of $(PERF_LSP)"
+	@$(call perf_count,lsp_count,./$(STAGE1_EXE), \
+	  ./$(STAGE1_EXE) run $(KSPL_FLAGS) $(PERF_LSP) $(TMP_DIR)/perf_lsp)
 	./$(SEED_EXE) run tests/checkers/perf_guard.kspl --cold=$(LOG_DIR)/perf_cold.log \
 	  --warm=$(LOG_DIR)/perf_warm.log --compile-count=$(LOG_DIR)/perf_compile_count.log \
 	  --run-count=$(LOG_DIR)/perf_run_count.log --serve-count=$(LOG_DIR)/perf_serve_count.log \
+	  --lsp-count=$(LOG_DIR)/perf_lsp_count.log \
 	  $(if $(filter 1,$(PERF_UPDATE)),--update)
 
 $(SEED_EXE): $(SEED_C) | $(OUT_DIR)

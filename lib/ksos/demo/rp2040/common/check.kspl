@@ -1,0 +1,303 @@
+//< The car check's parts, verdicts and order, with no hardware
+//< **Each function here takes readings and answers, and returns a verdict or what to do next.**
+//< The firmware (`rp2040_car_check_probe`) reads the sensors, asks the person and moves the
+//< wheels. So `lib/ksos/tests/check_test.kspl` checks every verdict and the order on the host.
+//< Caution: **Do not import a driver here**, as in `stops.kspl`: one hardware access makes the
+//< verdicts untestable on the host again.
+
+// ==========================================
+//   $run: = check.Run()
+//   switch run.gate(part) case .run { … run.set(part, verdict) } default { run.set(part, .skipped) }
+//   for !check.quiet_to_start(last, now) { … }   // before a motion, until the answer is let go
+//   run.carry(w)                     // the panic message that keeps the verdicts
+//   switch check.resume(msg) case .some(earlier) { … }
+//   run.summary(w)                   // `car-check: 9 pass, 1 fail, 2 skipped`
+// ==========================================
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/demo/rp2040/common/stops"
+import "std/buf" { Buf_writer }
+import "std/strfmt" as _strfmt // `\{}` on a number
+
+enum Part //< each part that gets a verdict, **in the order the check runs them**
+    //< Caution: **Keep `panic` last.** A panic ends the firmware, and `PART_COUNT` counts up to it.
+    battery
+    remote
+    line_left
+    line_middle
+    line_right
+    light_left
+    light_right
+    matrix
+    ultrasonic
+    leds
+    buzzer
+    servo
+    wheel_front_left
+    wheel_back_left
+    wheel_back_right
+    wheel_front_right
+    held_key
+    panic
+
+const PART_COUNT: Sz = Sz::Part.panic + 1 //< how many parts there are
+
+enum Verdict //< one part's result
+    untested //< not reached yet
+    pass
+    fail
+    skipped
+
+impl Verdict
+    fn word(r: Self): U8[] //< how a report line writes it
+        switch r
+        case .untested
+            return "NOT RUN"
+        case .pass
+            return "PASS"
+        case .fail
+            return "FAIL"
+        case .skipped
+            return "SKIPPED"
+
+    priv fn mark(r: Self): U8 //< the one character `carry` writes for it
+        switch r
+        case .untested
+            return '-'
+        case .pass
+            return 'P'
+        case .fail
+            return 'F'
+        case .skipped
+            return 'S'
+
+enum Gate //< whether a part runs, and if not, why it is skipped
+    run
+    no_remote //< it needs the remote, which did not answer
+    no_stand //< it moves, and the person did not confirm the stand
+    stopped //< it moves, and a key stopped an earlier motion
+    shares_pins //< the other module on GPIO 4/5 is plugged in
+
+impl Gate
+    fn reason(r: Self): U8[] //< what the report line says for a skip
+        switch r
+        case .run
+            return ""
+        case .no_remote
+            return "needs the remote, which did not answer"
+        case .no_stand
+            return "moves, and the stand was not confirmed"
+        case .stopped
+            return "moves, and a key stopped an earlier motion"
+        case .shares_pins
+            return "shares GPIO 4/5"
+
+impl Part
+    fn needs_remote(r: Self): Bool //< whether the person answers it with the remote
+        //< The battery, the remote itself and the sensors that change by hand need no answer.
+        switch r
+        case .battery, .remote, .line_left, .line_middle, .line_right, .light_left, .light_right,
+            .ultrasonic
+            return false
+        default {}
+        return true
+
+    fn moves(r: Self): Bool //< whether it moves the wheels or the head
+        //< **Nothing that moves runs before the person confirms the stand.**
+        switch r
+        case .servo, .wheel_front_left, .wheel_back_left, .wheel_back_right, .wheel_front_right,
+            .held_key, .panic
+            return true
+        default {}
+        return false
+
+    fn wheel(r: Self): Sz //< the wheel a wheel part turns, as `board.WHEEL_*`
+        //< Caution: **Only a wheel part has one**; any other part gives `board.WHEEL_COUNT`.
+        switch r
+        case .wheel_front_left
+            return board.WHEEL_FRONT_LEFT
+        case .wheel_back_left
+            return board.WHEEL_BACK_LEFT
+        case .wheel_back_right
+            return board.WHEEL_BACK_RIGHT
+        case .wheel_front_right
+            return board.WHEEL_FRONT_RIGHT
+        default {}
+        return board.WHEEL_COUNT
+
+    fn line_bit(r: Self): U32 //< the bit of `track.read_bits` a line part covers; 0 for another
+        switch r
+        case .line_left
+            return 4
+        case .line_middle
+            return 2
+        case .line_right
+            return 1
+        default {}
+        return 0
+
+// --- the answers: ▶ is yes, 9 is no. **They are the car-ir firmware's two stop keys**, so a
+// person reaching for "stop" also answers "no" here ---
+const KEY_YES: U32 = stops.KEY_STOP //< ▶
+const KEY_NO: U32 = stops.KEY_MANUAL //< 9
+
+fn answer(cmd: U32): Verdict //< the verdict a key gives a question
+    //< `untested` for any other key: the question keeps waiting.
+    if cmd == KEY_YES
+        return .pass
+    if cmd == KEY_NO
+        return .fail
+    return .untested
+
+// --- the limits each reading is judged by ---
+const BATTERY_FULL_MARGIN_MV: U32 = 400 //< how far above full charge a reading still passes [mV]
+    //< The divider's resistors and the ADC's reference each vary by a few per cent.
+
+fn battery(mv: U32): Verdict //< the battery's verdict from its reading [mV]
+    //< **It passes from `board.BATTERY_LOW_MV` to full charge plus a margin.** Under the low mark
+    //< the car stops itself; far above full charge, the divider or the ADC is wrong.
+    if mv < board.BATTERY_LOW_MV || mv > board.BATTERY_FULL_MV + BATTERY_FULL_MARGIN_MV
+        return .fail
+    return .pass
+
+fn line_alone(rest: U32, now: U32, part: Part): Bool //<
+    //< Whether only `part`'s sensor changed from its reading at rest
+    //< **The others must stay**: a swapped left and right changes the wrong bit, and fails.
+    bit: = part.line_bit()
+    return bit != 0 && (rest ^ now) == bit
+
+const LIGHT_REST_MIN: U32 = 100 //< the least light at rest that a shade can be seen against
+    //< [the raw ADC value]. In a darker room a hand changes too little to judge.
+const LIGHT_DROP_PERCENT: U32 = 30 //< how far a shaded sensor's reading must fall [%]
+    //< A hand over the sensor halves it or more; 30% leaves room for a room's own light.
+
+fn light_dropped(rest: U32, now: U32, other_rest: U32, other_now: U32): Bool //<
+    //< Whether the shaded sensor fell by `LIGHT_DROP_PERCENT`, and further than the other one
+    //< **It must fall further than the other**: a hand shading both, or swapped wires, fails.
+    if rest < LIGHT_REST_MIN || now >= rest
+        return false
+    drop: = (rest - now) * 100
+    if drop < rest * LIGHT_DROP_PERCENT
+        return false
+    if other_now >= other_rest
+        return true
+    other_drop: = (other_rest - other_now) * 100
+    // Compare the falls as fractions of each one's rest, crossed to stay in integers.
+    return drop * other_rest > other_drop * rest
+
+const SONAR_DROP_MM: U32 = 50 //< how far a hand must bring the distance down [mm]
+
+fn sonar_answers(mm: U32): Bool //< whether the ultrasonic answered at all
+    //< **0 is "ECHO never went up"**: the wiring, not a distance. `range.OUT_OF_RANGE_MM` (no
+    //< reflection) answers, since a hand then brings it down.
+    return mm > 0
+
+fn sonar_hand(first: U32, now: U32): Bool //< whether a hand brought the distance down
+    return now > 0 && now + SONAR_DROP_MM <= first
+
+const HOLD_SLACK_US: U32 = 100000 //< how late after `stops.HOLD_TIMEOUT_US` the wheels may stop
+    //< [us]. One IR frame (up to 70ms) and one tick of the loop, with room.
+
+fn held_key(repeats: U32, quiet_us: U32): Verdict //<
+    //< The held key's verdict from the repeats seen and the quiet before the wheels stopped
+    //< **At least one repeat must come**, or the hold was never seen to extend the drive. **The
+    //< quiet must not pass the timeout by more than the slack**, or the wheels ran on.
+    if repeats == 0 || quiet_us > stops.HOLD_TIMEOUT_US + HOLD_SLACK_US
+        return .fail
+    return .pass
+
+// --- the wait before a motion. **The key that answered may still be held**, and its repeats
+// would stop the motion it started ---
+const QUIET_US: U32 = stops.HOLD_TIMEOUT_US //< how long the remote must be quiet first [us]
+    //< **Longer than the NEC repeat interval (about 108ms)**, so a key still held sends a repeat
+    //< within it. It is also when `stops.hold` counts a held key as let go.
+
+fn quiet_to_start(last_frame_us: U32, now_us: U32): Bool //<
+    //< Whether a motion may start: no frame came for `QUIET_US`
+    //< Caution: **Start `last_frame_us` at the time the wait begins**, not at 0: a key still held
+    //< may not have sent its next repeat yet. It is right across the timer's wrap.
+    return now_us - last_frame_us >= QUIET_US
+
+// ---------------------------------------------------------
+// The run: each part's verdict, and what decides the next part
+// ---------------------------------------------------------
+
+struct Run //< one check's verdicts so far
+    priv verdicts: Verdict[PART_COUNT]
+    remote_ok: Bool //< the remote answered: the parts that ask can run
+    stand_ok: Bool //< the person confirmed the stand: the parts that move can run
+    stopped: Bool //< a key stopped a motion: no part moves again
+    matrix_found: Bool //< the LED matrix answered on GPIO 4/5, so the ultrasonic is not there
+
+impl Run
+    fn new(): Run //< a run with no part tested
+        return ::{}
+
+    fn get(r: Self@, part: Part): Verdict
+        return r.verdicts[Sz::part]
+
+    fn set(r: Self$@, part: Part, verdict: Verdict)
+        r.verdicts[Sz::part] = verdict
+
+    fn gate(r: Self@, part: Part): Gate //< whether `part` runs now
+        //< **The remote comes first**: with no remote, nothing confirms the stand either.
+        if part == Part.matrix && !r.matrix_found
+            return .shares_pins
+        if part == Part.ultrasonic && r.matrix_found
+            return .shares_pins
+        if part.needs_remote() && !r.remote_ok
+            return .no_remote
+        if part.moves() && !r.stand_ok
+            return .no_stand
+        if part.moves() && r.stopped
+            return .stopped
+        return .run
+
+    fn count(r: Self@, verdict: Verdict): U32 //< how many parts have the verdict `verdict`
+        $n: U32 = 0
+        for each in r.verdicts
+            if each == verdict
+                n += 1
+        return n
+
+    fn summary(r: Self@, out: Buf_writer$@) //< the one summary line
+        //< `car-check: 9 pass, 1 fail, 2 skipped`, and `, N not run` only while some are.
+        out.s("car-check: \{r.count(.pass)\} pass, \{r.count(.fail)\} fail, ")
+        out.s("\{r.count(.skipped)\} skipped")
+        untested: = r.count(.untested)
+        if untested > 0
+            out.s(", \{untested\} not run")
+
+    // --- keeping the verdicts across the deliberate panic ---
+
+    fn carry(r: Self@, out: Buf_writer$@) //< the panic message that keeps every verdict
+        //< **The panic record keeps the message through the watchdog's restart** (`.noinit_panic`).
+        //< One character per part, in `Part`'s order; `resume` reads it back.
+        out.s(CARRY_TAG)
+        for each in r.verdicts
+            out.c(each.mark())
+
+const CARRY_TAG: U8[] = "car-check:" //< how a carried message starts
+    //< Caution: **Change it when the parts change**: a message carried by an older firmware must
+    //< then fail `resume`, not land on the wrong parts.
+
+fn resume(msg: U8[]): Run? //< the run a panic message carried, if it is one
+    //< `.none` for any other panic's message, a wrong length, or a character no verdict writes.
+    //< **The flags come back as the parts' verdicts show them**: the remote and the stand passed.
+    if msg.len != CARRY_TAG.len + PART_COUNT
+        return .none
+    for i in Range.asc(CARRY_TAG.len)
+        if msg[i] != CARRY_TAG[i]
+            return .none
+    $run: = Run()
+    for part in Part.variants()
+        $found: = false
+        for verdict in Verdict.variants()
+            if !found && msg[CARRY_TAG.len + Sz::part] == verdict.mark()
+                run.set(part, verdict)
+                found = true
+        if !found
+            return .none
+    run.remote_ok = run.get(.remote) == Verdict.pass
+    // The stand gate let the panic part run only after a confirmed stand and no stop.
+    run.stand_ok = true
+    return .some(run)

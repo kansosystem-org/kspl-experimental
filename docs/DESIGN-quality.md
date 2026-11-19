@@ -37,20 +37,20 @@
 
 | Property | Main mechanisms | Strength today |
 | :-- | :-- | :-- |
-| Functional suitability | self-host, `test-equiv`, `test-property`, `test-random-equiv`, `test-spec-claims`, `test-server-claims`, the claims runs of ksmd, ksagent and ksos, `test-negative`, `test-extract`, the package tests | Strong for ksplc and std, partial for the rest |
+| Functional suitability | self-host, `test-equiv`, `test-property`, `test-random-equiv`, `test-spec-claims`, `test-server-claims`, the claims runs of ksmd, ksagent and ksos, `test-negative`, `test-extract`, the package tests | Strong: every specification's rows are checked against its code. Partial where no row can show a claim |
 | Performance efficiency | `perf-log`, `test-simd` | Partial |
 | Compatibility | `test-llvm-abi`, `test-emit-runtime`, `test-ship`, `test-lsp`, `test-layout-targets` | Strong; partial off Linux |
-| Interaction capability | `ksplc explain`, `ksplc doc`, `test-ksmd-browser`, the CLI comparison in `test-conventions` | Strong for ksplc, partial elsewhere |
+| Interaction capability | `ksplc explain`, `ksplc doc`, `test-ksmd-browser` and `test-ksagent-chat` with axe-core, the CLI comparison in `test-conventions` | Strong for ksplc and for the two pages' markup, partial elsewhere |
 | Reliability | `T!E` results, `lint`, `test-fuzz`, `test-sanitize`, `test-race`, `test-holes`, `test-lsp` | Strong on Linux; one thread schedule per run |
 | Security | the language's checks, `test-holes`, `test-sanitize`, the local server's tests, both pages' policy checks, the pin check | Partial: with no borrow check, a use after free is undefined |
 | Maintainability | `lint`, `test-conventions`, `test-docref`, `test-surface`, `test-fmt-tree` | Strong |
 | Flexibility | both backends self-host, `test-ksos-qemu`, `test-ksos-link`, `test-freestanding-math`, `install-check` | Strong |
-| Safety | ksos's kernel checks, `motor_test.kspl`, `stops_test.kspl`, the car checked by hand | Partial |
+| Safety | ksos's kernel checks, `motor_test.kspl`, `stops_test.kspl`, `check_test.kspl`, the car check run on the car | Partial |
 | Readability | `test-fmt-tree`, the sentence and comment caps, lint's naming hints | Strong for length and names, review for meaning |
 | Testability and verifiability | stage1 equal to stage2, `test-seed-sum`, a failure case per gate, `make coverage` by hand when the tests are surveyed | Strong |
 | Determinism | fixed seeds, no time bound in a test, byte-equal stages | Strong |
 | Observability | the round's verdict and causes, per-gate logs, panic positions | Strong |
-| Documentation | `test-docref`, `test-docsnippet`, `test-spec-claims`, `test-server-claims`, the claims runs of ksmd, ksagent and ksos, `test-docs` | Strong for references and code, partial for prose |
+| Documentation | `test-docref`, `test-docsnippet`, `test-spec-claims`, `test-server-claims`, the claims runs of ksmd, ksagent and ksos, `test-docs` | Strong for references, code and specifications' rows; partial for other prose |
 | Privacy | a local model, files as the only channel | Partial |
 | Licence compliance | `THIRD-PARTY-NOTICES.md` held by `test-conventions` | Strong |
 | Sustainability | a weekly CI, a factor per platform, time caps on jobs and gates | Strong; energy not measured |
@@ -77,7 +77,7 @@
 
 ### Performance efficiency
 
-**Memory and counted work are gated; time is recorded.** `perf-log` judges the compiler's peak memory during its own build, and the sizes of its tree types. It also counts the instructions of a fixed workload, `tests/checkers/perf_work.kspl`, under Cachegrind. One count is the compiler translating it, the other the program built from it. A third count is kssrv answering the plain HTTP requests of `kssrv/tests/workload.kspl`, 200 times each. They are a file, a missing file, a range, a conditional request, a path out of the root and a JSON call. Each count may grow by a tenth over its baseline. The build time is only logged, since a time differs from machine to machine ("No fixed time bound in a test" in [`SPEC-gates.md`](SPEC-gates.md)). `test-simd` checks that ksai's marked loops are vectorized.
+**Memory and counted work are gated; time is recorded.** `perf-log` judges the compiler's peak memory during its own build, and the sizes of its tree types. It also counts the instructions of a fixed workload, `tests/checkers/perf_work.kspl`, under Cachegrind. One count is the compiler translating it, the other the program built from it. A third count is kssrv answering the plain HTTP requests of `kssrv/tests/workload.kspl`, 200 times each. They are a file, a missing file, a range, a conditional request, a path out of the root and a JSON call. A fourth count is the language server's worker playing a fixed editor session, `tests/checkers/perf_lsp.kspl`. It opens three documents of about 400 lines that import each other, asks hovers and jumps to definitions, and changes one document three times. Each count may grow by a tenth over its baseline. The build time is only logged, since a time differs from machine to machine ("No fixed time bound in a test" in [`SPEC-gates.md`](SPEC-gates.md)). `test-simd` checks that ksai's marked loops are vectorized.
 
 **A count is not a time.** It repeats to about one part in a million on one machine, and to a few parts in a hundred on another C library. It does not see a cache miss, a branch mispredicted or a slower system call. So a change that slows only memory access passes, and so does a slowdown in code that the workload does not reach.
 
@@ -99,7 +99,9 @@
 
 **Both pages are checked for keyboard use, names and focus** by `test-ksmd-browser` and `test-ksagent-chat`, in Chromium on Linux and in Chrome on Windows. `test-conventions` holds every colour pair of both pages, in light and dark, to a contrast of 4.5:1. It refuses a colour written in a page's `.html`, where that measure would miss it.
 
-**What is not covered**: the pages are checked in Chromium and Chrome alone: never on macOS, nor in Firefox or Safari. No screen reader is driven. The wording of a diagnostic is reviewed; only its spelling of names is checked.
+**axe-core, the usual automated accessibility checker, runs inside both browser gates.** It runs WCAG 2.1's rules of levels A and AA, and the best practices that judge what a page states. On ksmd's page it checks a document holding a table, a chart and a diagram, in light and dark. It checks a menu and two dialogs open too. The chat page is checked empty, then with a checked answer and its source. Any violation fails the gate, naming the rule and the element. Each run first plants a button with no name, and checks that axe names it. So a missing name, a role an element may not take, an `id` that ARIA names twice or a skipped heading level fails.
+
+**What is not covered**: the pages are checked in Chromium and Chrome alone: never on macOS, nor in Firefox or Safari. No screen reader is driven. axe-core sees only the states the checks open. What it cannot decide, such as contrast over a gradient, it leaves for review, and the gates do not fail on it. Whether a name says the right thing is reviewed. The wording of a diagnostic is reviewed; only its spelling of names is checked.
 
 ### Reliability
 
@@ -117,7 +119,7 @@
 
 **The inputs from outside are checked where they arrive.** ksagent's Word and Excel readers are tested on zip bombs and damaged copies, under the sanitizers. The local server's rules are [`SPEC-local-server.md`](SPEC-local-server.md): the loopback, a token checked before any path, and headers that refuse framing. kssrv refuses a key file that others can read, on POSIX systems. ksmd's page and ksagent's chat page show a file's markup as text. Each page's Content-Security-Policy lets only its own scripts run, each named by its hash, and refuses any load from outside. `test-ksmd-browser` opens a crafted document and checks that nothing in it runs. It and `test-ksagent-chat` also put markup straight into their page, and check that the policy refuses it ([What a document cannot do in the page](../ksmd/docs/DESIGN-page.md#what-a-document-cannot-do-in-the-page)).
 
-**The supply chain is pinned where it is fetched.** The workflows name each outside action by its hash, the Linux image's base by its digest, and the Chromium build by its SHA-256. `test-conventions` refuses an action or a base image named any other way. Each release carries `SHA256SUMS` over its files. Dependabot proposes updates. [`SECURITY.md`](SECURITY.md) says where to report a vulnerability and what counts as one.
+**The supply chain is pinned where it is fetched.** The workflows name each outside action by its hash, the Linux image's base by its digest, and the Chromium build by its SHA-256. The bundled axe-core is checked against its SHA-256 before each run. `test-conventions` refuses an action or a base image named any other way. Each release carries `SHA256SUMS` over its files. Dependabot proposes updates. [`SECURITY.md`](SECURITY.md) says where to report a vulnerability and what counts as one.
 
 **What is not covered**: on Windows, `secret_trust` in `std/fs.kspl` returns `unchecked`, since an ACL decides there.
 
@@ -129,7 +131,7 @@
 
 **The compiler can always rebuild itself.** It is built from a frozen C copy, the seed, and `test-seed-sum` checks that the seed was baked after the last compiler change ([`DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md)).
 
-**What is not covered**: files in Python, make and Markdown have no line cap.
+**What is not covered**: a Markdown document has no line cap, on purpose. A reader looks a rule up by its heading ("Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md)).
 
 ### Flexibility
 
@@ -144,6 +146,8 @@
 **ksos guards its own kernel under test.** A stack canary, a heap guard and the refusal of a wait with interrupts off run in `test-ksos-posix` and `test-ksos-qemu`. `lib/ksos/tests/motor_test.kspl` checks that every wheel command is scaled to the speed cap. `watchdog_test.kspl` in the same folder checks the watchdog's register values.
 
 **The car's stop decisions are checked on the host; their sensors and wiring are checked on the car.** QEMU has no RP2040 model, so `test-ksos-link` only links that firmware. So each stop decision is a function with no hardware access. `lib/ksos/tests/stops_test.kspl` checks the battery, distance, remote and run-time stops of both car firmwares. It also checks that a panic's stop gives every wheel zero. Which parts still need the car is in ksos's bring-up tutorial, under [The safety timeouts of each firmware](../lib/ksos/docs/TUTORIAL-bring-up.md#the-safety-timeouts-of-each-firmware).
+
+**On the car, one firmware run gives each part a verdict.** `make ksos-rp2040-car-check` asks a person about each sensor, wheel, the held key and the panic hook in turn. It prints `PASS`, `FAIL` or `SKIPPED` for each, then one summary line. Its verdicts and their order are functions with no hardware access, which `lib/ksos/tests/check_test.kspl` checks on the host. The steps are [stage 13](../lib/ksos/docs/TUTORIAL-bring-up.md#stage-13--checking-the-whole-car-in-one-run) of the bring-up tutorial.
 
 ## The properties builders add
 
@@ -191,9 +195,9 @@
 
 | Gap | Why it matters |
 | :-- | :-- |
-| The car's sensors, wiring and panic hook are checked only on the car | A wrong stop harms people or things, and QEMU has no RP2040 model |
-| The sanitizer and race gates run only on Linux, and the browser gates not on macOS | A fault in memory or threads on Windows or macOS, or in a page on macOS, shows only on a person's machine, after the push |
-| Speed is gated only by counted instructions on two small workloads | A slower language server or HTTPS server passes every gate. So does a slowdown the workloads do not reach, or one that adds no instructions |
+| The car's sensors, wiring and panic hook are checked only on the car, by one repeatable run with a verdict per part | A wrong stop harms people or things, and QEMU has no RP2040 model. No gate runs the check |
+| The sanitizer and race gates run only on Linux, and the browser gates not on macOS | A fault in memory or threads on Windows or macOS, or in a page on macOS, shows only on a person's machine, after the push. On Windows the risk sits in the UTF-16 conversions of `ksplc/gen/runtime/`: `hosted_fs_win.c`, `hosted_spawn_win.c` and the `_WIN32` branches. MSYS2's UCRT64 ships no sanitizer runtime, and Windows has no leak or thread sanitizer |
+| Speed is gated only by counted instructions on three small workloads | A slower HTTPS server passes every gate. So does a slowdown the workloads do not reach, or one that adds no instructions. The language server's count leaves out its supervisor and the requests that walk the workspace |
 | A specification's claims are checked only where a row can show them | What only the page draws, a model server answers or the car does can drift from its specification |
 
 **Some gaps are decisions, with their reasons in the canonical source.** CI runs weekly ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `test-race` sees one schedule (its note in "What each platform runs" there). ksagent speaks plain http to its model ([The model server](../ksagent/docs/DESIGN-agent.md#the-model-server) in ksagent's design). No gate holds a coverage figure ("Testability and verifiability" above). The service manager, not kssrv, starts kssrv again after a panic ("Reliability" above).

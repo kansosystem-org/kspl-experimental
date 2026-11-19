@@ -221,8 +221,13 @@ function ksmdTable(ks) {
     const head = document.createElement("thead");
     const lettersRow = document.createElement("tr");
     const namesRow = document.createElement("tr");
-    lettersRow.appendChild(document.createElement("th"));
-    namesRow.appendChild(document.createElement("th"));
+    // The corners above the row numbers head nothing, so each is a plain cell of the grid: a
+    // header with no words would be read out as an empty heading.
+    for (const row of [lettersRow, namesRow]) {
+      const corner = document.createElement("th");
+      corner.setAttribute("role", "gridcell");
+      row.appendChild(corner);
+    }
     b.names.forEach((n, c) => {
       const th = ks.el("th", "letter");
       th.scope = "col";

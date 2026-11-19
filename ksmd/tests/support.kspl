@@ -1,18 +1,17 @@
 //< The helpers that several of ksmd's test files share: reading a test source, opening an editor
 //< on it, a row or column edit, the source a document saves as, the reader's or the editor's
-//< refusal, and a folder on disk to read sources from
+//< refusal, and the view of a document in a folder on disk
 import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor"
 import "ksmd/edit/editor_tables" { Table_edit }
 import "ksmd/files/assemble" { Assembly, assemble_loaded }
-import "ksmd/files/files" { Files, Load_error, Refusal, load, resolve_text }
+import "ksmd/files/files" { Load_error, load }
 import "ksmd/model/model" { Document }
+import "ksmd/port/check" { Disk }
 import "ksmd/syntax/reader"
 import "ksmd/syntax/writer"
 import "std/ds"
-import "std/fs"
-import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -76,27 +75,6 @@ fn refuses(what: U8[], result: Void!Refused) //< the editor refuses the action
     //< action the editor wrongly takes prints nothing, and the test passes unseen.
     verdict.check(what, result.is_err(), "accepted")
 
-struct Folder //< a folder on disk that the tests read sources and images from
-    //< It applies the rules of a path's text alone. The page and the local server add their own
-    //< checks, such as the refusal of a link; those are tested where they are made.
-    root: U8[]
-
-impl Folder
-    fn assemble(r: Self@, written: U8[], arena: Arena$@): Assembly!Load_error //<
-        //< The view of the document `written` names from the root
-        return assemble_loaded(r, load(r, written, arena)!, arena)
-
-impl Folder: Files
-    fn resolve(_r: Self@, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal
-        return resolve_text(folder, written, arena)
-
-    fn check(r: Self@, path: U8[], arena: Arena$@): Void!Refusal
-        info: = fs.stat(fs.join(r.root, path, arena)) catch
-            throw .missing
-        if info.kind != .file
-            throw .not_file
-
-    fn read(r: Self@, path: U8[], limit: Sz, arena: Arena$@): U8[]!Refusal
-        r.check(path, arena)!
-        return io.read_file_capped(fs.join(r.root, path, arena), limit + 1, arena) catch
-            throw .unreadable
+fn view_on_disk(ws: Disk@, written: U8[], arena: Arena$@): Assembly!Load_error //<
+    //< The view of the document `written` names from the root of a folder on disk
+    return assemble_loaded(ws, load(ws, written, arena)!, arena)

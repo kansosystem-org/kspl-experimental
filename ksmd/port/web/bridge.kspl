@@ -8,6 +8,7 @@
 //< This file holds the actions on the text and on files. What every action shares, the memory,
 //< the open document and the result, is `bridge_session.kspl`.
 import "ksmd/base/source" { Diagnostic, MAX_SOURCE_BYTES, Source }
+import "ksmd/calc/calc"
 import "ksmd/edit/editor" { Input }
 import "ksmd/edit/editor"
 import "ksmd/edit/editor_blocks" // `insert_divider`, `insert_image`, `insert_functions`, `insert_include`
@@ -29,6 +30,7 @@ import "ksmd/port/web/bridge_session" { HEAP_BYTES, RESERVE, assembled, auto, be
     result_with, session, text_in }
 import "ksmd/port/web/bridge_tables" as _tables // the table actions; this brings them into the wasm
 import "ksmd/port/web/save_as"
+import "ksmd/syntax/markdown"
 import "ksmd/syntax/reader"
 import "ksmd/syntax/settings" { fault_of, is_empty }
 import "ksmd/syntax/writer"
@@ -196,6 +198,20 @@ extern fn ksmd_web_source(): Sz //< the canonical source, as the writer saves it
     ensure()
     out.clear()
     writer.write(ed.doc@, out)
+    return out.slice().len
+
+extern fn ksmd_web_markdown(): Sz //<
+    //< The document as Markdown, for Copy as Markdown, and what it could not carry (`Left_out`):
+    //< `{"text","charts","diagrams","includes","drawn"}`. Its tables show their values now.
+    ensure()
+    defer scratch: = Arena(64 * 1024)
+    values: = calc.calculate(ed.doc@, ed.today, scratch, ed.own)
+    defer $text: = Str_builder()
+    left: = markdown.write(ed.doc@, values@, text@)
+    out.clear()
+    out.s("{\"text\":\"").escape_and_append(text.slice()).s("\",\"charts\":\{left.charts\},")
+    out.s("\"diagrams\":\{left.diagrams\},\"includes\":\{left.includes\},")
+    out.s("\"drawn\":\{left.drawn\}}")
     return out.slice().len
 
 extern fn ksmd_web_select(ap: I32, ab: Sz, ai: Sz, ao: Sz, fp: I32, fb: Sz, fi: Sz, fo: Sz) //<

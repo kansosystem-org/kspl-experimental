@@ -54,6 +54,8 @@ priv fn error_reason(error: io.Io_error, path: U8[]): U8[] //< the error's name,
         return "file_not_found" if p.equals(path) else "file_not_found, another path"
     case .write_failed(p)
         return "write_failed" if p.equals(path) else "write_failed, another path"
+    case .invalid_arg
+        return "invalid_arg"
     default
         return "another error"
 
@@ -70,8 +72,9 @@ fn test_io_open_missing() //< a file not there is told apart for reading and for
     verdict.check("writing under a missing folder is write_failed",
         open_reason(under_missing, "wb").equals("write_failed"),
         open_reason(under_missing, "wb"))
-    verdict.check("a path holding a NUL is not opened",
-        open_reason("out/tmp/a\0b", "rb").equals("file_not_found"), "")
+    verdict.check("a path holding a NUL is refused as invalid_arg, before the OS sees it",
+        open_reason("out/tmp/a\0b", "rb").equals("invalid_arg"),
+        open_reason("out/tmp/a\0b", "rb"))
     $read_why: U8[] = "read"
     text: = io.read_file(missing, null) catch e
         read_why = error_reason(e, missing)
