@@ -25,13 +25,11 @@ Static figures are images with captions. Images keep their aspect ratio. Each fi
 
 **A new attribute stays in version 2, and a ksmd older than the attribute refuses the file.** Its reader refuses an unknown attribute, naming the line and column, so it never opens such a file and saves it without the attribute. A version step would add nothing to that refusal: the older reader refuses `%ksmd 3` as well. It would cost a second reader to keep, and every file written since would carry the new number. The format is not yet a published specification, so version 2 still grows. A version step comes with a change an older reader would read wrongly rather than refuse.
 
-### A version 1 file
+### A formula longer than an edit writes
 
-**Version 2 changes only how a formula's quoted text is read.** The formula is stored as its text, so a ksmd that read version 1 would read such a formula wrongly. The version step makes that ksmd refuse the file instead. How the reader rewrites a version 1 formula is "Version 1 files" in [`SPEC-file-format.md`](SPEC-file-format.md#version-1-files) (`from_version_1` in `ksmd/calc/formula.kspl`).
+**A file holds a formula of up to 32,768 bytes** (`MAX_READ_FORMULA` in `ksmd/model/model.kspl`). An older ksmd converted the formulas of a `%ksmd 1` file, and the conversion could make one longer than 4,096 bytes.
 
-* **A version 2 file holds a formula of up to 32,768 bytes** (`MAX_READ_FORMULA` in `ksmd/model/model.kspl`). A version 1 formula of 4,096 bytes grows less than 6 times when it is converted.
-  * Why: a document that opened in an older ksmd opens in this one too, and saves.
-* **A document that holds a formula over 4,096 bytes when read allows that formula's length to each edit** (`formula_cap`). So a converted formula does not refuse every edit of the document. A formula typed into a cell, or made longer by an edit, keeps within that length.
+* **A document that holds a formula over 4,096 bytes when read allows that formula's length to each edit** (`formula_cap`). So such a formula does not refuse every edit of the document. A formula typed into a cell, or made longer by an edit, keeps within that length.
 
 ## What the reader models
 
@@ -503,7 +501,6 @@ These were weighed and left out, so one way to write each thing stays:
 
 * **A share, not pixels or centimetres**: the same file shows alike on any screen and on any paper. A narrower window narrows the image with the text.
 * **Images next to each other share a row**, so pictures stand in a line of Word's text. Two screenshots at `45%` stand side by side, with no clause for a row.
-* **`scale` is refused**, so a clause never holds two sizes that disagree.
 
 Rendering never follows a link; opening one is an explicit user action, in a new tab ("Read-only" in [`DESIGN-page.md`](DESIGN-page.md)).
 
@@ -722,7 +719,7 @@ A diagnostic names the source path, one-based line and Unicode-scalar column, pl
 
 A source the reader refuses cannot be edited or saved, so a partly parsed model never overwrites the file; its diagnostics are offered instead.
 
-An edit that would write a formula over 4,096 bytes is refused; a table's new name counts too, as a reference writes it. In a document read with a longer formula, that formula's length is the limit instead ("A version 1 file"). A table edit past a table's limits is refused, and a refused edit changes nothing.
+An edit that would write a formula over 4,096 bytes is refused; a table's new name counts too, as a reference writes it. In a document read with a longer formula, that formula's length is the limit instead ("A formula longer than an edit writes"). A table edit past a table's limits is refused, and a refused edit changes nothing.
 
 **A step that would leave the source over 8 MiB or 100,000 blocks is undone and refused**, since the saved file would not open again. The editor keeps the count of the source's bytes. A step that changes only blocks adds the bytes of those blocks. A step that changes a table measures the whole source, since a table changes how other tables and charts are written.
 

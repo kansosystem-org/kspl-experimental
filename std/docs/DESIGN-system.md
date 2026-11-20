@@ -161,7 +161,6 @@ Why a walk that walked nothing fails is at `check_list` in `std/verdict.kspl`. W
 | :-- | :-- | :-- |
 | `json` | `json.parse` | The value is written (`dump`, flat and indented) and read back. The result `equals` the one read, and is written the same again |
 | `url` | `url.decode_component`, `url.parse_query` | A component, encoded (`url.encode`), decodes to itself. The pairs, encoded into a query, parse back to the same pairs in order |
-| `base64` | `base64.decode` | The bytes, encoded, decode to themselves |
 | `regex` | `Regex.compile`, then matching | `is_match`, `find` and `find_all`'s first match agree. A search visits no more states per byte than the program holds, plus one |
 | `http-req` | `http.parse_request` | None |
 | `http-res` | `http.parse_response` | A response that the writer takes (`format_response`) reads back as the status, headers and body it was given, and is written the same again |

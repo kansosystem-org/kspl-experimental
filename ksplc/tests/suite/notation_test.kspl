@@ -416,6 +416,10 @@ priv const NOT_HEAD_WORDS: U8[][2] = ::{ "catch", "in" } //<
     //< **`catch` alone opens a level at a line's end** (`ends_in_catch` in
     //< `ksplc/parse/line_cont.kspl`); **`in` is part of `for`'s heading** (`for x in xs`).
 
+priv const LINKAGE_RULE: U8[] = "linkage" //< `extern` before a definition, first on its line
+    //< Its word heads the line whose block the definition opens (`extern fn f(): I32`), so the
+    //< mending side keeps it among the heading words.
+
 priv const LABEL_MARK: U8[] = "label:" //< the mark for a word that is not a heading word
     //< A `:` goes into no name, so it collides with no real word.
 
@@ -486,7 +490,7 @@ priv fn check_head_words(arena: Arena$@)
         named.push(one)
     $from_grammar: = List<|U8[]|>(arena)
     for one in rules
-        if !named.contains(one.name)
+        if !named.contains(one.name) && !one.name.equals(LINKAGE_RULE)
             continue
         for word in quoted_words(one.body, arena)
             from_grammar.push(word)

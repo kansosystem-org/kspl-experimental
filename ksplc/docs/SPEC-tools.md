@@ -26,7 +26,7 @@ Every KSPL development tool is a subcommand of one executable, `ksplc`: you type
 
 The words in the table: *semantic analysis* works out every type and name, and *Lower* prepares the code for output. A *diagnostic* is a message about your code: an error, a warning, an information or a hint ([§5.2](#52-the-diagnostics-four-weights)). A *translation unit* is one `.c` file as the C compiler reads it.
 
-**The input is a `.kspl` file.** Indentation marks the blocks, as in Python, and the compiler turns it into braces right after reading it. **A file named `.ksplb` is refused**: braces are what the parser reads, not a notation a file is written in. **A file named `.kspls`, the extension's old name, is refused too**, and the line names the rename.
+**The input is a `.kspl` file.** Indentation marks the blocks, as in Python, and the compiler turns it into braces right after reading it. **A file named `.ksplb` is refused**: braces are what the parser reads, not a notation a file is written in.
 
 A name with no extension, as an `import` writes it, is opened as `.kspl`, and a diagnostic or a `#line` names it with `.kspl`. Diagnostics, jumps and the hover use the line numbers of the file as written.
 

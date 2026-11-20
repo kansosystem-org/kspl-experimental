@@ -5,7 +5,7 @@
 # ==================================================================
 
 # $(call kspl_build,<source>,<out name>,<KSPL flags>,<link flags>[,<exe>]): C at -O3; libraries by
-# `#link`. The executable is `$(OUT_DIR)/<out name>.exe` unless <exe> names another.
+# `##link`. The executable is `$(OUT_DIR)/<out name>.exe` unless <exe> names another.
 define kspl_build
 	@mkdir -p $(GEN_DIR) $(dir $(or $(5),$(OUT_DIR)/$(2).exe))
 	./$(STAGE1_EXE) $(KSPL_FLAGS) $(3) --emit-libs=$(GEN_DIR)/$(2).libs $(1) $(GEN_DIR)/$(2).c
@@ -126,7 +126,7 @@ $(KSSRV_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/kssrv)
 
 # Whether the libraries kssrv links are installed: OpenSSL's libssl and libcrypto, for HTTPS.
 # `make install` asks it before it ties `.ksmd` to its launcher, which starts kssrv. **The libraries
-# are asked of ksplc** (`--emit-libs`, from the sources' `#link`), and an empty program is linked
+# are asked of ksplc** (`--emit-libs`, from the sources' `##link`), and an empty program is linked
 # against them, as `lib/kstls/Makefile`'s `test` does. So a fault in kssrv's own code is not reported
 # as a missing library.
 KSSRV_PROBE := $(GEN_DIR)/kssrv_probe

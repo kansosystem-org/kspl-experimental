@@ -99,11 +99,6 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
         return "\n  Note: '?' marks an optional type ('I32?' is 'Option<|I32|>'). It does nothing \
             after a value. Use 'f()!' to pass on a call's failure. Use 'if v: = x' to get an \
             optional's value."
-    // A result in the old spelling (`I32?Io_error`): `I32?` is whole, so the name after it fails.
-    before: = skip_space_back(src, pos)
-    if before >= 0 && src[before] == '?' && pos < src.len && src[pos].is_alpha()
-        return "\n  Note: a result is written with '!' ('I32!Io_error'). 'I32?' is an optional \
-            type. No type name follows it."
     // The range syntax `a..b` / the slice syntax `a[i..j]`: the failure lands on the second `.`.
     if pos >= 1 && pos < src.len && src[pos] == '.' && src[pos - 1] == '.'
         if on_case_line(src, pos)
@@ -113,6 +108,7 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
             ('Range.asc(b)' from 0). Use 'x.sub(start, len)' for a sub-slice."
     // A trailing closure (`count_over(xs) fn(x: I32; ): Bool`, Swift's and Kotlin's shape). Nothing
     // in KSPL puts a `fn` right after a call's `)`, so the failure lands on the `fn`.
+    before: = skip_space_back(src, pos)
     if before >= 0 && src[before] == ')' && src.starts_with("fn", pos) &&
         word_end(src, pos) == pos + 2
         return "\n  Note: KSPL has no trailing closure. Pass the closure inside the call's \

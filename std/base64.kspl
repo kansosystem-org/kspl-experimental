@@ -1,23 +1,11 @@
-//< Base64, encoded and decoded (RFC 4648's standard alphabet, with padding)
+//< Base64 encoding (RFC 4648's standard alphabet, with padding)
 //< It uses only bit operations and needs nothing from the OS, like `std/sha256`. Use it to put
 //< binary data in a JSON string, an HTTP header or a data URI.
-import "std/chars" // classifying one character
-import "std/mem" { Arena, dealloc }
-
-pub enum Base64_error //< why a Base64 string could not be read
-    invalid_length //< the input's length is not a multiple of 4
-    invalid_char //< a character outside the alphabet or an `=` outside the padding
-        //< Also the last character before the padding when the bits it carries past the data are
-        //< not zero (RFC 4648 §3.5): `QR==` and `QQ==` would otherwise both read as `A`.
+import "std/mem" { Arena }
 
 priv fn encode_char(sextet: U8): U8
     return (('A' + sextet) if sextet < 26U8 else ('a' + (sextet - 26U8)) if sextet < 52U8
         else ('0' + (sextet - 52U8)) if sextet < 62U8 else '+' if sextet == 62U8 else '/')
-
-priv fn decode_char(char: U8): I32 //< returns -1 for a character outside the alphabet
-    return ((char - 'A') if char.is_upper() else (char - 'a') + 26 if char.is_lower()
-        else (char - '0') + 52 if char.is_digit() else 62 if char == '+' else 63 if char == '/'
-        else -1)
 
 pub fn encode( //< encodes bytes with the standard alphabet and `=` padding into a new string
     data: U8[], //< the bytes to encode
@@ -43,53 +31,4 @@ pub fn encode( //< encodes bytes with the standard alphabet and `=` padding into
 
         i += 3
         pos += 4
-    return out
-
-pub fn decode( //< decodes a Base64 string into a new byte array
-    text: U8[], //< the text to read, whose length must be a multiple of 4
-    arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
-): U8[]!Base64_error //< the decoded bytes; fails on a character outside the alphabet
-    if text.len == 0
-        return U8[]::{ .ptr = null, .len = 0 }
-    if text.len % 4 != 0
-        throw .invalid_length
-
-    $pad: Sz = 0
-    if text[text.len - 1] == '='
-        pad += 1
-    if text[text.len - 2] == '='
-        pad += 1
-
-    out_len: = (text.len / 4) * 3 - pad
-    out: = U8$[]::{ .ptr = U8$@::arena.alloc(out_len), .len = out_len }
-
-    $pos: Sz = 0
-    $i: Sz = 0
-    for i < text.len
-        is_last_group: = i + 4 == text.len
-        skip2: = is_last_group && pad >= 2
-        skip3: = is_last_group && pad >= 1
-        c0: = decode_char(text[i])
-        c1: = decode_char(text[i + 1])
-        c2: = 0 if skip2 else decode_char(text[i + 2])
-        c3: = 0 if skip3 else decode_char(text[i + 3])
-
-        // Caution: **Refuse the bits the padding leaves unused unless they are zero**, so each
-        // byte string has one encoding. A check comparing encodings would otherwise be fooled.
-        loose: = (skip2 && (c1 & 0xf) != 0) || (skip3 && !skip2 && (c2 & 0x3) != 0)
-        if c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0 || loose
-            if arena == null
-                dealloc(Void$@::out.ptr)
-            throw .invalid_char
-
-        n: U32 = (U32::c0 << 18U32) | (U32::c1 << 12U32) | (U32::c2 << 6U32) | U32::c3
-
-        out[pos] = U8::(n >> 16U32)
-        if !skip2
-            out[pos + 1] = U8::(n >> 8U32)
-        if !skip3
-            out[pos + 2] = U8::n
-
-        i += 4
-        pos += 3
     return out

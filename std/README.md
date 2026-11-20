@@ -43,9 +43,9 @@ Caution: **Do not add line counts to this table**: every edit changes them, and 
 | `lang` + `libc` alone | 2 |
 | `bytes` `math` `checked_int` `mem` `ring` `prng` `bignat` `log` `stack_limit` `suite` `thread` `panic_record` | 3 |
 | `chars` | 3 (4 on a freestanding build, one with no operating system under it, where `mem` supplies `memcmp`) |
-| `buf` `refcount` | 4 |
+| `buf` `refcount` `base64` `rand` | 4 |
 | `strfmt` `strnum` `sha256` | 5 (6 on a freestanding build, through `chars`) |
-| `ds` (`List` / `Map`), `base64` `rand` `net` `url` `channel` | 5 |
+| `ds` (`List` / `Map`), `net` `url` `channel` | 5 |
 | `seq` `reactor` `regex_node` | 6 |
 | `str` `regex` | 8 |
 | `io` | 9 |

@@ -30,7 +30,6 @@
 | `\| Formula \| Shows \|` | A formula, and the text its cell shows | The cell shows that text: a number as shown, a date, `true`, or an error mark such as `#SHAPE!` |
 | `\| Formula \| The reason says \|` | A formula, and words | The error's reason holds those words |
 | `\| Entry \| Shows 1234.5 as \| Shows -0.125 as \|` | A number format, and two texts | The format shows each number as that text |
-| `\| Version 1 formula \| Reads as \|` | A formula of a version 1 file, and its form in version 2 | The reader rewrites the first into the second |
 | `\| Written \| Answer \|` | A path as a clause writes it, and the path from the workspace's root, or `refused` | The path is read that way |
 | `\| Opened \| Shows \| Problem at \| The reason says \|` | A file of the workspace above the table, what its view shows, and its problem | Opening that file gives that view and that problem, or no problem |
 
@@ -71,7 +70,7 @@ In a table, a backslash before `|` inside a cell makes a literal `|`.
 
 ## The source
 
-**A file is UTF-8 text, and its first line names its version: `%ksmd 2`.** The reader also takes `%ksmd 1` ("Version 1 files" below). It refuses any other first line before it reads on.
+**A file is UTF-8 text, and its first line names its version: `%ksmd 2`.** The reader refuses any other first line before it reads on, `%ksmd 1` included.
 
 ```ksmd
 %ksmd 3
@@ -173,53 +172,6 @@ It is refused at line 3, column 12.
 ```
 
 It is refused at line 3, column 30.
-
-### Version 1 files
-
-**Version 2 differs from version 1 only in how a formula's quoted text reads.** A version 1 formula quotes text by JSON's escapes, so `"C:\\src"` there means `C:\src`. Version 2 reads quoted text in a formula by the rules of "Tables and formulas" below.
-
-**The reader rewrites each formula of a `%ksmd 1` file into version 2's form.** Each row below is a formula as its cell holds it, `=` included:
-
-| Version 1 formula | Reads as |
-| :-- | :-- |
-| `="C:\\src"` | `="C:\src"` |
-| `="say \"hi\""` | `="say ""hi"""` |
-| `="\u0041"` | `="A"` |
-| `="a\nb"` | `=("a" & char(10) & "b")` |
-| `="\q"` | `="\q"` |
-| `="\\"` | `="\"` |
-| `="\""` | `=""""` |
-| `=B1&"\t"&B2` | `=B1&char(9)&B2` |
-| `=sum(A1:A2)` | `=sum(A1:A2)` |
-
-* **A control character cannot stand on a formula's line.** It becomes `char(10)` and the like, joined to the rest by `&` in brackets. The text it gives stays the same.
-* **Quoted text that is no JSON string stays as written**, such as `"\q"`. In version 1 it calculates as empty text.
-* **A version 1 formula is at most 4,096 bytes, measured as the file writes it.** Its form in version 2 can be longer: `"a\nb"` takes 6 bytes, and its form 22.
-* **A version 2 file may hold a formula of up to 32,768 bytes.**
-* **A save writes `%ksmd 2`.** The file then needs a ksmd that reads version 2.
-* **Every other part of the file reads the same in both versions.** A text cell, an attribute and a note keep JSON's quotes and escapes.
-
-```ksmd
-%ksmd 1
-
-:::table name="t"
-| "a" | "b" |
-| ="C:\\src" | ="a\nb" |
-| "C:\\src" | 2 |
-:::
-```
-
-It saves as:
-
-```ksmd
-%ksmd 2
-
-:::table name="t"
-| "a" | "b" |
-| ="C:\src" | =("a" & char(10) & "b") |
-| "C:\\src" | 2 |
-:::
-```
 
 ## How the reader reads
 
@@ -1271,8 +1223,6 @@ Arithmetic of one level groups from the left. Where a formula reads, the order a
 
 It is refused at line 5, column 4.
 
-**A `%ksmd 1` file read its formula text by JSON's escapes.** How the reader rewrites it is "Version 1 files" above.
-
 ### Values and errors
 
 **A cell's value is empty, a number, text, a date, `true` or `false`, or an error.** A formula gives one of these, but never an empty value. A formula that names an empty cell alone shows 0.
@@ -2111,17 +2061,6 @@ It is refused at line 3, column 19.
 ```ksmd
 %ksmd 2
 
-:::table name="t" widths="1,2"
-| "a" | "b" |
-| 1 | 2 |
-:::
-```
-
-It is refused at line 3, column 19.
-
-```ksmd
-%ksmd 2
-
 :::table name="t" heights="12.5"
 | "a" |
 | 1 |
@@ -2557,15 +2496,6 @@ It saves as:
 ```
 
 It is refused at line 3, column 1.
-
-```ksmd
-%ksmd 2
-
-:::image src="a.png" alt="A window" scale="50%"
-:::
-```
-
-It is refused at line 3, column 37.
 
 ```ksmd
 %ksmd 2
@@ -3057,7 +2987,7 @@ The window
 | One table | 256 columns, 10,000 data rows, 100,000 cells counting the header |
 | A colour rule's text | 100 bytes |
 | A filter's entry for one column | 65,536 bytes |
-| One formula | 4,096 bytes and 64 levels of nesting; 32,768 bytes in a file, for a converted version 1 formula |
+| One formula | 4,096 bytes and 64 levels of nesting; 32,768 bytes in a file, which an older ksmd's conversion of a version 1 formula could write |
 | Text that `&` or a function gives | 32,767 bytes; past it, `#NUM!` |
 | `round`'s places | -15 to 15 |
 | Cell values read in one calculation | 500 million; past it, each formula not yet calculated shows `#LIMIT!` |

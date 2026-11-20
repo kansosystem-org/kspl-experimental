@@ -5,7 +5,7 @@
 KSPLC ?= ksplc
 OUT ?= out
 BLAS ?= 0
-# The library comes with the flag: the block `--define=blas` keeps names it (`#link` in tensor.kspl).
+# The library comes with the flag: the block `--define=blas` keeps names it (`##link` in tensor.kspl).
 BLAS_FLAGS := $(if $(filter 1,$(BLAS)),--define=blas)
 KSPLC_EXE = $(shell command -v "$(KSPLC)")
 # Handed to the fuzz as they stand: `--trials=N`, `--seed=N`.

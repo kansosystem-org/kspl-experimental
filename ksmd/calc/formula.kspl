@@ -4,12 +4,11 @@
 //< the identities back into the coordinates the rows and columns have now.
 //< Caution: **Read a formula only through `token_at` and `next`.** Binding, writing and
 //< calculating then agree on where each reference starts and ends.
-import "ksmd/base/marker" { formula_text_end, is_decimal, quoted_end, run_of_digits, write_column }
+import "ksmd/base/marker" { formula_text_end, is_decimal, run_of_digits, write_column }
 import "ksmd/calc/bases" { is_literal, literal }
 import "ksmd/model/model" { Cell, Corner, Document, Piece, Table }
 import "std/chars"
 import "std/ds" { List }
-import "std/json"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
@@ -626,51 +625,6 @@ fn unquoted(quoted: U8[], arena: Arena$@): U8[] //<
         out.c(inner[i])
         i += 2 if inner[i] == '"' else 1
     return out.take()
-
-fn from_version_1(written: U8[], arena: Arena$@): U8[] //<
-    //< A formula of a `%ksmd 1` file, its quoted text rewritten by today's rule (`write_quoted`)
-    //< Version 1 read quoted text by JSON's rules, so `"C:\\src"` was `C:\src`. A control
-    //< character cannot stand on the formula's line, so it becomes `char(10)` joined by `&`. Text
-    //< that was no JSON string stays as written.
-    defer $out: = Str_builder()
-    $i: Sz = 0
-    for i < written.len
-        if written[i] != '"'
-            out.c(written[i])
-            i += 1
-            continue
-        close: = quoted_end(written, i)
-        if close == written.len
-            out.s(written.sub_from(i))
-            break
-        quoted: = written.sub(i, close + 1 - i)
-        i = close + 1
-        decoded: = json.parse(quoted, arena) catch
-            out.s(quoted)
-            continue
-        write_joined(decoded.val.as_str().unwrap_or(""), out@)
-    return arena.dup_str(out.slice())
-
-priv fn write_joined(text: U8[], out: Str_builder$@) //<
-    //< Text as quoted runs and `char(n)` for each control character, joined by `&` in brackets
-    $parts: Sz = 0
-    $run: Sz = 0
-    defer $whole: = Str_builder()
-    for k in Range.asc(text.len + 1)
-        if k < text.len && text[k] >= 0x20U8 && text[k] != 0x7FU8
-            continue
-        if k > run || parts == 0 && k == text.len
-            whole.s(" & " if parts > 0 else "")
-            write_quoted(text.sub(run, k - run), whole@)
-            parts += 1
-        if k < text.len
-            whole.s(" & " if parts > 0 else "").s("char(\{Sz::text[k]\})")
-            parts += 1
-        run = k + 1
-    if parts > 1
-        out.c('(').s(whole.slice()).c(')')
-    else
-        out.s(whole.slice())
 
 fn find_table(doc: Document@, name: U8[]): Sz? //< the table of this name in this source
     for table in Range.asc(doc.tables.len)

@@ -20,7 +20,7 @@ KANSO_REQUIRE_ASAN ?=
 # -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
 ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
 
-# **The libraries are asked of ksplc** (`--emit-libs`, from the sources' `#link`), never copied
+# **The libraries are asked of ksplc** (`--emit-libs`, from the sources' `##link`), never copied
 # here. An empty program linked against them tells "not installed" from a binding that is wrong:
 # only the first skips. `test` and `test-fuzz` both run `$(1)` behind this probe; `$(2)` names it.
 # Caution: **Quote every path** — a folder whose name holds a space splits an unquoted one.

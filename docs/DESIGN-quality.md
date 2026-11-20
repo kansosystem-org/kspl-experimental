@@ -87,7 +87,7 @@
 
 **Each binary interface has its own gate.** `test-llvm-abi` checks that the two backends call each other correctly. `test-emit-runtime` checks that a runtime of another version does not link. `test-ship` links the shipped libraries into C and KSPL programs, static and shared. `test-layout-targets` checks every folded size against each machine ksplc knows.
 
-**Formats and protocols have their own checks.** A ksmd file names its version, and the reader also takes version 1 ("Version 1 files" in [`ksmd/docs/SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md#version-1-files)). `test-lsp`, `test-lsp-tree` and `test-vscode` check the language server and the editor extension.
+**Formats and protocols have their own checks.** A ksmd file names its version, and the reader refuses any other ("The source" in [`ksmd/docs/SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md#the-source)). `test-lsp`, `test-lsp-tree` and `test-vscode` check the language server and the editor extension.
 
 **What is not covered**: Linux runs every gate, Windows the shared sections, and macOS a small set ("What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md)). The sanitizer and race gates run only on Linux, and the browser gates on Linux and Windows. The behaviour of Windows file systems is checked by hand on a Windows machine.
 

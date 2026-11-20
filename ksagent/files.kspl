@@ -42,9 +42,6 @@ const CHAT_SUFFIX: U8[] = ".chat.jsonl" //< how the name of a conversation's rec
     //< `team.ask.jsonl` has `team.chat.jsonl`. Only ksagent writes it.
 const LIVE_SUFFIX: U8[] = ".live.json" //< how the name of the answer being written ends
     //< `team.ask.jsonl` has `team.live.json`. Only ksagent writes it.
-priv const OLD_SUFFIXES: U8[][_] = ::{ ".chat.ksmd", ".live.ksmd" } //<
-    //< how the names of chat files of the old form end, which ksmd's editor showed
-    //< Their answers are the model's own words, so `old_chat_file` finds them before any command.
 
 struct Folder //< the folder the tools reach, and the files in it that they leave out
     root: U8[] //< the folder
@@ -119,19 +116,6 @@ fn chat_path(ask_path: U8[], arena: Arena$@): U8[] //< the conversation's record
 
 fn live_path(ask_path: U8[], arena: Arena$@): U8[] //< the answer being written, beside an ask file
     return arena.text().s(ask_path.strip_suffix(ASK_SUFFIX)).s(LIVE_SUFFIX).take()
-
-fn old_chat_file(root: U8[], arena: Arena$@): U8[] //<
-    //< The first chat file of the old form under the root, or empty where none stands
-    //< **No command starts beside one**: the tools do not hide it, so its answers would count as
-    //< sources. The person deletes it, or asks its questions again on the chat page.
-    found: = walk(root, arena) catch
-        return ""
-    for path in found
-        name: = sys.get_file_name(path)
-        for suffix in OLD_SUFFIXES
-            if ends_ignoring_case(name, suffix) && !is_hidden(name)
-                return path
-    return ""
 
 fn is_hidden(name: U8[]): Bool //< whether a name is one the tools never show: it starts with a dot
     return name.len > 0 && name[0] == '.'

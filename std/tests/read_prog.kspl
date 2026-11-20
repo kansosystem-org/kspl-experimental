@@ -7,7 +7,6 @@
 //< the reader read, must read back the same.
 //< Usage: `read_prog <kind> <file>` (the kinds are the names that `read_one` below lists).
 import "std/argparse"
-import "std/base64"
 import "std/chars"
 import "std/ds" { List }
 import "std/http" + { Headers }
@@ -120,20 +119,6 @@ priv fn use_query(query: url.Query, arena: Arena$@) //<
         use_bytes(p.name)
         use_bytes(p.value)
         use_bytes(url.encode(p.value, arena))
-
-// ---------------------------------------------------------
-// Base64
-// ---------------------------------------------------------
-priv fn read_base64(src: U8[], arena: Arena$@): I32
-    data: = base64.decode(src, arena) catch
-        return 1
-    use_bytes(data)
-    again: = base64.encode(data, arena)
-    use_bytes(again)
-    back: = base64.decode(again, arena) catch
-        panic("base64: what encode wrote does not decode")
-    assert(back.equals(data), "base64: the bytes encoded decode to others")
-    return 0
 
 // ---------------------------------------------------------
 // Regular expressions
@@ -461,8 +446,6 @@ priv fn read_one(kind: U8[], src: U8[], arena: Arena$@): I32
         return read_json(src, arena)
     if kind.equals("url")
         return read_url(src, arena)
-    if kind.equals("base64")
-        return read_base64(src, arena)
     if kind.equals("regex")
         return read_regex(src, arena)
     if kind.equals("http-req")

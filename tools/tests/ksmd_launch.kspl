@@ -26,7 +26,7 @@ priv const URL_WAIT_STEPS: Sz = 300 //< how many times, 100ms apart, an open's o
 priv const ANSWER_WAIT_MS: I32 = 10000 //< how long a server may take to answer one request
 priv const TOOL_WAIT_MS: I32 = 60000 //< how long a run that does not wait on its server may take
 priv const PAGE: U8[] = "a stand-in for the ksmd page\n" //< what the server answers `/` with
-priv const DOC: U8[] = "%ksmd 1\n\n:::include path=\"../top.ksmd\"\n:::\n" //<
+priv const DOC: U8[] = "%ksmd 2\n\n:::include path=\"../top.ksmd\"\n:::\n" //<
     //< A document two folders down, whose include climbs to the workspace's top
 
 struct Run //< one launcher run that waits on the server it started
@@ -154,9 +154,9 @@ priv fn write_workspaces(work: U8[], arena: Arena$@): Void!fs.Fs_error //<
     //< `ws/`, marked as a workspace and holding two documents, and `loose/`, holding one unmarked
     fs.write_tree(fs.join(work, "ws", arena),
         U8[][]::{ aim.MARK, "top.ksmd", "parts/doc.ksmd", "notes.txt" },
-        U8[][]::{ "", "%ksmd 1\n\nTop.\n", DOC, "not a document\n" }, arena)!
+        U8[][]::{ "", "%ksmd 2\n\nTop.\n", DOC, "not a document\n" }, arena)!
     fs.write_tree(fs.join(work, "loose", arena), U8[][]::{ "a.ksmd" },
-        U8[][]::{ "%ksmd 1\n\nLoose.\n" }, arena)!
+        U8[][]::{ "%ksmd 2\n\nLoose.\n" }, arena)!
 
 priv fn check_marked(launcher: U8[], ws: U8[], work: U8[], arena: Arena$@): Run //<
     //< A document two folders under the mark opens on the marked folder, on that folder's port
@@ -180,7 +180,7 @@ priv fn check_marked(launcher: U8[], ws: U8[], work: U8[], arena: Arena$@): Run 
     // allowed, the builder copied here finds no ksplc to build with, so it answers with its own
     // message: a server without it would answer 404, and one with no record 403.
     $hex: U8[sha256.HEX_LEN] = ::{}
-    sha256.write_hex(sha256.hash("%ksmd 1\n\nTop.\n"), U8$[]::hex)
+    sha256.write_hex(sha256.hash("%ksmd 2\n\nTop.\n"), U8$[]::hex)
     $said_allow: U8[] = "(no answer)"
     if allowed: =
         ask(first.url, "/api/allow?path=top.ksmd", arena, "POST", arena.dup_str(U8[]::hex))
@@ -402,7 +402,7 @@ priv fn check_together(launcher: U8[], pair: U8[][2], work: U8[], arena: Arena$@
         verdict.check("two workspaces with the same port are found", false, work)
         return runs
     for k in Range.asc(2)
-        fs.write_tree(pair[k], U8[][]::{ "doc.ksmd" }, U8[][]::{ "%ksmd 1\n\nOne of two.\n" },
+        fs.write_tree(pair[k], U8[][]::{ "doc.ksmd" }, U8[][]::{ "%ksmd 2\n\nOne of two.\n" },
             arena) catch panic("a document of the pair must be writable")
     // Caution: **Start both before waiting on either**: one after the other, the second finds the
     // first's server in the note and never meets the race.

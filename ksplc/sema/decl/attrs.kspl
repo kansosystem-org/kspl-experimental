@@ -256,21 +256,6 @@ priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, ctx: Sema_ctx$@
     if id_node == null
         return
     name: = attr.attribute_name()
-    // **An attribute that gave way to another spelling is named with it**, so code written for it
-    // learns the spelling rather than an "unknown attribute".
-    if name.equals("export")
-        ctx.clear_scratch()
-            .s("the attribute '#export' is no longer written. Write 'extern fn …' (after 'pub' \
-                where it stands): 'extern' before a definition publishes it to C under its own \
-                name, as 'extern' before a declaration without a body brings C's in")
-        ctx.err(id_node, ctx.scratch.slice())
-        return
-    if name.equals("link")
-        ctx.clear_scratch()
-            .s("the attribute '#link' is no longer written. Write '##link(\"name\")' in the file: \
-                it names the libraries the file's 'extern' declarations are found in")
-        ctx.err(id_node, ctx.scratch.slice())
-        return
     if !is_known_attribute(name)
         ctx.clear_scratch()
             .s("unknown attribute '#\{name\}'. The compiler would silently ignore it")
@@ -344,15 +329,6 @@ priv fn check_linkage(decl: Ast_node$@, node: Ast_node$@, owner: Attr_owner, in_
                 a free function. Write 'extern' on that function")
         ctx.err(node, ctx.scratch.slice())
 
-priv fn refuse_extern_block(decl: Ast_node$@, ctx: Sema_ctx$@) //<
-    //< Refuses an `extern` declaration, naming the spelling that took its place
-    ctx.clear_scratch()
-        .s("an 'extern \"C\"' block is no longer written. Write 'extern' before each declaration in \
-            it: 'extern fn f(): I32', 'extern struct S', 'extern errno: I32'. A '#cfg' on the block \
-            goes before a group of them ('#cfg(flag)' with the declarations indented below it), and \
-            a '#link(\"name\")' becomes '##link(\"name\")' in the file")
-    ctx.err(decl, ctx.scratch.slice())
-
 priv fn check_attribute_combination(decl: Ast_node$@, owner: Attr_owner, in_impl: Bool,
     ctx: Sema_ctx$@)
     // **An `embed` holds a file's bytes**, made by no expression, so `#raw_address` on it does
@@ -412,8 +388,6 @@ priv fn check_attributes_under(node: Ast_node$@, in_impl: Bool, in_body: Bool, c
     // **Not under the attribute list alone**: `extern` is written without one.
     if l: = node.linkage_of()
         check_linkage(node, l, owner, in_impl, ctx)
-    if node.kind_id == .k_decl_extern_block
-        refuse_extern_block(node, ctx)
     inside: = in_impl || node.kind_id == .k_decl_impl || node.kind_id == .k_decl_trait
     body: = in_body || node.kind_id == .k_decl_fn
     for child in node.children

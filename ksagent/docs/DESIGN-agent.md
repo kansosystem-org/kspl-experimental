@@ -205,10 +205,6 @@ Caution: **The check shows that the words stand at those lines, not that they ba
 * **A chat file with a broken line gets no further answer** until the line is repaired. A turn written after it would hide it, and reading up to it would drop the turns after it without a word.
 * **The page shows each broken line it meets**, with its file and number. It reads an ask file with ksagent's rules, so a question ksagent passes over is named, never shown as waiting. The browser check compares its reasons with what ksagent prints.
 
-### Chat files of the old form
-
-**ksagent starts no command where a `.chat.ksmd` or `.live.ksmd` file stands under the root.** The tools do not hide such a file, so its answers would count as sources. The refusal names the file and says to delete it, or to ask its questions again on the chat page. No conversion is offered: a converter would stay as code that serves no file once the old ones are deleted.
-
 ## The chat page
 
 **The chat page is the one place a person asks** ([`ksagent/page/chat.html`](../page/chat.html)). It lists the conversations at the top of the root, starts a new one, asks, stops, and shows each answer as it grows. **The page is served as one file**, since the local server serves one file for the page and nothing else without the token. That holds for the built page, not its source. The build puts the Markdown reader ([`ksagent/page/markdown.js`](../page/markdown.js)) inside it, and kssrv's client for the local server (`kssrv/page/client.js`), the same client ksmd's page holds. The reader stands in its own file, so it can be read and changed apart from the page's own script.

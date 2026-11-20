@@ -26,7 +26,6 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str"
 import "std/strfmt" as _strfmt
 
 priv const NAME: U8[] = "ksagent" //< the program's name in its usage and messages
@@ -87,16 +86,6 @@ fn main(): I32
         return 1
     if o.timeout_s < 1I64 || o.timeout_s > MAX_TIMEOUT_S
         io.err().s("\{NAME\}: --timeout must be from 1 to \{MAX_TIMEOUT_S\} seconds\n")
-        return 1
-    // **No command starts beside a chat file of the old form**: its answers would count as sources.
-    old: = files.old_chat_file(root, arena)
-    if old.len > 0
-        // A walked file name can hold an escape sequence, so it goes out shown safely.
-        said: = arena.text()
-            .s("\{NAME\}: \{old\} is a chat file of the old form, and the tools would read its \
-                answers as sources. Delete it, or ask its questions again on the chat page\n")
-            .take()
-        answer.write_shown(io.err(), said)
         return 1
     $server: =
         model.parse_url(o.url, o.model, I32::(o.timeout_s * 1000I64), arena) catch why

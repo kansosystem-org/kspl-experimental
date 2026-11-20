@@ -7,7 +7,6 @@
 // `kspl_rand_fill` in `ksplc/gen/runtime/hosted.c`.
 // ==========================================
 import "std/bytes" // `get_u64_be`
-import "std/mem" { Arena, dealloc }
 
 extern fn kspl_rand_fill(buf_ptr: U8$@, buf_len: Sz): Bool
 
@@ -19,17 +18,6 @@ pub fn fill( //< fills the caller's memory from the OS randomness source
 ): Void!Rand_error
     if !kspl_rand_fill(buf.ptr, buf.len)
         throw .unavailable
-
-pub fn bytes( //< a newly allocated buffer of secure random bytes
-    count: Sz, //< how many bytes to return
-    arena: Arena$@, //< where they go; null means the heap, freed with `dealloc`
-): U8[]!Rand_error //< the bytes; fails if the OS randomness source cannot be read
-    buf: = U8$[]::{ .ptr = U8$@::arena.alloc(count), .len = count }
-    fill(buf) catch e
-        if arena == null
-            dealloc(Void$@::buf.ptr)
-        throw e
-    return buf
 
 pub fn u64(): U64!Rand_error //< one secure random `U64`
     //< For a token or a session ID.

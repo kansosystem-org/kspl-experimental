@@ -7,15 +7,15 @@ import "ksmd/base/dates" { is_date }
 import "ksmd/base/keyed" { Keyed }
 import "ksmd/base/marker" { formula_text_end, is_decimal, leading, quoted_end }
 import "ksmd/base/source" { HEADER, Diagnostic, Line, Source }
-import "ksmd/calc/formula" { from_version_1, text_piece }
+import "ksmd/calc/formula" { text_piece }
 import "ksmd/model/choice" { has_choices, is_entry, lowered }
 import "ksmd/model/filter" { is_filter_entry }
 import "ksmd/model/format" { format_of }
 import "ksmd/model/group" { Group_fault, read_groups }
 import "ksmd/model/look" { look_of, note_of, plain_look }
 import "ksmd/model/model" { Block, Cell, Chart, Document, Image, Drawing, UNBOUND, MAX_CELLS,
-    MAX_COLUMNS, MAX_FORMULA, MAX_HEIGHT, MAX_READ_FORMULA, MAX_NAME, MAX_ROWS, MAX_WIDTH,
-    MIN_HEIGHT, MIN_WIDTH, Column_filter, Row_height, Table }
+    MAX_COLUMNS, MAX_HEIGHT, MAX_READ_FORMULA, MAX_NAME, MAX_ROWS, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH,
+    Column_filter, Row_height, Table }
 import "ksmd/model/rule" { has_rule, rule_of }
 import "ksmd/syntax/chart" { kind_of, split_names }
 import "ksmd/syntax/diagram" { read_diagram }
@@ -75,10 +75,6 @@ priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attri
             .count = 0, .offset = first.offset, .align = .none, .note = "", .invisible = false })
         return empty_body(src, first, "':::include' has no body. Close it on the next line")
     if kind.equals("image")
-        if a: = find(attributes, "scale")
-            throw src.diagnostic(a.offset,
-                "':::image' no longer takes scale. Give its size as a share of the text width with \
-                    width")
         allow(src, attributes, U8[][]::{ "src", "alt", "caption", "width", "invisible" },
             "':::image' takes only src, alt, caption, width and invisible")!
         image_src: =
@@ -205,10 +201,6 @@ priv fn read_chart(src: Source@, first: Line, attributes: List<|Attribute|>, doc
 priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc: Document$@,
     names: Keyed<|Bool|>$@, arena: Arena$@): Sz!Diagnostic //<
         //< A header row of quoted names, then data rows, each with as many cells
-    if a: = find(attributes, "widths")
-        throw src.diagnostic(a.offset,
-            "':::table' no longer takes widths. Give each column's width in characters with \
-                char_widths")
     allow(src, attributes,
         U8[][]::{ "name", "caption", "char_widths", "heights", "formats", "choices", "color_rows",
         "rules", "groups", "merge", "filter", "invisible" },
@@ -288,7 +280,7 @@ priv fn read_row(src: Source@, line: Line, table: Table$@, arena: Arena$@): Sz!D
     $count: Sz = 0
     $start: Sz = 1
     $i: Sz = 1
-    $plain: = plain_quotes(src, text.sub_from(1))
+    $plain: = plain_quotes(text.sub_from(1))
     for i < text.len
         if text[i] == '"'
             close: = formula_text_end(text, i) if plain else quoted_end(text, i)
@@ -305,16 +297,16 @@ priv fn read_row(src: Source@, line: Line, table: Table$@, arena: Arena$@): Sz!D
                 .push(read_cell(src, text.sub(start, i - start), line.offset + start, table, arena)!)
             count += 1
             start = i + 1
-            plain = plain_quotes(src, text.sub_from(start))
+            plain = plain_quotes(text.sub_from(start))
         i += 1
     if start != text.len
         throw src.diagnostic(line.offset, "a table row starts and ends with '|'")
     return count
 
-priv fn plain_quotes(src: Source@, cell: U8[]): Bool //<
+priv fn plain_quotes(cell: U8[]): Bool //<
     //< Whether a cell's quotes, from its start to a `{`, follow a formula's rule: `""` is a '"'
-    //< and a `\` is itself. A `%ksmd 1` file quotes a formula's text by JSON's rules too.
-    return src.version >= 2 && cell.trim_start().starts_with("=")
+    //< and a `\` is itself
+    return cell.trim_start().starts_with("=")
 
 fn reads_as_formula(formula: U8[]): Bool //<
     //< Whether `formula`, saved after `=` alone in a cell, reads back as this formula and nothing
@@ -338,7 +330,7 @@ priv fn read_cell(src: Source@, raw: U8[], offset: Sz, table: Table$@, arena: Ar
         //< is read.
     whole: = raw.trim_spaces()
     at: = offset + leading(raw)
-    brace: = brace_at(whole, plain_quotes(src, whole))
+    brace: = brace_at(whole, plain_quotes(whole))
     $look: = plain_look()
     $note: U8[] = ""
     $link: U8[] = ""
@@ -375,15 +367,10 @@ priv fn read_cell(src: Source@, raw: U8[], offset: Sz, table: Table$@, arena: Ar
         cell.text = decode(src, body, at, arena)!
         return cell
     if body[0] == '='
-        // **A `%ksmd 1` formula is measured as written**, since converting it can lengthen it.
-        $formula: = body.sub_from(1).trim_spaces()
+        formula: = body.sub_from(1).trim_spaces()
         if formula.len == 0
             throw src.diagnostic(at, "this formula is empty")
-        if src.version == 1
-            if formula.len > MAX_FORMULA
-                throw src.diagnostic(at, "a formula holds at most 4,096 bytes")
-            formula = from_version_1(formula, arena)
-        else if formula.len > MAX_READ_FORMULA
+        if formula.len > MAX_READ_FORMULA
             throw src.diagnostic(at, "a formula holds at most 32,768 bytes in a file")
         table.pieces.push(text_piece(formula))
         cell.kind = .formula

@@ -28,10 +28,10 @@ priv const MAX_ALIAS_DEP_DEPTH: Sz = 64 //<
     //< The depth limit for walking an alias's dependencies
     //< The same idea as max_type_layout_depth in sema/decl/layout.kspl.
 
-priv fn extern_word(item: Ast_node@): U8[] //< the storage word of an `extern` block's item
-    //< **std's blocks declare the runtime** (the reason a `kspl_*` function's body is in
-    //< `gen/runtime/`). `KSPL_LINK` sets the runtime's linkage: in a library it is `static`. C
-    //< refuses a `static` definition after an `extern` declaration. Any other block declares C's.
+priv fn extern_word(item: Ast_node@): U8[] //< the storage word of an item `extern` brings in
+    //< **std's `extern` declarations declare the runtime** (the reason a `kspl_*` function's body
+    //< is in `gen/runtime/`). `KSPL_LINK` sets the runtime's linkage: in a library it is `static`.
+    //< C refuses a `static` definition after an `extern` declaration. Any other declares C's.
     if base_core.is_library() && base_locate.is_std_file(item.loc.file())
         return "KSPL_LINK "
     return "extern "
@@ -199,15 +199,14 @@ impl Ast_node
     priv fn emit_fwd_extern_decls(r: Ast_node@, cg: Genc_ctx$@)
         for raw in r.children
             child: = raw.unwrap_top_level()
-            if (child.kind_id != .k_decl_extern && child.kind_id != .k_decl_extern_block) ||
-                !child.is_alive_for_backend()
+            if child.kind_id != .k_decl_extern || !child.is_alive_for_backend()
                 continue
             for item in child.children
                 if item.is_alive_for_backend()
                     item.emit_fwd_extern_item(cg)
 
     priv fn emit_fwd_extern_item(r: Ast_node$@, cg: Genc_ctx$@) //<
-        //< The forward declaration of one item an `extern` block declares
+        //< The forward declaration of the item an `extern` declaration brings in
         switch r.kind_id
         case .k_decl_var
             id: = r.get_decl_id_text()

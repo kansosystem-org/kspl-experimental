@@ -1,6 +1,7 @@
 //< Normalizes a declaration's raw tree into the slots later layers read
-//< An `extern` block's items, an `impl`'s target, an enum variant, and a declaration naming several
-//< variables split into one per name; `normalize_by_kind` in `normalize.kspl` calls each by kind.
+//< An `extern` declaration's item, an `impl`'s target, an enum variant, and a declaration naming
+//< several variables split into one per name; `normalize_by_kind` in `normalize.kspl` calls each by
+//< kind.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as _base_ast_place // `has_keyword`, `has_literal_child`
@@ -13,39 +14,6 @@ priv enum Var_decl_phase
     init_expr
 
 impl Ast_node
-    fn normalize_extern_decl(r: Ast_node$@)
-        // A block (`extern "C" { … }`, refused by sema: `refuse_extern_block` in
-        // `sema/decl/attrs.kspl`) or a single `extern` declaration.
-        // Caution: **Do not look children up by index.** Attributes come first among the children
-        // ("The top-level declarations" in ksplc/docs/DESIGN-parse.md) and shift `get_child(1)`.
-        // A block mistaken for a single declaration loses every declaration inside.
-        $is_block: = r.kind_id == .k_decl_extern_block
-        for $i: Sz = 0; i + 1 < r.children.len; i += 1
-            if r.get_child(i).is_keyword("extern")
-                is_block = is_block || r.get_child(i + 1).kind_id == .k_string
-                break
-        flat: = base_ast.new_ast_node_list()
-
-        if is_block
-            r.set_kind(.k_decl_extern_block)
-            r.text = "extern_block"
-            for child in r.children
-                if child.is_keyword("extern") || child.kind_id == .k_literal ||
-                    child.kind_id == .k_string
-                    continue
-                decl_node: =
-                    (child.process_extern_item().unwrap_or(null)
-                    if child.kind_id == .k_decl_extern else child)
-                if decl_node != null
-                    flat.push(decl_node)
-        else
-            if decl_node: = r.process_extern_item()
-                extern_kw: = r.find_child(.k_keyword)
-                if extern_kw != null
-                    flat.push(extern_kw)
-                flat.push(decl_node)
-        r.children = flat
-
     fn settle_top_level(r: Ast_node$@) //<
         //< Splices each kept `#cfg` group's items into `r` (the file, or the group around it), and
         //< wraps each `extern` declaration without a body in a `decl_extern`
@@ -116,8 +84,8 @@ impl Ast_node
 
     priv fn into_extern_decl(r: Ast_node$@): Ast_node$@ //<
         //< The `decl_extern` that brings in the one C symbol `r` declares
-        //< The item takes the shape an `extern` block's item has, so every later stage reads both
-        //< alike. `extern` itself leaves it: kept, the item would read as published.
+        //< Every later stage finds the C symbols by this one kind. `extern` itself leaves the item:
+        //< kept, the item would read as published.
         r.drop_linkage()
         if r.kind_id == .k_decl_fn
             r.set_kind(.k_decl_fn_proto)
@@ -270,23 +238,6 @@ impl Ast_node
         if attr_node != null
             new_vc.push(attr_node)
         r.children = new_vc
-
-    priv fn process_extern_item(r: Ast_node$@): Ast_node$@?
-        mods: = base_ast.new_ast_node_list()
-        $decl_node: Ast_node$@ = null
-        for inner in r.children
-            if inner.kind_id == .k_literal || inner.kind_id == .k_string ||
-                inner.is_keyword("extern")
-                continue
-            if inner.is_modifier()
-                mods.push(inner)
-            else if inner.kind_id == .k_decl_fn_proto || inner.kind_id == .k_decl_var ||
-                inner.kind_id == .k_decl_extern_struct
-                decl_node = inner
-        if decl_node != null
-            decl_node.prepend_children(mods)
-            return .some(decl_node)
-        return .none
 
     priv fn normalize_var_item(r: Ast_node$@): List<|Ast_node$@|>$@
         flat: = base_ast.new_ast_node_list()

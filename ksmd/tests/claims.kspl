@@ -2,7 +2,7 @@
 //< **Nothing here copies a rule**: each row's question and answer are read from the text, and run
 //< in this process through ksmd's reader, writer and calculator. A failure names the row's line,
 //< and says what the code gave against what the text says.
-//< The rows take eleven forms: five table headings (`TABLE_FORMS`), four sentences after a
+//< The rows take ten forms: four table headings (`TABLE_FORMS`), four sentences after a
 //< `ksmd` block (`BLOCK_FORMS` and `REFUSED_SAYS`), and two over a workspace of file blocks
 //< (`FILE_LABEL`): `OPENED_HEAD`, which opens its files, and `CHECK_SAYS`, which checks one as
 //< `ksmd --check` does. A `ksmd` block that no sentence follows is an example.
@@ -11,7 +11,6 @@
 //< answer changed, must fail on their line: a gate that cannot fail stays green as things break.
 import "ksmd/base/source" { Source }
 import "ksmd/calc/calc"
-import "ksmd/calc/formula" { from_version_1 }
 import "ksmd/calc/reason" { write_reason }
 import "ksmd/files/files" { resolve_text }
 import "ksmd/model/format" { Number_format, format_of, show, show_plain, shows_numbers }
@@ -65,7 +64,6 @@ priv enum Form //< what a row asks, and how its answer is checked
     shows //< the text a formula's cell shows
     reason //< what the reason of a formula's error says
     format //< how a format entry shows 1234.5 and -0.125
-    version_1 //< what a `%ksmd 1` formula reads as
     path //< the path a written one resolves to, or a refusal
     saves //< what the writer saves a `ksmd` block as
     refused //< where the reader refuses a `ksmd` block
@@ -74,26 +72,24 @@ priv enum Form //< what a row asks, and how its answer is checked
     opened //< what the view of a workspace's file shows, and its problem
     checked //< what `ksmd --check` prints of a workspace's file, and its exit code
 
-priv const FORMS: Form[11] = ::{ .shows, .reason, .format, .version_1, .path, .saves, .refused,
-    .reads, .copies, .opened, .checked } //< every form, in the order a missing one is named
+priv const FORMS: Form[10] = ::{ .shows, .reason, .format, .path, .saves, .refused, .reads, .copies,
+    .opened, .checked } //< every form, in the order a missing one is named
 
 priv struct Table_form //< a table form's heading row, and the form of its rows
     head: U8[] //< as `heading_of` writes it: `| A | B |`
     form: Form
     spans: Sz //< how many of its first cells hold one text in backticks; the rest hold plain text
 
-priv const TABLE_FORMS: Table_form[5] = ::{
+priv const TABLE_FORMS: Table_form[4] = ::{
     Table_form::{ .head = "| Formula | Shows |", .form = .shows, .spans = 2 },
     Table_form::{ .head = "| Formula | The reason says |", .form = .reason, .spans = 1 },
     Table_form::{ .head = "| Entry | Shows 1234.5 as | Shows -0.125 as |", .form = .format,
         .spans = 3 },
-    Table_form::{ .head = "| Version 1 formula | Reads as |", .form = .version_1, .spans = 2 },
     Table_form::{ .head = "| Written | Answer |", .form = .path, .spans = 1 },
-} //< the five table headings
+} //< the four table headings
 
-priv const ROW_STARTS: U8[][5] = ::{ "| Formula |", "| Entry |", "| Version 1 formula |",
-    "| Written |", "| Opened |" } //<
-        //< The first cells of the table forms: a heading starting so is meant as one
+priv const ROW_STARTS: U8[][4] = ::{ "| Formula |", "| Entry |", "| Written |", "| Opened |" } //<
+    //< The first cells of the table forms: a heading starting so is meant as one
 
 priv const OPENED_HEAD: U8[] = "| Opened | Shows | Problem at | The reason says |" //<
     //< The heading of the table that opens files of the workspace above it
@@ -232,10 +228,8 @@ impl Form
             return TABLE_FORMS[1].head
         case .format
             return TABLE_FORMS[2].head
-        case .version_1
-            return TABLE_FORMS[3].head
         case .path
-            return TABLE_FORMS[4].head
+            return TABLE_FORMS[3].head
         case .saves
             return BLOCK_FORMS[0].says
         case .refused
@@ -259,8 +253,6 @@ priv fn row_name(reading: Reading@, row: Row@, arena: Arena$@): U8[] //<
         b.s("the reason of `").s(row.given).s("` says \"").s(row.want).c('"')
     case .format
         b.s("`").s(row.given).s("` shows `").s(row.want).s("` and `").s(row.also).c('`')
-    case .version_1
-        b.s("version 1's `").s(row.given).s("` reads as `").s(row.want).c('`')
     case .path
         b.s("`").s(row.given).s("` resolves to ").s(row.want)
     case .saves
@@ -667,9 +659,6 @@ priv fn judged(row: Row@, arena: Arena$@): U8[] //<
             return ""
         return arena.text().s("the code shows `").s(first).s("` and `").s(second)
             .s("`; the text says `").s(row.want).s("` and `").s(row.also).s("`").take()
-    case .version_1
-        got: = from_version_1(row.given, arena)
-        return "" if got.equals(row.want) else gave(got, row.want, arena)
     case .path
         resolved: = resolve_text(FOLDER, row.given, arena) catch why
             if row.want.equals(REFUSED_WORD)
@@ -813,7 +802,7 @@ priv const BAD: Bad[9] = ::{
     Bad::{ .what = "a row whose cell is not one text in backticks",
         .text = "| Formula | Shows |\n| :-- | :-- |\n| =A1 | `2` |\n" },
     Bad::{ .what = "a row with a cell too few",
-        .text = "| Version 1 formula | Reads as |\n| :-- | :-- |\n| `=1` |\n" },
+        .text = "| Formula | Shows |\n| :-- | :-- |\n| `=1` |\n" },
     Bad::{ .what = "a sentence after a block that is not one of the three",
         .text = "```ksmd\n%ksmd 2\n```\n\nIt is refused at line one.\n" },
     Bad::{ .what = "\"It saves as:\" with no ksmd block after it",

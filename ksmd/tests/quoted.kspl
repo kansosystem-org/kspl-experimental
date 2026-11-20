@@ -1,12 +1,12 @@
 //< Text in a formula's quotes: each byte stands for itself, `\` too, and `""` is one '"'
-//< Also a `%ksmd 1` file, whose formulas quote text by JSON's rules, read into today's rule. The
-//< rules are "Text in a formula" in `ksmd/docs/SPEC-file-format.md`.
+//< The rules are "Text in a formula" in `ksmd/docs/SPEC-file-format.md`. Also a file's formula
+//< longer than an edit writes.
 import "ksmd/base/source" { Source }
 import "ksmd/calc/calc"
 import "ksmd/calc/formula" { Token_kind, shift_formula, token_at, unquoted }
 import "ksmd/syntax/reader"
 import "ksmd/tests/calculation" { cases_with }
-import "ksmd/tests/support" { changed, opened, read, saves, written }
+import "ksmd/tests/support" { changed, opened, read, written }
 import "std/chars"
 import "std/ds"
 import "std/mem" { Arena }
@@ -18,8 +18,7 @@ priv const HEAD: U8[] = "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
 fn run()
     tokens()
     values()
-    version_1()
-    version_1_longer()
+    longer()
     shifting()
 
 priv fn tokens() //< where quoted text ends, and the text it means
@@ -47,58 +46,22 @@ priv fn values() //< what quoted text calculates to, and `char` for what text ca
         "len(\"a\" & char(10) & \"b\") -> 3", "char(65) -> \"A\"", "char(12354) -> \"あ\"",
         "char(0) -> #NUM!", "char(55296) -> #NUM!", "char(1114112) -> #NUM!" }, "")
 
-priv fn version_1() //< a `%ksmd 1` file reads its formulas' text by JSON's rules, and saves as 2
-    defer arena: = Arena(64 * 1024)
-    old: =
-        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| =\"\\\\src\\\\\" | =\"say \
-            \\\"hi\\\"\" | =substitute(\"x\\ny\", \"\\n\", \", \") |\n| \"a\\\"|b\" | =\"a\\\"|b\" \
-            | =\"\\u0041\\/\" & \"\\q\" {color=\"#c00000\"} |\n:::\n\n:::table name=\"Q1 \
-            \\\"x\\\"\"\n| \"n\" |\n| 5 |\n:::\n\n:::table name=\"u\"\n| \"m\" |\n| =\"Q1 \
-            \\\"x\\\"\".A1 * 2 |\n:::\n"
-    ed: = opened(old, arena)
-    saves("a version 1 file saves as version 2, its formulas' quoted text by today's rule", ed@,
-        arena,
-        "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| =\"\\src\\\" | =\"say \
-            \"\"hi\"\"\" | =substitute((\"x\" & char(10) & \"y\"), char(10), \", \") |\n| \
-            \"a\\\"|b\" | =\"a\"\"|b\" | =\"A/\" & \"\\q\" {color=\"#c00000\"} |\n:::\n\n:::table \
-            name=\"Q1 \\\"x\\\"\"\n| \"n\" |\n| 5 |\n:::\n\n:::table name=\"u\"\n| \"m\" |\n| =\"Q1 \
-            \"\"x\"\"\".A1 * 2 |\n:::\n")
-    values: = calc.calculate(ed.doc@, "2026-10-23", arena)
-    verdict.check("a doubled backslash in version 1 is one backslash",
-        values.at(0, 0, 0).text.equals("\\src\\"), values.at(0, 0, 0).text)
-    verdict.check("an escaped quote in version 1 is a quote",
-        values.at(0, 0, 1).text.equals("say \"hi\""), values.at(0, 0, 1).text)
-    verdict.check("an escaped line break in version 1 is still a line break",
-        values.at(0, 0, 2).text.equals("x, y"), values.at(0, 0, 2).text)
-    verdict.check("a pipe after an escaped quote stays in its cell",
-        values.at(0, 1, 1).text.equals("a\"|b"), values.at(0, 1, 1).text)
-    verdict.check("a quoted table name with escapes still names its table",
-        values.at(2, 0, 0).number == 10.0, "")
-
-// A `%ksmd 1` formula is measured as written. Converting `"a\nb"` makes it `("a" & char(10) &
-// "b")`, so a formula of 1,797 bytes there becomes one of 4,997.
-priv fn version_1_longer()
+// A file may hold a formula over 4,096 bytes, as an older ksmd's conversion of a `%ksmd 1` file
+// wrote. Such a document still takes an edit.
+priv fn longer()
     defer arena: = Arena(256 * 1024)
-    defer $f: = Str_builder()
-    f.s("len(")
-    for i in Range.asc(200)
-        f.s(" & " if i > 0 else "").s("\"a\\nb\"")
-    f.s(")")
-    old: = arena.text().s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =").s(f.slice())
-        .s(" |\n:::\n").take()
-    $ed: = opened(old, arena)
+    long: = arena.text().s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| =")
+        .s(long_sum(5001, arena)).s(" |\n:::\n").take()
+    $ed: = opened(long, arena)
     values: = calc.calculate(ed.doc@, "2026-10-23", arena)
-    verdict.check("a version 1 formula that conversion makes longer than 4,096 bytes opens",
-        values.at(0, 0, 0).number == 600.0, "")
+    verdict.check("a formula longer than 4,096 bytes in a file opens",
+        values.at(0, 0, 0).number == 2501.0, "")
     changed(ed@, 0, .insert_row, 0)
     saved: = written(ed.doc@, arena)
     again: = read(saved, arena)
-    verdict.check("and the document takes an edit, and saves as version 2 that opens again",
+    verdict.check("and the document takes an edit, and saves a file that opens again",
         again.tables[0].rows.len == 2 && saved.len > 4096 + 40, "")
-    refused_file("a version 1 formula over 4,096 bytes as written is refused",
-        arena.text().s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =")
-        .s(long_sum(4097, arena)).s(" |\n:::\n").take(), arena)
-    refused_file("a version 2 formula over 32,768 bytes is refused",
+    refused_file("a formula over 32,768 bytes is refused",
         arena.text().s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| =")
         .s(long_sum(32769, arena)).s(" |\n:::\n").take(), arena)
 

@@ -25,7 +25,7 @@
 | `cites nothing` | The same answer, with no source |
 | `finds nothing` | It lists the folder, then says that the files do not hold the answer |
 
-**The rows run in a folder that holds two folders, `team` and `old`.** `team` holds `rules/leave.md`, whose lines 3–4 read "A new employee receives 10 days of paid leave" and "after six months of work." It also holds `questions.md`, the questions file that "Testing models on your own documents" shows. `old` holds `team.chat.ksmd`, a chat file of the old form.
+**The rows run in a folder that holds the folder `team`.** `team` holds `rules/leave.md`, whose lines 3–4 read "A new employee receives 10 days of paid leave" and "after six months of work." It also holds `questions.md`, the questions file that "Testing models on your own documents" shows.
 
 ## The model server
 
@@ -157,11 +157,6 @@ A model that thinks first (Qwen3.5) shows its thinking after `thinking:`. Neithe
 * **One JSON record stands on each line.** A text editor can ask too, by adding a line such as `{"type": "question", "id": "q1", "text": "How many days?"}` to an ask file.
 * **An ask file larger than 1 MiB gets no further answer**, and the console and the page say so. Start a new conversation.
 * **A line that cannot be read is named on the console and on the page**, with its number and the reason. In a chat file, ksagent answers no further question until the line is repaired, and answers again within 2 seconds once it is.
-* **ksagent starts nothing where an old `.chat.ksmd` or `.live.ksmd` file stands**, and names the file. Delete it, or ask its questions again on the page.
-
-| Command | Exit code | Standard error holds |
-| :-- | :-- | :-- |
-| `ksagent ask old "How many days?"` | 1 | `old/team.chat.ksmd is a chat file of the old form` |
 
 ## Testing models on your own documents
 
