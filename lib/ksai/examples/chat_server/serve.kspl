@@ -20,7 +20,7 @@ import "std/math"
 import "std/mem" { Arena }
 import "std/net"
 import "std/prng"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/strnum" // `to_count`
 import "std/sys"
@@ -87,7 +87,7 @@ fn answer_one(conn: net.Tcp_stream$@, server: Server$@, arena: Arena$@) //<
 priv fn read_request(conn: net.Tcp_stream$@, arena: Arena$@): http.Request$@!http.Http_error //<
     //< One whole request, all of it within `READ_WAIT_MS`
     deadline: = sys.deadline_after_ms(READ_WAIT_MS)
-    defer $got: = Str_builder()
+    defer $got: = Str()
     for
         left: = (deadline - sys.mono_us()) / 1000I64
         if left <= 0I64
@@ -125,7 +125,7 @@ priv fn write_answer(conn: net.Tcp_stream@, answer: Answer, arena: Arena$@) //<
     $head: = http.headers(arena).add("Content-Type", "application/json").add("Connection", "close")
     if answer.status == 405
         head = head.add("Allow", "GET, POST")
-    defer $out: = Str_builder()
+    defer $out: = Str()
     http.format_response(out@, answer.status, head.build(), answer.body) catch
         panic("an answer built here is well-formed HTTP")
     conn.write_all_for(out.slice(), WRITE_WAIT_MS) catch {}
@@ -258,7 +258,7 @@ priv struct Stream //< a chat answer going out as it is generated, and how far i
     s: Server$@
     conv: Conversation@
     ids: reply.Answer_ids
-    text: Str_builder //< the generated text so far
+    text: Str //< the generated text so far
     sent: reply.Sent
     last_write_us: I64 //< when bytes last went out (`sys.mono_us`)
     gone: Bool //< whether a write failed: the client has gone, and the work stops
@@ -286,7 +286,7 @@ impl Stream
         //< Sends each chunk as one event `data: <json>`, then `after`, in one write
         if chunks.len == 0 && after.len == 0
             return
-        defer $events: = Str_builder()
+        defer $events: = Str()
         for i in Range.asc(chunks.len)
             events.s("data: ").s(chunks.get(i)).s("\n\n")
         events.s(after)
@@ -295,7 +295,7 @@ impl Stream
     priv fn send(r: Self$@, events: U8[]) //< writes text as one HTTP chunk; a failure marks `gone`
         if r.gone
             return
-        defer $out: = Str_builder()
+        defer $out: = Str()
         http.format_chunk(out@, events)
         r.write(out.slice())
 
@@ -310,12 +310,12 @@ priv fn stream_chat(conn: net.Tcp_stream$@, server: Server$@, conv: Conversation
         //< **The head goes out before the prompt is read**, which can take minutes on a CPU. Every
         //< check has passed by then, so nothing is left to refuse with a status.
     defer step: = Arena(STEP_CHUNK)
-    $st: = Stream::{ .conn = conn, .s = server, .conv = conv, .ids = ids, .text = Str_builder(),
+    $st: = Stream::{ .conn = conn, .s = server, .conv = conv, .ids = ids, .text = Str(),
         .sent = reply.Sent::{ .reasoning = 0, .content = 0, .calls = 0, .arguments = 0 },
         .last_write_us = 0I64, .gone = false, .step = step }
     head: = http.headers(arena).add("Content-Type", "text/event-stream")
         .add("Cache-Control", "no-cache").add("Connection", "close").build()
-    defer $opening: = Str_builder()
+    defer $opening: = Str()
     http.format_chunked_head(opening@, 200, head) catch
         panic("a stream's head built here is well-formed HTTP")
     http.format_chunk(opening@,
@@ -341,7 +341,7 @@ priv fn stream_chat(conn: net.Tcp_stream$@, server: Server$@, conv: Conversation
             .cached = g.reused }
         last.push(reply.usage_chunk(ids, use, arena))
     st.send_chunks(last@, "data: [DONE]\n\n")
-    defer $end: = Str_builder()
+    defer $end: = Str()
     http.format_last_chunk(end@)
     st.write(end.slice())
     return Answer::{ .status = 200, .body = "", .streamed = true }

@@ -24,7 +24,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // for its single-character methods
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 fn vis_rank(vis: sema_type_scope.Visibility): I32 //<
     //< A visibility's breadth (narrowest first, file_private < internal < public)
@@ -524,7 +524,7 @@ impl Sema_ctx
         //< reaches (`one_thread_count_path`). **It sees only the type written**: an `Rc` behind a
         //< `Void$@` or a cast passes, so it refuses sure bugs and does not promise that what
         //< passes is safe to share.
-        defer $path: = Str_builder()
+        defer $path: = Str()
         steps: = r.env.one_thread_count_path(type_id, path@)
         if steps == 0
             return false
@@ -668,7 +668,7 @@ impl Sema_ctx
                 // Keep function and field names out of the message: a generic reaches here once per
                 // instance. Differing internal names slip past report_diagnostic's de-duplication
                 // (the file:offset:msg key), and give N entries for one line.
-                defer $shown: = Str_builder()
+                defer $shown: = Str()
                 r.write_shown_name(sym, node, shown@)
                 r.clear_scratch()
                     .s("\{position\} '\{shown.slice()\}' is less visible than the \{owner\} \
@@ -695,11 +695,28 @@ impl Sema_ctx
         //< is_bound_generic_type).
         if r.is_bound_generic_type(sym)
             return true
+        // **A trait's default body copied into an impl passes what the impl's file sees too.** Its
+        // names are read in the trait's file, while `Self`, its methods and the body's own locals
+        // stand in the impl's.
+        stands_in: = r.copied_body_file()
+        if stands_in.len > 0 &&
+            (defined_in.equals(stands_in) ||
+            r.vis_allows_from(sym.vis, defined_in, stands_in))
+            return true
         site_file: = r.outermost_instance_file()
         if site_file.len == 0 || site_file.equals(r.file_name)
             return false
         return defined_in.equals(site_file) ||
             r.vis_allows_from(sym.vis, defined_in, site_file)
+
+    fn copied_body_file(r: Self@): U8[] //<
+        //< The file of the impl whose copy of a trait's default body is analysed now
+        //< Empty in any other body, and where the trait stands in the impl's own file. The copy's
+        //< names are read in the trait's file (names_file in `../session/ctx.kspl`), so the file
+        //< being analysed is not the one the body stands in.
+        if r.fn_ctx.decl == null || r.fn_ctx.decl.loc.file().equals(r.file_name)
+            return ""
+        return r.fn_ctx.decl.loc.file()
 
     priv fn outermost_instance_file(r: Self@): U8[] //<
         //< The file of the call or type that started the chain of instantiations being analysed
@@ -812,7 +829,7 @@ impl Sema_ctx
         //< check_visibility_and_mark_used for a struct field read or written at loc
         r.check_visibility_and_mark_used(field_symbol(field), loc)
 
-    priv fn write_shown_name(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@, out: Str_builder$@) //<
+    priv fn write_shown_name(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@, out: Str$@) //<
         //< The name a visibility diagnostic shows for sym, as the source spells it
         //< Only where sym's own is internal. An instance's name is mangled
         //< (`app_lib_kspl_Box_I64`), and its methods' are named after it. See "A diagnostic points
@@ -836,6 +853,8 @@ impl Sema_ctx
     fn check_visibility_and_mark_used(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@)
         defined_in: = sym.get_defined_in()
         if defined_in.len == 0 || defined_in.equals(r.file_name)
+            if r.copied_body_file().len > 0
+                sym.flags.is_used_by_copied_body = true
             return
         if r.is_exempt_generic_reference(sym, defined_in)
             return
@@ -850,7 +869,7 @@ impl Sema_ctx
             // An instance's own name is mangled (`app_lib_kspl_Box_I64`), so it is shown as the
             // source spells the type. See "A diagnostic points at 'the position the user wrote'" in
             // ksplc/docs/DESIGN-diagnostics.md.
-            defer $shown: = Str_builder()
+            defer $shown: = Str()
             r.write_shown_name(sym, loc, shown@)
             r.clear_scratch()
                 .s("cannot access symbol '\{shown.slice()\}'\n(defined in \{defined_in\})")

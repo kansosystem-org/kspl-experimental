@@ -7,7 +7,7 @@ import "std/json" + { Json_builder }
 import "std/jsonrpc"
 import "std/mem" + { Arena, dealloc }
 import "std/net"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/tests/mem_test" { back_to }
 import "std/thread"
 import "std/url"
@@ -60,6 +60,10 @@ fn test_url_codec()
         catch panic("parse_query should succeed for '+'-as-space input")
     assert(pairs_text(plus, arena).equals("a b=c d|"),
         "'+' must decode to a space (application/x-www-form-urlencoded convention)")
+    // **A query no form wrote keeps its `+`**, as a file's name in it must; `%20` is still a space.
+    kept: = url.parse_uri_query("a+b=c+d%20e", arena) catch panic("parse_uri_query should succeed")
+    assert(pairs_text(kept, arena).equals("a+b=c+d e|"),
+        "in a URI's query, '+' must stay a '+' in a name and in a value")
 
     // The result is the same with or without a leading '?'.
     bare: = url.parse_query("a=1&b=2", arena)
@@ -150,7 +154,7 @@ fn test_http_parse_buffered()
     assert(second.target.equals("/b"), "consumed must land on the start of the next message")
 
     // format_response builds the whole message, leaving the sending to the caller.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     head: = http.headers(arena).add("Content-Type", "text/plain").build()
     http.format_response(out@, 200, head, "hi")
         catch panic("format_response should succeed for well-formed arguments")
@@ -315,7 +319,7 @@ fn test_http_reject_smuggling()
         "a status above 599 must be rejected")
 
     // The builder goes through the same checks, so a value from outside cannot splice in a header.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     bad_head: = http.headers(arena).add("X", "a\r\nInjected: 1").build()
     $inject_ok: = true
     out.s("an answer queued before\n")
@@ -406,7 +410,7 @@ fn test_http_connection_tokens() //< `Connection` is a list of tokens, possibly 
     assert(closes("GET / HTTP/1.1\r\nConnection: TE\r\nConnection: keep-alive, close\r\n", arena),
         "wants_close: a close in a later Connection header closes")
     // **The streamed head finds `close` the way a reader does**, among other tokens.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     listed: = http.headers(arena).add("Connection", "TE").add("Connection", "upgrade, close")
         .build()
     http.format_response_head(out@, 200, listed)
@@ -448,7 +452,7 @@ fn test_http_write_length()
         "a length on a 304 must be refused")
 
     // **The answer to a HEAD names the length of a body it does not carry**, its own way in.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     http.format_response_to_head(out@, 200, http.headers(arena).build(), 10)
         catch panic("format_response_to_head should succeed for a 200")
     assert(out.slice().equals("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n"),
@@ -476,14 +480,14 @@ fn test_http_write_length()
 
 priv fn built(status: I32, head: http.Headers, body: U8[], arena: Arena$@): U8[] //<
     //< The bytes `format_response` builds, or a panic where it refuses
-    defer $out: = Str_builder()
+    defer $out: = Str()
     http.format_response(out@, status, head, body)
         catch panic("format_response should succeed here")
     return arena.dup_str(out.slice())
 
 priv fn build_error(status: I32, head: http.Headers, body: U8[], arena: Arena$@): U8[] //<
     //< How `format_response` refuses: the error's name, or `accepted`
-    defer $out: = Str_builder()
+    defer $out: = Str()
     http.format_response(out@, status, head, body) catch e
         switch e
         case .length_mismatch
@@ -503,7 +507,7 @@ fn test_http_response_length()
 
     // **A body that runs to the close is refused, not read as empty**: success with no body would
     // drop it silently. These are the bytes `format_response_head` builds, and a body after them.
-    defer $streamed: = Str_builder()
+    defer $streamed: = Str()
     http.format_response_head(streamed@, 200,
         http.headers(arena).add("Connection", "close").build())
         catch panic("format_response_head should succeed with Connection: close")
@@ -559,7 +563,7 @@ fn test_http_response_head_refused() //< a response whose first line or a header
         verdict.check(arena.text().s("'").s(cases[i]).s("' reads as ").s(cases[i + 1]).take(),
             got.equals(cases[i + 1]), got)
     // The writer refuses a status outside 100 to 599 before it writes anything.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     for status in I32[]::{ 99, 600 }
         $refused: = false
         http.format_response(out@, status, http.headers(arena).build(), "") catch
@@ -577,7 +581,7 @@ extern fn http_echo_server(listener: net.Tcp_listener$@): Void$@
     defer server_arena: = Arena(64 * 1024)
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
     // A server parses what has arrived so far, and reads more while the request is incomplete.
-    defer $got: = Str_builder()
+    defer $got: = Str()
     $req: http.Request$@ = null
     for req == null
         $chunk: U8[256] = ::{}
@@ -596,8 +600,8 @@ extern fn http_echo_server(listener: net.Tcp_listener$@): Void$@
     assert(req_ok, "server must parse the client's request correctly")
 
     resp_headers: = http.headers(server_arena).add("Content-Type", "text/plain").build()
-    defer $out: = Str_builder()
-    defer $body: = Str_builder()
+    defer $out: = Str()
+    defer $body: = Str()
     for _i in Range.asc(4096)
         body.s("pong")
     http.format_response(out@, 200, resp_headers, body.slice())
@@ -679,7 +683,7 @@ fn test_http_socket_roundtrip()
 // Otherwise the tests pass without ever extracting from a backlog. **Check that the next frame is
 // still readable after a broken header.** A broken header that is not discarded fails forever.
 // ==========================================
-priv fn taken_or(acc: Str_builder$@, arena: Arena$@): U8[]
+priv fn taken_or(acc: Str$@, arena: Arena$@): U8[]
     got: = jsonrpc.take_frame(acc, jsonrpc.MAX_BODY_BYTES, arena) catch
         return "(broken)"
     switch got
@@ -698,7 +702,7 @@ priv fn length_or(head: U8[]): Sz //<
 fn test_jsonrpc_take_frame()
     verdict.start("[Jsonrpc] cutting a frame out test...")
     defer arena: = Arena(64 * 1024)
-    defer $acc: = Str_builder()
+    defer $acc: = Str()
 
     // With only the header in, no frame can be extracted.
     acc.s("Content-Length: 5\r\n\r\n")
@@ -741,7 +745,7 @@ fn test_jsonrpc_take_frame()
 fn test_jsonrpc_broken_frame()
     verdict.start("[Jsonrpc] a broken frame test...")
     defer arena: = Arena(64 * 1024)
-    defer $acc: = Str_builder()
+    defer $acc: = Str()
 
     // A header that gives no length is broken; the next frame must still be readable.
     acc.s("Content-Type: application/json\r\n\r\nContent-Length: 4\r\n\r\nnext")
@@ -749,7 +753,7 @@ fn test_jsonrpc_broken_frame()
     assert(taken_or(acc@, arena).equals("next"), "the next frame must still be readable")
 
     // A length above the cap is broken.
-    defer $huge: = Str_builder()
+    defer $huge: = Str()
     huge.s("Content-Length: \{jsonrpc.MAX_BODY_BYTES + 1\}\r\n\r\n")
     acc.s(huge.slice())
     assert(taken_or(acc@, arena).equals("(broken)"), "a length above the cap is broken")
@@ -776,7 +780,7 @@ fn test_jsonrpc_broken_frame()
 
     // **The reader's own limit decides.** A body past the default, under a reader's larger limit,
     // is taken whole. The frame after it is read where it starts.
-    defer $wide: = Str_builder()
+    defer $wide: = Str()
     wide.s("Content-Length: 150\r\n\r\n")
     for _i in Range.asc(150)
         wide.c('x')
@@ -807,7 +811,7 @@ fn test_jsonrpc_encode()
     assert(note.find_str("\"id\"").is_none(), "a notification must not carry an id")
 
     // A built frame can be extracted again (the round trip).
-    defer $out: = Str_builder()
+    defer $out: = Str()
     jsonrpc.frame_into(out@, req)
     body: = jsonrpc.take_frame(out@, jsonrpc.MAX_BODY_BYTES, arena)
         catch panic("a freshly framed body must be takeable")

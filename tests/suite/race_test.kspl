@@ -16,7 +16,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/subproc"
 import "std/sys"
 import "std/verdict"
@@ -414,7 +414,7 @@ impl Builds
             exes.push(b.exe)
         return exes
 
-priv fn build_programs(work: U8[], deps: Str_builder$@, arena: Arena$@): Builds //<
+priv fn build_programs(work: U8[], deps: Str$@, arena: Arena$@): Builds //<
     //< Builds every program of `PROGRAMS` at once; the sources of each that built go to deps
     root: = harness.root()
     $orders: = List<|Order|>(arena)
@@ -545,8 +545,8 @@ priv fn race_lsp(work: U8[], builds: Builds@, runs: List<|Raced|>$@, arena: Aren
     log_dir: = fs.join(work, "lsp_log", arena)
     // Caution: **No stack for an abort in this run.** The session crashes the worker on purpose,
     // and each logged abort starts `llvm-symbolizer` over ksplc's debug build. On a loaded 2-core
-    // runner that took past the server's 60 s, so the crash read as a hang. A panic still names
-    // its file and line, and a race is still logged with its stacks.
+    // runner that took past the server's wait for its worker, so the crash read as a hang. A panic
+    // still names its file and line, and a race is still logged with its stacks.
     no_abort_stack: = tsan_options(log_dir, false, arena)
     runs
         .push(Raced::{ .name = name, .dir = top, .argv = argv, .log_dir = log_dir,
@@ -588,7 +588,7 @@ fn main(): I32
             lacks)
         return ksplc_harness.finish()
     check_fires(work, arena)
-    defer $deps: = Str_builder()
+    defer $deps: = Str()
     $runs: = List<|Raced|>(arena)
     builds: = build_programs(work, deps@, arena)
     // **The runs that take longest stand first**, so none of them starts last and runs alone. Two

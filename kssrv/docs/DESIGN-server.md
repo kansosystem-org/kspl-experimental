@@ -348,7 +348,7 @@ Kssrv serves files from under its root and answers JSON under `/api/`. Every pat
 
 **The path part of the request target is *percent-decoded* (`%2e` becomes `.`) once, by `url.decode_component`.** **Only then does `fs.join_under` check that it stays under the root. The order is everything.** Checked first, `%2e%2e` passes the check and then becomes `..`. So the regression in `kssrv/tests/main.kspl` sends encoded strings too.
 
-Caution: **Decode a path with `decode_component`, which keeps a `+`.** `+` means a space only in a query or a form (`parse_query` reads it so). Mistaking one for the other makes a file with `+` in its name unreachable.
+Caution: **Decode a path with `decode_component`, which keeps a `+`.** `+` means a space only where a form wrote the query (`parse_query` reads it so; `parse_uri_query` does not). **`path=` keeps its `+` too** (`path_param` in `kssrv/api.kspl`): no form writes it, and it names a file. Mistaking one for the other makes a file with `+` in its name unreachable.
 
 **A target may name the server too** (`GET http://host/path`, the absolute form), which RFC 9112 §3.2.2 asks a server to take. `conn.split_target` takes the host out of it. Under `--local`, the host check then judges that host, not `Host`, as the RFC has the server ignore `Host` here.
 

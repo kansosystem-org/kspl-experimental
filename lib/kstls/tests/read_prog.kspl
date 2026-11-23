@@ -99,7 +99,9 @@ priv fn read_as_client(input: U8[]): I32 //<
         // **The peer ends its side**, so the handshake ends on what it sent, never on the time.
         assert(e != tls.Tls_error.handshake_timed_out,
             "kstls: a handshake ran out of time with the peer's side already closed")
-        if e == tls.Tls_error.cert_verify_failed
+        // Each way the certificate is refused counts, as no CA trusted here issued the seed's.
+        if e == tls.Tls_error.cert_untrusted || e == tls.Tls_error.cert_wrong_host ||
+            e == tls.Tls_error.cert_verify_failed
             code = 0
         fallback null
     // No CA in the default store issued the seed's chain, so no handshake can be finished.

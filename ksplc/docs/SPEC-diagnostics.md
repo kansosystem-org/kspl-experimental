@@ -28,6 +28,14 @@ The terminal view omits parenthetical document references and Markdown link targ
 
 The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). For a carriage return the rule is "2. Lexical structure". For `extern` the rule is "11.3 Publishing a KSPL definition to C (`extern` with a body)", and for a trait's methods "5.3 Checking trait conformance", in the same document.
 
+**An error for an undefined name says what to write instead, where it can tell.**
+
+* **Another language's name gets KSPL's spelling**: `True` gets `true`, `print` gets `io.out().s(…)`, and the type `int` gets `I32`.
+* **A name one typo away from one in scope is offered** (`Hint: did you mean 'count'?`). One typo is at most one edit per three characters: an insertion, a deletion, a change or a swap of two neighbours. **Where two names are equally near, neither is offered.** A misspelled field or method offers the type's member the same way.
+* **`x = 5` with no `x` declared names the declaration**, `x: = 5`.
+  * **Where a name one typo away is in scope, that name is offered instead**: `cuont = 4` with `count` in scope is a misspelling.
+* **An undefined type is one error.** Its uses add no type mismatch.
+
 ## 2. The list of warnings (W)
 
 ### [W0101] An out-of-bounds array access
@@ -94,10 +102,10 @@ A pointer to such a value (`Arena(…)`'s result) is read only up to a `defer` l
   * an element read out of a container that holds such values (`rows.get(i)`);
   * an exit inside a closure, which leaves only the closure;
   * in a generic body, a value whose type is a type argument itself (`v: T`): in one instance it can be an `I32`.
-* **An arena passed to the call does not exempt a value that keeps none.** Its `free()` has no arena to give its memory back to, so the value is on the heap. Example: a function that takes an arena for its scratch work and returns a `Str_builder`.
+* **An arena passed to the call does not exempt a value that keeps none.** Its `free()` has no arena to give its memory back to, so the value is on the heap. Example: a function that takes an arena for its scratch work and returns a `Str`.
 * **A generic body is checked in each instance the program uses.** A finding is printed once, at the line written.
 * **Not seen**: a field or a value reached through a pointer, a generic body no instance uses, or an arena variable `null` at run time.
-* **Fix**: put `defer` in front of the declaration (`defer $b: = Str_builder()`), which frees it on every way out. Where the value is handed on along some paths, free it by hand on the others.
+* **Fix**: put `defer` in front of the declaration (`defer $b: = Str()`), which frees it on every way out. Where the value is handed on along some paths, free it by hand on the others.
 
 ### [W0110] A container keeps a trait value of a local
 A local value becomes a trait value where the trait is expected, with no `@` written, and the trait value keeps the local's address. Here it is handed to a method that takes its receiver as `Self$@`, on a container that holds that trait as a type argument: `xs.push(sq)` with `xs: List<|Shape|>`. The container can keep the address after the local's block ends. It is reported where the container is behind a pointer, in a global, or in a local of an outer block.
@@ -140,7 +148,7 @@ A place is assigned its own value, as in `a = a`, `p.n = p.n`, or `b |= b` and `
 ### [W0204] A meaningless comparison
 A comparison whose answer its own text already fixes. There are five shapes:
 * **One expression on both sides**, written alike and calling nothing, as in `a == a`, `p.n < p.n` or `(a ^ b) != (a ^ b)`. A floating-point value is left out: `f != f` is how IEEE 754 asks whether `f` is a NaN.
-* **A number written beside a side that cannot reach it**, or at the edge of what that side holds: `u >= 0U32` and `u < 0U32` with `u: U32`, `x < -128I8`, `b <= 255U8`. The side's range is its type's, or what its casts and operators leave of it (`I32::(b) < 0` with `b: U8`; `(u & 15U32) > 20U32`). A number outside the type's range is an error instead ("6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#68-integer-arithmetic-folding-overflow-division-shifts)).
+* **A number written beside a side that cannot reach it**, or at the edge of what that side holds: `u >= 0U32` and `u < 0U32` with `u: U32`, `x < -128I8`, `b <= 255U8`. The side's range is its type's, or what its casts and operators leave of it (`I32::(b) < 0` with `b: U8`; `(u & 15U32) > 20U32`; `(x % 4) > 3`). A number outside the type's range is an error instead ("6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#68-integer-arithmetic-folding-overflow-division-shifts)).
 * **A mask that rules the number out**: `(x & 1) == 2`, `(x | 4) == 1`.
 * **A `Bool` joined with its own negation**: `b || !b` is always true, and `b && !b` always false, in either order.
 * **Two tests of one value against written numbers, joined by `&&` or `||`, with a fixed answer**: no value passes both `3 <= x` and `1 > x`, and every value passes `x < 3` or `x > 1`. Where one test is fixed alone (`b >= 0U8 || b < 3U8`), that test is reported, not the pair. `Sz` is read at its widest, so such an answer holds on every target.

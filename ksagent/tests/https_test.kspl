@@ -1,0 +1,99 @@
+//< A model server reached over https: the certificate checked, `--model-ca`, and each refusal
+//< **The certificates are made at run time** (`lib/kstls/tests/cert.kspl`), so no key stands in the
+//< repository. The CA is handed over as a file (`--model-ca`), never through the default store.
+import "ksagent/agent"
+import "ksagent/answer" + { Answer }
+import "ksagent/files"
+import "ksagent/model"
+import "ksagent/tests/agent_test"
+import "ksagent/tests/stub" + { Stub }
+import "kstls/tests/cert" { Test_ca, VALID_NOW }
+import "kstls/tls_server" { Tls_server }
+import "std/chars"
+import "std/ds"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv fn server_for(ca: Test_ca, host: U8[], arena: Arena$@): Tls_server$@ //<
+    //< A certificate `ca` issued for `host`, with its key, as the stand-in answers with it
+    made: = ca.issue(host, VALID_NOW, false, arena)
+    return Tls_server.load(made.cert_pem, made.key_pem, arena)
+        catch panic("the stand-in's certificate and key load")
+
+priv fn ask_secure(stand_in: Stub$@, ca_file: U8[], root: U8[], arena: Arena$@): Answer //<
+    //< Asks one question of the stand-in at `https://localhost:<port>`, trusting `ca_file`
+    url: = arena.text().s("https://localhost:\{stand_in.port\}").take()
+    server: = model.parse_url(url, "test", 10000, ca_file, arena) catch panic("an https URL reads")
+    job: = agent.Ask::{ .server = arena.create(server), .folder = files.Folder(root),
+        .trace = false }
+    a: = agent_test.ask_on(job, "How much paid leave?", arena)
+    stub.done_asking(stand_in)
+    return a
+
+fn test_an_https_server_answers_through_its_ca(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] an https model server whose CA --model-ca names gives the answer")
+    root: = stub.folder(work, "https-answer", arena)
+    ca: = Test_ca.made(arena)
+    defer ca.free()
+    defer tls: = server_for(ca, "localhost", arena)
+    done: = stub.streamed_call("", "answer", stub.leave_args("Ten days.", arena), arena)
+    s: = stub.start_secure(U8[][]::{ done }, tls, arena)
+    a: = ask_secure(s, ca.file, root, arena)
+    verdict.check("the streamed answer came over TLS, with its checked source",
+        a.text.equals("Ten days.") && a.sources.len == 1, answer.ended_line(a@, arena))
+    verdict.check("the stand-in read the request through TLS",
+        s.bodies.len == 1 &&
+        s.bodies.get(0).find_str("How much paid leave?").is_some(), "")
+    stub.release(s)
+
+fn test_an_https_certificate_that_does_not_verify_is_refused(work: U8[], arena: Arena$@)
+    verdict
+        .start("[ksagent] an https certificate that does not verify ends the question, saying why")
+    root: = stub.folder(work, "https-refused", arena)
+    ca: = Test_ca.made(arena)
+    defer ca.free()
+    defer right: = server_for(ca, "localhost", arena)
+    defer other: = server_for(ca, "other.test", arena)
+    // **Each refusal names what to do**: an unknown CA names `--model-ca`, another host the name.
+    unknown: = stub.start_secure(U8[][]::{ stub.text_reply("never sent", arena) }, right, arena)
+    by_store: = ask_secure(unknown, "", root, arena)
+    line: = answer.ended_line(by_store@, arena)
+    verdict.check("a CA this machine does not trust is refused, and --model-ca is named",
+        by_store.text.len == 0 && line.find_str("--model-ca").is_some() &&
+        line.find_str("https://localhost:").is_some(), line)
+    verdict.check("nothing was sent to a server whose certificate was refused",
+        unknown.bodies.len <= 1 &&
+        (unknown.bodies.len == 0 || unknown.bodies.get(0).len == 0), "")
+    stub.release(unknown)
+    wrong: = stub.start_secure(U8[][]::{ stub.text_reply("never sent", arena) }, other, arena)
+    by_name: = ask_secure(wrong, ca.file, root, arena)
+    wrong_line: = answer.ended_line(by_name@, arena)
+    verdict.check("a certificate for another host is refused, naming the host as the cause",
+        by_name.text.len == 0 && wrong_line.find_str("another host name").is_some(), wrong_line)
+    stub.release(wrong)
+    gone: = stub.start_secure(U8[][]::{ stub.text_reply("never sent", arena) }, right, arena)
+    missing: = arena.text().s(root).s("/no-such-ca.pem").take()
+    by_file: = ask_secure(gone, missing, root, arena)
+    file_line: = answer.ended_line(by_file@, arena)
+    verdict.check("a --model-ca file that cannot be read is named",
+        file_line.find_str("no-such-ca.pem").is_some(), file_line)
+    stub.release(gone)
+
+fn test_an_https_url_reads_and_model_ca_wants_one(arena: Arena$@)
+    verdict.start("[ksagent] an https URL takes port 443 by default, and --model-ca wants https")
+    s: =
+        model.parse_url("https://models.example/llm", "test", 1000, "ca.pem", arena)
+        catch panic("an https URL with a CA file reads")
+    verdict.check("https without a port is port 443, and keeps its base path",
+        s.secure && s.port == 443 && s.base.equals("/llm"), s.address(arena))
+    verdict.check("the server's address says https",
+        s.address(arena).starts_with("https://"), s.address(arena))
+    $why: U8[] = "it was taken"
+    _plain: =
+        model.parse_url("http://127.0.0.1:8081", "test", 1000, "ca.pem", arena) catch e
+            why = e
+            fallback s
+    verdict.check("--model-ca with an http URL is refused, saying it is for https",
+        why.find_str("--model-ca is for an https://").is_some(), why)

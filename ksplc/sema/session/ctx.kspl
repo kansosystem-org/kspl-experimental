@@ -25,7 +25,7 @@ import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/math"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv const MAX_ERRORS: I32 = 50 //< the errors a run reports, the cap's own line counted
     //< "Compilation stops at 50 errors" in ksplc/docs/SPEC-tools.md fixes it; change both together.
@@ -65,6 +65,7 @@ struct Fn_ctx
         //< expression's arguments would get the exemption, and there the value is read.
     in_defer: Bool
     defer_boundary: Sz
+    assign_target: Ast_node$@ //< the left side of the `=` being analysed; null otherwise
     literal_negated: Bool //<
         //< Whether the literal being inferred is directly under a unary minus
         //< `-1` is a unary minus on the literal `1`, so without this the range check rejects a
@@ -147,7 +148,7 @@ struct Sema_ctx
     source_map: Map<|U8[], U8$[]|>$@ //<
         //< every loaded file's source by name, for a diagnostic's line
     jump_stack: List<|Jump_label|>$@ //< the loops and labelled blocks enclosing the statement
-    scratch: Str_builder //< the one builder in which a diagnostic's message is assembled
+    scratch: Str //< the one builder in which a diagnostic's message is assembled
     pointees: Map<|U8[], Pointee_param|>$@ //<
         //< [I0602] each `T$@` parameter by where it is written; null until lint meets one
     spawn_args: List<|Spawn_arg|>$@ //<
@@ -201,6 +202,8 @@ impl Sema_ctx
                 .templates = base_core.arena
                     .create(Map<|U8[], Ast_node$@|>.new_with_cap(256, null)),
                 .impls = base_core.arena.create(List<|Ast_node$@|>(null)),
+                .method_impls = base_core.arena
+                    .create(Map<|Sz, Ast_node$@|>(base_core.arena)),
                 .trait_insts = List<|Trait_inst|>.create(base_core.arena),
                 .args = base_core.arena.create(List<|Generic_arg|>(null)),
                 .pending = List<|Pending_inst|>.create(base_core.arena),
@@ -236,6 +239,7 @@ impl Sema_ctx
                     .create(Map<|U8[], I32|>.new_with_cap(64, null)),
                 .undefined_at = base_core.arena
                     .create(Map<|U8[], Bool|>.new_with_cap(16, null)),
+                .default_origin = base_core.arena.create(Map<|Sz, Loc|>(base_core.arena)),
                 .lint_settings = List<|Lint_setting_entry|>.create(base_core.arena),
                 .line_starts = base_core.arena
                     .create(Map<|U8[], List<|Sz|>$@|>(base_core.arena)),
@@ -246,7 +250,7 @@ impl Sema_ctx
             .body_names = null,
             .source_map = source_map,
             .jump_stack = base_core.arena.create(List<|Jump_label|>(null)),
-            .scratch = Str_builder(),
+            .scratch = Str(),
             .spawn_args = List<|Spawn_arg|>.create(base_core.arena),
             .layout = Layout_state::{
                 .memo = base_core.arena
@@ -260,6 +264,8 @@ impl Sema_ctx
                 .consts = base_core.arena.create(Map<|Sz, Bool|>(null)),
                 .cut_path = List<|Sz|>.create(base_core.arena),
                 .cut_reported = base_core.arena.create(Map<|Sz, Bool|>(base_core.arena)),
+                .missing_types = base_core.arena
+                    .create(Map<|U8[], Bool|>(base_core.arena)),
                 .registries = List<|I32|>.create(base_core.arena),
             },
             .statics = Static_state::{
@@ -294,7 +300,7 @@ impl Sema_ctx
         at: = loc.offset if loc.offset <= src.len else src.len
         return base_lines.line_for_offset(r.line_starts_for(loc.file(), src), at)
 
-    fn clear_scratch(r: Self$@): Str_builder$@
+    fn clear_scratch(r: Self$@): Str$@
         return r.scratch.clear()
     fn mark_used(r: Self$@, sym: Sema_symbol$@) //<
         //< It marks `sym` used, unless the body analysed now is `sym`'s own
@@ -359,7 +365,7 @@ impl Sema_ctx
         //< **The caller keeps it as it is**, with no copy: it is the one copy name_text in
         //< ksplc/base/core.kspl holds. It is built in a builder of its own, so a name held in
         //< the context's scratch is read intact.
-        defer $b: = Str_builder()
+        defer $b: = Str()
         b.s_path_as_dots(file_path).c('.').s(name)
         return base_core.pools.name_text(b.slice())
 
@@ -410,10 +416,15 @@ impl Sema_ctx
         //< During monomorphization the current file is the template's. So a diagnostic on a node of
         //< the user's code (a generic's bound violation) would take its line and caret from the
         //< template's text.
-        if node == null || node.loc.file().len == 0 ||
-            node.loc.file().equals(r.file_name)
+        if node == null
             return r.source
-        src: = base_core.source_of(r.source_map, node.loc.file())
+        return r.source_for_file(node.loc.file())
+
+    priv fn source_for_file(r: Self$@, file: U8[]): U8$[] //<
+        //< The source text of that file; the current file's where the name is empty or unknown
+        if file.len == 0 || file.equals(r.file_name)
+            return r.source
+        src: = base_core.source_of(r.source_map, file)
         return src if src.len > 0 else r.source
 
     priv fn file_for_node(r: Self@, node: Ast_node@): U8[]
@@ -434,8 +445,46 @@ impl Sema_ctx
     fn report_diagnostic(r: Self$@, node: Ast_node$@, sev: base_diag.Diagnostic_severity,
         msg: U8[])
         info: = written_span(node)
+        // **A warning from a trait's default body is reported in the trait, once.** The body is
+        // copied into each impl and stands there, so every copy would repeat it at its impl's
+        // line. An error stays at the impl: it can hold for that implementing type alone.
+        if sev != base_diag.Diagnostic_severity.error
+            if origin: = r.diags.default_origin.get(Sz::node)
+                r.report_core(origin.file(), r.source_for_file(origin.file()), origin.offset,
+                    info.span, true, sev, msg)
+                return
         r.report_core(r.file_for_node(node), r.source_for_node(node), info.offset, info.span,
             node != null, sev, msg)
+
+    fn names_file(r: Self@, node: Ast_node@): U8[] //<
+        //< The file in which the names node writes are looked up: the file its text stands in
+        //< **For a trait's default body copied into an impl, that is the trait's file.** The copy
+        //< stands at its impl, whose file can hold other imports and other `priv` names. For a
+        //< type argument of the impl written into the copy, it is the impl's file.
+        if origin: = r.diags.default_origin.get(Sz::node)
+            return origin.file()
+        return node.loc.file()
+
+    fn enter_written_file(r: Self$@, node: Ast_node@): U8[] //<
+        //< Makes current the file a node of a copied default body is written in
+        //< It returns the file that was current, for the caller to set back. Any other node
+        //< changes nothing. **The copy mixes two files**: the trait's text, and each type argument
+        //< the impl wrote (write_impl_args in `../decl/trait_default.kspl`). So what reads a
+        //< written type or name of the copy enters that node's file first.
+        prev: = r.file_name
+        if origin: = r.diags.default_origin.get(Sz::node)
+            r.set_current_file(origin.file())
+        return prev
+
+    fn carry_default_origin(r: Self$@, from: Ast_node$@, clone: Ast_node$@) //<
+        //< Gives a clone of a copied default body the places in the trait its original holds
+        //< For a generic impl's instance: its warnings are the body's own too.
+        //< Caution: **Call it on a fresh clone**, while both trees have one shape.
+        origin: = r.diags.default_origin.get(Sz::from) catch
+            return
+        r.diags.default_origin.set(Sz::clone, origin)
+        for i in Range.asc(from.children.len)
+            r.carry_default_origin(from.children.get(i), clone.children.get(i))
 
     priv fn report_core(r: Self$@, file: U8[], src: U8[], offset: Sz, span: Sz, has_pos: Bool,
         sev: base_diag.Diagnostic_severity, msg: U8[]) //<
@@ -463,7 +512,7 @@ impl Sema_ctx
             return
         if eff_sev == base_diag.Diagnostic_severity.error
             r.diags.errors_met += 1
-        defer $key_sb: = Str_builder()
+        defer $key_sb: = Str()
         if has_pos
             key_sb.s("\{file\}:\{offset\}:")
         // **One error per place in a generic's body**, whichever instance found it. Each instance
@@ -486,7 +535,7 @@ impl Sema_ctx
             r.diags.counts.errors >= MAX_ERRORS - 1
             if r.diags.counts.errors == MAX_ERRORS - 1
                 starts: = r.line_starts_for(file, src)
-                defer $cap: = Str_builder()
+                defer $cap: = Str()
                 cap.s("Too many errors (>= \{MAX_ERRORS\}). Further errors are suppressed.")
                 base_diag.print_diagnostic(file, src, offset, span, cap.slice(), eff_sev, starts)
                 r.diags.counts.errors += 1
@@ -601,17 +650,17 @@ impl Sema_ctx
         //< records where an undefined name was reported
         //< A call's callee is resolved as a name before the call is. So its undefined head is
         //< reported there first, and the call's own report is skipped (`undefined_reported_at`).
-        defer $key: = Str_builder()
+        defer $key: = Str()
         r.offset_key(node, key@)
         r.diags.undefined_at.set(base_core.arena.dup_str(key.slice()), true)
 
     fn undefined_reported_at(r: Self@, node: Ast_node$@): Bool //<
         //< whether one was reported where node starts
-        defer $key: = Str_builder()
+        defer $key: = Str()
         r.offset_key(node, key@)
         return r.diags.undefined_at.get(key.slice()).unwrap_or(false)
 
-    priv fn offset_key(r: Self@, node: Ast_node$@, out: Str_builder$@) //< "file:offset" of node
+    priv fn offset_key(r: Self@, node: Ast_node$@, out: Str$@) //< "file:offset" of node
         info: = node.get_span_offset()
         out.s(r.file_for_node(node)).c(':').s("\{info.offset\}")
 
@@ -629,7 +678,7 @@ impl Sema_ctx
         //< Caution: Keep the wording in this one place. Name resolution has two failure points, an
         //< undefined identifier and an undefined callee. With a copy, only one of them gets each
         //< fix.
-        defer $key: = Str_builder()
+        defer $key: = Str()
         key.s(r.file_name).s("::").s(name)
         path: = r.aliases.withheld.get(key.slice()).unwrap_or("")
         if path.len == 0
@@ -820,7 +869,7 @@ impl Sema_ctx: Manual_free
 
 fn join_dotted_name(base_name: U8[], sub_name: U8[]): U8[] //<
     //< `base_name.sub_name`, a member's name under its owner's (`Enum.variant`), kept by name_text
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s(base_name).c('.').s(sub_name)
     return base_core.pools.name_text(b.slice())
 

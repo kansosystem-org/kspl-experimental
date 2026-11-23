@@ -10,7 +10,7 @@ import "ksplc/base/core" as base_core
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
-import "std/str" { Arena_text, Str_builder }
+import "std/str" { Arena_str, Str }
 import "std/strfmt"
 import "std/sys"
 import "std/url"
@@ -134,7 +134,7 @@ priv fn std_beside_exe(): U8[] //< the std standing beside this executable; empt
             return base_core.perm_arena.dup_str(at)
     return ""
 
-fn append_exe_path(out: Str_builder$@): Bool //<
+fn append_exe_path(out: Str$@): Bool //<
     //< It writes this executable's path, links resolved, into out; false where it is unknown
     //< Caution: **Do not take the executable from argv[0]** (the reason is at `kspl_exe_path` in
     //< `gen/runtime/hosted_spawn.c`).
@@ -153,7 +153,7 @@ fn write_slashed(path: U8[], out: Writer): Writer //< writes path with every `\`
     return out
 
 priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty where unknown
-    defer $exe: = Str_builder()
+    defer $exe: = Str()
     if !append_exe_path(exe@)
         return ""
     return base_core.arena.dup_str(sys.get_dir_name(exe.slice()))
@@ -233,7 +233,7 @@ priv fn recorded_root($folder: Package_folder$@, name: U8[]): U8[]? //<
         folder = folder.next
     return .none
 
-fn recorded_name_to(logical: U8[], out: Str_builder$@) //<
+fn recorded_name_to(logical: U8[], out: Str$@) //<
     //< Writes the file name the generated code records for a source: a `#line`'s, a trace frame's
     //< disk_name with `/` between folders, and the extension where the name has none.
     //< **Both backends take it from here**, so a `!`'s trace names one file on either.
@@ -312,7 +312,7 @@ fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
         if part.equals("..") && head > 0
             continue
         parts.push(part)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     write_slashed(path.sub(0, head), out)
     for i in Range.asc(parts.len)
         out.s("/" if i > 0 else "").s(parts.get(i))
@@ -481,7 +481,7 @@ impl Uri_style
         //< A file's logical name written as a document URI in this form
         //< **It names the file where it is read from** (`append_file_path` below): from ksdb's own
         //< folder, `ksdb/log` is the `log.kspl` there, and `std/lang` is the one in std's folder.
-        defer $named: = Str_builder()
+        defer $named: = Str()
         append_file_path(name, named@)
         out: = base_core.arena.text()
         path: = to_absolute(named.slice()) if r.is_absolute else named.slice()
@@ -494,7 +494,7 @@ impl Uri_style
             out.s(path)
         return out.take()
 
-priv fn spell_uri_path(path: U8[], out: Arena_text$@) //< a path as a `file://` URI's path, escaped
+priv fn spell_uri_path(path: U8[], out: Arena_str$@) //< a path as a `file://` URI's path, escaped
     //< Caution: **Escape only what a URI cannot hold bare**, which `strip_file_uri` (above)
     //< decodes: a space, a Japanese letter, a control byte, `%`, `#` and `?`.
     //< Anything else stays as the client wrote it, a drive's `:` and `/` included, so a client
@@ -505,14 +505,14 @@ priv fn spell_uri_path(path: U8[], out: Arena_text$@) //< a path as a `file://` 
         else
             out.c('/' if c == '\\' else c)
 
-fn append_file_path(import_path: U8[], out: Str_builder$@) //<
+fn append_file_path(import_path: U8[], out: Str$@) //<
     //< It writes into out the file path to read for an import path (a file's logical name)
     //< Caution: Do not mix a logical name (`std/io`) with the file's path. An absolute path in the
     //< logical name makes mangled names differ per machine. That breaks seed.c's byte-for-byte
     //< match ("The bootstrap, and keeping the seed in step" in ksplc/docs/DESIGN-compiler.md).
     _top: = append_source_path(import_path, out)
 
-priv fn append_source_path(import_path: U8[], out: Str_builder$@): Sz? //<
+priv fn append_source_path(import_path: U8[], out: Str$@): Sz? //<
     //< `append_disk_path` for a source, with the extension added where the name has none
     top: = append_disk_path(import_path, out)
     if !out.slice().has_kspl_ext()
@@ -522,7 +522,7 @@ priv fn append_source_path(import_path: U8[], out: Str_builder$@): Sz? //<
 fn embed_disk_path(logical: U8[]): U8[] //< the path an embedded file is read from
     //< **The same path as a source's** (`append_disk_path` below), with nothing added: an embedded
     //< file's name includes its own extension.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     _top: = append_disk_path(logical, out@)
     return base_core.arena.dup_str(out.slice())
 
@@ -536,7 +536,7 @@ fn link_on_the_way( //< the first step below a package's top folder that is a li
     logical: U8[], //< the logical name of a source or an embedded file
     source: Bool, //< true for a source, whose path takes the extension `append_file_path` adds
 ): U8[] //< the link's path as opened
-    defer $out: = Str_builder()
+    defer $out: = Str()
     top: =
         append_source_path(logical, out@) if source else append_disk_path(logical, out@)
     path: = out.slice()
@@ -609,7 +609,7 @@ fn spelt_otherwise_on_the_way( //<
     written: U8[], //< the path as the import or the `embed` wrote it
     source: Bool, //< true for a source, whose path takes the extension `append_file_path` adds
 ): Spelt_otherwise?
-    defer $out: = Str_builder()
+    defer $out: = Str()
     top: =
         append_source_path(logical, out@) if source else append_disk_path(logical, out@)
     path: = out.slice()
@@ -636,7 +636,7 @@ fn spelt_otherwise_on_the_way( //<
                 .on_disk = other })
     return .none
 
-priv fn append_disk_path(import_path: U8[], out: Str_builder$@): Sz? //<
+priv fn append_disk_path(import_path: U8[], out: Str$@): Sz? //<
     //< Where a logical name's file is: under std's folder, in a package's own folder, or locally
     //< It returns how much of what it wrote is the top folder of a package read from a place of
     //< its own (`link_on_the_way` above); none for a local folder.

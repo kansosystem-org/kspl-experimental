@@ -76,6 +76,30 @@ export function tools({ browser, page, media, js, settle, until, press, type, se
         start.replace("**bold**words", "**bold**terms"));
       await menu("undo");
       await saves("and the next the single Replace", start);
+      // A new text that holds the text looked for is passed over, so each Replace reaches a new match.
+      await js("document.querySelector('.replace-text').value = 'WORDS'");
+      await click('.find [data-find="replace"]');
+      check(await found() === "2 of 3", "after a Replace whose new text matches too, the next match is current",
+        await found());
+      await click('.find [data-find="replace"]');
+      await saves("so a second Replace changes the second match, not the first again",
+        start.replace("**bold**words", "**bold**WORDS").replace("More words", "More WORDS"));
+      await menu("undo");
+      await menu("undo");
+      await saves("and two undos take both back", start);
+      // A cell retyped while the bar is open is searched, and replaced, as it now stands.
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await type("none");
+      await press("Enter");
+      check((await found()).endsWith(" of 2"), "a cell retyped while the bar is open is searched as it now stands",
+        await found());
+      await click('.find [data-find="all"]');
+      await saves("and Replace all leaves that cell as it was typed",
+        start.replace("**bold**words", "**bold**WORDS").replace("More words", "More WORDS")
+          .replace('"Words"', '"none"'));
+      await menu("undo");
+      await menu("undo");
+      await saves("two undos take the Replace all and the typing back", start);
 
       await js(`(() => { const b = document.querySelector('.find-text'); b.value = "more";
         b.dispatchEvent(new Event("input")); })()`);

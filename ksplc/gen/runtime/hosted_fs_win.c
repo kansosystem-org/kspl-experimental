@@ -203,6 +203,17 @@ KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
     return false;
 }
 
+/* The POSIX side's meaning, read from the read-only mark, which is what Windows has in place of
+ * the owner's write bit. A folder's mark does not stop a write into it, so it is not counted. */
+KSPL_LINK Bool kspl_is_read_only(const U8 *path_ptr, Sz path_len) {
+    wchar_t path[KSPL_WPATH_CAP];
+    DWORD attr;
+    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return false;
+    attr = GetFileAttributesW(path);
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) != 0) return false;
+    return (attr & FILE_ATTRIBUTE_READONLY) != 0;
+}
+
 /* Whether that path itself is a link. The meanings of 1/0/-1 are the same as the POSIX side's:
  * **a path kspl_path_to_wide cannot convert is 0**, as one not there (empty, not UTF-8, too long).
  * Caution: **Do not settle it by `FILE_ATTRIBUTE_REPARSE_POINT` alone.** OneDrive's and Dropbox's

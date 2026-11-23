@@ -3,7 +3,7 @@ import "ksplc/tests/support/jsonrpc_client"
 import "std/chars" // `find_str`
 import "std/jsonrpc"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 import "std/verdict"
 
@@ -15,7 +15,7 @@ priv fn check(exe: U8[], name: U8[], head: U8[], accepted: Bool, arena: Arena$@)
     defer $c: = jsonrpc_client.spawn(U8[][]::{ exe, "lsp" }, "") catch
         verdict.check(name, false, "the server could not start")
         return
-    defer $frame: = Str_builder()
+    defer $frame: = Str()
     frame.s(head)
     if accepted
         frame.s(BODY)
@@ -49,7 +49,7 @@ priv fn exit_code_of(client: jsonrpc_client.Client$@): I32? //<
     return .none
 
 fn run(exe: U8[], arena: Arena$@) //< one short server round per header shape
-    defer $head: = Str_builder()
+    defer $head: = Str()
     head.s(jsonrpc.LENGTH_TAG).s(" \{BODY.len\}\r\n")
     line: = arena.dup_str(head.slice())
     head.s("\r\n")
@@ -91,7 +91,7 @@ priv fn check_after_shutdown(exe: U8[], arena: Arena$@) //<
         verdict.check(name, false, "the server could not start")
         return
     stop: = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}"
-    defer $frame: = Str_builder()
+    defer $frame: = Str()
     frame.s(jsonrpc.LENGTH_TAG).s(" \{stop.len\}\r\n\r\n").s(stop)
     c.child.write(frame.slice(), WAIT_MS) catch
         verdict.check(name, false, "the shutdown could not be sent")

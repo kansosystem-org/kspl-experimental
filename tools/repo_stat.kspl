@@ -17,7 +17,7 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/seq"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 import "std/subproc"
 import "std/sys"
@@ -92,7 +92,7 @@ priv fn bump_ext(rows: List<|Ext_row|>$@, ext: U8[], st: Stat)
 
 priv const HEADER: U8[] = "   lines    body comment   blank    cmt%   trail  "
 
-priv fn write_pct(out: Str_builder$@, st: Stat) //< the comment rate [%] to one decimal place
+priv fn write_pct(out: Str$@, st: Stat) //< the comment rate [%] to one decimal place
     //< Caution: **Leave blank lines out of the denominator**, or it changes with a writing habit.
     den: = st.comment + st.body
     if st.marked == 0 || den == 0
@@ -101,7 +101,7 @@ priv fn write_pct(out: Str_builder$@, st: Stat) //< the comment rate [%] to one 
     permille: = st.comment * 1000 / den
     out.s("\{permille / 10:6\}.\{permille % 10\}%\{st.trail:8\}")
 
-priv fn write_cols(out: Str_builder$@, st: Stat) //< writes only the number columns
+priv fn write_cols(out: Str$@, st: Stat) //< writes only the number columns
     //< **The caller writes the name after it** (a string is built only as a chain of writes).
     out.s("\{st.lines:8\}\{st.body:8\}")
     out.s("\{st.comment:8\}\{st.blank:8\}")
@@ -122,8 +122,8 @@ priv fn git_list(args: U8[][], arena: Arena$@): U8[]!fs.Fs_error //< what `git <
             throw .operation_failed
     return listed
 
-priv fn write_files(out: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|Stat|>$@,
-    arena: Arena$@): Void!fs.Fs_error //<
+priv fn write_files(out: Str$@, exts: List<|Ext_row|>$@, roles: List<|Stat|>$@, arena: Arena$@):
+    Void!fs.Fs_error //<
         //< 1. The line count per file
         //< Grouped by top-level folder, and by package under `lib/`, with a subtotal after each
         //< group and the total last. The files are git's: the tracked and the untracked that are
@@ -131,7 +131,7 @@ priv fn write_files(out: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|St
     tracked: = git_list(U8[][]::{ "ls-files" }, arena)!
     others: = git_list(U8[][]::{ "ls-files", "--others", "--exclude-standard" }, arena)!
     files: = path_kind.listed(tracked, others, arena)
-    defer $rootb: = Str_builder()
+    defer $rootb: = Str()
     $sub: = Stat::{}
     $root: = Stat::{}
     $total: = Stat::{}
@@ -181,7 +181,7 @@ priv fn write_files(out: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|St
     write_cols(out, gen)
     out.s("ksplc/seed.c (generated. not in the total above)\n\n")
 
-priv fn write_exts(out: Str_builder$@, exts: List<|Ext_row|>@, arena: Arena$@) //<
+priv fn write_exts(out: Str$@, exts: List<|Ext_row|>@, arena: Arena$@) //<
     //< 2. The total per extension
     //< **The rate is shown only for extensions that have a comment mark** (`.md`'s 0% would be
     //< misread as "no comments").
@@ -195,7 +195,7 @@ priv fn write_exts(out: Str_builder$@, exts: List<|Ext_row|>@, arena: Arena$@) /
         out.s("\{e.ext\}\n")
     out.c('\n')
 
-priv fn write_roles(out: Str_builder$@, roles: List<|Stat|>@) //<
+priv fn write_roles(out: Str$@, roles: List<|Stat|>@) //<
     //< 3. Functional code against test code
     //< **Compare the `body` column**: comments and blank lines change with writing habits. The
     //< ratio is test code's body lines per 100 of functional code's.
@@ -210,7 +210,7 @@ priv fn write_roles(out: Str_builder$@, roles: List<|Stat|>@) //<
     out.c('\n')
 
 priv fn write_stat(out_dir: U8[], arena: Arena$@): Void!fs.Fs_error
-    defer $b: = Str_builder()
+    defer $b: = Str()
     $exts: = List<|Ext_row|>(arena)
     $roles: = List<|Stat|>(arena)
     for _role in path_kind.Role.variants()

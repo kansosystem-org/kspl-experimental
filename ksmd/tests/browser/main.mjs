@@ -366,6 +366,26 @@ const sections = {
     await menu("row-remove");
     await saves("a column added after the last, and the last row removed",
       `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |\n| 5 | 3 | =A1*B1 | |\n:::\n`);
+    // The removed row held the chosen cell. The keys still go to the table, on the row above.
+    check(await focusOf(js) === "0:0", "the row above the removed last row takes the choice",
+      await focusOf(js));
+    await press("z", CTRL);
+    await saves("so Ctrl+Z right after brings the last row back",
+      `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |\n| 5 | 3 | =A1*B1 | |\n| | | | |\n:::\n`);
+    await click('#doc td[data-r="1"][data-c="3"]');
+    await menu("column-remove");
+    check(await focusOf(js) === "1:2", "the column left of the removed last column takes the choice",
+      await focusOf(js));
+    await press("z", CTRL);
+    await click('#doc td[data-r="1"][data-c="0"]');
+    await menu("row-remove");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await menu("row-remove");
+    check(await focusOf(js) === "-1:0", "a table left with no data row keeps the choice on its names",
+      await focusOf(js));
+    await press("z", CTRL);
+    await saves("and Ctrl+Z brings its last data row back",
+      `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |\n| 5 | 3 | =A1*B1 | |\n:::\n`);
     await click('#doc td[data-r="0"][data-c="0"]');
     await menu("table-remove");
     await saves("removing the table", "%ksmd 2\n");
@@ -663,6 +683,10 @@ const sections = {
     const link = (text) => `#doc a[href${text === "site" ? '^="https"' : '^="#"'}]`;
     await click(link("site"));
     check(await opened() === "", "a plain press on a link while editing only places the caret");
+    // **Wait for the page to settle before the next press.** The caret placed in the text takes
+    // the gap away on the next `selectionchange` (`ksmd/port/web/input.js`), and the text moves. Measured
+    // before that, the Ctrl+press landed where the link had stood, on a slow Windows runner.
+    await frames();
     await click(link("site"), CTRL);
     check(await opened() === "https://kanso.example/x _blank noopener,noreferrer",
       "Ctrl+press opens the link in a new tab, with no way back to this page", await opened());

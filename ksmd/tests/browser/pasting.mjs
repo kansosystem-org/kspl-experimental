@@ -303,6 +303,17 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       };
       await load(start);
       check(await shown() === "10101", "the filter hides the rows that are not done", await shown());
+      // Shift and an arrow key reach to the next row in sight, as the arrow key alone moves.
+      const corner = () => js("(() => { const c = document.querySelector('#doc .table[data-name=t] .fill-handle'); " +
+        "return c ? c.closest('[data-r]').dataset.r : ''; })()");
+      await click(at(0, 1));
+      await press("ArrowDown", SHIFT);
+      check(await corner() === "2", "Shift+Down passes over a hidden row to the next row in sight", await corner());
+      await press("ArrowDown", SHIFT);
+      await press("ArrowDown", SHIFT);
+      check(await corner() === "4", "and stops at the last row in sight", await corner());
+      await press("ArrowUp", SHIFT);
+      check(await corner() === "2", "Shift+Up passes over one the same way", await corner());
       await chooseColumn(1);
       await press("Delete");
       await saves("Delete on a filtered range clears the rows in sight alone",

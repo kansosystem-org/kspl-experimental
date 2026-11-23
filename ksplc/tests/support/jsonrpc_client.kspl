@@ -11,7 +11,7 @@
 import "std/json"
 import "std/jsonrpc"
 import "std/mem" { Arena, alloc, dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/subproc"
 import "std/sys"
 
@@ -48,9 +48,9 @@ impl Client: Manual_free //< it owns its memory and releases it with `free()`
 pub struct Client //< exchanges JSON-RPC messages with a child connected by pipes
     child: subproc.Piped_child
     next_id: I32
-    acc: Str_builder //<
+    acc: Str //<
         //< The read buffer, because a frame can span several reads
-    err: Str_builder //<
+    err: Str //<
         //< the end of the server's standard error, attached to a failure's description
     // Caution: **Keep separate buffers for standard output and standard error.** With one shared
     // buffer, draining overwrites what was read, and a frame sometimes breaks.
@@ -62,7 +62,7 @@ pub fn spawn( //< starts a child and attaches to its pipes
     cwd: U8[], //< the working directory; empty inherits the parent's
 ): Client!subproc.Spawn_error //< the client, freed by the caller; fails if the child cannot start
     child: = subproc.spawn_piped(argv, cwd)!
-    return Client::{ .child = child, .next_id = 1, .acc = Str_builder(), .err = Str_builder(),
+    return Client::{ .child = child, .next_id = 1, .acc = Str(), .err = Str(),
         .out_buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK },
         .err_buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK } }
 
@@ -76,7 +76,7 @@ impl Client
 
     fn send_messages(r: Self@, bodies: U8[][], timeout_ms: I32): Void!jsonrpc.Rpc_end //<
         //< Frames separate messages and sends them in one write, in their given order
-        defer $out: = Str_builder()
+        defer $out: = Str()
         for body in bodies
             jsonrpc.frame_into(out@, body)
         r.child.write(out.slice(), timeout_ms) catch e

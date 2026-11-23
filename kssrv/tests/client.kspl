@@ -9,7 +9,7 @@ import "std/ds" { List }
 import "std/json"
 import "std/mem" { Arena, alloc, dealloc }
 import "std/net"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/strnum"
 import "std/sys"
@@ -71,7 +71,7 @@ impl Conn: Manual_free
 struct Conn //< one connection
     //< **A response's boundary is not a read's**, so reads are collected and responses cut out.
     sock: net.Tcp_stream$@
-    acc: Str_builder
+    acc: Str
     // The read buffer.
     // Caution: **Keep one per connection.** One per read fills the arena with buffers on a sweep.
     buf: U8$[]
@@ -85,7 +85,7 @@ impl Conn
         sock.set_nonblocking() catch
             sock.free()
             throw .connect_failed
-        return Conn::{ .sock = sock, .acc = Str_builder(),
+        return Conn::{ .sock = sock, .acc = Str(),
             .buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK } }
 
     fn open_in(port: I32, arena: Arena$@): Conn$@!Http_end //<
@@ -353,7 +353,7 @@ fn post_empty(port: I32, target: U8[], arena: Arena$@): Resp!Http_end //<
 
 fn dump_of(value: json.Value, arena: Arena$@): U8[] //<
     //< Turns a JSON value into a string (for display in checks)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     value.dump(out@)
     return arena.dup_str(out.slice())
 

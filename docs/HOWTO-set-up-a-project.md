@@ -6,6 +6,18 @@
 
 **A compiler built with `make` alone is `out/ksplc_stage1.exe`, and it has no `std/` beside it.** It finds the repository's `std/` only when run from the repository's top folder. To use it elsewhere, run `make install`, or set the environment variable `KSPLC_STD_DIR` to that `std/` folder. `ksplc info std-dir` names the folder it takes.
 
+## Checking a downloaded zip
+
+**Check a zip from the Releases page before you unpack it.** The page also carries `SHA256SUMS`, one SHA-256 per file. Put the zip and `SHA256SUMS` in one folder, then run the command for your system there:
+
+| Your system | The command |
+| :-- | :-- |
+| Linux | `sha256sum -c --ignore-missing SHA256SUMS` |
+| macOS | `shasum -a 256 -c --ignore-missing SHA256SUMS` |
+| Windows (PowerShell) | `Get-FileHash <zip>`, then compare its hash with the zip's line in `SHA256SUMS` |
+
+A line that is not `OK`, or a hash that differs, means the file is not what the release built. Do not use that file.
+
 ## Running a program
 
 **`ksplc run` turns a `.kspl` file into a program and runs it, in one command.**

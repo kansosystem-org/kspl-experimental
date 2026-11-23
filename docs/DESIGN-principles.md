@@ -217,6 +217,11 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | **A multi-byte character literal** | "There is no `Char` type" below |
 | **An octal literal**, and a decimal integer that starts with `0` | "A decimal integer does not start with 0" below |
 | **Link flags in the source** | A flag forces one machine's link line on every machine, and can run code at build time. See "The libraries a file needs are named in the file" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
+| **A name declared by assigning it** | A misspelled assignment would declare a second name in silence. A declaration's `:` shows where a name begins |
+| **Python's heads** | A head ends with its line, so a `:` would be a second end. `fn` and `else if` are C's spelling ("The spelling of reserved words is taken from C" in [`DESIGN-notation.md`](DESIGN-notation.md)) |
+| **`and`, `or` and `not`** | Each operator has one spelling, C's |
+| **`++` and `--`** | A change inside another expression hides when it happens. `i += 1` already writes it as a statement |
+| **Another language's names for values and types** | Each value and type has one name. A type's name starts with a capital letter (`I32`), a value's with a small one (`true`) |
 | **A postfix `if` / a conditional `break`** | The action before its condition runs against reading top to bottom |
 | **A deprecation mark** | A feature that stops paying its way is removed outright (Principle 1). A period of warnings would keep two ways alive |
 

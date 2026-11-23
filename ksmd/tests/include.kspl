@@ -18,7 +18,7 @@ import "std/ds"
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 import "std/tests/scratch"
 import "std/verdict"
@@ -197,7 +197,7 @@ priv fn path_refusals() //< each written path names its refusal; `..` may climb 
         "../ok.ksmd", "ok.ksmd.", "sub", "missing.ksmd", "sub/inner.ksmd" }
     want: Refusal[13] = ::{ .absolute, .absolute, .address, .address, .backslash, .spelling,
         .spelling, .spelling, .spelling, .outside, .name, .not_file, .missing }
-    defer $top: = Str_builder()
+    defer $top: = Str()
     top.s("%ksmd 2\n")
     for p in paths
         top.s("\n:::include path=\"").s(p).s("\"\n:::\n")
@@ -247,7 +247,7 @@ priv fn depth_limit() //< sixteen files on the stack open; a seventeenth is refu
 priv fn block_limit() //< 200,000 blocks with repeats counted; the include past it is refused
     defer arena: = Arena(1024 * 1024)
     root: = workspace(arena)
-    defer $many: = Str_builder()
+    defer $many: = Str()
     many.s("%ksmd 2\n")
     for _ in Range.asc(99999)
         many.s("\na\n")
@@ -272,7 +272,7 @@ priv fn byte_limit() //< 64 MiB of source text with repeats counted, on a new fi
     defer arena: = Arena(1024 * 1024)
     root: = workspace(arena)
     make_file(root, "big.ksmd", sized(MAX_SOURCE_BYTES, arena), arena)
-    defer $seven: = Str_builder()
+    defer $seven: = Str()
     seven.s("%ksmd 2\n")
     for _ in Range.asc(7)
         seven.s("\n:::include path=\"big.ksmd\"\n:::\n")
@@ -304,7 +304,7 @@ priv fn outcome(root: U8[], top: U8[], arena: Arena$@): U8[] //<
     //< The view itself goes in an arena of its own, freed here.
     defer view: = Arena(1024 * 1024)
     a: = assembled(root, top, view)
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s("\{a.instances.len\} instances")
     for i in Range.asc(a.problems.len)
         b.s(" | ").s(problem_of(a@, i, view)).c(' ').s(a.problems.get(i).at.message)
@@ -454,7 +454,7 @@ priv fn answer(ws: Disk@, fetched: Fetched$@, path: U8[], image: Bool, arena: Ar
     fetched.hold(path, Held::{ .found = true, .why = .missing, .bytes = bytes })
 
 priv fn problems_of(assembly: Assembly@, arena: Arena$@): U8[] //< each problem's place and message
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for i in Range.asc(assembly.problems.len)
         b.s(problem_of(assembly, i, arena)).c(' ').s(assembly.problems.get(i).at.message).c('\n')
     return arena.dup_str(b.slice())
@@ -494,7 +494,7 @@ priv fn read(path: U8[], arena: Arena$@): U8[] //< a file's bytes; empty where i
 
 priv fn sized(bytes: Sz, arena: Arena$@): U8[] //< a valid source of exactly that many bytes
     //< One code block, its lines at most 1,000 bytes long
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s("%ksmd 2\n\n```\n")
     $left: = bytes - 17
     for left > 0
@@ -535,7 +535,7 @@ priv fn edit_text(source: Loaded, node: Sz, text: U8[]) //< replaces one text no
 priv fn view_of(assembly: Assembly@, arena: Arena$@): U8[] //<
     //< Each entry as `path:offset`; an include adds `>` and the name of the file it opens, an image
     //< `=` and where its path leads
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for i in Range.asc(assembly.entries.len)
         e: = assembly.entries.get(i)
         if i > 0
@@ -552,18 +552,18 @@ priv fn problem_of(assembly: Assembly@, index: Sz, arena: Arena$@): U8[] //<
     if index >= assembly.problems.len
         return "no such problem"
     p: = assembly.problems.get(index)
-    defer $b: = Str_builder()
+    defer $b: = Str()
     place(p.at, b@)
     for i in Range.asc(p.chain.len)
         b.s(" < ")
         place(p.chain.get(i), b@)
     return arena.dup_str(b.slice())
 
-priv fn place(diagnostic: Diagnostic, out: Str_builder$@)
+priv fn place(diagnostic: Diagnostic, out: Str$@)
     out.s(diagnostic.path).s(":\{diagnostic.line\}:\{diagnostic.column\}")
 
 priv fn snapshot(root: U8[], arena: Arena$@): U8[] //< every file's path and bytes, in order
-    defer $b: = Str_builder()
+    defer $b: = Str()
     files: = fs.walk_files(root, fs.skip_none, arena) catch
         return ""
     for path in files
@@ -587,7 +587,7 @@ priv fn moved_paths() //< a source saved in another folder writes its paths to n
             src=\"pics/a.png\" alt=\"A\"\n:::\n\n:::functions path=\"parts/mine.kspl\"\n:::\n"
     $ed: = opened(top, arena)
     ed.move_paths("", "parts")
-    defer $out: = Str_builder()
+    defer $out: = Str()
     writer.write(ed.doc@, out@)
     moved: =
         "%ksmd 2\n\nText.\n\n:::include path=\"notes.ksmd\"\n:::\n\n:::image src=\"../pics/a.png\" \

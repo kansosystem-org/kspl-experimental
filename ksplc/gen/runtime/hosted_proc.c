@@ -16,7 +16,7 @@
  * Caution: **Keep one case per line, each NTSTATUS named, and the code a literal.** make
  * test-conventions compares this table with the one in "A child's end is one code on every OS" in
  * std/docs/DESIGN-system.md, where the reasons are. Exit code 3 is not here, as an exit(3) gives
- * it too. It touches no OS, so it is built on every OS, and std's subproc_test checks it there. */
+ * it too. It touches no OS, so it is built on every OS, and std's subproc_win_test checks it. */
 KSPL_LINK I32 kspl_win_status_code(U32 st) {
     switch (st) {
     case 0xC0000005u: /* STATUS_ACCESS_VIOLATION */

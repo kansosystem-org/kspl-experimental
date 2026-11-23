@@ -10,7 +10,7 @@ import "ksmd/tests/support" { changed, opened, records_one_column, saves }
 import "std/chars"
 import "std/ds"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 priv const OPEN: U8[] = "%ksmd 2\n\n:::table name=\"t\""
@@ -63,13 +63,13 @@ priv fn shared() //<
     //< A formula's `round` and a number format round alike: what a format shows of the rounded
     //< number is what it shows of the number itself
     $same: = true
-    defer $detail: = Str_builder()
+    defer $detail: = Str()
     for n in SHARED
         for places in Range.asc(ENTRIES.len)
             f: = fmt(ENTRIES[places])
             rounded: = round_places(n, places).unwrap_or(-1.0)
-            defer $a: = Str_builder()
-            defer $b: = Str_builder()
+            defer $a: = Str()
+            defer $b: = Str()
             show(rounded, f, a@)
             show(n, f, b@)
             if !a.slice().equals(b.slice())
@@ -90,7 +90,7 @@ priv fn edges()
     shows("a large number is written whole", 1.0e21, "grouped:0", "1,000,000,000,000,000,000,000")
     shows("its digits past the seventeenth are zeros", 123456789012345678901.0, "grouped:0",
         "123,456,789,012,345,680,000")
-    defer $out: = Str_builder()
+    defer $out: = Str()
     show(1.0e300, fmt("number:0"), out@)
     verdict.check("the largest numbers are written whole too",
         out.slice().len == 301 && out.slice()[0] == '1', out.slice())
@@ -175,7 +175,7 @@ priv fn editing()
 
 priv fn shows(what: U8[], number: F64, format: U8[], expected: U8[]) //<
     //< `number` shows as `expected`
-    defer $out: = Str_builder()
+    defer $out: = Str()
     show(number, fmt(format), out@)
     verdict.check(what, out.slice().equals(expected), out.slice())
 
@@ -194,13 +194,13 @@ priv fn saves_as(what: U8[], bytes: U8[], expected: U8[])
 priv fn refused(line: U8[], message: U8[], column: Sz) //<
     //< The reader refuses a table opened by `line` with this message, on line 3 at `column`
     defer arena: = Arena(64 * 1024)
-    defer $text: = Str_builder()
+    defer $text: = Str()
     text.s("%ksmd 2\n\n").s(line).s("\n| \"a\" | \"b\" |\n:::\n")
     src: = Source("bad.ksmd", text.slice()) catch e
         verdict.check(message, false, e.message)
         return
     _doc: = reader.read(src@, arena) catch e
-        defer $got: = Str_builder()
+        defer $got: = Str()
         got.s("\{e.message\} at \{e.line\}:\{e.column\}")
         verdict.check(message,
             e.message.equals(message) && e.line == 3 && e.column == column, got.slice())

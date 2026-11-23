@@ -68,10 +68,7 @@ fn of_code(code: U8[]): Format //< what a custom format code (`yyyy"年"m"月"d"
             continue
         if c == '['
             close: = code.sub_from(i + 1).find_char(']').unwrap_or(code.len - i - 1)
-            inner: = code.sub(i + 1, close)
-            if inner.len > 0 &&
-                (inner[0].to_lower() == 'h' || inner[0].to_lower() == 'm' ||
-                inner[0].to_lower() == 's')
+            if is_elapsed(code.sub(i + 1, close))
                 elapsed = true
                 hour = true
             i += close + 2
@@ -111,6 +108,15 @@ fn of_code(code: U8[]): Format //< what a custom format code (`yyyy"年"m"月"d"
         return Format::{ .shown = .percent, .seconds = false }
     return plain()
 
+priv fn is_elapsed(inner: U8[]): Bool //< whether a bracket's text counts elapsed time: `h`, `mm`
+    //< **Only `h`, `m` or `s` letters make one.** A colour's name opens with one of them too
+    //< (`[Magenta]`), and a number under it is no time.
+    for c in inner
+        lower: = c.to_lower()
+        if lower != 'h' && lower != 'm' && lower != 's'
+            return false
+    return inner.len > 0
+
 priv fn starts_ignoring_case(text: U8[], at: Sz, word: U8[]): Bool //< whether `word` stands at `at`
     if text.len - at < word.len
         return false
@@ -149,7 +155,7 @@ fn show(raw: U8[], format: Format, date1904: Bool, arena: Arena$@): U8[] //<
     default {}
     return out.take()
 
-priv fn write_date(out: str.Arena_text$@, serial: I64) //< a day's serial number as `yyyy-mm-dd`
+priv fn write_date(out: str.Arena_str$@, serial: I64) //< a day's serial number as `yyyy-mm-dd`
     //< Excel counts 1900 as a leap year, as Lotus 1-2-3 did, so its day 60 is 1900-02-29, a day
     //< that never was. It is shown as Excel shows it; the days before it are one off from after.
     if serial == 60I64
@@ -172,7 +178,7 @@ priv fn write_date(out: str.Arena_text$@, serial: I64) //< a day's serial number
     out.c('-')
     two(out, day)
 
-priv fn write_time(out: str.Arena_text$@, hours: I64, secs: I64, seconds: Bool) //<
+priv fn write_time(out: str.Arena_str$@, hours: I64, secs: I64, seconds: Bool) //<
     //< `hh:mm`, or `hh:mm:ss`; the minutes and seconds come from `secs` within the day
     two(out, hours)
     out.c(':')
@@ -181,7 +187,7 @@ priv fn write_time(out: str.Arena_text$@, hours: I64, secs: I64, seconds: Bool) 
         out.c(':')
         two(out, secs % 60I64)
 
-priv fn two(out: str.Arena_text$@, value: I64) //< a number of at least two digits
+priv fn two(out: str.Arena_str$@, value: I64) //< a number of at least two digits
     if value < 10I64
         out.c('0')
     out.s("\{value\}")

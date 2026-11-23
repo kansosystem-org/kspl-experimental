@@ -12,7 +12,7 @@ import "ksplc/sema/session/state" { Static_value }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 
 fn append_c_string_byte(out: Writer, byte: U8) //<
@@ -99,15 +99,18 @@ impl Ast_node
 
     fn emit_float(r: Ast_node@, cg: Genc_ctx$@)
         text_val: = r.text
-        defer $clean_str: = Str_builder()
+        defer $clean_str: = Str()
         // It stops at the 'F' suffix and, for an F32, attaches C's 'f' suffix.
         stop: = text_val.append_clean_number(clean_str@, "F")
         if stop >= 0 && text_val.starts_with("F32", stop)
             clean_str.c('f')
         cg.s(clean_str.slice())
 
-    fn emit_integer(r: Ast_node@, cg: Genc_ctx$@)
-        defer $clean_str: = Str_builder()
+    fn emit_integer(r: Ast_node$@, cg: Genc_ctx$@)
+        // A `const` parameter's value is one literal with its minus (`-3`), I64's minimum included.
+        if r.text.starts_with("-") && r.emit_negated_i64_min(cg)
+            return
+        defer $clean_str: = Str()
         r.text.append_clean_number(clean_str@, "UIS")
         digits: = clean_str.slice()
         binary: = digits.starts_with("0b") || digits.starts_with("0B")
@@ -154,7 +157,7 @@ impl Ast_node
         if r == null
             return
         if r.kind_id == .k_string && cg.env.is_slice(r.type_id)
-            defer $key: = Str_builder()
+            defer $key: = Str()
             r.literal_key_to(cg, key@)
             if cg.literals.get(key.slice()).is_none()
                 name: = base_core.arena.text().s("kspl_lit_\{cg.literals.len\}").take()
@@ -166,7 +169,7 @@ impl Ast_node
         for child in r.children
             child.name_string_literals(cg)
 
-    priv fn literal_key_to(r: Ast_node@, cg: Genc_ctx$@, key: Str_builder$@) //<
+    priv fn literal_key_to(r: Ast_node@, cg: Genc_ctx$@, key: Str$@) //<
         //< A string slice's key among the named constants: its C type, unqualified, and spelling
         cg.map_c_type_to_impl(r.type_id, key, 0, true)
         key.c('|').s(r.text)
@@ -180,7 +183,7 @@ impl Ast_node
         // rejects a `\u` naming a basic character (Principle 2).
         is_slice: = !cg.env.is_pointer(r.type_id)
         if is_slice && !as_init
-            defer $key: = Str_builder()
+            defer $key: = Str()
             r.literal_key_to(cg, key@)
             if name: = cg.literals.get(key.slice())
                 cg.s(name)

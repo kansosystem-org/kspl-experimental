@@ -20,7 +20,7 @@ import "std/verdict"
 fn job_at(port: I32, root: U8[], arena: Arena$@): agent.Ask //<
     //< What a question needs to reach a stand-in on `port`, about the folder `root`
     url: = arena.text().s("http://127.0.0.1:\{port\}").take()
-    s: = model.parse_url(url, "test", 10000, arena) catch panic("the stand-in's URL reads")
+    s: = model.parse_url(url, "test", 10000, "", arena) catch panic("the stand-in's URL reads")
     return agent.Ask::{ .server = arena.create(s), .folder = files.Folder(root), .trace = false }
 
 fn ask(stub_server: Stub$@, root: U8[], question: U8[], arena: Arena$@): Answer //<
@@ -622,13 +622,14 @@ fn test_a_folder_given_with_a_slash_keeps_whole_paths(work: U8[], arena: Arena$@
 fn test_a_model_url_that_ends_in_v1_is_refused(arena: Arena$@)
     verdict.start("[ksagent] a model URL that ends in /v1 is refused, saying how to write it")
     for url in U8[][]::{ "http://127.0.0.1:8081/v1", "http://127.0.0.1:8081/v1/" }
-        _s: = model.parse_url(url, "test", 1000, arena) catch why
+        _s: = model.parse_url(url, "test", 1000, "", arena) catch why
             verdict.check(arena.text().s("refused: ").s(url).take(),
                 why.find_str("http://127.0.0.1:8081").is_some(), why)
             continue
         verdict.check(arena.text().s("refused: ").s(url).take(), false, "it was taken")
-    proxy: = model.parse_url("http://127.0.0.1:8081/llm", "test", 1000, arena) catch
-        panic("a base path that is not /v1 is taken")
+    proxy: =
+        model.parse_url("http://127.0.0.1:8081/llm", "test", 1000, "", arena) catch
+            panic("a base path that is not /v1 is taken")
     verdict.check("a base path that is not /v1 is kept", proxy.base.equals("/llm"), proxy.base)
 
 fn test_a_request_refused_twice_names_the_context(work: U8[], arena: Arena$@)

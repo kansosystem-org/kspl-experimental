@@ -18,7 +18,7 @@ import "ksai/sampler"
 import "ksai/tensor" { Tensor }
 import "std/mem" + { Arena, dealloc }
 import "std/prng"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 import "std/sys"
 
@@ -234,7 +234,7 @@ priv fn maneuver_tensor(arena: Arena$@): Tensor<|F32|> //<
         t[row + 2] = F32::m.rot
     return t
 
-fn export(pilot: Pilot$@, arena: Arena$@): Str_builder //<
+fn export(pilot: Pilot$@, arena: Arena$@): Str //<
     //< Builds the whole steering policy the car reads, as one safetensors
     //< Caution: **Make the file enough on its own to reproduce `decide` and the manoeuvres'
     //< meaning.** With the weights alone, the reader must copy the features (`FAR_MM`) and the
@@ -246,11 +246,11 @@ fn export(pilot: Pilot$@, arena: Arena$@): Str_builder //<
     w.add("fc2.bias", pilot.mlp.fc2.bias)
     w.add("maneuvers", maneuver_tensor(arena))
     w.set_meta("kspl_pilot", encoding.FORMAT_VERSION)
-    defer $num: = Str_builder()
+    defer $num: = Str()
     w.set_meta("far_mm", num.s("\{FAR_MM\}").slice())
     return w.finish()
 
-fn summary(pilot: Pilot@, out: Str_builder$@) //< one line of the policy's figures
+fn summary(pilot: Pilot@, out: Str$@) //< one line of the policy's figures
     out
         .s("pilot: \{pilot.params\} params, \{pilot.samples\} samples, trained in \
             \{pilot.train_ms\} ms, loss \{pilot.final_loss:.4\}, agrees with the rules on \

@@ -178,7 +178,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-freestanding-math | ✅ | ✅(note 3) | ✅ |
 | test-simd | ✅ | ✅ | ✅ |
 | test-surface (the published API matches its record) | ✅ | ➖(note 2) | ➖(note 26) |
-| test-docs (the language tutorial matches its program and output) | ✅ | ➖(note 2) | ➖(note 26) |
+| test-docs (each of the language's tutorials matches its program and output) | ✅ | ➖(note 2) | ➖(note 26) |
 | test-emit-runtime | ✅ | ✅(note 4) | ✅(note 4) |
 | test-ship (libraries built with `--library`, static and shared, linked into a C and a KSPL program) | ✅(note 19) | ➖(note 2) | ✅(note 19) |
 | run (the AI engine, a smoke test) | ➖(note 25) | ✅ | ➖(note 25) |
@@ -210,7 +210,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | The other suites (c-warnings / own-machine / cli / config / std-dir / thin-use / lint / fmt / link-rules / ext-import / doc / runtime / limits / decl-macros / spawn / place / visibility) | ✅(note 22) | ➖(note 2) | ✅(note 22) |
 | self-host (the LLVM backend) | ✅ | ✅ | ✅ |
 | debug tests (the LLVM backend) | ✅ | ✅ | ✅ |
-| test-llvm-pkgs (kssrv's and kstls's tests on code the LLVM backend built) | ✅ | ➖(note 28) | ➖(note 28) |
+| test-llvm-pkgs (kssrv's, kstls's and ksagent's tests on code the LLVM backend built) | ✅ | ➖(note 28) | ➖(note 28) |
 | test-blas (ksai's unit tests with `BLAS=1`) | ✅ | ➖(note 15) | ➖(note 15) |
 | kstls's own tests (the OpenSSL binding, from a copy by `test-extract`) | ✅ | ➖(note 2) | ✅(note 18) |
 | perf-log (peak memory, the tree types' sizes, and counted instructions of the compiler, a program, kssrv and the language server, judged by `perf_guard`) | ✅ | ➖(note 16) | ➖(note 16) |
@@ -234,7 +234,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | `test-sanitize` (note 29) and `test-holes` (note 34) | Clang's address, leak and undefined-behaviour sanitizer runtimes (`libclang-rt-<version>-dev`) | `KANSO_REQUIRE_ASAN` | Memory errors and undefined behaviour in the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls. ucrt64's clang holds no address sanitizer |
 | The fuzzers of std, kssrv, ksai, ksos, ksmd, kspeg, ksdb and kstls, in `test-extract` (note 21) | Clang's address sanitizer runtime | `KANSO_REQUIRE_ASAN` | A read past the end, since the fuzzing runs on a plain build, as on ucrt64 |
 | `test-c-warnings`, `test-equiv` and `test-random-equiv` | Both gcc and clang: each warns about code the other passes, and fills in what C leaves open its own way | `KANSO_REQUIRE_BOTH_CC` | The generated C under the missing family: its warnings, and that it means the same. The windows-ucrt64 runner installs clang alone |
-| kstls's own tests, in `test-extract` and `test-race` (note 18), and its fuzzer, in `test-extract` | OpenSSL (`libssl-dev`) | `KSTLS_REQUIRE_LIBS` | The binding, linked and run, as on macOS. kssrv does not build at all without it |
+| kstls's own tests, in `test-extract` and `test-race` (note 18), and its fuzzer, in `test-extract` | OpenSSL (`libssl-dev`) | `KSTLS_REQUIRE_LIBS` | The binding, linked and run, as on macOS. kssrv and ksagent do not build at all without it |
 | `cli`'s two cases on a cache folder (note 22) | Root, or `sudo` without a password, to hand a folder to another user | `KANSO_REQUIRE_CHOWN` | That ksplc refuses a cache folder another user owns. Windows runs neither case |
 | `test-ship`'s Windows half, in `test-extract` (note 19) | `x86_64-w64-mingw32-gcc` and its `ar` (`gcc-mingw-w64-x86-64-win32`), and Wine to run the result | `KANSO_REQUIRE_MINGW`, for the cross compiler alone. The image leaves Wine out for its size | That the shipped libraries build and link for Windows, static and DLL. A green Linux run has not run them |
 | `test-ksmd-desktop` (note 23) | `desktop-file-validate`, `update-desktop-database` (`desktop-file-utils`), `update-mime-database` (`shared-mime-info`), `gio` (`libglib2.0-bin`) | The gate's row sets `KSMD_REQUIRE_DESKTOP=1` | The part whose tool is missing |
@@ -289,7 +289,7 @@ The suite a note names says what it checks in its opening comment; a note adds w
     | Two `Mutex` locks taken in opposite orders, even where the two never overlapped in the run | A wait that never ends, such as a lost wakeup. It does not check liveness |
     | A thread never joined | A race in a build through the LLVM backend, or on a platform other than Linux |
   * **Two stress checks press on the hand-written protocols.** ksai's thread pool runs thousands of short rounds back to back. A watchdog fails with a message when no round ends for 10 s. The language server takes a burst of 40 edits with no wait between them. A lost wakeup in the pool is caught only in some runs: its window is a few microseconds.
-* **note 18**: kstls's own `make test` links OpenSSL. kssrv links it too, for HTTPS, so the windows-ucrt64 job installs it with `tools/msys2-packages.txt`, and both packages' tests run there. The macOS runner lacks it, and runs neither package's tests (note 27).
+* **note 18**: kstls's own `make test` links OpenSSL. kssrv links it too, for HTTPS, and ksagent for an https model server. So the windows-ucrt64 job installs it with `tools/msys2-packages.txt`, and the three packages' tests run there. The macOS runner lacks it, and runs none of them (note 27).
 * **note 19**: `test-ship` builds both forms with the host's own toolchain, natively on ucrt64. **Elsewhere it also cross-builds them for Windows where `x86_64-w64-mingw32-gcc` is installed**, and runs them only under Wine.
   * **No CI job runs the check "the Windows programs run under Wine".** The Linux image leaves Wine out for its size. The Windows job builds natively, and macOS runs no `test-ship`.
   * **To run it by hand, put Wine on a Linux machine or in the dev container (the `wine` package on Debian and Ubuntu), then run `make test-ship`.** The check's two `pass` lines then stand where its `SKIP` line stood.
@@ -301,9 +301,9 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 25**: Linux and Windows run the same check through `test-extract`, where ksai's own `make test` trains `llama_engine` (`lib/ksai/tests/examples_main.kspl`). macOS runs `make run` instead.
 * **note 26**: these read the tree's text, or the C it translates to, so the answer cannot differ by platform, and a Windows minute costs double. So they run on Linux alone: in `ci-shard-linux` (`Shard.linux` in `tools/ci_gates.kspl`), or in job b's Linux run (`Gate.linux_only`). The suites among them are `SUITES_TEXT` in `mk/test.mk`. Windows keeps building, linking and running, `lsp-tree` and `c-warnings`.
   * **`lint` and `test-seed-sum` leave macOS too.** The tree holds no `#cfg` branch for an operating system, and `.gitattributes` keeps every text file's line ends LF.
-* **note 27**: `make debug` runs the tests of every package but kssrv and kstls in one program; those two run only as their package's own `make test`. Linux and Windows run every package's own `make test` from a copy (`test-extract`), which also proves it stands alone. So there `make debug-tools` runs only `tools/`, which has no `Makefile`. macOS runs `make debug` instead, leaving kssrv's and kstls's tests unrun.
+* **note 27**: `make debug` runs the tests of every package but kssrv, kstls and ksagent in one program. Those three link OpenSSL, so they run only as their package's own `make test`. Linux and Windows run every package's own `make test` from a copy (`test-extract`), which also proves it stands alone. So there `make debug-tools` runs only `tools/`, which has no `Makefile`. macOS runs `make debug` instead, leaving kssrv's, kstls's and ksagent's tests unrun.
   * **Windows leaves `debug-tools` out**: `make LLVM=1 debug` runs the same tests of `tools/` there, against the same Windows calls. Only the backend differs, and the C backend is checked on Windows on every package's copy. Linux still runs both.
-* **note 28**: `make LLVM=1 debug` holds neither kssrv nor kstls (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci` does.
+* **note 28**: `make LLVM=1 debug` holds none of kssrv, kstls and ksagent (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci` does.
 * **note 29**: `test-sanitize` builds the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls with clang's address, leak and undefined-behaviour sanitizers (`tests/suite/sanitize_test.kspl`). kssrv's tests start a server built the same way. ucrt64's clang holds no address sanitizer. macOS's runtime has no leak sanitizer on Apple silicon, and refuses to start when asked for one. So the suite says `SKIP` on both.
 * **note 31**: `test-ksmd-browser` drives ksmd's editing page in a headless Chromium (`ksmd/tests/browser/main.mjs`), then serves it with `kssrv --local` (`ksmd/tests/browser/served.mjs`).
   * **axe-core, an automated accessibility checker, runs inside the page** in a few states (`ksmd/tests/browser/axe.mjs`). Any violation fails the gate, naming the rule and the element.

@@ -750,6 +750,19 @@ const SECTIONS = {
       } else {
         verdict.skip("a link cannot be made here, so its refusal is not checked");
       }
+      // **A name that starts with a dot is read, but never written** (`kssrv/docs/SPEC-api.md`).
+      // The page once blamed a link that does not stand.
+      fs.mkdirSync(path.join(ctx.root, ".notes"));
+      fs.writeFileSync(path.join(ctx.root, ".notes/plan.ksmd"), `${H}Plan.\n`);
+      await withTab(ctx, "?doc=.notes/plan.ksmd", async (t) => {
+        await typeAtEnd(t, 0, " More.");
+        await t.press("s", CTRL);
+        await idle(t);
+        const why = await said(t);
+        check(why.includes("starts with a dot") && ctx.disk(".notes/plan.ksmd") === `${H}Plan.\n`,
+          "a save under a folder whose name starts with a dot is refused, and says why", why);
+      });
+      fs.rmSync(path.join(ctx.root, ".notes"), { recursive: true });
       const port = ctx.server.port;
       const token = ctx.server.token;
       const bare = await request(port, "GET", "/api/file?path=top.ksmd");
@@ -915,6 +928,30 @@ const SECTIONS = {
       check(alt === "<img src=x onerror=window.pwned=29>", "an image's alt text with markup stays text", alt);
     });
     fs.rmSync(path.join(ctx.root, "hostile.ksmd"), { force: true });
+  },
+
+  // A file marked read-only is not replaced, and the page says so: it holds what the page
+  // expects, so "changed on disk" would be untrue. `chmod` sets the read-only mark on Windows.
+  async readOnly(ctx) {
+    const file = path.join(ctx.root, "locked.ksmd");
+    const before = `${H}Kept text.\n`;
+    fs.writeFileSync(file, before);
+    fs.chmodSync(file, 0o444);
+    await withTab(ctx, "?doc=locked.ksmd", async (d) => {
+      await typeAtEnd(d, 0, " More.");
+      await d.press("s", CTRL);
+      await idle(d);
+      check((await said(d)).includes("\"locked.ksmd\" is read-only") && await noticed(d) === "" &&
+        ctx.disk("locked.ksmd") === before,
+      "a save to a read-only file writes nothing and says that the file is read-only",
+      `${await said(d)} | ${await noticed(d)}`);
+      fs.chmodSync(file, 0o644);
+      await d.press("s", CTRL);
+      await idle(d);
+      check(await said(d) === "Saved locked.ksmd." && ctx.disk("locked.ksmd") === `${H}Kept text. More.\n`,
+        "and once the file takes writes again, the same page saves it", await said(d));
+    });
+    fs.rmSync(file, { force: true });
   },
 
 };

@@ -10,7 +10,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/display" as sema_type_display
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv const SIG_ONE_LINE_MAX: Sz = 100 //<
     //< How wide the one-line form may be before the parameters are laid out one per line
@@ -27,7 +27,7 @@ priv const SIG_MAX_PARAM_LINES: Sz = 16 //<
     //< How many parameters are laid out before the rest is given as a count
     //< It is above any hand-written declaration, so only generated input is cut short.
 
-priv fn write_self_spelling(type_node: Ast_node$@, out: Str_builder$@): Bool //<
+priv fn write_self_spelling(type_node: Ast_node$@, out: Str$@): Bool //<
     //< It writes a type written `Self` as is, and returns true if it did
     //< **It takes precedence over every type id.** `Self` is the fixed spelling rather than a type
     //< to resolve ("Traits (`trait`)" in `../../docs/SPEC-programming-language.md`). On a template,
@@ -40,7 +40,7 @@ priv fn write_self_spelling(type_node: Ast_node$@, out: Str_builder$@): Bool //<
     out.s(spelt)
     return true
 
-fn write_type_of(ctx: Sema_ctx$@, type_node: Ast_node$@, own_id: I32, out: Str_builder$@) //<
+fn write_type_of(ctx: Sema_ctx$@, type_node: Ast_node$@, own_id: I32, out: Str$@) //<
     //< The type a declaration's node names, in the notation the source uses
     //< own_id is the holder's own resolved type (a parameter's `type_id`), or 0.
     //< Caution: **Send the spelling through the display even where there is no type id.** A
@@ -64,7 +64,7 @@ fn write_type_of(ctx: Sema_ctx$@, type_node: Ast_node$@, own_id: I32, out: Str_b
     defer $named: = ctx.env.display_str_named(spelt)
     out.s(named.slice())
 
-priv fn spell_for_editor(ctx: Sema_ctx$@, part: base_ast_spell.Sig_part, out: Str_builder$@): Bool //<
+priv fn spell_for_editor(ctx: Sema_ctx$@, part: base_ast_spell.Sig_part, out: Str$@): Bool //<
     //< A signature's type as the editor shows it (`write_type_of` above); it always writes one
     write_type_of(ctx, part.type_node, part.type_id, out)
     return true
@@ -73,18 +73,18 @@ priv fn param_doc_at(docs: List<|base_ast_doc.Param_doc|>@, i: Sz): U8[] //<
     //< The description on parameter `i`'s own line, or empty where it has none
     return docs.get(i).doc if i < docs.len else ""
 
-fn format_fn_sig_flat(ctx: Sema_ctx$@, fn_node: Ast_node$@): Str_builder //<
+fn format_fn_sig_flat(ctx: Sema_ctx$@, fn_node: Ast_node$@): Str //<
     //< The signature on one line, `(a: I32, b: I32 = 2): I32`
     //< **It is all the completion list's one row can show**, and the hover's answer where it fits;
     //< its content comes from `write_sig` in `../base/ast_spell.kspl`.
-    $res: = Str_builder()
+    $res: = Str()
     base_ast_spell.write_sig(fn_node,
-        fn(part: base_ast_spell.Sig_part, out: Str_builder$@; ctx: Sema_ctx$@): Bool {
+        fn(part: base_ast_spell.Sig_part, out: Str$@; ctx: Sema_ctx$@): Bool {
             return spell_for_editor(ctx, part, out);
         }, res@)
     return res
 
-fn format_fn_sig(ctx: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder //<
+fn format_fn_sig(ctx: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str //<
     //< The signature as the editor shows it
     //< It is `(a: I32, b: I32): I32` on one line where that fits and no parameter or return value
     //< has a description, and one parameter per line where one does.
@@ -103,7 +103,7 @@ fn format_fn_sig(ctx: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder /
             described = true
             break
 
-    $res: = Str_builder()
+    $res: = Str()
     if !described && flat.len <= SIG_ONE_LINE_MAX
         res.s(flat.slice())
         return res
@@ -117,7 +117,7 @@ fn format_fn_sig(ctx: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder /
             break
         res.s(SIG_PARAM_INDENT)
         base_ast_spell.write_sig_part(parts.get(i),
-            fn(part: base_ast_spell.Sig_part, out: Str_builder$@; ctx: Sema_ctx$@): Bool {
+            fn(part: base_ast_spell.Sig_part, out: Str$@; ctx: Sema_ctx$@): Bool {
                 return spell_for_editor(ctx, part, out);
             }, res@)
         res.c(',')
@@ -127,7 +127,7 @@ fn format_fn_sig(ctx: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder /
         res.c('\n')
     res.c(')')
     base_ast_spell.write_sig_ret(fn_node,
-        fn(part: base_ast_spell.Sig_part, out: Str_builder$@; ctx: Sema_ctx$@): Bool {
+        fn(part: base_ast_spell.Sig_part, out: Str$@; ctx: Sema_ctx$@): Bool {
             return spell_for_editor(ctx, part, out);
         }, res@)
     if ret_doc.len > 0

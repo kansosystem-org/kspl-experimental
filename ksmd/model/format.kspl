@@ -8,7 +8,7 @@
 import "std/chars"
 import "std/ds"
 import "std/math"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum"
 
 const MAX_PLACES: Sz = 9 //< the most digits a format shows after the decimal point
@@ -81,7 +81,7 @@ fn currency_of(code: U8[]): Number_format? //<
     places: Sz = 0 if code.equals("JPY") || code.equals("KRW") else 2
     return .some(Number_format::{ .kind = .currency, .places = places, .code = code })
 
-fn write_format(format: Number_format, out: Str_builder$@) //<
+fn write_format(format: Number_format, out: Str$@) //<
     //< the entry `formats` holds; none is empty
     switch format.kind
     case .none
@@ -102,7 +102,7 @@ fn write_format(format: Number_format, out: Str_builder$@) //<
         out.s("currency:").s(format.code)
     out.c(':').c('0' + U8::format.places)
 
-fn show(number: F64, format: Number_format, out: Str_builder$@) //<
+fn show(number: F64, format: Number_format, out: Str$@) //<
     //< writes a finite number as `format` shows it
     //< A number that rounds to zero shows no minus sign: `-0.00` would read as a value below zero.
     $d: = digits_of(-number if number < 0.0 else number)
@@ -130,7 +130,7 @@ fn show(number: F64, format: Number_format, out: Str_builder$@) //<
 const SHOWN_DIGITS: Sz = 15 //< the most significant digits a number shows without a format
     //< Spreadsheets show 15, so the F64 just above 0.3 that `0.1 + 0.2` gives shows as 0.3.
 
-fn show_plain(number: F64, out: Str_builder$@) //<
+fn show_plain(number: F64, out: Str$@) //<
     //< writes a finite number as it shows without a format
     //< Its digits are rounded to `SHOWN_DIGITS`, then written as JavaScript writes a number:
     //< `100000000000000000000`, `0.000001`, `1e+21` and `1e-7`, and never `.0` after a whole
@@ -205,7 +205,7 @@ fn round_places(number: F64, places: Sz): F64? //<
     cut(d@, kept)
     if d.count == 0
         return .some(0.0)
-    defer $text: = Str_builder()
+    defer $text: = Str()
     if number < 0.0
         text.c('-')
     text.s("0.")
@@ -228,7 +228,7 @@ impl Digits
 priv fn digits_of(number: F64): Digits //<
     //< the shortest digits that read back as `number`, which is 0 or more
     $d: Digits = ::{}
-    defer $text: = Str_builder()
+    defer $text: = Str()
     text.s("\{number\}")
     t: = text.slice()
     $seen_point: = false
@@ -280,7 +280,7 @@ priv fn carry(digits: Digits$@) //< adds one to the last digit; nines carry, and
 priv fn is_code(text: U8[]): Bool //< three capital letters, as ISO 4217 writes a currency
     return text.len == 3 && text[0].is_upper() && text[1].is_upper() && text[2].is_upper()
 
-priv fn write_symbol(code: U8[], out: Str_builder$@) //<
+priv fn write_symbol(code: U8[], out: Str$@) //<
     //< The symbol English text writes for a currency, or else its code and a no-break space
     //< A symbol that two currencies share is told apart, as `CA$` and `CN¥` are.
     if code.equals("USD")

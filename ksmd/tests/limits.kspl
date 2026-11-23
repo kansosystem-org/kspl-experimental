@@ -12,7 +12,7 @@ import "ksmd/tests/support" { opened }
 import "std/ds"
 import "std/mem" { Arena }
 import "std/str"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 priv const ROOM: Sz = 10 //< the bytes the test document leaves free below 8 MiB
@@ -22,7 +22,7 @@ fn run()
     bytes()
 
 priv fn blocks()
-    defer $text: = Str_builder()
+    defer $text: = Str()
     text.s("%ksmd 2\n")
     for _ in Range.asc(MAX_BLOCKS - 1)
         text.s("\na\n")
@@ -37,9 +37,9 @@ priv fn blocks()
     reopens("so the document holds 100,000 blocks, and opens again", ed@)
 
 priv fn bytes()
-    defer $text: = Str_builder()
+    defer $text: = Str()
     text.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n:::\n")
-    defer $line: = Str_builder()
+    defer $line: = Str()
     for _ in Range.asc(65534)
         line.c('a')
     for text.slice().len + 2 * 65536 <= MAX_SOURCE_BYTES - ROOM
@@ -59,7 +59,7 @@ priv fn bytes()
     ed.type_text("bbbbbbbbbb", .typing) catch e
         verdict.check("typing up to 8 MiB", false, e.message())
     reopens("so the source takes 8 MiB, and opens again", ed@)
-    defer $full: = Str_builder()
+    defer $full: = Str()
     writer.write(ed.doc@, full@)
     $grew: = true
     ed.set_cell(0, 0, 0, "12") catch e
@@ -92,14 +92,14 @@ priv fn refused(ed: Editor$@, what: U8[], typed: U8[], want: Refused, before: U8
 
 priv fn counted(what: U8[], ed: Editor@) //<
     //< The editor's count of the source's bytes is what the writer writes
-    defer $out: = Str_builder()
+    defer $out: = Str()
     writer.write(ed.doc@, out@)
-    defer $said: = Str_builder()
+    defer $said: = Str()
     said.s("\{ed.written\} counted, \{out.slice().len\} written")
     verdict.check(what, ed.written == out.slice().len, said.slice())
 
 priv fn reopens(what: U8[], ed: Editor@) //< the saved source reads again
-    defer $out: = Str_builder()
+    defer $out: = Str()
     writer.write(ed.doc@, out@)
     src: = Source("again.ksmd", out.slice()) catch e
         verdict.check(what, false, e.message)
@@ -111,6 +111,6 @@ priv fn reopens(what: U8[], ed: Editor@) //< the saved source reads again
     verdict.check(what, true, "")
 
 priv fn source_is(ed: Editor@, expected: U8[]): Bool //< whether the document saves as `expected`
-    defer $out: = Str_builder()
+    defer $out: = Str()
     writer.write(ed.doc@, out@)
     return out.slice().equals(expected)

@@ -24,7 +24,7 @@ import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "ksplc/tools/libs" as tools_libs
 import "std/chars"
 import "std/ds" { List, Map }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv const MAX_TYPE_WALK_DEPTH: Sz = 1000 //<
     //< The depth limit for walking inside a type
@@ -193,11 +193,10 @@ impl Walk
     // ==========================================
     // Spelling a type in C (a declarator around a name) and in KSPL
     // ==========================================
-    priv fn c_decl(r: Self$@, raw: I32, inner: U8[], leaf_const: Bool, out: Str_builder$@,
-        depth: Sz) //<
-            //< It writes the type `raw` as C declares `inner` (a name, or empty for a bare type)
-            //< **The declarator grows from the inside out**, as C reads it: a pointer puts `*`
-            //< before `inner`, a function pointer wraps it as `(*inner)(...)`.
+    priv fn c_decl(r: Self$@, raw: I32, inner: U8[], leaf_const: Bool, out: Str$@, depth: Sz) //<
+        //< It writes the type `raw` as C declares `inner` (a name, or empty for a bare type)
+        //< **The declarator grows from the inside out**, as C reads it: a pointer puts `*`
+        //< before `inner`, a function pointer wraps it as `(*inner)(...)`.
         if depth >= MAX_TYPE_WALK_DEPTH
             return
         id: = r.strip(raw)
@@ -219,7 +218,7 @@ impl Walk
                 out.s("const " if is_const else "").s("void ").s(starred)
             return
         case .fn_type(sig)
-            defer $params: = Str_builder()
+            defer $params: = Str()
             for i in Range.asc(sig.params.len)
                 if i > 0
                     params.s(", ")
@@ -243,12 +242,12 @@ impl Walk
         default
             return false
 
-    priv fn c_decl_leaf(_r: Self$@, name: U8[], inner: U8[], leaf_const: Bool, out: Str_builder$@)
+    priv fn c_decl_leaf(_r: Self$@, name: U8[], inner: U8[], leaf_const: Bool, out: Str$@)
         out.s("const " if leaf_const else "").s(name)
         if inner.len > 0
             out.c(' ').s(inner)
 
-    priv fn k_type(r: Self$@, raw: I32, out: Str_builder$@, depth: Sz) //<
+    priv fn k_type(r: Self$@, raw: I32, out: Str$@, depth: Sz) //<
         //< It writes the type `raw` as a KSPL declaration names it
         if depth >= MAX_TYPE_WALK_DEPTH
             return
@@ -382,7 +381,7 @@ priv fn claim(walk: Walk$@, seen: Map<|U8[], Bool|>$@, site: Ast_node$@, name: U
         return
     seen.set(name, true)
 
-priv fn c_doc(doc: U8[], indent: U8[], out: Str_builder$@) //< a summary as a C comment
+priv fn c_doc(doc: U8[], indent: U8[], out: Str$@) //< a summary as a C comment
     if doc.len > 0
         out.s(indent).s("/** ").s(doc.replace("*/", "* /", base_core.arena)).s(" */\n")
 
@@ -410,7 +409,7 @@ priv fn guard_of(out_path: U8[]): U8[] //< the include guard, from the file's na
 
 priv fn render_c(walk: Walk$@, exports: List<|Export|>@, out_path: U8[]): U8[]
     guard: = guard_of(out_path)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     out.s("/* The C interface of a library, written by `ksplc --library`.\n")
     out.s(" * Caution: Do not edit it. The compiler regenerates it with the library. */\n")
     out.s("#ifndef \{guard\}\n#define \{guard\}\n\n")
@@ -442,7 +441,7 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>@, out_path: U8[]): U8[]
         out.s("};\n\n")
     for e in exports
         c_doc(e.doc, "", out@)
-        defer $params: = Str_builder()
+        defer $params: = Str()
         ps: = params_of(e.node)
         for i in Range.asc(ps.len)
             p: = ps.get(i)
@@ -486,7 +485,7 @@ priv fn visit_body(walk: Walk$@, id: I32, done: Map<|I32, Bool|>$@, out: List<|N
     default {}
     out.push(walk.types.get(at))
 
-priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def@, out: Str_builder$@) //<
+priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def@, out: Str$@) //<
     //< A scalar enum as the library's C carries it: its base type, and its tags
     //< A C enumerator is an `int`, so tags past it are macros of the enum's type, as genc writes
     //< them (`emit_enum_decl` in `../gen/c/types.kspl`).
@@ -513,7 +512,7 @@ priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def@, ou
 priv fn render_kspl(walk: Walk$@, exports: List<|Export|>@, root: Ast_node$@, out_path: U8[],
     parser: kspeg.Target$@): U8[] //<
         //< The KSPL form, written in braces, then printed by the formatter in the file's notation
-    defer $out: = Str_builder()
+    defer $out: = Str()
     out.s("// The C interface of a library, written by `ksplc --library`.\n")
     out.s("// Caution: Do not edit it. The compiler regenerates it with the library.\n\n")
     for t in walk.types

@@ -5,7 +5,7 @@ import "ksos/demo/common/pilot_policy" as policy
 import "std/bytes"
 import "std/ds"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 // ==========================================
@@ -59,14 +59,14 @@ priv fn refused_as(swap: U8[], swap_shape: Sz[], arena: Arena$@): U8[] //<
 priv fn with_header_entry(blob: U8[], entry: U8[], arena: Arena$@): U8[] //<
     //< The same file with one more header entry first; the tensors' bytes stay where they were
     hl: = Sz::blob.get_u64_le(0)
-    defer $head: = Str_builder()
+    defer $head: = Str()
     head.s("{").s(entry).s(",").s(U8[]::{ .ptr = blob.ptr + 9, .len = hl - 1 })
     for (head.len + 8) % 8 != 0
         head.s(" ")
     $len_bytes: U8[8] = ::{}
     len_slice: = U8$[]::len_bytes
     len_slice.put_u64_le(0, U64::head.len)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     out.s(U8[]::len_bytes).s(head.slice())
     out.s(U8[]::{ .ptr = blob.ptr + 8 + hl, .len = blob.len - 8 - hl })
     return arena.dup_str(out.slice())

@@ -12,7 +12,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/math"
 import "std/mem" { Arena }
-import "std/str" { Str_builder } // and `arena.text()`
+import "std/str" { Str } // and `arena.text()`
 import "std/strfmt" as _strfmt
 import "std/strnum" // `to_count`
 import "std/verdict"
@@ -207,11 +207,11 @@ priv const F32_10000: U32 = 0x461C4000U32 //< the bits of the F32 10000.0, RoPE'
 priv const F32_1E_6: U32 = 0x358637BDU32 //< the bits of the F32 0.000001, the norms' epsilon
 
 priv struct Gguf_parts //< a GGUF file being built: its keys, its tensors' entries, their bytes
-    keys: Str_builder
+    keys: Str
     n_keys: U64
-    infos: Str_builder
+    infos: Str
     n_tensors: U64
-    data: Str_builder
+    data: Str
 
 impl Gguf_parts
     priv fn key(r: Self$@, name: U8[], kind: U32) //< a key's name and type; its value follows
@@ -242,8 +242,8 @@ impl Gguf_parts
 priv fn built35(state: Sz, head: Sz, trained: Sz, arena: Arena$@): U8[] //<
     //< A Qwen3.5 file whose delta net's state rows are `state` wide and its heads `head` wide
     //< The tensors' numbers are zeros: the file is for loading, not for scores.
-    $g: = Gguf_parts::{ .keys = Str_builder(), .n_keys = 0U64, .infos = Str_builder(),
-        .n_tensors = 0U64, .data = Str_builder() }
+    $g: = Gguf_parts::{ .keys = Str(), .n_keys = 0U64, .infos = Str(), .n_tensors = 0U64,
+        .data = Str() }
     g.key("general.architecture", 8U32)
     put_str(g.keys@, "qwen35")
     w: = BUILT_WIDTH
@@ -291,7 +291,7 @@ priv fn built35(state: Sz, head: Sz, trained: Sz, arena: Arena$@): U8[] //<
             g.tensor(arena.text().s("blk.\{b\}.").s(part).take(), w, 0)
         for part in U8[][]::{ "ffn_gate.weight", "ffn_up.weight", "ffn_down.weight" }
             g.tensor(arena.text().s("blk.\{b\}.").s(part).take(), w, w)
-    defer $file: = Str_builder()
+    defer $file: = Str()
     file.s("GGUF")
     put32(file@, 3U32)
     put64(file@, g.n_tensors)

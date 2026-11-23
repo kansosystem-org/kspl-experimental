@@ -14,7 +14,7 @@ import "ksplc/base/locate" as base_locate
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 
 // find_child / clone_with are tree-walking primitives used everywhere, and they keep the promise
@@ -75,7 +75,7 @@ fn is_anon_env_type(name: U8[]): Bool //<
     //< `.`; a plain substring match would also hit `Foo_anon_env_1`.
     if name.starts_with(ANON_ENV_PREFIX)
         return true
-    defer $sb: = Str_builder()
+    defer $sb: = Str()
     sb.c('.').s(ANON_ENV_PREFIX)
     return name.find_str(sb.slice()).is_some()
 
@@ -297,7 +297,7 @@ impl U8[]
             return base
         return base.sub(0, base.rfind_char('.').unwrap_or(base.len))
 
-    fn resolve_import_path(r: U8[], import_str: U8[]): Str_builder
+    fn resolve_import_path(r: U8[], import_str: U8[]): Str
         // **The reader and the analyser both go through here**, so one file has one name.
         return r.logical_path(import_str)
 
@@ -309,11 +309,11 @@ impl U8[]
         defer $res: = r.logical_path(written)
         return base_core.arena.dup_str(res.slice())
 
-    priv fn logical_path(r: U8[], written: U8[]): Str_builder //<
+    priv fn logical_path(r: U8[], written: U8[]): Str //<
         //< What a path written in this file names
         //< It is that package's file where the first segment names a package, and otherwise the
         //< file next to this one.
-        $res: = Str_builder()
+        $res: = Str()
         if written.starts_with("std/") ||
             (written.find_char('/').is_some() && !written.starts_with("."))
             res.s(written)

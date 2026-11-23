@@ -25,7 +25,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 fn handle(state: Doc_state$@, params: json.Value, id_val: json.Value, arena: Arena$@) //<
     //< It answers a hover request
@@ -50,7 +50,7 @@ priv fn send_cfg_inactive_hover(state: Doc_state@, params: json.Value, id_val: j
     // By the logical name the range was recorded under, not the URI: a copy under another folder
     // name (`alone/log.kspl` for `ksdb/log`) shares no tail with it.
     if region: = base_cfg_inactive.find_cfg_inactive(state.mod_name_perm, offset)
-        defer $md: = Str_builder()
+        defer $md: = Str()
         md.s("`#cfg(")
         if region.is_neg
             md.c('!')
@@ -82,7 +82,7 @@ priv struct Hover_ctx
     type_id: I32
     shape: Hover_shape
     def_node: Ast_node$@
-    fallback_str: Str_builder
+    fallback_str: Str
 // The type a method or associated function belongs to, "" for a free function.
 //
 // Caution: **Prefer the declared type over an instantiation.** A generic's method node is reached
@@ -141,7 +141,7 @@ priv fn owner_name_of(ctx: Sema_ctx$@, decl: Ast_node$@): U8[] //<
     id_n: = owner.find_child(.k_identifier)
     if id_n == null
         return ""
-    defer $b: = Str_builder()
+    defer $b: = Str()
     lsp_nav.write_full_name(id_n.text, owner.loc.file(), b@)
     return base_core.arena.dup_str(b.slice())
 
@@ -211,9 +211,8 @@ priv fn declares_in_variant(vv: sema_type_def.Enum_variant$@, def_node: Ast_node
         if pfield.node == def_node
             return true
     return false
-priv fn append_enum_variant_hover(hover_text: Str_builder$@, hover: Hover_ctx$@,
-    state: Doc_state$@) //<
-        //< For an enum variant, it appends the payload `(name: T, ...)` and the tag value to the hover
+priv fn append_enum_variant_hover(hover_text: Str$@, hover: Hover_ctx$@, state: Doc_state$@) //<
+    //< For an enum variant, it appends the payload `(name: T, ...)` and the tag value to the hover
     if hover.def_node == null || hover.def_node.kind_id != .k_enum_variant
         return
     id_n: = hover.def_node.find_child(.k_identifier)
@@ -275,7 +274,7 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
     // **A label is not a value**, so it has no type to show. Left to the classification below, it
     // would read as a variable typed by its own name (`with_setup: with_setup`).
     if is_label_name(path, target_node)
-        defer $md_label: = Str_builder()
+        defer $md_label: = Str()
         md_label.s("```kspl\nlabel ").s(target_node.text).s("\n```")
         send_markdown(id_val, md_label.slice(), arena)
         return
@@ -285,7 +284,7 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
         return
 
     $hover: = Hover_ctx::{ .type_id = 0, .shape = .type_head, .def_node = null,
-        .fallback_str = Str_builder() }
+        .fallback_str = Str() }
     defer hover.fallback_str.free()
 
     resolve_hover_target(state, path, target_node, hover@)
@@ -293,18 +292,18 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
     if (hover.type_id == 0 || state.sema == null) && hover.fallback_str.len == 0
         lsp_msg.send_null_response(id_val, arena)
         return
-    defer $formatted_name: = Str_builder()
+    defer $formatted_name: = Str()
     write_shown_type(state, hover@, formatted_name@)
-    defer $def_code: = Str_builder()
+    defer $def_code: = Str()
     build_hover_def_code(state, hover@, def_code@)
-    defer $fqn_name: = Str_builder()
+    defer $fqn_name: = Str()
     get_fqn_name(state, hover@, target_node, fqn_name@)
     f_name_slice: =
         formatted_name.slice() if formatted_name.len > 0 else hover.fallback_str.slice()
-    defer $hover_text: = Str_builder()
+    defer $hover_text: = Str()
     write_hover_head(state, hover@, def_code.slice(), fqn_name.slice(), f_name_slice, hover_text@)
     append_enum_variant_hover(hover_text@, hover@, state)
-    defer $md_str: = Str_builder()
+    defer $md_str: = Str()
     md_str.s("```kspl\n\{hover_text.slice()\}\n\n```")
     // **The description goes below the fence**, or the editor shows it as part of the signature.
     doc: = lsp_nav.linked_doc(state.sema, state.root_file, hover.def_node)
@@ -312,7 +311,7 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
         md_str.s("\n\{doc\}")
     send_markdown(id_val, md_str.slice(), arena)
 
-priv fn write_shown_type(state: Doc_state$@, hover: Hover_ctx$@, out: Str_builder$@) //<
+priv fn write_shown_type(state: Doc_state$@, hover: Hover_ctx$@, out: Str$@) //<
     //< The type a hover shows: the analysed type (a variant's as `Enum.variant`), else the fallback
     if hover.type_id == 0 || state.sema == null
         out.s(hover.fallback_str.slice())
@@ -323,7 +322,7 @@ priv fn write_shown_type(state: Doc_state$@, hover: Hover_ctx$@, out: Str_builde
         out.c('.').s(id_n.text if id_n != null else "")
 
 priv fn write_hover_head(state: Doc_state$@, hover: Hover_ctx$@, def_code: U8[], fqn: U8[],
-    shown: U8[], out: Str_builder$@) //<
+    shown: U8[], out: Str$@) //<
         //< The hover's first line: a function's signature, a type's declaration, or `name: type`
     if hover.shape == .fn_head
         write_fn_head(state, hover, def_code, fqn, shown, out)
@@ -358,7 +357,7 @@ priv fn type_decl_keyword(hover: Hover_ctx$@): U8[] //< the word a type's hover 
         return "file " if hover.shape == .file else "type "
 
 priv fn write_fn_head(state: Doc_state$@, hover: Hover_ctx$@, def_code: U8[], fqn: U8[],
-    shown: U8[], out: Str_builder$@) //<
+    shown: U8[], out: Str$@) //<
         //< A function's hover line, from its declaration where there is one
     if hover.def_node.is_fn_decl()
         is_pub: = hover.def_node.get_visibility() == sema_type_scope.Visibility.public
@@ -401,7 +400,7 @@ priv fn send_literal_type(state: Doc_state$@, literal: Ast_node@, id_val: json.V
         lsp_msg.send_null_response(id_val, arena)
         return
     shown: = state.sema.env.display(literal.type_id)
-    defer $md: = Str_builder()
+    defer $md: = Str()
     md.s("```kspl\n").s(shown).s("\n```")
     send_markdown(id_val, md.slice(), arena)
 
@@ -643,7 +642,7 @@ priv fn is_length_of(node: Ast_node$@, child: Ast_node@): Bool //<
         node.text.strip_prefix("$").starts_with("[") && node.children.len > 0 &&
         node.get_child(0) == child
 
-priv fn build_hover_def_code(state: Doc_state$@, hover: Hover_ctx$@, def_code: Str_builder$@)
+priv fn build_hover_def_code(state: Doc_state$@, hover: Hover_ctx$@, def_code: Str$@)
     if hover.def_node == null
         return
     def_file: = hover.def_node.loc.file()
@@ -666,8 +665,8 @@ priv fn build_hover_def_code(state: Doc_state$@, hover: Hover_ctx$@, def_code: S
     if snippet.len > 150
         def_code.s("...")
 
-priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bool,
-    out: Str_builder$@): Bool //<
+priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bool, out: Str$@):
+    Bool //<
         //< It writes `Owner.` for a member, the owner as the source spells it; false where none is
         //< **The owner's name is already complete**, with its own module. The member's file is not
         //< the owner's where an `impl` is in a different file from its type.
@@ -693,7 +692,7 @@ priv fn enclosing_impl_target(path: List<|Ast_node$@|>@): U8[] //<
     return ""
 
 priv fn get_fqn_name(state: Doc_state$@, hover: Hover_ctx$@, target_node: Ast_node@,
-    fqn_name: Str_builder$@)
+    fqn_name: Str$@)
     $orig_name: = target_node.text
     $sym: Sema_symbol$@ = null
 
@@ -712,7 +711,7 @@ priv fn get_fqn_name(state: Doc_state$@, hover: Hover_ctx$@, target_node: Ast_no
         // notation, which only display_type_to in sema/type/env.kspl produces.
         // orig_name points into this content, so keep this binding alive to the end of the
         // function.
-        defer $shown_sb: = Str_builder()
+        defer $shown_sb: = Str()
         // **Do not use `type_id` for a function.** It is **the return type**, so the return type
         // would stand where the name goes; the owner is the signature's first argument.
         is_fn_def: = hover.def_node.is_fn_decl()

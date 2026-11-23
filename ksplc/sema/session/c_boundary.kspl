@@ -18,7 +18,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // testing and slicing single characters
 import "std/ds" { List, Map }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv const MAX_FFI_NESTING_DEPTH: Sz = 32 //<
     //< The maximum depth to which check_ffi_safety_at walks a struct
@@ -149,14 +149,14 @@ impl Sema_ctx
                 but this scope already declares that name. Rename one of them.")
         r.err(node, r.scratch.slice())
 
-priv fn c_name_partner(name: U8[]): Str_builder //< the other name of `name`'s C pair, or empty
+priv fn c_name_partner(name: U8[]): Str //< the other name of `name`'s C pair, or empty
     //< A reserved word's partner is its suffixed form; a suffixed name's is the word it renames.
     //< Caution: **Check both declaration orders**, or a suffixed name written first passes. Only
     //< c_safe_name decides the renamed-to name, so do not rebuild it here. **Do not build it in
     //< r.scratch**: report_c_name_clash overwrites that scratch.
     if name.needs_c_escape()
         return name.c_safe_name()
-    $partner: = Str_builder()
+    $partner: = Str()
     if name.ends_with(base_c_name.C_NAME_SUFFIX)
         bare: = name.sub(0, name.len - base_c_name.C_NAME_SUFFIX.len)
         if bare.needs_c_escape()

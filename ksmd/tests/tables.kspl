@@ -13,7 +13,7 @@ import "ksmd/tests/support" { changed, opened, records_one_column, saves, writte
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum"
 import "std/verdict"
 
@@ -259,7 +259,7 @@ priv fn naming()
             name=\"b\"\n| \"y\" | \"z\" |\n| =\"Q1 sales | \"\"net\"\"\".A1 | =c.A1 |\n:::\n"
     saves("a name that is not plain is quoted in a formula, each quote twice", ed@, arena, quoted)
     verdict.check("and its references still calculate", value(ed@, 1, 0, 0, arena) == 3.0, "")
-    defer $long: = Str_builder()
+    defer $long: = Str()
     long.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | =t.A1")
     for _ in Range.asc(800)
         long.s("+t.A1")
@@ -645,7 +645,7 @@ priv fn closings() //< what closes a formula at its end, or nothing where an end
     closes("=1)+(2", "")
 
 priv fn closes(text: U8[], want: U8[]) //< `closing` of a formula gives `want`
-    defer $out: = Str_builder()
+    defer $out: = Str()
     closing(text, out@)
     defer arena: = Arena(4096)
     what: = arena.text().s("the ending that closes \{text\} is \{want\}").take()
@@ -747,7 +747,7 @@ priv fn pasting()
 // The editor's arena lasts as long as the editor, so a paste keeps no copy of the tables there.
 // A refused paste puts them back from the copy made to record the step.
 priv fn kept_small()
-    defer $tall: = Str_builder()
+    defer $tall: = Str()
     tall.s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
     for i in Range.asc(1000)
         tall.s("| \{i\} | =A\{i + 1\}*2 |\n")
@@ -899,7 +899,7 @@ priv fn leaving_rows() //< a clear and a fill leave alone the rows they are told
 priv fn goes_on(what: U8[], first: U8[], given: Sz, expected: U8[]) //<
     //< A column of four rows whose `given` first cells are `first`, filled down by the handle
     defer arena: = Arena(64 * 1024)
-    defer $rows: = Str_builder()
+    defer $rows: = Str()
     rows.s(first)
     for _ in Range(given, 4, 1)
         rows.s("\n| |")
@@ -913,11 +913,11 @@ priv fn goes_on(what: U8[], first: U8[], given: Sz, expected: U8[]) //<
 priv fn too_long(arena: Arena$@) //<
     //< A fill refused midway puts back the cells it copied before the refusal
     //< A long formula on A9 grows by one byte a reference when it is copied onto row 10.
-    defer $long: = Str_builder()
+    defer $long: = Str()
     long.s("A9")
     for long.slice().len + 3 <= 4096
         long.s("+A9")
-    defer $rows: = Str_builder()
+    defer $rows: = Str()
     for r in Range.asc(10)
         rows.s("| \{r\} | ")
         if r == 8

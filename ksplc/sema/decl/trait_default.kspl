@@ -9,8 +9,6 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/access" as sema_decl_access
-import "ksplc/sema/decl/mono" as sema_decl_mono
-import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/subst" as sema_decl_subst
 import "ksplc/sema/session/ctx" { Sema_ctx }
@@ -142,7 +140,7 @@ impl Sema_ctx
         // writes in another block, and the type would then hold two of that name.
         r.require_methods_in_block(impl_node, trait_node, decl, full, impls)
         r.refuse_foreign_methods(impl_node, decl, full)
-        r.copy_default_bodies(impl_node, decl, full, target_vis)
+        r.copy_default_bodies(impl_node, trait_node, decl, target_vis)
         for m in impl_node.children
             if m.kind_id != .k_decl_fn
                 continue
@@ -215,15 +213,10 @@ impl Sema_ctx
     // Caution: **Replace the declaration's type parameters with the impl's actual arguments.**
     // The `T` inside the body copied into `impl<|S, T, U|> Conversion<|S, T, U|>: Chain<|U|>` means
     // `U`.
-    priv fn copy_default_bodies(r: Self$@, impl_node: Ast_node$@, decl: Ast_node$@, spelled: U8[],
-        target_vis: sema_type_scope.Visibility)
-        // **If there is nothing to copy, touch nothing.** The binding below adds names to the type
-        // table, making a type variable (`V`) resolvable as a type, and `V!Ds_error` reaches C.
-        if !has_default_body(decl)
-            return
-        saved: = r.generics.args.len
-        defer r.generics.args.truncate(saved)
-        r.bind_trait_decl_params(decl, spelled)
+    priv fn copy_default_bodies(r: Self$@, impl_node: Ast_node$@, trait_node: Ast_node$@,
+        decl: Ast_node$@, target_vis: sema_type_scope.Visibility)
+        params: = decl.find_child(.k_type_gen_params)
+        args: = trait_node.find_child(.k_type_args)
         for m in decl.children
             // Only a method with a body is copied.
             if m.kind_id != .k_decl_fn || m.find_child(.k_stmt_block) == null
@@ -232,28 +225,74 @@ impl Sema_ctx
             if name.len == 0 || impl_defines(impl_node, name)
                 continue
             fresh: = m.clone()
-            fresh.replace_type_vars(r)
+            r.keep_written_positions(fresh)
+            if params != null && args != null
+                r.write_impl_args(fresh, params, args)
+                // Each type's text is written again from its parts, which now hold the arguments.
+                fresh.replace_type_vars(r)
             adopt_as_impl_method(fresh, impl_node, target_vis)
             impl_node.children.push(fresh)
 
-    priv fn bind_trait_decl_params(r: Self$@, decl: Ast_node$@, spelled: U8[]) //<
-        //< Binds the declaration's type parameters to the names of the arguments the impl wrote
-        //< Caution: **Do not resolve it as a type** (the reason is at copy_defaults_from_trait).
-        args_str: = spelled.generic_args_str()
-        if args_str.len == 0
-            return
-        r.bind_generic_args(decl.find_child(.k_type_gen_params), r.type_ids_of_text(args_str), false)
+    priv fn keep_written_positions(r: Self$@, node: Ast_node$@) //<
+        //< Records where each node of a copied default body is written
+        //< That is in the trait, or in the impl's header for a type argument written into the
+        //< copy. adopt_as_impl_method moves the copy to its impl. A warning is still reported
+        //< here (`default_origin` in `../session/state.kspl`). **The node's names are read in
+        //< this place's file too** (names_file in `../session/ctx.kspl`): the trait's file and the
+        //< impl's hold other imports and other `priv` names.
+        r.diags.default_origin.set(Sz::node, node.loc)
+        for child in node.children
+            r.keep_written_positions(child)
+
+    priv fn write_impl_args(r: Self$@, node: Ast_node$@, params: Ast_node$@, args: Ast_node$@) //<
+        //< Writes the impl's type arguments where a copied default body names the trait's parameters
+        //< **The argument's tree is copied in, as the impl wrote it**, so any type can stand there
+        //< (`Local[]`, `Box<|Local|>?`), and one of the impl's own parameters is bound with its
+        //< instance. No type is resolved this early: the reason is at copy_defaults_from_trait.
+        //< Each copy is read in the impl's file (keep_written_positions above), while the text
+        //< around it is read in the trait's.
+        for i in Range.asc(node.children.len)
+            child: = node.children.get(i)
+            k: = child.kind_id
+            arg: = written_arg(params, args, child) catch
+                r.write_impl_args(child, params, args)
+                continue
+            $made: = arg
+            if k == .k_expr_path || k == .k_type_path
+                // `T.make()` or a `const` parameter's value.
+                made = value_form(arg)
+            made = made.clone()
+            r.keep_written_positions(made)
+            if k == .k_type_atom
+                // `T@`: the argument stands as a type in parentheses does, under the postfix.
+                child.children = base_ast.new_ast_node_list()
+                child.add_child(made)
+            else
+                node.set_child(i, made)
+            // `T.make`: the member is one of the type the impl's file names.
+            if i == 0 && node.kind_id == .k_expr_postfix
+                r.diags.default_origin.set(Sz::node, arg.loc)
 
 priv fn adopt_as_impl_method(fresh: Ast_node$@, impl_node: Ast_node@,
     target_vis: sema_type_scope.Visibility) //<
         //< Makes the copied body into that impl's method
-        //< **Replace the position too, with the impl's**: that is where a mistake gets fixed, and
-        //< visibility follows the `loc`'s file (get_defined_in in `../type/scope.kspl`).
+        //< **Replace the position too, with the impl's**: an error can hold for that implementing
+        //< type alone, and visibility follows the `loc`'s file (get_defined_in in
+        //< `../type/scope.kspl`). A warning is about the body's own text, and is reported in the
+        //< trait (keep_written_positions above).
         //< Caution: **Do not make it more visible than the implementing type** (check_one_member in
         //< `access.kspl`).
     fresh.retarget_loc(impl_node.loc)
     set_visibility_keyword(fresh,
         sema_decl_access.narrower_vis(target_vis, fresh.get_visibility()))
+    // **Its parameter defaults are the trait's**, not ones the impl wrote, which are refused.
+    params: = fresh.get_fn_params()
+    if params == null
+        return
+    for p in base_ast_ext.Param_cursor(params, false)
+        d: = p.get_param_default()
+        if d != null
+            d.ival = INHERITED_DEFAULT
 
 priv fn set_visibility_keyword(decl: Ast_node$@, vis: sema_type_scope.Visibility) //<
     //< Sets the declaration's visibility keyword to exactly one
@@ -305,13 +344,6 @@ fn declares_methods(decl: Ast_node@): Bool //<
             return true
     return false
 
-priv fn has_default_body(decl: Ast_node@): Bool //<
-    //< Whether that trait declares any method with a default body
-    for m in decl.children
-        if m.kind_id == .k_decl_fn && m.find_child(.k_stmt_block) != null
-            return true
-    return false
-
 priv fn impl_defines(impl_node: Ast_node$@, name: U8[]): Bool //<
     //< Whether that impl writes a method of that name itself
     return method_named(impl_node, name).is_some()
@@ -355,3 +387,32 @@ priv fn copy_param_defaults(req_m: Ast_node$@, impl_m: Ast_node$@) //<
         // (`../../parse/normalize.kspl`).
         ip.add_child(Ast_node(.k_literal, "=", ip.loc))
         ip.add_child(fresh)
+
+priv fn written_arg(params: Ast_node$@, args: Ast_node$@, at: Ast_node$@): Ast_node$@? //<
+    //< The argument `args` writes for the type parameter of `params` that `at` names alone
+    //< None where `at` is not a type's or a value's name, or names no parameter.
+    k: = at.kind_id
+    if k != .k_type_expr && k != .k_type_atom && k != .k_expr_path && k != .k_type_path
+        return .none
+    name: = at.bare_written_name()
+    if name.len == 0
+        return .none
+    $pos: Sz = 0
+    for arg in args.children
+        if arg.kind_id == .k_literal || arg.kind_id == .k_keyword || arg.kind_id == .k_empty
+            continue
+        p: = params.gen_param_at(pos)
+        if p != null && p.gen_param_name().equals(name)
+            return .some(arg)
+        pos += 1
+    return .none
+
+priv fn value_form(arg: Ast_node$@): Ast_node$@ //<
+    //< What stands for a type argument where an expression names it: a value, or a type's name
+    //< A type that is more than a name (`Local@`, `fn(x: I32): I32`) stands as it is. No
+    //< expression can begin with one, and the report names it as the impl wrote it
+    //< (refuse_type_as_value in `../body/expr.kspl`).
+    if arg.kind_id != .k_type_expr || arg.children.len != 1 ||
+        arg.get_child(0).children.len != 1
+        return arg
+    return arg.get_child(0).get_child(0)

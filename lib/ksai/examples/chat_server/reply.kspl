@@ -10,7 +10,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv const OPEN_TAG: U8[] = "<tool_call>"
 priv const CLOSE_TAG: U8[] = "</tool_call>"
@@ -43,7 +43,7 @@ priv struct Reading //< one reading of a generated text, and what it has found s
     done: Bool
     kind: Kind
     tools: List<|json.Value|>@
-    raw: Str_builder$@ //< the content, its ends not trimmed yet
+    raw: Str$@ //< the content, its ends not trimmed yet
     calls: List<|Call_out|>
     arena: Arena$@
 
@@ -66,7 +66,7 @@ fn read_text( //< what a generated text says so far: its thinking, its content a
     arena: Arena$@,
 ): Parsed
     t: = text if done else text.utf8_complete()
-    defer $raw: = Str_builder()
+    defer $raw: = Str()
     $r: = Reading::{ .t = t, .done = done, .kind = kind, .tools = tools, .raw = raw@,
         .calls = List<|Call_out|>(arena), .arena = arena }
     $at: Sz = 0
@@ -156,7 +156,7 @@ impl Reading
         case .instruct_2507
             return r.arena.dup_str(raw_value(body, from, closed))
         case .qwen35
-            defer $out: = Str_builder()
+            defer $out: = Str()
             write_parameters(out@, body, from, closed, tagged, parameters_of(r.tools, name),
                 r.arena)
             return r.arena.dup_str(out.slice())
@@ -275,7 +275,7 @@ priv fn raw_value(body: U8[], from: Sz, closed: Bool): U8[] //<
 // Qwen3.5's parameters, written as a JSON object as they arrive
 // ==========================================
 
-priv fn write_parameters(out: Str_builder$@, body: U8[], from: Sz, closed: Bool, tagged: Bool,
+priv fn write_parameters(out: Str$@, body: U8[], from: Sz, closed: Bool, tagged: Bool,
     params: json.Value, arena: Arena$@) //<
         //< Writes `{"key":value,...}` for the `<parameter=key>` blocks after `from`
         //< A text parameter's value grows as it arrives; any other waits for its closing tag.
@@ -337,7 +337,7 @@ priv fn write_parameters(out: Str_builder$@, body: U8[], from: Sz, closed: Bool,
     if tagged
         out.c('}')
 
-priv fn write_key(out: Str_builder$@, key: U8[], nth: Sz) //< `"key":`, after a comma but the first
+priv fn write_key(out: Str$@, key: U8[], nth: Sz) //< `"key":`, after a comma but the first
     if nth > 1
         out.c(',')
     out.c('"').escape_and_append(key).s("\":")
@@ -385,7 +385,7 @@ priv fn read_call(body: U8[], arena: Arena$@): Call_out? //<
         if text: = found.as_str()
             args = text
         else if is_object(found)
-            defer $b: = Str_builder()
+            defer $b: = Str()
             found.dump(b@)
             args = arena.dup_str(b.slice())
         else
@@ -465,7 +465,7 @@ priv fn usage_of(builder: Json_builder$@, use: Usage): json.Value //< the token 
         .set("prompt_tokens_details", details).build()
 
 fn dumped(value: json.Value, arena: Arena$@): U8[] //< a value as JSON text
-    defer $out: = Str_builder()
+    defer $out: = Str()
     value.dump(out@)
     return arena.dup_str(out.slice())
 

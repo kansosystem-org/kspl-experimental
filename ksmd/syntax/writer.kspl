@@ -25,11 +25,11 @@ import "ksmd/syntax/settings" { write_settings }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv const MIN_FENCE: Sz = 3
 
-fn write(doc: Document@, out: Str_builder$@) //< appends the whole source to `out`
+fn write(doc: Document@, out: Str$@) //< appends the whole source to `out`
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
     out.s(HEADER).c('\n')
@@ -37,7 +37,7 @@ fn write(doc: Document@, out: Str_builder$@) //< appends the whole source to `ou
         out.c('\n')
         write_block(doc, doc.blocks.get(i), at@, out)
 
-fn write_one(doc: Document@, block: Sz, out: Str_builder$@) //<
+fn write_one(doc: Document@, block: Sz, out: Str$@) //<
     //< Appends a source that holds one block of the document alone, as a copy of it carries it
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
@@ -52,7 +52,7 @@ fn blocks_size(doc: Document@, blocks: List<|Block|>@, from: Sz, to: Sz): Sz //<
     //< Each block is written alone into one buffer used again, so the whole source is never held.
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     $bytes: Sz = 0
     for i in Range(from, to, 1)
         out.clear()
@@ -60,7 +60,7 @@ fn blocks_size(doc: Document@, blocks: List<|Block|>@, from: Sz, to: Sz): Sz //<
         bytes += 1 + out.slice().len
     return bytes
 
-priv fn write_block(doc: Document@, block: Block, at: Positions@, out: Str_builder$@)
+priv fn write_block(doc: Document@, block: Block, at: Positions@, out: Str$@)
     // A paragraph's or a heading's alignment and note stand on a line of braces before it.
     if block.align != .none || block.note.len > 0
         $aligned: = plain_look()
@@ -136,9 +136,8 @@ priv fn write_block(doc: Document@, block: Block, at: Positions@, out: Str_build
         write_drawings(image.drawings@, out)
         out.s(":::\n")
 
-priv fn write_table(doc: Document@, table: Table@, invisible: Bool, at: Positions@,
-    out: Str_builder$@) //<
-        //< The opening line, the header and each data row, then the closing line
+priv fn write_table(doc: Document@, table: Table@, invisible: Bool, at: Positions@, out: Str$@) //<
+    //< The opening line, the header and each data row, then the closing line
     out.s(":::table")
     write_attribute("name", table.name, out)
     if table.caption.len > 0
@@ -204,7 +203,7 @@ priv fn write_table(doc: Document@, table: Table@, invisible: Bool, at: Position
         out.c('\n')
     out.s(":::\n")
 
-priv fn write_cell(doc: Document@, table: Table@, cell: Cell, at: Positions@, out: Str_builder$@) //<
+priv fn write_cell(doc: Document@, table: Table@, cell: Cell, at: Positions@, out: Str$@) //<
     //< One cell, its look in braces, and the '|' after it
     //< A formula's references take the coordinates they have now.
     out.c(' ')
@@ -226,7 +225,7 @@ priv fn write_cell(doc: Document@, table: Table@, cell: Cell, at: Positions@, ou
         out.c(' ')
     out.c('|')
 
-priv fn write_heights(table: Table@, out: Str_builder$@) //<
+priv fn write_heights(table: Table@, out: Str$@) //<
     //< ` heights="..."`, one entry per data row, where a row that stands has a height
     //< An entry whose row is gone stays in the model for an undo, and is left out here.
     if table.heights.len == 0
@@ -250,7 +249,7 @@ priv fn write_heights(table: Table@, out: Str_builder$@) //<
             out.s("\{by_id[table.rows[r]]\}")
     out.c('"')
 
-priv fn write_filter(table: Table@, out: Str_builder$@) //<
+priv fn write_filter(table: Table@, out: Str$@) //<
     //< ` filter="..."`, one entry per column, where a column that stands narrows the rows
     $any: = false
     for f in table.filters
@@ -279,11 +278,11 @@ priv fn has_format(table: Table@): Bool //< whether any column has a number form
             return true
     return false
 
-priv fn write_attribute(name: U8[], value: U8[], out: Str_builder$@) //< ` name="value"`
+priv fn write_attribute(name: U8[], value: U8[], out: Str$@) //< ` name="value"`
     out.c(' ').s(name).s("=\"").escape_and_append(value).c('"')
 
 priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, paragraph: Bool, lead: U8[],
-    out: Str_builder$@) //<
+    out: Str$@) //<
         //< In a paragraph, a text that starts a line is kept from reading as a block marker
         //< `lead` starts each line after a hard break: a quote's `> `.
         //< What the format cannot hold at a line's edge is left out: spaces and tabs at either end
@@ -329,7 +328,7 @@ fn is_blank_end(node: Inline): Bool //<
     return node.kind == .hard_break ||
         node.kind == .text && node.text.trim_spaces().len == 0
 
-priv fn write_text(text: U8[], line_start: Bool, after_brackets: Bool, out: Str_builder$@) //<
+priv fn write_text(text: U8[], line_start: Bool, after_brackets: Bool, out: Str$@) //<
     //< Literal text, with the escapes that keep it literal
     //< A `{` straight after brackets would read as their colour, so it is escaped there.
     $from: Sz = 0
@@ -350,7 +349,7 @@ priv fn write_text(text: U8[], line_start: Bool, after_brackets: Bool, out: Str_
             out.c('\\')
         out.c(c)
 
-fn write_code(code: U8[], out: Str_builder$@) //<
+fn write_code(code: U8[], out: Str$@) //<
     //< The shortest run of backticks that no run inside the code equals. A space pads each end
     //< where the code starts or ends with a backtick, or has a space at both ends.
     //< Markdown reads a code span by the same rule, so a copy as Markdown writes one here too.

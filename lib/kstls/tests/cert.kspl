@@ -7,7 +7,7 @@ import "kstls/tls"
 import "kstls/tls_server"
 import "std/fs"
 import "std/mem" { dealloc, Arena }
-import "std/str" { Str_builder } // and `to_cstr`
+import "std/str" { Str } // and `to_cstr`
 import "std/sys"
 
 extern struct EVP_PKEY_CTX
@@ -83,7 +83,7 @@ fn new_cert( //< a certificate for `key`, which the caller frees
         && X509_set_issuer_name(x, issuer_name) == 1
     assert(ok, "the certificate should be filled in")
     if ip.len > 0
-        defer $text: = Str_builder()
+        defer $text: = Str()
         text.s("IP:").s(ip)
         value: U8$@ = text.slice().to_cstr() catch
             panic("an address holds no NUL")
@@ -146,23 +146,32 @@ pub struct Test_cert //< a fresh key and a certificate for it, as the PEM text a
 
 priv const CA_BASE: U8[] = "out/tmp/kstls_tls" //< where a test CA's certificate is written
 
-pub struct Test_ca //< a CA made for one test, which the client trusts while it stands
+pub struct Test_ca //< a CA made for one test, whose certificate stands in a file while it stands
     key: tls.EVP_PKEY$@
     cert: tls.X509$@
     dir: U8[] //< the scratch folder holding `file`
-    file: U8[] //< the certificate as PEM, which `SSL_CERT_FILE` names
+    pub file: U8[] //< the certificate as PEM, which `SSL_CERT_FILE` names where it is `trusted`
 
 impl Test_ca
     pub fn trusted(arena: Arena$@): Test_ca //<
         //< Makes a CA and points OpenSSL's default store at it alone (`SSL_CERT_FILE`)
         //< **The client is left as it is.** It loads the default store, where OpenSSL reads the
         //< variable. So the test runs the code a program runs.
-        key: = new_key()
-        cert: =
-            new_cert(key, "Kanso test CA", "", 1, null, key,
-            Validity::{ .from_day = -1, .to_day = 30 })
+        ca: = Test_ca.made(arena)
+        sys.set_env("SSL_CERT_FILE", ca.file) catch panic("SSL_CERT_FILE should be set")
+        return ca
+
+    pub fn made(arena: Arena$@): Test_ca //<
+        //< Makes a CA and writes its certificate to `file`, leaving the default store as it is
+        //< For a client handed the file itself, such as the CA file `Tls_stream.connect` takes.
         dir: = fs.mkdir_unique(CA_BASE, "ca_", arena)
             catch panic("the scratch folder should be made")
+        // **Each CA has a name of its own**: OpenSSL looks an issuer up by its name, so two CAs of
+        // one name would stand for each other in the lookup.
+        name: = arena.text().s("Kanso test CA ").s(sys.get_file_name(dir)).take()
+        key: = new_key()
+        cert: =
+            new_cert(key, name, "", 1, null, key, Validity::{ .from_day = -1, .to_day = 30 })
         file: = fs.join(dir, "ca.pem", arena)
         c_file: U8$@ = file.to_cstr() catch
             panic("the scratch path holds no NUL")
@@ -170,7 +179,6 @@ impl Test_ca
         dealloc(Void$@::c_file)
         assert(bio != null && PEM_write_bio_X509(bio, cert) == 1, "the CA should be written out")
         tls.BIO_free(bio)
-        sys.set_env("SSL_CERT_FILE", file) catch panic("SSL_CERT_FILE should be set")
         return ::{ .key = key, .cert = cert, .dir = dir, .file = file }
 
     fn issue_ctx(r: Self, host: U8[]): tls.SSL_CTX$@ //<
@@ -221,6 +229,7 @@ impl Test_ca
         return arena.text().s(cert_pem(r.cert, arena)).s(cert_pem(x, arena)).take()
 
     pub fn free(r: Self) //< stops trusting it, and removes what it wrote
+        //< `SSL_CERT_FILE` is unset whether `trusted` or `made` made it: no test sets it otherwise.
         sys.unset_env("SSL_CERT_FILE") catch panic("SSL_CERT_FILE could not be unset")
         fs.remove_path(r.file) catch {}
         fs.remove_path(r.dir) catch {}

@@ -94,7 +94,7 @@ priv enum Kind
 priv struct Box //< one open paragraph, table cell or note, and the text it has so far
     kind: Kind
     depth: Sz //< the reader's depth at its start tag; its end comes back one below it
-    text: str.Arena_text$@
+    text: str.Arena_str$@
     len: Sz //< the bytes written into `text` so far
     after: List<|U8[]|> //< a paragraph's text boxes' lines, which follow its own line
     style: U8[] //< a paragraph's style id
@@ -107,6 +107,9 @@ priv struct Box //< one open paragraph, table cell or note, and the text it has 
 
 priv struct Table //< one open table: the row being read, and the cells merged downwards
     depth: Sz
+    row_depth: Sz //< the reader's depth at the current row's start tag
+        //< **A row can stand inside a content control** (`sdt`), as a form's repeating rows do,
+        //< so it is not always one level below its table.
     cells: List<|U8[]|> //< the current row's cells so far
     col: Sz //< the grid column the next cell starts at
     above: List<|U8[]|> //< each grid column's text where its last cell started, to `MAX_GRID`
@@ -203,11 +206,12 @@ priv fn start_of(doc: Doc$@, reader: xml.Reader$@, walk: Walk$@): Void!U8[] //< 
         walk.run_style = ""
     else if name.equals("tbl")
         tb: = a
-            .create(Table::{ .depth = reader.depth(), .cells = List<|U8[]|>(a), .col = 0,
-            .above = List<|U8[]|>(a) })
+            .create(Table::{ .depth = reader.depth(), .row_depth = 0,
+            .cells = List<|U8[]|>(a), .col = 0, .above = List<|U8[]|>(a) })
         walk.tables.push(tb)
     else if name.equals("tr") && walk.tables.len > 0
         tb: = walk.tables.get(walk.tables.len - 1)
+        tb.row_depth = reader.depth()
         tb.cells = List<|U8[]|>(a)
         tb.col = 0
     else if name.equals("tc") && walk.tables.len > 0
@@ -367,7 +371,7 @@ priv fn end_of(doc: Doc$@, reader: xml.Reader@, walk: Walk$@): Void!U8[] //< tak
         return
     if walk.tables.len > 0
         tb: = walk.tables.get(walk.tables.len - 1)
-        if reader.name.equals("tr") && reader.depth() == tb.depth
+        if reader.name.equals("tr") && reader.depth() + 1 == tb.row_depth
             row_done(doc, tb, walk)!
             return
         if reader.name.equals("tbl") && reader.depth() + 1 == tb.depth

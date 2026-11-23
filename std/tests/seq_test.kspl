@@ -606,6 +606,37 @@ fn test_map_odd_cap() //< a capacity that is not a power of two
         m.set(k, k * 10)
     assert(m.len == 3 && m.get(3).unwrap_or(-1) == 30, "every key put in is reachable")
     verdict.pass("A count that is not a power of two is rounded up, and the map works.")
+fn test_map_cap_of_one() //< a map asked for one slot
+    verdict.start("[Map] new_with_cap(1) through set, remove and set again test...")
+    // Caution: **Run this under the address sanitizer** (`make test-sanitize`). One slot held one
+    // pair with no empty slot left, and so did the two slots it grew to. Dropping the tombstones
+    // then looked for an empty slot past the table's end, which only the sanitizer reports.
+    defer $m: = Map<|I32, I32|>.new_with_cap(1, null)
+    assert(m.cap == 2, "one slot is rounded up to two, so one pair leaves a slot empty")
+    for round in Range.asc(8)
+        first: = I32::round * 2
+        m.set(first, 1)
+        m.set(first + 1, 2)
+        assert(m.len == 2, "both pairs are held")
+        assert(m.remove(first) && m.remove(first + 1) && m.len == 0, "both pairs are removed")
+    m.set(100, 3)
+    assert(m.len == 1 && m.get(100).unwrap_or(-1) == 3, "a pair set after the removals is found")
+    verdict.pass("A map asked for one slot keeps one empty, so its tombstones are dropped safely.")
+fn test_no_room_asked_for() //< `new_with_cap(0, …)` on the heap
+    verdict.start("[ds] new_with_cap(0) allocates nothing test...")
+    // Caution: **Check the pointer, not `mem.heap_used_bytes()`.** A block of 0 bytes adds
+    // nothing to that count, so the leak showed only under the sanitizer (`make test-sanitize`).
+    $xs: = List<|I32|>.new_with_cap(0, null)
+    assert(xs.ptr == null && xs.cap == 0, "a list with no room holds no block")
+    xs.push(7)
+    assert(xs.len == 1 && xs.get(0) == 7, "it grows from nothing as `List.new` does")
+    xs.free()
+    $m: = Map<|I32, I32|>.new_with_cap(0, null)
+    assert(m.entries == null && m.cap == 0, "a map with no slot holds no block")
+    m.set(1, 10)
+    assert(m.len == 1 && m.get(1).unwrap_or(-1) == 10, "it grows from nothing as `Map.new` does")
+    m.free()
+    verdict.pass("A list or a map asked for no room allocates nothing, so nothing is left behind.")
 fn test_list_remove_at() //< the counterpart of `List.insert`
     verdict.start("[ds] List.remove_at test...")
     defer arena: = Arena(8 * 1024)

@@ -184,7 +184,7 @@ SUMMARY_PATTERNS = (
     # It also catches `std_ds_Map_entry_…`, which the summary tells apart by its fields.
     ("kspl_map_summary", r"^std_ds_Map_[A-Za-z0-9_]+$",
      (("entries", "cap", "len"), ("key", "value", "is_active"))),
-    ("kspl_builder_summary", r"^std_str_(Str_builder|Arena_text)$", (("ptr", "len", "cap"),)),
+    ("kspl_builder_summary", r"^std_str_(Str|Arena_str)$", (("ptr", "len", "cap"),)),
     ("kspl_ast_node_summary", r"^ksplc_base_ast_Ast_node$", (("kind_id", "text"),)),
 )
 
@@ -486,7 +486,7 @@ def kspl_plain_enum_summary(valobj, internal_dict):
 # ------------------------------------------
 # A trait's value is `{void *obj; const struct kspl_vtable_X *vtable;}` (`emit_trait_decl` in
 # `ksplc/gen/c/types.kspl`). The implementing type is read from the symbol the vtable pointer
-# points at (`kspl_vtable_impl_std_str_Str_builder_Writer`).
+# points at (`kspl_vtable_impl_std_str_Str_Writer`).
 def is_kspl_trait(sbtype, internal_dict):
     t = sbtype.GetCanonicalType()
     return t.GetTypeClass() == lldb.eTypeClassStruct and _field_names(t) == ["obj", "vtable"]
@@ -723,7 +723,7 @@ DEMANGLE_CASES = [
     ("Option_std_ds_Map_entry_Slice_U8_Const_I32_Ptr", "Map_entry<|U8[], I32|>@?"),
     ("Result_I32_tools_tests_lldb_sample_Made_err", "I32!Made_err"),
     ("tools_tests_lldb_sample_Shape", "Shape"),
-    ("std_str_Str_builder", "Str_builder"),
+    ("std_str_Str", "Str"),
     ("Slice_U8", "U8[]"),
     ("std_ds_Hashable_Slice_U8_Const", "Hashable<|U8[]|>"),
 ]
@@ -741,7 +741,7 @@ SAMPLE_STOP = "kspl_priv_tools_tests_lldb_sample_stop_here"
 LLDB_WANTS = [
     ("list", ("(List<|I32|>) len=2",)),
     ("map", ("(Map<|U8[], I32|>) entries=1",)),
-    ("builder", ('(Str_builder) "built"',)),
+    ("builder", ('(Str) "built"',)),
     ("text", ('(U8[]) "hello"',)),
     ("_shape", ("(Shape) .square(side: 2)",)),
     ("_int", ("(Shape) .int(v: 7)",)),
@@ -833,7 +833,7 @@ def check_c(rep, c_text):
     rep.check("a trait value is obj and vtable", structs.get("Writer", ([],))[0] ==
               ["obj", "vtable"], repr(structs.get("Writer")))
     rep.check("a vtable's symbol is kspl_vtable_impl_<type>_<trait>",
-              "kspl_vtable_impl_std_str_Str_builder_Writer" in c_text)
+              "kspl_vtable_impl_std_str_Str_Writer" in c_text)
     for stop in PANIC_STOPS:
         rep.check("the panic stop %s is a function in the C" % stop,
                   re.search(r'\bvoid %s\(' % stop, c_text) is not None)

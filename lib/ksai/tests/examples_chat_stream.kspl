@@ -14,7 +14,7 @@ import "std/http_body"
 import "std/json"
 import "std/mem" { Arena }
 import "std/net"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/strnum" // `to_count`
 import "std/verdict"
@@ -22,21 +22,20 @@ import "std/verdict"
 priv const ASK_WAIT_MS: I32 = 60000 //< how long one answer may take, under a sanitizer too
 
 struct Joined //< a stream's pieces put together, as a client joins them
-    reasoning: Str_builder
-    content: Str_builder
+    reasoning: Str
+    content: Str
     ids: List<|U8[]|> //< each call's id, by its index
     names: List<|U8[]|>
-    arguments: List<|Str_builder|>
+    arguments: List<|Str|>
     finish: U8[] //< the last finish reason; empty while none came
     usage: json.Value //< the counts a last piece carried; null where none did
     fault: U8[] //< the first piece that broke the protocol; empty where none did
 
 impl Joined
     fn new(arena: Arena$@): Joined //< nothing joined yet
-        return Joined::{ .reasoning = Str_builder(), .content = Str_builder(),
-            .ids = List<|U8[]|>(arena), .names = List<|U8[]|>(arena),
-            .arguments = List<|Str_builder|>(arena), .finish = "", .usage = .null_val,
-            .fault = "" }
+        return Joined::{ .reasoning = Str(), .content = Str(), .ids = List<|U8[]|>(arena),
+            .names = List<|U8[]|>(arena), .arguments = List<|Str|>(arena), .finish = "",
+            .usage = .null_val, .fault = "" }
 
     fn add(r: Self$@, chunk: U8[], arena: Arena$@) //< joins one piece's JSON text
         doc: = json.parse(chunk, arena) catch
@@ -60,7 +59,7 @@ impl Joined
                 r.ids.push(c.get("id").as_str().unwrap_or(""))
                 r.names
                     .push(c.get("function").get("name").as_str().unwrap_or(""))
-                r.arguments.push(Str_builder())
+                r.arguments.push(Str())
             else if at < 0 || at > r.names.len || c.find("id").is_some()
                 r.fault = arena.text().s("a piece names call \{at\} out of turn: ").s(chunk).take()
                 return
@@ -199,7 +198,7 @@ priv fn asked_stream(port: I32, body: U8[], arena: Arena$@): Streamed //<
     out.typed =
         r.headers.find("Transfer-Encoding").unwrap_or("").equals("chunked") &&
         r.headers.find("Content-Type").unwrap_or("").equals("text/event-stream")
-    defer $events: = Str_builder()
+    defer $events: = Str()
     for
         piece: = r.body.next(ASK_WAIT_MS) catch
             out.why = "the body broke off"

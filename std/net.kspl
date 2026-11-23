@@ -133,6 +133,22 @@ impl Tcp_listener
         //< makes it non-blocking, for use with `std/reactor`
         handle_set_nonblocking(r.handle)!
 
+// ============================ Byte_stream ============================
+pub trait Byte_stream //< a connection whose bytes are read and written, each with a wait
+    //< `Tcp_stream` is one. So is a stream with TLS on top, which a library outside `std` gives.
+    //< `std/http` and `std/http_body` read and write through it, so HTTP works over either.
+    fn read_for( //< receives at most `buf.len` bytes, waiting at most `timeout_ms` for the first
+        //< 0 means the peer ended the stream. Past the wait it fails with `timed_out`.
+        r: Self,
+        buf: U8$[], //< where the bytes go; at least one byte long
+        timeout_ms: I32, //< how long to wait for something to read
+    ): Sz!Net_error
+    fn write_all_for( //< sends every byte, all within `timeout_ms`, or fails with `timed_out`
+        r: Self,
+        buf: U8[], //< the bytes sent
+        timeout_ms: I32, //< how long the whole send can take
+    ): Void!Net_error
+
 // ============================ Tcp_stream ============================
 pub struct Tcp_stream //< one connection that can be written to and read from
     priv handle: I64
@@ -287,22 +303,6 @@ impl Tcp_stream
                 throw .io_failed // no progress is possible (the peer closed)
             sent += n
 
-    pub fn write_all_for( //< sends every byte as `write_all` does, all within `timeout_ms`
-        //< For a peer that can stop reading: once the OS's buffer is full, `write_all` waits for it
-        //< for good. Past the time it throws `timed_out`, and how much was sent is not known.
-        //< Caution: **The stream is blocking when it returns**, as `connect` and `accept` make it.
-        //< Do not use it on a stream that `std/reactor` drives.
-        r: Self@,
-        buf: U8[], //< the bytes sent
-        timeout_ms: I32, //< how long the whole send can take; a non-positive time is past at once
-    ): Void!Net_error
-        deadline: = kspl_mono_us() + I64::timeout_ms * 1000I64
-        r.set_nonblocking()!
-        r.send_until(buf, deadline) catch e
-            r.set_blocking() catch {}
-            throw e
-        r.set_blocking()!
-
     priv fn send_until(r: Self@, buf: U8[], deadline: I64): Void!Net_error //<
         //< Sends every byte of a non-blocking stream, waiting for room until the deadline
         $sent: Sz = 0
@@ -348,17 +348,6 @@ impl Tcp_stream
             throw .io_failed
         return transferred(kspl_tcp_recv(r.handle, buf.ptr, buf.len))
 
-    pub fn read_for( //< receives as `read` does, waiting at most `timeout_ms` for the first byte
-        //< For a blocking stream whose peer can go quiet: `read` would wait for it for good.
-        r: Self@,
-        buf: U8$[], //< where the bytes go
-        timeout_ms: I32, //< how long to wait for something to read; `timed_out` past it
-    ): Sz!Net_error
-        if buf.len == 0
-            throw .io_failed // as `read` refuses it, before any wait
-        r.wait_until_ready(POLL_READABLE, timeout_ms)!
-        return r.read(buf)!
-
     pub fn peer( //< the address of the peer
         //< For a stream that `accept` returned, it is the client; for one that connected, the
         //< server.
@@ -398,6 +387,34 @@ impl Tcp_stream
         //< Caution: **Do not use it instead of closing** (only `free` releases the memory).
         if kspl_net_shutdown_write(r.handle) != 0
             throw .io_failed // the peer is already gone, or the socket is already closed
+
+impl Tcp_stream: Byte_stream //< a blocking stream with a wait on each read and on a whole send
+    pub fn read_for( //< receives as `read` does, waiting at most `timeout_ms` for the first byte
+        //< For a blocking stream whose peer can go quiet: `read` would wait for it for good.
+        r: Self@,
+        buf: U8$[], //< where the bytes go
+        timeout_ms: I32, //< how long to wait for something to read; `timed_out` past it
+    ): Sz!Net_error
+        if buf.len == 0
+            throw .io_failed // as `read` refuses it, before any wait
+        r.wait_until_ready(POLL_READABLE, timeout_ms)!
+        return r.read(buf)!
+
+    pub fn write_all_for( //< sends every byte as `write_all` does, all within `timeout_ms`
+        //< For a peer that can stop reading: once the OS's buffer is full, `write_all` waits for it
+        //< for good. Past the time it throws `timed_out`, and how much was sent is not known.
+        //< Caution: **The stream is blocking when it returns**, as `connect` and `accept` make it.
+        //< Do not use it on a stream that `std/reactor` drives.
+        r: Self@,
+        buf: U8[], //< the bytes sent
+        timeout_ms: I32, //< how long the whole send can take; a non-positive time is past at once
+    ): Void!Net_error
+        deadline: = kspl_mono_us() + I64::timeout_ms * 1000I64
+        r.set_nonblocking()!
+        r.send_until(buf, deadline) catch e
+            r.set_blocking() catch {}
+            throw e
+        r.set_blocking()!
 
 impl Tcp_listener: Manual_free //< it owns its resources and frees them with `free()`
     pub fn free(r: Self$@) //< closes the listener and frees it

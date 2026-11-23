@@ -19,9 +19,15 @@ function ksmdLocal() {
       "If it still does not answer, start ksmd on the folder again, then open the URL it shows." :
     "The local server cannot be reached. Start ksmd on the folder again, then open the URL it shows.");
 
-  // What a refusal means for a file, by its status.
-  function reason(status) {
+  // What a refusal means for a file, by its status. `dots` says that the request refuses a name
+  // starting with a dot too: a write and a listing do, a read does not ("`/api/` does not go
+  // through static serving" in `kssrv/docs/DESIGN-server.md`).
+  function reason(status, dots = false) {
     if (status === 401) return "The page has no valid token. Open the URL the local server showed.";
+    if (status === 403 && dots) {
+      return "The local server refused the path: a link stands along it, or a name in it starts " +
+        "with a dot. The server writes no such name, so choose another.";
+    }
     if (status === 403) return "The local server refused the path: a link stands along it.";
     if (status === 404) return "No file stands there.";
     if (status === 413) return "The file is too large for the local server to take.";
@@ -117,7 +123,7 @@ function ksmdLocal() {
     async list(path) {
       try {
         const got = await send(ask("list", path));
-        if (!got.ok) return { status: got.status, why: reason(got.status) };
+        if (!got.ok) return { status: got.status, why: reason(got.status, true) };
         const said = await got.json();
         return { status: 200, folders: said.folders, files: said.files, more: said.more === true };
       } catch (e) {
@@ -132,7 +138,9 @@ function ksmdLocal() {
       try {
         const got = await send(ask("file", path), { method: "PUT", body: bytes,
           headers: { "X-Kanso-If-Content": expected === null ? "missing" : expected } });
-        if (got.status !== 409) return { status: got.status, why: got.ok ? "" : reason(got.status) };
+        if (got.status !== 409) {
+          return { status: got.status, why: got.ok ? "" : reason(got.status, true) };
+        }
         let said = null;
         try {
           said = await got.json();

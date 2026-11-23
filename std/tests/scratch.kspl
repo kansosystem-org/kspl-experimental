@@ -7,6 +7,7 @@ import "std/ds"
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
+import "std/str"
 import "std/subproc"
 import "std/sys"
 
@@ -34,6 +35,21 @@ pub fn set_mode(path: U8[], mode: U8[], arena: Arena$@): Bool //<
         subproc.run_capture(U8[][]::{ "/bin/chmod", mode, path }, "", TOOL_WAIT_MS, 4096, arena)
         catch
             return false
+    return r.exited_with(0)
+
+pub fn mark_read_only(dir: U8[], name: U8[], arena: Arena$@): Bool //<
+    //< Marks a file in dir read-only with the OS's own tool; false where it cannot
+    //< Run inside dir with the bare name, which must hold no `'`.
+    //< **Windows's tool is PowerShell, not `attrib`.** Where `attrib` finds no file to mark, it
+    //< marks nothing and still ends with 0, so a mark that failed would count as set.
+    //< PowerShell reads its arguments as a C program does, and ends with 1 where the mark fails.
+    mark: = arena.text().s("$ErrorActionPreference='Stop'; (Get-Item -LiteralPath '").s(name)
+        .s("').IsReadOnly = $true").take()
+    argv: =
+        (U8[][]::{ "powershell", "-NoProfile", "-NonInteractive", "-Command", mark }
+        if sys.is_windows() else U8[][]::{ "chmod", "444", name })
+    r: = subproc.run_capture(argv, dir, TOOL_WAIT_MS, 4096, arena) catch
+        return false
     return r.exited_with(0)
 
 pub fn keeps_modes(dir: U8[], arena: Arena$@): Bool //< whether files in the folder keep a mode

@@ -21,16 +21,45 @@ KSPL_LINK I32 kspl_proc_start_error(void) { return kspl_start_error; }
  * The Windows command line. It touches no OS, so it is built on every OS, and a test on Linux
  * reaches it through kspl_win_line_for.
  * ============================================================ */
-/* A Windows command line is one string joined by spaces, each argument wrapped in "". Microsoft's
- * parser treats a backslash specially only right before a ", so that run of backslashes is doubled.
- * Otherwise a path ending in \ swallows the closing quote, and the following arguments merge (an
+/* A Windows command line is one string joined by spaces. Microsoft's parser splits it at a space
+ * or a tab outside quotes, and treats a backslash specially only right before a ".
+ * **An argument stays bare only where every reader takes it as it is** (kspl_win_arg_is_bare):
+ * where it is made of letters, digits, bytes past ASCII and `- _ . / \ : = + ,` alone, and does
+ * not start with `@`. Any other argument goes in "". None of a bare argument's backslashes stands
+ * before a ", so the parser reads each as itself, a run at its end too.
+ *   Why bare at all: a program with its own argument reader (attrib, findstr, net, cmd's `/c`)
+ *   does not take a quoted switch. `attrib "+r" "x.txt"` marks nothing and still ends with 0.
+ *   Why a list of what is safe, not of what is not: three readers stand behind one line.
+ *   Microsoft's splits at a space or a tab. cmd.exe, where a caller names it as the program,
+ *   reads `& | < > ^ ( )` as commands. A program built on Cygwin, MSYS2 or mingw-w64 (git, sh)
+ *   expands `* ? [ ] { }` and `'` into file names, and reads a leading `@` as a file of
+ *   arguments: `git grep -e a[0-9]` took the pattern for file names. Inside quotes each of the
+ *   three takes these as they are. A list of the unsafe ones would miss the next reader's own.
+ *   `%` and `!` are quoted with the rest, though cmd.exe expands them inside quotes too.
+ * **The program (argv[0]) is always quoted, and so is every argument of a batch file**
+ * (quote_all). The program's path can hold a space, and the parser reads the first word by rules
+ * of its own. cmd.exe reads a batch file's line again, and there only the quotes keep `&|<>^()`
+ * from being commands (kspl_win_batch_safe).
+ * Inside quotes, a run of backslashes right before a " or the closing quote is doubled. Otherwise
+ * a path ending in a backslash swallows the closing quote, and the following arguments merge (an
  * argument injection).
  * Caution: Every place calling CreateProcess must come through this function. A copied rule
  * brings the injection back the day only one copy is fixed.
  * **Confirm that the number of steps agrees with argc exactly** (the check on off at the
  * end). The reason is at the POSIX side's kspl_argv_split. */
-static Bool kspl_win_build_cmdline(const U8 *argv_buf, Sz argv_buf_len, I32 argc, char *cmd,
-    int cmd_cap) {
+static Bool kspl_win_arg_is_bare(const char *arg, Sz alen) {
+    if (alen == 0) return false;
+    for (Sz i = 0; i < alen; i++) {
+        unsigned char c = (unsigned char)arg[i];
+        Bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+            || c >= 0x80 || strchr("-_./\\:=+,", (int)c) != NULL;
+        if (!plain || (i == 0 && c == '@')) return false;
+    }
+    return true;
+}
+
+static Bool kspl_win_build_cmdline(const U8 *argv_buf, Sz argv_buf_len, I32 argc, Bool quote_all,
+    char *cmd, int cmd_cap) {
     if (argc <= 0) return false;
     /* Caution: **Count in Sz, not int.** A run of backslashes counts twice, and an int sum of two
      * counts near cmd_cap would wrap negative and pass the checks below. */
@@ -46,6 +75,13 @@ static Bool kspl_win_build_cmdline(const U8 *argv_buf, Sz argv_buf_len, I32 argc
         Sz alen = off - start;
         off++;
         if (i > 0) cmd[m++] = ' ';
+        if (!quote_all && i > 0 && kspl_win_arg_is_bare(arg, alen)) {
+            /* needs no quotes: copied as it is */
+            if (alen >= limit - m) return false;
+            memcpy(cmd + m, arg, (size_t)alen);
+            m += alen;
+            continue;
+        }
         cmd[m++] = '"';
         Sz j = 0;
         while (j < alen) {
@@ -99,7 +135,9 @@ static Bool kspl_win_is_batch(const char *prog) {
  * nothing of kspl_win_build_cmdline's `\"`. A `"` in an argument closes the quoting, and what
  * follows (`& del ...`) runs as a command of its own. `%` and `!` expand even inside quotes, and a
  * line break ends the command. With those refused, every argument stays inside its own quotes,
- * where cmd.exe takes `&|<>^()` as they are. */
+ * where cmd.exe takes `&|<>^()` as they are.
+ * Caution: **So every argument of a batch file is quoted**, a plain one too
+ * (kspl_win_build_cmdline's quote_all). Left bare, `a&calc` would run calc. */
 static Bool kspl_win_batch_safe(const U8 *argv_buf, Sz argv_buf_len) {
     for (Sz i = 0; i < argv_buf_len; i++) {
         U8 c = argv_buf[i];
@@ -111,20 +149,22 @@ static Bool kspl_win_batch_safe(const U8 *argv_buf, Sz argv_buf_len) {
 /* The command line that starts argv on Windows, written into cmd with a NUL at its end. argv is
  * an argument run as kspl_proc_start takes it, argv[0] already the program's full path. False
  * where an argument holds a NUL, the line passes cmd_cap, or kspl_win_batch_safe refuses what a
- * batch file is handed. std/tests/subproc_test.kspl checks its answers on every OS.
+ * batch file is handed. std/tests/subproc_win_test.kspl checks its answers on every OS.
+ * **Only a batch file is fully guarded against cmd.exe.** A caller that names cmd.exe itself as
+ * the program hands it a line that it reads by its own rules. An argument's `& | < > ^` stand in
+ * quotes there, but nothing is refused: its `%VAR%` still expands, and its `"` ends the quoting.
  * A batch file's argument keeps the backslashes doubled before its closing quote. A batch file
  * mostly hands `%1` or `%*` on to a program, which reads them so. */
 KSPL_LINK Bool kspl_win_line_for(const U8 *argv_buf, Sz argv_buf_len, I32 argc, U8 *cmd,
     I32 cmd_cap) {
     if (argv_buf_len <= 0 || memchr(argv_buf, '\0', (size_t)argv_buf_len) == NULL) return false;
-    if (kspl_win_is_batch((const char *)argv_buf) && !kspl_win_batch_safe(argv_buf, argv_buf_len)) {
-        return false;
-    }
-    return kspl_win_build_cmdline(argv_buf, argv_buf_len, argc, (char *)cmd, (int)cmd_cap);
+    Bool batch = kspl_win_is_batch((const char *)argv_buf);
+    if (batch && !kspl_win_batch_safe(argv_buf, argv_buf_len)) return false;
+    return kspl_win_build_cmdline(argv_buf, argv_buf_len, argc, batch, (char *)cmd, (int)cmd_cap);
 }
 
 /* How a program name is looked up on Windows, and how PATH splits there. They touch no OS either,
- * so std/tests/subproc_test.kspl checks them on every OS. */
+ * so std/tests/subproc_win_test.kspl checks them on every OS. */
 /* Whether a name is bare, to be looked up (no `\`, `/` or drive colon in it). */
 KSPL_LINK Bool kspl_win_is_bare(const U8 *name) {
     return strpbrk((const char *)name, "\\/:") == NULL;

@@ -161,7 +161,12 @@ impl<|T|> List<|T|>
         initial_cap: Sz, //< how many elements must fit before it grows
         arena: Arena$@, //< where the elements go; null means the global heap and a `free()`
     ): List<|T|>
-        ptr: = T$@::alloc_zeroed(checked_cap_bytes(initial_cap, sizeof(T)), arena)
+        bytes: = checked_cap_bytes(initial_cap, sizeof(T))
+        // Caution: **Allocate nothing for no room.** `free` gives back a block only where `cap` is
+        // above 0, and growing from 0 takes no old block, so one allocated here would leak.
+        if initial_cap == 0
+            return List<|T|>(arena)
+        ptr: = T$@::alloc_zeroed(bytes, arena)
         return List<|T|>::{ .ptr = ptr, .len = 0, .cap = initial_cap, .arena = arena }
 
     priv fn ensure_cap(r: Self$@)
@@ -387,17 +392,23 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
 
     pub fn new_with_cap( //< an empty map with its slots already allocated
         //< Caution: **It counts slots, not pairs**: it resizes once half the slots are used.
-        initial_cap: Sz, //< how many slots, rounded up to a power of two
+        initial_cap: Sz, //< how many slots, rounded up to a power of two; 1 gives two
         arena: Arena$@, //< where the slots go; null means the global heap and a `free()`
     ): Map<|K, V|>
         entry_size: = sizeof(Map_entry<|K, V|>)
         // Caution: **Round up, never take the count as it is.** The bucket is `hash & (cap - 1)`,
         // so another count leaves slots no probe reaches, and a probe that meets no empty slot
         // never ends. The count is checked first, so the growth to it cannot overflow.
+        // **Start at two slots, never one.** One pair fills a table of one slot, and the growth
+        // from it to two gives a full table again. `drop_tombstones` then finds no empty slot to
+        // start from and reads past the table.
         _fits: = checked_cap_bytes(initial_cap, entry_size)
         $cap: Sz = 0
         for cap < initial_cap
-            cap = grow_cap(cap, 1)
+            cap = grow_cap(cap, 2)
+        // No slot is no block, for the reason at `List.new_with_cap`.
+        if cap == 0
+            return Map<|K, V|>(arena)
         entries: =
             Map_entry<|K, V|>$@::alloc_zeroed(checked_cap_bytes(cap, entry_size), arena)
         return Map<|K, V|>::{ .entries = entries, .cap = cap, .len = 0, .used = 0, .arena = arena }

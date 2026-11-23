@@ -177,9 +177,9 @@
 
 ### Privacy
 
-**ksagent keeps a person's files on their machine.** It asks a model server that the person runs, usually on the same machine. It shares nothing with the page but files in the folder ([`DESIGN-agent.md`](../ksagent/docs/DESIGN-agent.md)).
+**ksagent keeps a person's files on their machine.** It asks a model server that the person runs, usually on the same machine. It shares nothing with the page but files in the folder ([`DESIGN-agent.md`](../ksagent/docs/DESIGN-agent.md)). It reaches a server on another machine over https, and checks the server's certificate and host name first. Its tests hold it to that, with a certificate it must accept and ones it must refuse.
 
-**What is not covered**: ksagent speaks only plain http to its model server. That is a decision, since std holds no TLS client ([The model server](../ksagent/docs/DESIGN-agent.md#the-model-server) in ksagent's design). ksmd's page fetches nothing from outside, and its Content-Security-Policy and `test-ksmd-browser` hold it to that.
+**What is not covered**: a model server given as `http://` gets the key, the questions and the file excerpts in the clear. The person chooses http or https. Over https, ksagent does not check whether a CA withdrew the certificate ([The model server](../ksagent/docs/DESIGN-agent.md#the-model-server) in ksagent's design). ksmd's page fetches nothing from outside, and its Content-Security-Policy and `test-ksmd-browser` hold it to that.
 
 ### Licence compliance
 
@@ -200,4 +200,4 @@
 | Speed is gated only by counted instructions on three small workloads | A slower HTTPS server passes every gate. So does a slowdown the workloads do not reach, or one that adds no instructions. The language server's count leaves out its supervisor and the requests that walk the workspace |
 | A specification's claims are checked only where a row can show them | What only the page draws, a model server answers or the car does can drift from its specification |
 
-**Some gaps are decisions, with their reasons in the canonical source.** CI runs weekly ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `test-race` sees one schedule (its note in "What each platform runs" there). ksagent speaks plain http to its model ([The model server](../ksagent/docs/DESIGN-agent.md#the-model-server) in ksagent's design). No gate holds a coverage figure ("Testability and verifiability" above). The service manager, not kssrv, starts kssrv again after a panic ("Reliability" above).
+**Some gaps are decisions, with their reasons in the canonical source.** CI runs weekly ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). `test-race` sees one schedule (its note in "What each platform runs" there). ksagent does not check a certificate's revocation ([The model server](../ksagent/docs/DESIGN-agent.md#the-model-server) in ksagent's design). No gate holds a coverage figure ("Testability and verifiability" above). The service manager, not kssrv, starts kssrv again after a panic ("Reliability" above).

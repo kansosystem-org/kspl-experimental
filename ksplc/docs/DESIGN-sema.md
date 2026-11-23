@@ -426,8 +426,10 @@ An `impl` block adds methods to a type. **An impl covering one instantiation of 
 
 | matched on | the rule |
 | :-- | :-- |
-| **The name** | Where the target's position is the impl's own type argument, it binds anything. Where it is a concrete type, it must agree with the body's same position. |
+| **The name** | Where the target's position is the impl's own type argument, it binds anything. Where it is a concrete type, it must agree with the body's same position. A parameter named at two positions binds only where the body holds the same argument at both. |
 | **The mutability** | a position written with a `$` takes only a mutable body. A position with no mark attaches to the immutable version and, by one tier of weakening, reaches the mutable one too |
+
+**An impl's own type parameters bind by the same positions, not by name.** The impl names and orders them as it likes: the `X` of `impl<|X, Y|> Pair<|Y, X|>` is the instance's second argument, whatever `struct Pair` calls it. `impl_param_args` in the same file gives the instance's arguments in the impl's order. A method's signature and body, and the trait the impl names, resolve under that binding. `Generic_state.method_impls` finds a method template's impl.
 
 Caution: **Register it at Pass 2a** (`impl_needs_early_collect`). At 2b, resolving a type causes an instantiation first and closes the method table, and this impl's methods enter no body.
 

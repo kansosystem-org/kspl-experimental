@@ -249,10 +249,10 @@ flowchart LR
 
 * **A. The shared arena**, freed by `base_setup.fin`. It holds AST nodes (`Ast_node.new`), type-environment entries (`Entry` and the like in `sema/type/env.kspl`), symbol-table scopes (`sema/type/scope.kspl`), monomorphized names, the type-ID map's keys, and diagnostic messages (after `dup_str`). The test: can references spread through the AST or the symbol table, or does it live until the compilation ends?
   * **Collections keep references**: `Map` and the other internal collections do not deep-copy a key, so a slice passed to them must point at arena memory.
-  * **The standard idiom is scratch → `dup_str`.** Build a string in a `Str_builder` on tier C, then copy only the finished string to the arena with `base_core.arena.dup_str(...)`.
+  * **The standard idiom is scratch → `dup_str`.** Build a string in a `Str` on tier C, then copy only the finished string to the arena with `base_core.arena.dup_str(...)`.
   * Caution: **A name built from parts goes to `base_core.pools.name_text`, not to `dup_str`** (an FQN from `build_mod_fqn`, `join_dotted_name`, a path's segments joined). Such a name is rebuilt on every read, and a copy per read filled about 10 MB of a cold self-host's `AST bytes`. `name_text` keeps one copy of each, on tier C, until the pools are freed.
 * **B. Reference counting (`Rc<|T|>` / `Arc<|T|>` in `std/mem`)**, for memory shared by several owners. The types conform to `Ref_counted`, and the compiler inserts `retain` on a copy and `release` at scope exit (`lower/arc.kspl`). `Rc<|T|>` is for one thread, `Arc<|T|>` (atomic) for sharing between threads; `Weak_rc<|T|>` / `Weak_arc<|T|>` cut reference cycles. The chapter "The rules for implementing ARC" in [`DESIGN-lower.md`](DESIGN-lower.md) says what counts as an owning position.
-* **C. Raw memory (`alloc` / `dealloc`)**, for data whose whole life is in one place: `String_pool`'s internal buffer, and `Str_builder`'s scratch buffer. The pools are never wound back, so a name from `name_text` outlives every arena that holds it as a key.
+* **C. Raw memory (`alloc` / `dealloc`)**, for data whose whole life is in one place: `String_pool`'s internal buffer, and `Str`'s scratch buffer. The pools are never wound back, so a name from `name_text` outlives every arena that holds it as a key.
 
 **The base session owns the diagnostics and the ranges excluded by `#cfg`.** Its shared arena being present says the session is active. Its heap containers allocate lazily, an editor rewind clears them, and ending the session frees them before the arena.
 

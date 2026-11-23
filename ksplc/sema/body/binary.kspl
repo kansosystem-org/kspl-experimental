@@ -236,7 +236,11 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
     op_traits: = get_op_traits(op_text)
     method_name: = op_traits.method_name
     trait_name: = op_traits.trait_name
-    if method_name.len > 0
+    // **A pointer's operators are its own**: `p == null`, `p == q` and `p + i` compare and step
+    // the address. Only `.` and `[]` reach through a pointer ("Pointer arithmetic and implicit
+    // dereferencing" in docs/SPEC-programming-language.md). Looked up on the target, a pointer to
+    // a type implementing `Eq` called its `eq` with the other pointer as the value.
+    if method_name.len > 0 && !ctx.env.is_pointer(left_type_id)
         resolved: = ctx.resolve_operator_call(left_type_id, trait_name, method_name, "Operator",
             op_text, node)
         switch resolved
@@ -261,7 +265,8 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         right_type_id = right_node.infer_expr(ctx, pass_right_id)!
     if sema_body_resolve_path.refuse_type_name(ctx, right_node)
         return I32::sema_type_env.Builtin_type_id.unknown
-    if refuses_fn_operator(ctx, node, op_text, right_type_id) ||
+    if refuses_target_operator(ctx, node, trait_name, left_type_id, right_type_id) ||
+        refuses_fn_operator(ctx, node, op_text, right_type_id) ||
         refuses_operator_operand(ctx, node, op_text, right_type_id, false) ||
         is_logical && refuses_non_bool_logic(ctx, node, op_text, right_type_id)
         return I32::sema_type_env.Builtin_type_id.unknown
@@ -766,6 +771,27 @@ priv fn pointer_difference_type(ctx: Sema_ctx$@, node: Ast_node$@, left_type_id:
         .s("The answer counts elements, so the element size must be one")
     ctx.err(node, ctx.scratch.slice())
     return I32::sema_type_env.Builtin_type_id.unknown
+
+priv fn refuses_target_operator(ctx: Sema_ctx$@, node: Ast_node$@, trait_name: U8[], left_id: I32,
+    right_id: I32): Bool //<
+        //< Whether it reported a pointer on the left of an operator its target implements
+        //< `p == v` with `p: V@` and a value `v` reads as the target's `==`, which a pointer does
+        //< not reach. The report names the dereference, where the operand's own check would only
+        //< say that `V` takes no operator. A pointer or an integer on the right is the pointer's
+        //< own comparison or step, and is left alone.
+    if trait_name.len == 0 || !ctx.env.is_pointer(left_id) || ctx.env.is_pointer(right_id) ||
+        ctx.env.is_integer(right_id)
+        return false
+    target_id: = ctx.env.strip_ptr(left_id)
+    if !ctx.env.has_implemented_operator_trait(target_id, trait_name)
+        return false
+    op: = node.get_binary_op().text
+    ctx.clear_scratch()
+        .s("operator '\{op\}' on the pointer type '\{ctx.env.display(left_id)\}' is the pointer's \
+            own. It does not reach the '\{trait_name\}' that '\{ctx.env.display(target_id)\}' \
+            implements. Write the dereference to use it: 'p$ \{op\} …'")
+    ctx.err(node, ctx.scratch.slice())
+    return true
 
 fn refuses_fn_operator(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], type_id: I32): Bool //<
     //< Whether it reported an operator other than `==` and `!=` on a function value

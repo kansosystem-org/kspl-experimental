@@ -20,7 +20,7 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/sha256"
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 import "std/sys"
 
 priv const SCRIPT_HEAD: U8[] = "<script src=\""
@@ -61,7 +61,7 @@ fn main(): I32
             page = page.replace(mark, base64.encode(bytes, arena), arena)
         else
             return usage()
-    defer $built: = Str_builder()
+    defer $built: = Str()
     for line in page.lines(arena)
         within: = line.trim_spaces()
         if name: = between(within, SCRIPT_HEAD, SCRIPT_TAIL)
@@ -100,12 +100,11 @@ priv fn between(line: U8[], head: U8[], tail: U8[]): U8[]? //< what a whole line
         return .some(line.sub(head.len, line.len - head.len - tail.len))
     return .none
 
-priv fn inline(built: Str_builder$@, tag: U8[], folders: U8[][], name: U8[], arena: Arena$@):
-    Void!Stopped //<
-        //< Writes one file, from the page's folder or a `--from` one, inside its tag
-        //< Caution: **Refuse a name with a folder in it, a name two folders hold, and text that
-        //< ends the tag early**: the page would take a file from elsewhere, or run the rest of a
-        //< script as HTML.
+priv fn inline(built: Str$@, tag: U8[], folders: U8[][], name: U8[], arena: Arena$@): Void!Stopped //<
+    //< Writes one file, from the page's folder or a `--from` one, inside its tag
+    //< Caution: **Refuse a name with a folder in it, a name two folders hold, and text that
+    //< ends the tag early**: the page would take a file from elsewhere, or run the rest of a
+    //< script as HTML.
     for c in name
         if !c.is_alnum() && c != '.' && c != '-' || name[0] == '.'
             io.err().s("bundle: the page names a file outside its folder: \{name\}\n")

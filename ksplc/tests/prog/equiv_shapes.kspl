@@ -5,7 +5,7 @@
 //< Also a slice of an array literal that a branch built, read after the branch. Each is a function
 //< that `equiv.kspl`'s `main` calls with the builder, with the declarations it alone reads.
 import "std/libc"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 // The comparisons, assignments and `^` that [W0203], [W0204] and [W0215] report are shapes under
 // test here.
 ##lint(W0203 = off)
@@ -105,7 +105,7 @@ impl Eval_pair
         r.a = r.a * 10 + value
         return r
 
-fn tagged_union_lines(out: Str_builder$@) //< tagged unions in array literals and in globals
+fn tagged_union_lines(out: Str$@) //< tagged unions in array literals and in globals
     //< An element of a `const` array carries the immutability mark. Both backends once took it
     //< for another type: C named `Const_Ev`, LLVM read every element as the first variant.
     locals: Ev[3] = ::{ .none, .one(200), .two(-7, 9) }
@@ -135,7 +135,7 @@ fn tagged_union_lines(out: Str_builder$@) //< tagged unions in array literals an
     out.s("/\{locals[1].tag_of()\}\{copy.tag_of()\}/").s(bool_word(muts.len > 1))
         .s(bool_word(false)).s("\n")
 
-fn eval_order_lines(out: Str_builder$@) //< the evaluation order, a line per group of shapes
+fn eval_order_lines(out: Str$@) //< the evaluation order, a line per group of shapes
     //< The order is "Evaluation order" in docs/SPEC-programming-language.md.
     // Caution: **Put an expression with a side effect on both sides of an assignment.** C does not
     // define the order of an assignment's left and right sides. Without them, a shape that gives
@@ -194,7 +194,7 @@ impl Narrow_tag
         case .wide(p, al)
             return p * 10 + al.a
 
-fn layout_lines(out: Str_builder$@) //<
+fn layout_lines(out: Str$@) //<
     //< a narrow tag and a Result of a small error, laid out alike
     n: = Narrow_tag.wide(1, Held8::{ .a = 2, .w = 0 })
     out.s("narrow=\{sizeof(Narrow_tag)\}/\{n.sum()\}/\{G_NARROW[0].sum()\}/\{G_NARROW[1].sum()\}")
@@ -206,7 +206,7 @@ fn layout_lines(out: Str_builder$@) //<
         .s("\{(Sz::rs[0]@) % 8\}/\{got.a\}/\{sizeof(U8!Layout_err)\}\n")
 
 #noinline
-priv fn wrap16(unsigned: U16, signed: I16, out: Str_builder$@) //<
+priv fn wrap16(unsigned: U16, signed: I16, out: Str$@) //<
     //< 16-bit products, which C would compute in `int`
     $cu: = unsigned
     cu *= unsigned
@@ -214,7 +214,7 @@ priv fn wrap16(unsigned: U16, signed: I16, out: Str_builder$@) //<
     cs *= signed
     out.s("/\{unsigned * unsigned\}/\{signed * signed\}/\{cu\}/\{cs\}")
 
-fn wrap16_lines(out: Str_builder$@) //< 16-bit products past `int`'s range, which wrap at 16 bits
+fn wrap16_lines(out: Str$@) //< 16-bit products past `int`'s range, which wrap at 16 bits
     out.s("wrap16")
     wrap16(65535, -1, out)
     wrap16(40000, 300, out)
@@ -228,7 +228,7 @@ fn wrap16_lines(out: Str_builder$@) //< 16-bit products past `int`'s range, whic
 // ==========================================
 priv $warned_byte: U8 = 3
 
-fn warned_shape_lines(out: Str_builder$@) //< each shape, its value printed
+fn warned_shape_lines(out: Str$@) //< each shape, its value printed
     flipped: I32 = ~(I32::(warned_byte == 3U8))
     on: = warned_byte > 2U8
     either: Bool = !(on) | (on & (warned_byte == 4U8))
@@ -257,7 +257,7 @@ priv fn fixed_next(): U32 //< a side that runs code: it counts its calls
 priv fn fixed_nonneg<|T|>(x: T): Bool //< fixed only where `T` is unsigned
     return x >= 0
 
-fn fixed_answer_lines(out: Str_builder$@) //< each fixed answer, then what the program left
+fn fixed_answer_lines(out: Str$@) //< each fixed answer, then what the program left
     $p: Fixed_pt = ::{ .n = fixed_u8, .on = true }
     same: = fixed_u8 == fixed_u8
     field: = p.n < p.n
@@ -275,9 +275,10 @@ fn fixed_answer_lines(out: Str_builder$@) //< each fixed answer, then what the p
     named: = 0U32 > FIXED_ZERO
     either: = p.on || !p.on
     neither: = !p.on && p.on
+    rem: = fixed_u8 > ~(fixed_u8 % 1U8)
     out.s("fixed=\{same\}/\{field\}/\{flag\}/\{top\}/\{low\}/\{counted\}/\{below\}/")
         .s("\{widened\}/\{masked\}/\{ored\}/\{named\}/\{fixed_calls\}/\{p.n\}/\{p.on\}/")
-        .s("\{either\}/\{neither\}/")
+        .s("\{either\}/\{neither\}/\{rem\}/")
         .s("\{fixed_nonneg<|U32|>(fixed_u32)\}/\{fixed_nonneg<|I8|>(fixed_i8)\}\n")
 
 // ==========================================
@@ -292,7 +293,7 @@ priv fn overlap_next(): I32 //< a value two tests read: it counts its calls
     overlap_calls += 1
     return fixed_i8
 
-fn overlap_xor_lines(out: Str_builder$@) //< each fixed answer and each folded `^`
+fn overlap_xor_lines(out: Str$@) //< each fixed answer and each folded `^`
     $x: = I32::fixed_i8
     $n: Sz = 3
     never: = 3 <= x && 1 > x
@@ -349,7 +350,7 @@ impl Pick
         case .b(x)
             return x
 
-fn global_ref_lines(out: Str_builder$@) //< globals that name other globals, one line
+fn global_ref_lines(out: Str$@) //< globals that name other globals, one line
     g_var = 5
     out.s("gref=\{G_FOUR_AT$\}/\{G_FOUR_AT == G_FOUR@\}/\{G_VAR_AT$\}/\{G_LINK2.next.v\}/")
         .s("\{G_LINK2.next == G_LINK1@\}/\{G_PICK_A2.val()\}/\{G_PICKS[0].val()\}/")
@@ -366,7 +367,7 @@ extern $equiv_hidden: I32 = 5
 extern fn equiv_hidden_fn(): I32
     return 9
 
-fn verbatim_hiding_lines(out: Str_builder$@) //< each initializer reads the global, not the local
+fn verbatim_hiding_lines(out: Str$@) //< each initializer reads the global, not the local
     equiv_hidden: = equiv_hidden + 1
     equiv_hidden_fn: = equiv_hidden_fn() + 1
     strtod: = libc.strtod(Void$@::"16".ptr, null) + 1.0
@@ -387,12 +388,12 @@ priv $g_cast_src32: F32[_] = ::{ F32::2147483520.0, F32::2147483648.0, F32::3.0e
     F32::16777217.0 }
 priv const G_CAST_FOLDED: I32 = I32::(1.5 * -3.0) //< folded by ksplc for both backends
 
-priv fn cast_row(out: Str_builder$@, value: F64)
+priv fn cast_row(out: Str$@, value: F64)
     out
         .s("\{I8::value\},\{I16::value\},\{I32::value\},\{I64::value\},\{U8::value\},\{U16::value\},\{U32::value\},\{U64::value\},")
         .s("\{Sz::value\};")
 
-fn float_cast_lines(out: Str_builder$@) //< one line of every source value at every width
+fn float_cast_lines(out: Str$@) //< one line of every source value at every width
     zero: = g_cast_src[0]
     out.s("fcast=")
     cast_row(out, 1.0 / zero)
@@ -466,7 +467,7 @@ priv const SI_REG: U32@ = U32@::0x4000_0000
 priv $si_var: I32 = SI_B * 10
 priv $si_var_pt: Si_point = ::{ .x = SI_A if SI_B > 0 else 0 }
 
-fn static_init_lines(out: Str_builder$@) //< each top-level shape, read at run time
+fn static_init_lines(out: Str$@) //< each top-level shape, read at run time
     out.s("sinit=\{SI_B\}/\{SI_AND\}/\{SI_OR\}/\{SI_DIV\}/\{SI_PICK_N\}/\{SI_FF\}/\{SI_F32\}/")
         .s("\{SI_F_GT\}/\{SI_F_INT\}/\{SI_INF > 1.0e308\}/\{SI_NAN != SI_NAN\}/")
         .s("\{SI_PT_PICK.x\}/\{SI_TEXT\}/\{SI_PT.x\}/\{SI_PT.y\}/\{I32::SI_COL\}/\{SI_COL_N\}/")
@@ -529,7 +530,7 @@ priv $pk_var: Pk = ::{ .a = 3, .b = 4 }
 priv fn addr_of(x: I32): U8@ //< a negative `I32` as an address, widened by its sign
     return U8@::x
 
-fn parted_lines(out: Str_builder$@) //< each shape's answer, one line
+fn parted_lines(out: Str$@) //< each shape's answer, one line
     // `a * out + c` rounds twice. Joined into one fused multiply-add, it rounds once: clang folded
     // that at `-O2` to 5.55e-17, where `-O0` and LLVM gave 0.0 (the pragma in
     // ksplc/gen/runtime.kspl).
@@ -570,14 +571,14 @@ priv fn stack_churn(value: I32): I32 //< fills a frame of its own, as a later ca
         sum += v
     return sum
 
-priv fn words_line(out: Str_builder$@, label: U8[], words: U8[][]) //<
+priv fn words_line(out: Str$@, label: U8[], words: U8[][]) //<
     //< one line: the label, each word
     out.s(label).c('=')
     for w in words
         out.s(w).c(',')
     out.c('\n')
 
-fn branch_array_lines(out: Str_builder$@, value: I32, name: U8[]) //<
+fn branch_array_lines(out: Str$@, value: I32, name: U8[]) //<
     //< Each value a branch builds from an array literal, read after other calls
     //< **Its storage must outlive the branch.** Each array is a C compound literal; inside the
     //< branch's block, gcc at `-O2` reuses its stack once the block ends.

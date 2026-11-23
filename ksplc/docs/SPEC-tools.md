@@ -62,6 +62,8 @@ ksplc --to=llvm main.kspl main.ll
 
 **A failed or interrupted compile leaves the older output as it was.** The output is written beside it under a temporary name (`main.c.tmp<digits>`), and renamed onto it once every byte was written. **So is every other file the compile writes**: the `--emit-deps`, `--emit-libs` and `--library=` files. They are all renamed once the last is whole, so a compile that fails partway changes none of them. A write the disk refuses fails the compile with `io/write_failed`, which names the folder where it does not exist. A device named as the output (`/dev/null`) is written where it is.
 
+**No file the compile writes may be its input, and no two of them may be one file.** A compile that names such a file writes nothing and ends with 1: the source would be replaced, or one output by another. The paths are compared as written, with `.` and `..` folded. A device takes any number of writes.
+
 ### 2.2 Choosing the language of the output (`--to`)
 
 `--to` names the language of the output, and so the backend that writes it.
@@ -178,7 +180,7 @@ This table lists every option of a compile. Most have a section of their own, li
 **Standard output holds only what was asked for, and every line about the run goes to standard error.** What is asked for is a program's own output under `ksplc run`, `info`'s answer, `fmt`'s text, `doc`'s Markdown, `explain`'s text and `--help`'s usage. Everything else is about the run:
 
 * a refused command line: the reason, then the usage, and exit code 1. A subcommand left out or misspelled gets one line instead, naming the likely command (`ksplc hello.kspl` names `ksplc run hello.kspl`) and `--help`;
-* a compile's diagnostics, its summary (`Finished with 1 error(s), 0 warning(s).`) and the line closing a compile that printed its diagnostics (`sema/analysis_failed: compilation terminated (see diagnostics above)`). **Every compile that fails on a diagnostic ends with both**, a syntax error's included. The summary counts the diagnostics written above it;
+* a compile's diagnostics, its summary (`Finished with 1 error(s), 0 warning(s).`) and the line closing a compile that printed its diagnostics (`Compilation stopped. Fix the errors above, then run the command again.`). **Every compile that fails on a diagnostic ends with both**, a syntax error's included. The summary counts the diagnostics written above it;
 * an error with no diagnostic before it (a file that cannot be read);
 * `--stats`'s report, and the folder `ksplc clean` emptied.
 
@@ -535,12 +537,12 @@ Here a vendor, `greet`, ships a library built from KSPL, and a C program and a K
 
 ```kspl
 // greet.kspl (the vendor's; not shipped)
-import "std/str" { Str_builder }
+import "std/str" { Str }
 pub struct Greet_point
     pub x: I32
     pub y: I32
 pub extern fn greet_hello(times: I32): I32 //< the length of the text `hello <i>` for each i below times
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for i in Range.asc(Sz::times)
         b.s("hello \{i\}\n")
     return I32::b.slice().len
@@ -811,6 +813,7 @@ flowchart LR
     * a new name already declared in a scope around a place the name is written bare. The scope is the same block, an enclosing block, the function's parameters, or the file's own declarations and imports. A field, a variant or a method is compared with the other members of its type instead;
     * a function that a type call selects (`Vector(1, 2)` selects `Vector.new`): the calls name the type, not the function, so a rename would break them;
     * a method a trait declares, or one that implements a trait (`Shape.area`, or the `add` behind `+`). The trait and its implementations are matched by name, so renaming one alone breaks the program.
+    * a name the source does not spell where it is declared, since only its uses would change. An import's name where no `as` is written (`lib` of `import "lib"`) is one: the message says to write `as <name>` on the import line. A closure's `call` is another: the compiler declares it.
 * **The call hierarchy**: a function's callers and callees across files, as a tree. It follows the operators, the type calls and the methods to the plain calls the compiler rewrites them to. Passing a function as a function pointer is an edge too, marked `(as fn pointer)` in `detail`. **Where an error stops the analysis before the function, the answer is an error**, not an empty list that reads as "no callers".
 * **Formatting**: "Format Document" and format-on-save give the text `ksplc fmt` writes, from the same code ([§3](#3-the-formatter-ksplc-fmt)). The editor's tab size is not read: the layout has one form. **Text that does not parse gets no edit**, and no error pop-up; its diagnostic says why.
 * **The outline**: it answers `textDocument/documentSymbol` with what the file declares, nested as written. It lists functions, types with their fields and variants, an `impl` and a trait with their functions, constants and global variables. An `impl` is named by its header as written (`impl Editor`, `impl Align: Formattable`). It is read from the syntax tree already kept for the document, so it parses nothing again and resolves no import. Nothing inside a body is listed. A document that does not parse lists the declarations parsed around the error.

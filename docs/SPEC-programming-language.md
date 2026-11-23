@@ -429,6 +429,8 @@ pub struct Matrix<|T, const ROWS: Sz, const COLS: Sz|>
 
 **`impl<|T, U|> List<|T|>` cannot be written** (a compile error): nothing at the impl position binds `U`. A free function can take the receiver as its first argument (`fn map<|T, U|>(o: T?, f: fn(x: T): U): U?`), with both type arguments fixed at the call site.
 
+**An `impl` that names one parameter at two positions covers only instances whose arguments there are the same.** `impl<|T|> Pair<|T, T|>` gives its methods to `Pair<|I32, I32|>`, not to `Pair<|I32, Bool|>`. Calling one on the second is the error saying the method does not exist. A `const` parameter written twice (`impl<|const N: Sz|> Grid<|N, N|>`) asks for equal values likewise.
+
 **What can be written where a value is passed as a type argument**: an integer or boolean literal (`Ring<|512|>`, `Ring<|-3|>`). A `const`'s name (`Ring<|TX_RING_SIZE|>`) can stand there too. A run-time value or a computed expression (`Ring<|2 + 1|>`) is a compile error; declare a `const` holding it. **A value its parameter's type does not hold is a compile error at the use** (`Ring<|3000000000|>` for `const N: I32`, `Ring<|true|>` for an integer). Notations with the same value give the same type (`Ring<|4|>` and `Ring<|CAP|>` for `const CAP: Sz = 4`).
 
 **A parameter takes one kind of argument**: a `const` parameter a value, any other a type. The other kind is a compile error naming the parameter and the kind it takes, at the use (`Ring<|I32|>`, `List<|4|>`) and in a generic's own declaration alike. There a `const` parameter's name stands only where a value does (`fn f<|const N: Sz|>(h: List<|N|>@)` and `x: N` are errors), and a type parameter's only where a type does (`Ring<|T|>`, `I32[T]`).
@@ -575,24 +577,24 @@ A longer cycle (`typedef A = B` beside `typedef B = A`) is reported once, at its
 
 **The call is always `std/lang`'s `put`.** A `put` that the file declares or imports does not take it.
 
-The destination (the `Writer` from `io.out()`, a `Str_builder`, …) must implement the `Writer` trait, which carries writing methods such as `s()`. Each interpolated value's type must implement the `Formattable` trait, which carries `fmt(w: Writer): Writer` ([5.1](#51-traits-trait)).
+The destination (the `Writer` from `io.out()`, a `Str`, …) must implement the `Writer` trait, which carries writing methods such as `s()`. Each interpolated value's type must implement the `Formattable` trait, which carries `fmt(w: Writer): Writer` ([5.1](#51-traits-trait)).
 
-`put` returns the destination it was given, at its own type. So interpolation on a `Str_builder` can chain `Str_builder`'s own methods (`b.s("n=\{n\}").slice()`). Do not use `Formattable.fmt`'s return value: called through the trait, it has collapsed to `Writer`.
+`put` returns the destination it was given, at its own type. So interpolation on a `Str` can chain `Str`'s own methods (`b.s("n=\{n\}").slice()`). Do not use `Formattable.fmt`'s return value: called through the trait, it has collapsed to `Writer`.
 
-The chain always begins with an `s(...)` on the destination, so a destination held by value (`$b: = Str_builder()`) never reaches `put` as a copy. When `\{…\}` comes first, a step writing the empty string is inserted.
+The chain always begins with an `s(...)` on the destination, so a destination held by value (`$b: = Str()`) never reaches `put` as a copy. When `\{…\}` comes first, a step writing the empty string is inserted.
 
-**Interpolation pours into a Writer; it does not build a value.** It can be written only as an argument in a Writer chain (`io.out().s("...")` / `b.s("...")` / `w.s("...")`). In an assignment to a variable, or as an argument to a plain function, it is a compile error. For the string itself, keep it in an arena with `arena.text().s("...").take()` ([8.4](#84-memory-management)), or write into a `Str_builder` / `Buf_writer` and chain `.slice()`.
+**Interpolation pours into a Writer; it does not build a value.** It can be written only as an argument in a Writer chain (`io.out().s("...")` / `b.s("...")` / `w.s("...")`). In an assignment to a variable, or as an argument to a plain function, it is a compile error. For the string itself, keep it in an arena with `arena.text().s("...").take()` ([8.4](#84-memory-management)), or write into a `Str` / `Buf_writer` and chain `.slice()`.
 
 ```kspl
 import "std/io"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv fn take(s: U8[])
     io.out().s(s)
 
 n: = 7
 io.out().s("n=\{n\}\n") // OK: a Writer chain
-defer $b: = Str_builder()
+defer $b: = Str()
 take(b.s("n=\{n\}").slice()) // OK: chain a slice when a value is needed
 x: U8[] = "n=\{n\}" // error: it cannot build a value
 take("n=\{n\}") // error: the same reason
@@ -888,7 +890,7 @@ CS.bump() // error (bump takes Self$@)
 CS.peek() // OK (peek takes Self@)
 ```
 
-**If the receiver is not a pointer, a `$` is needed before the name**, as `v.f = x` needs a `$v`: `b.s("hello")` needs `$b: = Str_builder()`. Through a pointer `p: Builder$@`, `p.s("world")` rewrites what `p` points at, and `p` needs no `$`. **A slice is a value here**: a `Self$@` method on it rewrites its descriptor. A method that writes only the elements takes `Self@` ([5.2](#52-implementations-impl-and-receivers)).
+**If the receiver is not a pointer, a `$` is needed before the name**, as `v.f = x` needs a `$v`: `b.s("hello")` needs `$b: = Str()`. Through a pointer `p: Builder$@`, `p.s("world")` rewrites what `p` points at, and `p` needs no `$`. **A slice is a value here**: a `Self$@` method on it rewrites its descriptor. A method that writes only the elements takes `Self@` ([5.2](#52-implementations-impl-and-receivers)).
 
 So a reader can tell whether a variable can change from its `$` alone. The lint [I0601] (an unnecessary `$`) does not report the `$` of a name on which a mutable method is called.
 
@@ -1079,6 +1081,10 @@ trait Drawable
 ```
 
 **A method can have a default body.** Give the declaration a body, and each implementation that does not write that method gets a copy of the body. An implementation that writes a method of the same name uses its own.
+
+**A default body's names are looked up in the trait's file, where the body is written.** So it can call a `priv` function of that file and use that file's imports, whichever file holds the `impl`. `Self` and the trait's methods are still those of the implementing type. A type argument that the `impl` gives the trait (the `Local[]` of `impl Far: Conv<|Local[]|>`) is read in the `impl`'s file, wherever the body names the trait's parameter.
+
+**A warning about a default body is reported once, at its place in the trait.** An error is reported at the `impl` that got the copy, since the body can fail for that type alone.
 
 In the copy, `Self` and the `impl`'s own type parameters mean what they mean in the rest of that `impl` block. The trait's type parameters are replaced by the type arguments the `impl` wrote: if `impl<|X, Y|> Pair<|X, Y|>: Seqish<|Y|>` implements `trait Seqish<|E|>`, the `E` inside the body is `Y`.
 
@@ -1306,6 +1312,8 @@ Implement a prescribed trait (`Add` or `Eq` in `std/lang`, and so on), and `+` a
 * **Binary and unary operators**: `a + b` becomes `a.add(b)` and `-a` becomes `a.neg()`. Comparisons (`!=` / `<` / `<=` / `>` / `>=`) and unary `!` / `-` are replaced the same way.
 
 **The left operand's type decides.** `1 + v` with a struct `v` is refused even when `v`'s type implements `Add`, because `1` has no `add` method. Write `v + 1`, or call the method.
+
+**An operator on a pointer is the pointer's own**, whatever its target implements. `p == q` and `p == null` compare addresses, and `p + i` steps by elements ([6.2](#62-pointer-arithmetic-and-implicit-dereferencing)). To use the target's operator, write the dereference (`p$ == q$`). `p == v` against a value is a compile error that says so.
 
 **Only the operators above have a trait.** `%`, `&`, `|`, `^`, `<<`, `>>`, `~`, `&&` and `||` stay built in. On a type of your own, call a method instead, such as `a.rem(b)`. A compound assignment is not rewritten either ([6.5](#65-assignment-and-compound-assignment)).
 
@@ -1915,7 +1923,7 @@ fn process_item<|T: Drawable + Serializable|>(item: T)
   * a generic type's arguments, or those of the generic trait the argument conforms to (as a closure conforms to `Callable1<|T, U|>`);
   * a function type's parameters and result.
 
-  A type parameter takes the type found where it stands bare, its immutability included. For example, an immutable `v` passed as `v@` to `a: T$@` makes `T` immutable, so the instance cannot write through `a`. The first argument to reach a type parameter decides it.
+  A type parameter takes the type found where it stands bare, its immutability included. For example, an immutable `v` passed as `v@` to `a: T$@` makes `T` immutable, so the instance cannot write through `a`. A read-only mark the parameter writes itself is the parameter's, not the type parameter's: an `I32[]` passed to `xs: T[]`, or an immutable `v@` to `p: T@`, makes `T` the plain `I32`. The first argument to reach a type parameter decides it, and a later one can only add the immutability.
 
   A `const` parameter takes the value found where it stands as an array's length or as a generic's value argument. `sum(s)` with `s: I32[3]` for `fn sum<|const N: Sz|>(v: I32[N])` makes `N` 3, and `cap(b@)` with `b: Buf<|8|>` for `fn cap<|const N: Sz|>(b: Buf<|N|>@)` makes it 8. This holds inside a nested array (`I32[C][R]`, `Buf<|N|>[K]`) or another generic's type argument (`Hold<|I32[N]|>@`) alike. Two arguments fixing it to different values are a compile error naming both.
 
@@ -1978,6 +1986,7 @@ impl Marker: Sited
 ```
 
 * It applies both to a call on the concrete type (`m.where_from()`) and to one through a `trait` value (`t.where_from()`).
+* A method with a default body ([5.1](#51-traits-trait)) can carry one too: an implementation that does not write the method gets the body with its default.
 * Indexing (`a[i]`) works the same way. In the standard library, `Index_place` and `Index_ref` receive the caller's position, so `List<|T|>`'s out-of-range error names **the use site** (`index out of bounds in List.at (idx: 9, len: 1) at file:12`).
 * **`Index` / `Index_mut`, which exchange values, do not receive it** (`Map` returns `V?` for an absent key instead of stopping).
 
@@ -2239,7 +2248,7 @@ There is no garbage collector, and no type frees itself. Each type uses manual c
 
 | Method | Where it fits | When it frees |
 | :-- | :-- | :-- |
-| **A manual owner (`Manual_free`) + `defer`** ([8.4.1](#841-the-defer-statement), [8.4.5](#845-tracking-a-free-with-manual_free)) | A value owning a buffer or another resource (`Str_builder`, `io.File_stream`, a `List` on the heap) | Where `defer` in front of its declaration says: when the block ends |
+| **A manual owner (`Manual_free`) + `defer`** ([8.4.1](#841-the-defer-statement), [8.4.5](#845-tracking-a-free-with-manual_free)) | A value owning a buffer or another resource (`Str`, `io.File_stream`, a `List` on the heap) | Where `defer` in front of its declaration says: when the block ends |
 | **A raw pointer (`T@`) + `defer`** ([8.4.1](#841-the-defer-statement)) | C interoperation and bare metal, where maximal control is needed | Where its `defer x.free()` was written; ownership is the programmer's to track |
 | **An arena (`Arena`)** ([8.4.3](#843-arenas-arena)) | Data whose lifetime is one bundle, such as one request | All at once, untracked, when the arena is freed |
 | **ARC (`Ref_counted` conformance)** ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)) | Data shared by several owners, whose lifetime does not fit one scope | When the last owner disappears |
@@ -2256,7 +2265,7 @@ There is no garbage collector, and no type frees itself. Each type uses manual c
 * **When it runs**: at the end of the scope, or on leaving it with `return`, `throw`, `break`, `continue` and the like, in reverse order of registration.
 * **Nothing escapes from inside a `defer`**: `return` / `throw` / `fallback` inside it, a `break` / `continue` aimed at an outer scope, and a `!` that can fail are compile errors.
 * **Values are read when it runs, not when it is registered**: `defer f(x)` reads `x` at the moment of leaving. To use the value at registration, copy it into a variable first. A capture list (`defer a, b { ... }`) cannot be written.
-* **`defer` in front of a declaration frees what it declares** when the block ends: `defer $b: = Str_builder()` means `$b: = Str_builder()` followed by `defer b.free()`. It takes one name.
+* **`defer` in front of a declaration frees what it declares** when the block ends: `defer $b: = Str()` means `$b: = Str()` followed by `defer b.free()`. It takes one name.
   * **The call goes through `Manual_free`** ([8.4.5](#845-tracking-a-free-with-manual_free)), matched by its full name. A type that does not conform is a compile error, even where it has a method named `free`. A cleanup other than `free()` (`unlock`, a child's `wait`) is a `defer` statement of its own.
   * **Such a value cannot be handed over**, since the block's end frees it. Returning or throwing it is a compile error. So is storing it whole (into a variable, a field, a struct or an array), or moving it where its type is `Move_only`. Declare it without `defer` to hand it over. A pointer declared this way is handed over only by `return` or `throw`; stored elsewhere, it lends what it points at, as `x@` does.
   * A `catch` under the declaration belongs to its initializer. The `free()` is registered after the whole declaration, so a failed initializer frees nothing.
@@ -2392,7 +2401,7 @@ impl Buf: Manual_free {} // without this the check does not work (an empty block
 * Only a **bare local variable** is inspected. A per-field free such as `r.field.free()`, and a free through an index, are not tracked.
 * A free wrapped in another function is followed **one level only**. If the callee's body always frees the matching parameter, in the `x.free()` or the `dealloc(x)` shape, the caller's argument counts as freed. A method shape (`x.close_it()`) is followed the same way, with the receiver as the first parameter.
   * So a body that frees the parameter itself is tracked whatever its name or conformance. `Manual_free` supplies the contract when `free()` frees **a field** instead.
-* **An owner frees the owners it holds in its fields.** No field frees itself, so a struct holding a `Str_builder` frees it in its own `free()`.
+* **An owner frees the owners it holds in its fields.** No field frees itself, so a struct holding a `Str` frees it in its own `free()`.
 
 #### 8.4.6 What invalidates a view
 
@@ -2408,9 +2417,9 @@ Caution: **No row of this table stops a program at run time.** Keeping each view
 | The same | `List.free` | The block is freed |
 | An entry of a `Map<\|K, V\|>`, such as each `e` that `for e in m.items()` gives | Any `set` (`m[k] = v`) | A set can rebuild the table first, and that moves every pair |
 | The same | Removing its key (`m.remove(k)`), or freeing the map (`m.free()`) | The pair is released |
-| `Str_builder.slice` | A write (`s`, `c`, `escape_and_append`, interpolation into it) that grows the builder, or `reserve` | The bytes move to a new block |
+| `Str.slice` | A write (`s`, `c`, `escape_and_append`, interpolation into it) that grows the builder, or `reserve` | The bytes move to a new block |
 | The same | `drop_prefix` or `clear` | The bytes move to the start, or the next write overwrites them |
-| The same | `Str_builder.free` | The block is freed |
+| The same | `Str.free` | The block is freed |
 | Memory an `Arena` gave out (`alloc`, `create`, `dup_str`, `arena.text()…take()`) | `Arena.restore` to a mark saved before it, or `Arena.reset` | The arena gives the memory out again, so the view reads another value's bytes |
 | The same | `Arena.free` | The chunks are freed |
 | The pointer that `Rc.get` returns | The last owner of that `Rc<\|T\|>` going: released, or given another value | The value is taken apart and freed ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)) |
@@ -3081,7 +3090,7 @@ KSPL leaves these features out on purpose. The table names each one and what to 
 | **Automatic cleanup** (a destructor, as Rust's `Drop` or C++'s) | `defer` in front of the declaration ([8.4.1](#841-the-defer-statement)); for shared ownership, `Ref_counted` ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)). |
 | **Garbage collection** | `defer`, and values kept on the stack. |
 | **`async` / `await`** (Rust's, Swift's, Python's, JavaScript's) | A thread that blocks (`std/thread`), `std/channel` to hand work between threads, and `std/reactor` to wait on many sockets at once. |
-| **A cleanup joined behind its declaration** (Lombok's `@Cleanup`, GCC's `cleanup` attribute, `buf: = Str_builder() defer .free()`) | `defer buf: = Str_builder()` for `free()` ([8.4.1](#841-the-defer-statement)). |
+| **A cleanup joined behind its declaration** (Lombok's `@Cleanup`, GCC's `cleanup` attribute, `buf: = Str() defer .free()`) | `defer buf: = Str()` for `free()` ([8.4.1](#841-the-defer-statement)). |
 | **Class inheritance** | Hold a struct inside another, and gather common behavior in a `trait`. |
 | **Named actual arguments** (`f(offset = 0)`) | Take the settings as a struct, written `::{ .name = value }` (an omitted field is 0). |
 | **Function overloading** (several functions with one name, told apart by their parameters) | Make it generic, or give each its own name. |
@@ -3092,7 +3101,7 @@ KSPL leaves these features out on purpose. The table names each one and what to 
 | **The type's name in a `case`** (`case Event.quit`) | `case .quit`; the type's name is an error naming this form ([7.1](#71-branching)). |
 | **A condition or a range of values in a `case`** (Rust's `x if x > 0 =>`, Swift's `case 1...5`, Java's `when`) | An `if` as the first statement of the case's block, or the values listed (`case 1, 2, 3`) ([7.1](#71-branching)). Either is a syntax error whose note says so. |
 | **Another language's word for a loop or a branch** (`while`, Rust's `loop`, `match`) | `for x > 0` for `while`, a bare `for` for `loop`, and `switch x case ...` for `match` ([7.1](#71-branching), [7.2](#72-loops)). Each is a syntax error whose note writes the KSPL head. The three words stay usable as names. |
-| **`::` as a path separator** (`Arena::new(1024)`, `io::out()`, `Shade::dark`) | `.`, for a module's member, a type's own and a value's alike: `io.out()`, `Shade.dark`, and `Arena(1024)` for `new` ([6.3](#63-method-calls-and-namespaces)). Written as a path, `::` is an error naming the `.` spelling. |
+| **`::` as a path separator** (`Arena::new(1024)`, `io::out()`, `Shade::dark`) | `.`, for an imported file's member, a type's own and a value's alike: `io.out()`, `Shade.dark`, and `Arena(1024)` for `new` ([6.3](#63-method-calls-and-namespaces)). Written as a path, `::` is an error naming the `.` spelling. |
 | **Range syntax (`a..b`)** | `for x in` over `std/lang`'s `Range` (`Range.asc(n)` / `Range.desc(n)` / `Range(start, stop, step)`; `stop` is exclusive). |
 | **A rename inside an import's braces** (Python's `from p import a as b`, JavaScript's `import { a as b }`) | The file under a name of its own (`import "p" as q`, then `q.a`), or `typedef B = A` for a type ([9.2](#92-which-names-an-import-brings-in)). `{ A as B }` is a syntax error whose note says so. |
 | **`a[i..j]` for cutting out a slice** | `s.sub(start, len)` / `s.sub_from(start)` / `sub_mut` from `std/chars`: a view, not a copy, for any element type ([3.2](#32-derived-types)). `std/seq`'s `take` / `skip` copy into a `List`. |
@@ -3110,6 +3119,11 @@ KSPL leaves these features out on purpose. The table names each one and what to 
 | **A multi-byte character literal** (`'あ'` / `'ab'`) | A string (`U8[]`); a character literal holds exactly one byte ([2.3](#23-literals)). |
 | **An octal literal** (`0755`, `0o755`), and a decimal integer that starts with `0` | Hexadecimal (`0x1ed`) ([2.3](#23-literals)). |
 | **Link flags in the source** (Go's `#cgo LDFLAGS`, MSVC's `#pragma comment(linker, ...)`) | `##link("name")` in the file; a search path and every other flag stay with the build ([11.5](#115-naming-the-libraries-a-file-needs-link)). |
+| **A name declared by assigning it** (Python's `x = 5`, JavaScript's `let x = 5` and `var x = 5`, Rust's `let mut x = 5`) | `x: = 5`, or `$x: = 5` for a name that changes ([4.1.1](#411-the-shape-of-a-declaration)). Each is an error whose message writes the declaration. |
+| **Python's heads** (`if x > 2:`, `elif`, `def f():`, `->` before a return type) | `if x > 2` with no `:`, `else if`, `fn f()` and `fn f(): I32` ([7.1](#71-branching), [8.1](#81-definitions)). Each is a syntax error whose note writes the line. |
+| **`and`, `or` and `not`** (Python's) | `&&`, `\|\|` and `!` ([6. Expressions and operators](#6-expressions-and-operators)). Each is a syntax error whose note writes the line with them. |
+| **`++` and `--`** (C's, Java's and JavaScript's) | `i += 1` and `i -= 1` ([6.5](#65-assignment-and-compound-assignment)). Each is a syntax error whose note writes the statement. |
+| **Another language's names for values and types** (`True`, `None`, `print`, `range`, `len`, `int`, `String`) | `true`, `.none`, `io.out().s(…)`, `Range.asc(n)`, `s.len`, `I32` and `U8[]`. The error for each name gives KSPL's spelling. |
 | **A postfix `if` / a conditional `break`** (`break if done`) | `break` / `continue` inside an ordinary `if` block. |
 | **A deprecation mark** (Rust's `#[deprecated]`, Java's `@Deprecated`, Swift's `@available(*, deprecated)`) | Remove the feature, and change its callers in the same change; `#deprecated` is an unknown attribute ([10](#10-compiler-directives-and-attributes)). |
 

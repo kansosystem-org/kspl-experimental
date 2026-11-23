@@ -423,6 +423,19 @@ The list of expectations (`expected …`) holds **only words the user can type, 
 * Grouping parentheses hold one value, so nothing is said there (the case `laid_group_holds_one_value` in `tests/negative/laid.kspl`).
 * The Note says "may", because two values side by side can need an operator instead.
 
+**Another language's habit is named with the line KSPL writes.** A model and a newcomer write Python's and JavaScript's forms first. The list of expectations names none of them. Each Note gives the line written in KSPL:
+
+| The habit | The function in `parse/syntax_habit.kspl` |
+| :-- | :-- |
+| `while`, `loop`, `match`, `let`, `var`, `def`, `function` opening a statement | `append_statement_word_hint` |
+| a head's closing `:`, `elif`, `and`, `or`, `not` | `append_habits_hint`, which rewrites the line (`rewrite_habits`) |
+| `->` before a return type, a `:` after a function's head | `append_fn_head_hint` |
+| `i++`, `i--` | `append_step_hint` |
+
+* **A Note fires only where the failure stands at or after the habit.** A line that fails before it fails for another reason.
+* **A line that opens with `if` or `else` is a branch.** The postfix `if`'s Note ("KSPL has no postfix condition") is not given there.
+* **The words stay names.** A Note only explains an error the line already has (the cases in `tests/negative/habits.kspl`).
+
 ### Every place a source enters reads it the same way
 
 **Source text reaches ksplc from the disk and from the editor. Each place runs the reader of the indentation notation exactly once, so the compiler and the editor see the same program.** The places are `parse/load.kspl` for the disk and `lsp/worker.kspl` for the editor. A second pass would count the `{` the first inserted as a bracket.

@@ -7,7 +7,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 
 priv enum Chain //< what chain to build
@@ -78,7 +78,7 @@ priv const GROWN: Grown[_] = ::{
         .expect = "constant expression nesting too deep", .limit = 1024, .depth = 1500,
         .chain = .const_ref, .once = true },
 }
-priv fn write_head(out: Str_builder$@, grown: Grown) //< the fixture's header
+priv fn write_head(out: Str$@, grown: Grown) //< the fixture's header
     //< Caution: **Always write the `EXPECT` line** (the runner fails a fixture with no mark). The
     //< header also says where it was built from, to trace a file found nowhere else.
     out.s("// It confirms ").s(grown.why).s("\n")
@@ -88,13 +88,13 @@ priv fn write_head(out: Str_builder$@, grown: Grown) //< the fixture's header
     if grown.once
         out.s("// EXPECT: Finished with 1 error(s)\n")
 
-priv fn write_struct_chain(out: Str_builder$@, depth: Sz) //< the struct chain
+priv fn write_struct_chain(out: Str$@, depth: Sz) //< the struct chain
     //< Only the innermost holds an ordinary field, and the chain ends there.
     for i in Range.asc(depth)
         out.s("struct S\{i\}\n  f: S\{i + 1\}\n\n")
     out.s("struct S\{depth\}\n  f: I32\n\n\n$g: S0\n\nfn main()\n  _x: = g.f\n\n")
 
-priv fn write_arc_chain(out: Str_builder$@, depth: Sz) //<
+priv fn write_arc_chain(out: Str$@, depth: Sz) //<
     //< The same shape, a chain whose innermost holds an ARC-managed type
     //< Caution: **Write them from the inside out.** Otherwise a field's type names something that
     //< has not yet appeared (the chain does not rely on a forward reference).
@@ -104,20 +104,20 @@ priv fn write_arc_chain(out: Str_builder$@, depth: Sz) //<
         out.s("struct S\{i + 1\}\n  inner: S\{i + 2\}\n\n")
     out.s("\nfn use_it(_v: S1) {}\n")
 
-priv fn write_generic_chain(out: Str_builder$@, depth: Sz) //< the generic struct chain
+priv fn write_generic_chain(out: Str$@, depth: Sz) //< the generic struct chain
     //< Each points at the next through a pointer (embedded by value, the size is not decided).
     for i in Range.asc(depth)
         out.s("struct G\{i\}<|T|>\n  f: G\{i + 1\}<|T|>$@\n\n")
     out.s("struct G\{depth\}<|T|>\n  f: T\n\n")
     out.s("\nfn main()\n  x: G0<|I32|>$@ = null\n  _y: = x\n\n")
 
-priv fn write_alias_chain(out: Str_builder$@, depth: Sz) //< the alias chain
+priv fn write_alias_chain(out: Str$@, depth: Sz) //< the alias chain
     //< The innermost points at a real type.
     for i in Range.asc(depth)
         out.s("typedef A\{i\} = A\{i + 1\}\n")
     out.s("typedef A\{depth\} = I32\n\nfn main()\n  x: A0 = 0\n\n")
 
-priv fn write_alias_chain_back(out: Str_builder$@, depth: Sz) //<
+priv fn write_alias_chain_back(out: Str$@, depth: Sz) //<
     //< The alias chain written the other way, the innermost first
     //< **The resolver walks it from the inside**, so the cut falls on a later alias, and the
     //< variable's type is one that was refused.
@@ -126,7 +126,7 @@ priv fn write_alias_chain_back(out: Str_builder$@, depth: Sz) //<
         out.s("typedef A\{i + 1\} = A\{i\}\n")
     out.s("\nfn main(): I32\n  x: A\{depth\} = 0\n  return x\n\n")
 
-priv fn write_const_chain(out: Str_builder$@, depth: Sz) //<
+priv fn write_const_chain(out: Str$@, depth: Sz) //<
     //< The constant chain
     //< **Each constant is defined by the one written before it.** So every one of them is folded on
     //< its own, and the later ones are cut short too. A refusal per constant must not come.
@@ -135,7 +135,7 @@ priv fn write_const_chain(out: Str_builder$@, depth: Sz) //<
         out.s("const C\{i + 1\}: I32 = C\{i\}\n")
     out.s("\nfn main(): I32\n  x: I32[C\{depth\}] = ::{ 0 }\n  return x[0]\n\n")
 
-priv fn write_body(out: Str_builder$@, grown: Grown)
+priv fn write_body(out: Str$@, grown: Grown)
     switch grown.chain
     case .struct_field
         write_struct_chain(out, grown.depth)
@@ -162,7 +162,7 @@ fn write_all(dir: U8[], arena: Arena$@): List<|U8[]|> //<
                 .s("harness_grow: \{g.stem\}'s step count \{g.depth\} does not exceed the limit \
                     \{g.limit\}\n")
             continue
-        defer $body: = Str_builder()
+        defer $body: = Str()
         write_head(body@, g)
         write_body(body@, g)
         path: = fs.join(dir, arena.text().s(g.stem).s(".kspl").take(), arena)

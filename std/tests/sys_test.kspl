@@ -4,7 +4,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/subproc" + { Job }
 import "std/sys"
 import "std/tests/scratch"
@@ -48,7 +48,7 @@ fn test_env_set_unset()
 
     // A value past 4096 characters reads back whole: held in a fixed buffer, it would read as
     // unset.
-    defer $long: = Str_builder()
+    defer $long: = Str()
     for _i in Range.asc(5000)
         long.c('v')
     sys.set_env(name, long.slice()) catch panic("set_env takes a value of 5000 characters")
@@ -373,16 +373,6 @@ fn test_wall_clock()
     assert(t >= 1577836800I64 && t < 4102444800I64, "now() should return a plausible epoch second")
     verdict.pass("the wall clock read a second between 2020 and 2100.")
 
-priv fn mark_read_only(dir: U8[], name: U8[], arena: Arena$@): Bool //<
-    //< marks a file in dir read-only with the OS's own tool; false where it cannot
-    //< Run inside dir with the bare name: Windows's `attrib` reads a `/` as a switch.
-    argv: =
-        (U8[][]::{ "attrib", "+r", name } if sys.is_windows()
-        else U8[][]::{ "chmod", "444", name })
-    r: = subproc.run_capture(argv, dir, 20000, 4096, arena) catch
-        return false
-    return r.exited_with(0)
-
 fn test_fs_read_only(arena: Arena$@) //<
     //< That a read-only file is removed, and replaced by a rename, as on POSIX
     //< POSIX looks at the folder's permission, not the file's; Windows refuses both while the file
@@ -396,10 +386,16 @@ fn test_fs_read_only(arena: Arena$@) //<
     io.write_file(gone, "old") catch panic("the file must be writable")
     io.write_file(kept, "old") catch panic("the file must be writable")
     io.write_file(incoming, "new") catch panic("the file must be writable")
-    if !mark_read_only(dir, "gone.txt", arena) || !mark_read_only(dir, "kept.txt", arena)
+    before: = fs.is_read_only(kept)
+    if !scratch.mark_read_only(dir, "gone.txt", arena) ||
+        !scratch.mark_read_only(dir, "kept.txt", arena)
         scratch.remove_tree(dir, arena)
         verdict.skip("this machine has no tool that marks a file read-only")
         return
+    // **`is_read_only` reads the mark the OS's own tool set**, and only a file carries one.
+    marked: = fs.is_read_only(kept) && !before && !fs.is_read_only(incoming)
+    elsewhere: =
+        fs.is_read_only(dir) || fs.is_read_only(fs.join(dir, "absent.txt", arena))
     $removed: = true
     fs.remove_path(gone) catch
         removed = false
@@ -409,9 +405,11 @@ fn test_fs_read_only(arena: Arena$@) //<
     body: = io.read_file_capped(kept, 16, arena) catch
         fallback ""
     scratch.remove_tree(dir, arena)
+    assert(marked, "is_read_only is true for a marked file alone")
+    assert(!elsewhere, "a folder is not read-only, nor is a path where nothing stands")
     assert(removed, "a read-only file is removed")
     assert(renamed && body.equals("new"), "a rename replaces a read-only file")
-    verdict.pass("A read-only file is removed, and a rename replaces one, as on POSIX.")
+    verdict.pass("A read-only file says so, is removed, and a rename replaces one, as on POSIX.")
 
 priv const ARGS_BELOW_SRC: U8[] = //< a child that reads the argument before the program's name
     """import "std/io"

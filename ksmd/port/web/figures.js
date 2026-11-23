@@ -36,21 +36,28 @@ function ksmdFigures(ks) {
     const rows = wrap.querySelector("tbody").rows;
     const numbers = [];
     let filled = 0;
+    // One pass, not `Math.min(...numbers)`: a browser limits how many arguments a call takes, and
+    // a large choice passes that limit.
+    let min = Infinity;
+    let max = -Infinity;
     for (let row = Math.max(r.r1, 0); row <= r.r2; row++) {
       if (rows[row] && rows[row].hidden) continue;
       for (let column = r.c1; column <= r.c2; column++) {
         const v = wrap.values[row] && wrap.values[row][column];
         if (!v || v.length < 2) continue;
         filled += 1;
-        if (v[0] === ks.CELL.NUMBER) numbers.push(v[1]);
+        if (v[0] !== ks.CELL.NUMBER) continue;
+        numbers.push(v[1]);
+        min = Math.min(min, v[1]);
+        max = Math.max(max, v[1]);
       }
     }
     const sum = numbers.reduce((a, x) => a + x, 0);
     const all = { count: String(filled), numbers: String(numbers.length) };
     if (numbers.length > 0) {
       all.average = ks.showNumber(sum / numbers.length);
-      all.min = ks.showNumber(Math.min(...numbers));
-      all.max = ks.showNumber(Math.max(...numbers));
+      all.min = ks.showNumber(min);
+      all.max = ks.showNumber(max);
       all.sum = ks.showNumber(sum);
     }
     return all;

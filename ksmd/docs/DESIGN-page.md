@@ -452,6 +452,7 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
 * **Enter and F3 go to the next match, and Shift+Enter and Shift+F3 to the one before.** The bar says which match is current, and of how many. Esc closes the bar and selects the current match.
 * **The matches show through the browser's highlights, which add no element**, so the find bar never disturbs an input method's composition.
 * **Only Replace and Replace all change the document.** Replace all changes every match as one step of undo, prose and cells together.
+* **After Replace, the next match after the new text is current.** A match inside the new text is passed over, so `cats` for `cat` changes each place once.
 * **The new text takes the marks of the first character it replaces.** So a bold word stays bold, and text inside a link stays in the link.
 * **A replace is refused whole**, as every action is. A cell text the file cannot hold, or a match that no longer stands where it was found, changes nothing.
 * **Find does not look in an included file's blocks, nor in rows a filter hides.** An included file edits in a tab of its own, and Replace all changes nothing a person cannot see.

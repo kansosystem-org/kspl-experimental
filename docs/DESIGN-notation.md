@@ -142,7 +142,7 @@ Write `io.out()` when `out` alone would be unclear, and plain `Arena` when the n
 
 | # | Condition | Passes | Fails |
 | :-- | :-- | :-- | :-- |
-| 1 | **Its spelling says what the thing is** | `Arena`, `Tensor`, `Option`, `Str_builder` | `Node`, `Value`, `Entry`, `Config`, `run`, `init`, `out` |
+| 1 | **Its spelling says what the thing is** | `Arena`, `Tensor`, `Option`, `Str` | `Node`, `Value`, `Entry`, `Config`, `run`, `init`, `out` |
 | 2 | **Its spelling is unique across the program** | — | A colliding name cannot enter, since a collision is a compile error |
 | 3 | **Its origin carries no design information** | A name from `ksplc/base/` or `std/` | A reference crossing `ksplc/`'s layers, which carries the layer in its name (`Sema_ctx`, `Genc_ctx`) |
 

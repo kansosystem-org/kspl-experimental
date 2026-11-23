@@ -7,7 +7,7 @@ import "std/ds"
 import "std/io"
 import "std/math"
 import "std/mem" + { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
@@ -282,7 +282,7 @@ priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@, payload: U8[] = "
     //< The data part is `payload` followed by `payload_len` zero bytes.
     //< **Pad with spaces up to an 8-byte boundary** (as the writer does;
     //< `Safetensors_writer.finish`).
-    defer $hdr: = Str_builder()
+    defer $hdr: = Str()
     hdr.s(header)
     for (hdr.len + 8) % 8 != 0
         hdr.s(" ")
@@ -337,7 +337,7 @@ fn test_safetensors_refuses_a_bad_range(arena: Arena$@)
         "{\"w\":{\"dtype\":\"Q4_0\",\"shape\":[2,3],\"data_offsets\":[0,24]}}", 24, arena)
     // The case where the header length is longer than the file. **Only this one is built
     // differently** (the length's 8 bytes are written by hand).
-    defer $big_len: = Str_builder()
+    defer $big_len: = Str()
     $huge: U8[8] = ::{}
     huge_slice: = U8$[]::huge
     huge_slice.put_u64_le(0, 100000U64)
@@ -463,7 +463,7 @@ fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
     // keeps its value. The header need not pad the data, and a misaligned load faults on Cortex-M.
     odd: =
         blob_of("{\"w\":{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[1,5]}}", 5, arena)
-    defer $bytes: = Str_builder()
+    defer $bytes: = Str()
     bytes.s(odd)
     held: = U8$[]::{ .ptr = bytes.ptr, .len = bytes.len }
     held.put_u32_le(held.len - 4, 0x3F800000U32) // 1.0 in the last four bytes, at data offset 1

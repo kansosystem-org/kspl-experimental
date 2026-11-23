@@ -542,7 +542,7 @@ A `trait` method's receiver **is written only as a bare `Self`**; `Self@` / `Sel
 pub trait Writer
     fn s(r: Self, val: U8[]): Self // the receiver is always a bare Self
 
-impl Str_builder: Writer
+impl Str: Writer
     pub fn s(r: Self$@, s: U8[]): Self$@ // the impl may receive Self$@ and rewrite it
         …
 ```
@@ -553,7 +553,7 @@ A *thunk*, a small function the compiler generates, sits between the vtable and 
 flowchart LR
     C["a call through the trait<br/>w.s(…), where w is a Writer"] --> V["the trait value<br/>(object pointer + vtable)"]
     V --> T["the thunk<br/>bridges value and pointer"]
-    T --> I["Str_builder's s<br/>receives Self$@ and may rewrite it"]
+    T --> I["Str's s<br/>receives Self$@ and may rewrite it"]
 ```
 
 **In a trait's receiver position, `$@` would not mean what it means elsewhere.**
@@ -567,7 +567,7 @@ flowchart LR
 
 * **The three place operations must agree** ("4.3 Places, and the rules for when they may be written" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A direct call `q.scale(10)` on an immutable `q` is refused. Without this check, `grow(q)` with `fn grow(s: Shape)` would do the same write through the trait value, and on a `const` it would write to ROM.
 * **The check stands at the upcast, not at the call through the trait value.** The callee sees only the trait value, which no longer tells where the object lives.
-* **A trait whose implementation only reads takes any place.** So `Writer` on a `Str_builder` needs `$b`, while a reading trait takes a `const`.
+* **A trait whose implementation only reads takes any place.** So `Writer` on a `Str` needs `$b`, while a reading trait takes a `const`.
 
 **What is given up**: a trait cannot state "this method requires an lvalue receiver", or that the receiver is not rewritten. The implementation chooses whether it rewrites, and the upcast holds the caller to that choice.
 
@@ -914,7 +914,7 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 
 ### Every cleanup stands in the source
 
-**No type frees itself.** A value that owns something is freed where the source says so: `defer` in front of its declaration (`defer $b: = Str_builder()`), a `defer` statement, or a `free()` call.
+**No type frees itself.** A value that owns something is freed where the source says so: `defer` in front of its declaration (`defer $b: = Str()`), a `defer` statement, or a `free()` call.
 
 | Contract | What the compiler supplies | Where it belongs |
 | :-- | :-- | :-- |
@@ -991,13 +991,13 @@ A `defer` reads outer variables **on leaving the scope** (docs/SPEC-programming-
 **Freezing at registration would be wrong**: for a value struct, freeing the frozen copy does not free the real thing.
 
 ```kspl
-b: = Str_builder() // at this point ptr = null, cap = 0
+b: = Str() // at this point ptr = null, cap = 0
 defer b                // <- frozen, this captures a copy with cap = 0
     b.free()
 b.s("...")             // allocates and grows the internal buffer (the original b is updated)
 ```
 
-`Str_builder.free()` frees only when `cap > 0`, so the frozen copy frees nothing and the grown buffer leaks. The standard library is full of this shape.
+`Str.free()` frees only when `cap > 0`, so the frozen copy frees nothing and the grown buffer leaks. The standard library is full of this shape.
 
 | | Read on leaving (KSPL) | Frozen at registration |
 | :-- | :-- | :-- |
@@ -1311,6 +1311,8 @@ Three kinds of C type have no KSPL spelling. In an `extern` declaration, the tab
 | `char*` / `FILE*` | Kanso's byte is `U8` (`unsigned char`), and C's plain `char` is a third type, distinct from both `signed char` and `unsigned char` | As `Void$@` / `Void@`: the same representation and calling convention, so nothing breaks |
 | `size_t` | Kanso's size type `Sz` is signed (`ptrdiff_t`; "Why the size and index type `Sz` is signed") | As `Sz`: the width, and so the ABI, always match, and only the sign differs. Do not pass a negative value |
 | `long` / `clock_t` / `time_t` | Its width varies per target (64-bit on LP64 Linux, **32-bit on LLP64 Windows**), and Kanso has only fixed-width types | **Where every value fits in 32 bits, as `Sz` going in and `I32` coming out** (below). Otherwise convert the width inside a small function on the C side |
+
+Caution: **A function the C headers already declare cannot be declared again with `Sz` or `Void@`.** The generated C includes `<stdlib.h>`, `<string.h>` and `<stdio.h>`, so `extern fn strlen(text: Void@): Sz` gives the C compiler two types for one name, and it refuses the program. Use std's own function where one exists (a slice's `len`, `seq`'s sorting), or a small C wrapper under a name of its own.
 
 Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit return value is read as 64 bits, so `-1L` (failure) becomes `4294967295`. It slips past a "negative means failure" check.
 

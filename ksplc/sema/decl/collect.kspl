@@ -292,8 +292,10 @@ priv fn is_own_param(raw_target: U8[], gen_params_node: Ast_node@): Bool //<
 
 priv fn resolve_ret_type_or_void(type_node: Ast_node$@, ctx: Sema_ctx$@): I32!Sema_error //<
     //< Resolves the return-type node, or returns Void where unspecified
+    // In the file whose names it uses: for a trait's default method copied into an impl, the
+    // trait's.
     if type_node != null
-        return type_node.resolve_type(ctx)!
+        return type_node.resolve_type_in_own_file(ctx)!
     return I32::sema_type_env.Builtin_type_id.void_type
 
 impl Sema_ctx
@@ -422,6 +424,9 @@ impl Ast_node
 
         for m in r.children
             if m.kind_id == .k_decl_fn
+                // A template's own impl, for the instance to bind that impl's type parameters.
+                if gen_params_node != null
+                    ctx.generics.method_impls.set(Sz::m, r)
                 m.collect_impl_method(ctx, gen_params_node, base_slice, target_fqn)!
 
     priv fn check_impl_gen_params(r: Ast_node$@, ctx: Sema_ctx$@, gen_params_node: Ast_node$@,

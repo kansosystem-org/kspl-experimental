@@ -91,7 +91,7 @@ Four words name the units that code is organized in. Every document and source c
 | Name | The kind — what the reader does with it | Who reads it | What it holds | What it does not hold |
 | :-- | :-- | :-- | :-- | :-- |
 | `README.md` | **Route.** Arrive, and find the way | Everyone arriving | What is here, the smallest usage example, further reading | An explanation, a manual, a rule of its own |
-| `TUTORIAL-<topic>.md` | **Learn.** Read the whole once, from start to end | A newcomer: to KSPL, or to one package. A package's tutorial says in its first sentence what you must already have | A walk from nothing to a first result. KSPL's (`docs/TUTORIAL-programming-language.md`) is generated from a program the gates compile and run. A package's, in its `docs/`, is written by hand: the steps in order, each with its command line and what it prints | One task for a reader who already knows the subject, which is a HOWTO's. In KSPL's, anything written by hand |
+| `TUTORIAL-<topic>.md` | **Learn.** Read the whole once, from start to end | A newcomer: to KSPL, or to one package. A package's tutorial says in its first sentence what you must already have | A walk from nothing to a first result. KSPL's, in the root `docs/`, are generated, each from a program the gates compile and run: the language's, and one for C programmers. A package's, in its `docs/`, is written by hand: the steps in order, each with its command line and what it prints | One task for a reader who already knows the subject, which is a HOWTO's. In KSPL's, anything written by hand |
 | `HOWTO-<task>.md` | **Do.** Carry out one task | Varies with the task, so its first sentence says what you must already have | The steps in order, each with its command line and what it prints | Why a step is what it is, past the one sentence that stops the reader skipping it |
 | `SPEC-<subject>.md` | **Look up.** Rely on an agreement | Whoever relies on the subject and cannot change it, such as a tool's options | The rules others can rely on, which change only with care | The reason a rule was chosen; anything that does not exist yet |
 | `DESIGN-<subject>.md` | **Understand.** Change it without breaking what it protects | Whoever changes Kanso | Decisions, their grounds, and what each gives up, in the present tense | A rule's statement, a roadmap, a history |
@@ -281,7 +281,7 @@ table cell  `Option<\|T\|>`
 * **An elision**: `...` or `…` outside a comment, where the writer left part out.
 * **A first line naming the file it needs beside it**: `// app.kspl (the KSPL customer; greet_api.kspl is beside it)`. A block with this line that compiles alone fails.
 
-**A tutorial's blocks are steps of one program.** `make test-docs` joins them in order, compiles and runs the result, which must print what the program prints.
+**A tutorial's KSPL blocks are steps of one program.** `make test-docs` joins them in order, compiles and runs the result, which must print what the program prints. A block in another language, such as C to compare with, is not joined.
 
 There is a gap. A fragment that does not compile is taken as leaning on the prose, so a refusal in it goes unseen without a mark. A form that escapes the check is still a violation.
 
@@ -296,7 +296,7 @@ The repository has three layers. From the top:
 | Layer | Contents | Role |
 | :-- | :-- | :-- |
 | index | The root `README.md`, `docs/` | Shows where everything is. **May point downward** |
-| implementation | `ksplc/` / `std/` / `lib/ksai/` / `lib/kspeg/` / `lib/ksos/` / `kssrv/` / `lib/ksdb/` / `lib/kstls/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `kstls→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `kssrv→kstls`, `ksos→ksdb`, `ksmd→kssrv`, `ksagent→kssrv`) |
+| implementation | `ksplc/` / `std/` / `lib/ksai/` / `lib/kspeg/` / `lib/ksos/` / `kssrv/` / `lib/ksdb/` / `lib/kstls/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `kstls→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `kssrv→kstls`, `ksos→ksdb`, `ksmd→kssrv`, `ksagent→kssrv`, `ksagent→kstls`) |
 | leaf | `tests/` / `tools/` | Point upward only |
 
 The chart shows the shape with a few of the packages; the table above is the full list of directions.
@@ -316,7 +316,7 @@ flowchart BT
 
 `ksos→ksdb` exists because `ksos` keeps an append-only record inside a device. **Do not create the reverse.**
 
-`ksmd→kssrv` and `ksagent→kssrv` exist because both pages are built with kssrv's browser client for the local server, and kssrv owns that protocol. kssrv names neither page.
+`ksmd→kssrv` and `ksagent→kssrv` exist because both pages are built with kssrv's browser client for the local server, and kssrv owns that protocol. kssrv names neither page. `ksagent→kstls` exists because ksagent reaches an https model server through kstls's TLS client.
 
 Caution: **Do not create sideways references between packages.** A pointer from `std/` to `ksplc/` or `lib/ksos/` has no dependency behind it, so moving either end goes unnoticed.
 

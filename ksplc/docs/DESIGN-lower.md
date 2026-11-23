@@ -61,6 +61,7 @@ The steps, one by one:
     | a top-level function, variable or constant | `kspl_` and its file's path, then its name; `main` becomes `kspl_main` |
     | one marked `priv` (`file_private` in `File_env`) | `kspl_priv_`, the file's logical path with each byte that is not a letter or a digit as `_`, then `_` and the name (`write_priv_prefix_to`). So the single `.c` file of a unity build has no collision |
     | a method in an `impl` | `kspl_`, the mangled name of the `impl`'s type, then `_` and the method's name |
+    | a trait's method with a default body | `kspl_`, the trait's mangled name, then `_` and the method's name. C holds no function of this name: the body is written only as its copies in the `impl`s. The trait's name keeps two traits' bodies of one name apart where two declarations of one C name are refused (`C_names.claim`) |
     | a generic function's or method's instance | `kspl_` and the instance's mangled name |
     | a type | the type's mangled name (`mangle_type_id_to`), which every use of the type also writes |
     | an `extern` declaration or definition, or what Lower synthesized | its name as written: it is already the C name (`uses_verbatim_c_name`) |

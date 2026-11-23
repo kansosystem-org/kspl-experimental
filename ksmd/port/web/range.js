@@ -93,6 +93,14 @@ function ksmdRange(ks) {
         end = kept.f ? place(kept.f) : null;
       } else {
         end = null;
+        // The chosen cell's row or column went, as Remove row takes the last row. **The cell that
+        // stands nearest takes the choice**: with none chosen the focus fell on the page, and no
+        // key reached the table, Ctrl+Z among them. A table left with no data row keeps its names.
+        if (wrap) {
+          const s = size(block);
+          ks.table.chooseCell({ block, row: Math.min(c.row, s.rows - 1),
+            column: Math.min(c.column, s.columns - 1) });
+        }
       }
       // A table that went, as an undo of its insert takes it, holds no chosen cell.
       if (!wrap) ks.table.chooseCell(null);
@@ -293,8 +301,12 @@ function ksmdRange(ks) {
     }
     const s = size(from.block);
     const e = end || { row: from.row, column: from.column };
-    const row = Math.max(-1, Math.min(s.rows - 1, e.row + dr));
-    const column = Math.max(0, Math.min(s.columns - 1, e.column + dc));
+    // **A hidden row or column is passed over, as an arrow key alone passes it.** Stepped onto, the
+    // far corner stood out of sight and the key seemed to do nothing: once for each row a filter
+    // hid. Where no line shows that way, the corner stays.
+    const stepped = dr ? ks.table.step(from.block, e.row, dr) : e.row;
+    const row = stepped < -1 || stepped >= s.rows ? e.row : stepped;
+    const column = dc ? ks.table.stepColumn(from.block, e.column, dc) : e.column;
     set(from.block, ks.cell.row, ks.cell.column, { row, column });
     focusChosen();
   }

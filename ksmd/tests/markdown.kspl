@@ -8,7 +8,7 @@ import "ksmd/syntax/markdown"
 import "ksmd/tests/support" { read }
 import "std/ds"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 priv const H: U8[] = "%ksmd 2\n\n"
@@ -29,7 +29,7 @@ priv struct Copy
 priv fn copy_of(source: U8[], arena: Arena$@): Copy //< the Markdown, and what it left out
     doc: = read(arena.text().s(H).s(source).take(), arena)
     values: = calc.calculate(doc@, "2026-10-23", arena)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     left: = markdown.write(doc@, values@, out@)
     return Copy::{ .text = arena.dup_str(out.slice()), .left = left }
 
@@ -96,6 +96,9 @@ priv fn blocks()
         "````\nx\n```\n`````y\n````\n", "``````\nx\n```\n`````y\n``````\n", arena)
     copies("a list after a list, a blank line between, takes the other markers",
         "- a\n\n\\\n\n1. b\n", "- a\n\n1) b\n", arena)
+    copies("a third list after two takes the first markers again, so it joins neither",
+        "- a\n\n- b\n\n- c\n\n1. x\n\n1. y\n\n1. z\n",
+        "- a\n\n* b\n\n- c\n\n1) x\n\n1. y\n\n1) z\n", arena)
     copies("a nested item under a nested item is indented to its parent's text",
         "1. a\n  1. b\n    - c\n", "1. a\n   1. b\n      - c\n", arena)
     got: =

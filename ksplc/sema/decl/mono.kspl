@@ -29,7 +29,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum"
 
 struct Mono_state_backup //<
@@ -85,6 +85,7 @@ fn prepare_inst_node(ctx: Sema_ctx$@, tmpl_node: Ast_node$@, inst_name: U8[], ar
     if tmpl_node != null
         ctx.set_current_file(tmpl_node.loc.file())
         inst_node.propagate_loc_file(tmpl_node.loc.file())
+        ctx.carry_default_origin(tmpl_node, inst_node)
     id_node: = inst_node.find_child(.k_identifier)
     params_node: = inst_node.find_child(.k_type_gen_params)
 
@@ -168,7 +169,7 @@ impl Sema_ctx
             return r.env.make_const(r.instance_arg_id(r.env.strip_const(real)))
         return real
 
-    fn instantiate_struct(r: Self$@, base_name: U8[], $args: I32[]): Str_builder!Sema_error //<
+    fn instantiate_struct(r: Self$@, base_name: U8[], $args: I32[]): Str!Sema_error //<
         //< Makes the instance of the generic type base_name (an FQN) binding args, once
         //< It returns the instance's mangled name, derived from its record (`Instance` in
         //< `../type/env.kspl`), as is its registration key.
@@ -182,7 +183,7 @@ impl Sema_ctx
                 args = canonical.slice()
                 break
         inst_rec: = sema_type_env.Instance::{ .template = base_name, .args = args }
-        defer $args_text: = Str_builder()
+        defer $args_text: = Str()
         r.env.type_args_to(args, args_text)
         if sema_decl_mono_name.contains_unknown(args_text.slice())
             return sema_decl_mono_name.unknown_type_str()
@@ -194,9 +195,9 @@ impl Sema_ctx
         if plain_rec: = r.env.strip_variance(inst_rec)
             shares_c_repr = true
             defer $_plain: = r.instantiate_struct(base_name, plain_rec.args)!
-        $inst_name: = Str_builder() // the result, handed to the caller
+        $inst_name: = Str() // the result, handed to the caller
         r.env.instance_c_name_to(inst_rec, inst_name)
-        defer $full_inst_name: = Str_builder()
+        defer $full_inst_name: = Str()
         r.env.instance_key_to(inst_rec, full_inst_name)
 
         $backup: = r.backup_mono_state()
@@ -392,6 +393,10 @@ impl Sema_ctx
             if !r.generic_impl_applies(generic_impl, inst)
                 continue
             if trait_node: = generic_impl.get_impl_trait_node()
+                // The trait's arguments are written in the impl's own type parameters.
+                saved_args: = r.generics.args.len
+                defer r.generics.args.truncate(saved_args)
+                r.bind_impl_params(generic_impl, inst.args)
                 inst_trait: = trait_node.clone()
                 r.set_current_file(generic_impl.loc.file())
                 inst_trait.propagate_loc_file(generic_impl.loc.file())
@@ -410,6 +415,12 @@ impl Sema_ctx
                     trait_tmpl: = r.env.instance_base(r.env.get_real_type(trait_id))
                     if trait_tmpl.ends_with("Index_place")
                         r.reject_const_index_place(target_id, inst_trait)
+
+    priv fn bind_impl_params(r: Self$@, impl_node: Ast_node$@, type_args: I32[]) //<
+        //< Binds an impl's own type parameters to the arguments of the instance it attaches to
+        //< The caller removes the bindings (restore_mono_state, or a truncate of generics.args).
+        r.bind_generic_args(impl_node.find_child(.k_type_gen_params),
+            sema_decl_mono_target.impl_param_args(impl_node, type_args), false)
 
     priv fn generic_impl_applies(r: Self$@, generic_impl: Ast_node$@,
         inst: sema_type_env.Instance): Bool //<
@@ -438,8 +449,7 @@ impl Sema_ctx
         site: Ast_node$@): Void!Sema_error //<
             //< Instantiates the methods the generic impls give `inst`, and queues their bodies
             //< `site` is what the user wrote that made the instance, or null.
-        inst_nodes: = List<|Ast_node$@|>.create(base_core.arena)
-        inst_shown: = List<|U8[]|>.create(base_core.arena) // each one's name, for a diagnostic
+        impl_name: = r.env.get_str(type_id)
         real_id: = r.env.get_real_type(type_id)
         t_entry: = r.env.id_to_type.get(real_id)
         // A defer fires on a continue too.
@@ -447,6 +457,11 @@ impl Sema_ctx
             if !r.generic_impl_applies(generic_impl, inst)
                 continue
             impl_gen_params: = generic_impl.find_child(.k_type_gen_params)
+            // The bodies are queued under the impl's own type parameters, which the signature
+            // was resolved under (instantiate_fn).
+            saved_args: = r.generics.args.len
+            defer r.generics.args.truncate(saved_args)
+            r.bind_impl_params(generic_impl, inst.args)
             for m_node in generic_impl.children
                 if m_node.kind_id != .k_decl_fn
                     continue
@@ -471,24 +486,20 @@ impl Sema_ctx
                 arena_short: = base_core.arena.dup_str(m_name)
                 if t_entry != null
                     t_entry.add_method(arena_short, m_sym_res)
-                inst_nodes.push(m_sym_res.node)
                 // **A closure's body is part of the function that writes it**: its environment's
                 // name is the compiler's, so it names no instantiation (`instance_notes` in ctx).
-                inst_shown
-                    .push("" if is_anon_env_type(inst.template)
+                shown: =
+                    ("" if is_anon_env_type(inst.template)
                     else base_core.arena.text().s(r.env.display(type_id)).c('.').s(m_name).take())
+                // Queued on pending, not inferred here (the reason is at instantiate_fn below).
+                // Caution: **Queue it at the same depth as the table** (not 0). What the body
+                // instantiates is one level deeper (inst_chain_depth in
+                // sema/session/state.kspl).
+                r.queue_fn_body(m_sym_res.node, base_core.arena.dup_str(impl_name),
+                    r.generics.inst_chain_depth, shown, site)
 
-        impl_name: = r.env.get_str(type_id)
-
-        // Queued on pending, not inferred here (the reason is at instantiate_fn below).
-        // Caution: **Queue it at the same depth as the table** (not 0). What the body instantiates
-        // is one level deeper (inst_chain_depth in sema/session/state.kspl).
-        for i in Range.asc(inst_nodes.len)
-            r.queue_fn_body(inst_nodes.get(i), base_core.arena.dup_str(impl_name),
-                r.generics.inst_chain_depth, inst_shown.get(i), site)
-
-    priv fn fn_instance_names(r: Self$@, fi: Fn_instance, owner: Fn_owner, key: Str_builder$@,
-        c_name: Str_builder$@) //<
+    priv fn fn_instance_names(r: Self$@, fi: Fn_instance, owner: Fn_owner, key: Str$@,
+        c_name: Str$@) //<
             //< Derives a function instance's registration key and mangled name from its record
             //< One name per shape: `app.gf<|U16|>` / `app_gf_U16` (a free function, a plain type's
             //< method), `app_Box_I64<|U16|>.gm` / `app_Box_I64_gm_U16` (an instance's method with
@@ -519,8 +530,9 @@ impl Sema_ctx
     priv fn fn_owner_of(r: Self$@, fi: Fn_instance): Fn_owner!Sema_error //<
         //< Which of fn_instance_names's shapes fi has, its type instantiated where it must be
         //< A method of a generic type's instance binds that instance's arguments. With its own type
-        //< arguments as well, it binds them to the type's parameters. Without, it binds them to the
-        //< impl's, which its template carries (`collect_impl_decl` in collect.kspl copies them in).
+        //< arguments as well, it binds its own. Either way it binds the impl's parameters to the
+        //< type's arguments (bind_impl_params); without its own, its template carries the impl's
+        //< (`collect_impl_decl` in collect.kspl copies them in).
         type_fqn: = fn_type_fqn(fi)
         type_tmpl: = r.generics.templates.get(type_fqn).unwrap_or(null)
         if type_tmpl == null
@@ -529,9 +541,7 @@ impl Sema_ctx
             if inst: = r.env.instance_of(fi.owner)
                 type_name: = r.env.get_str(fi.owner)
                 m_tmpl: = r.generics.templates.get(fi.template).unwrap_or(null)
-                if m_tmpl != null &&
-                    sema_decl_mono_name.introduces_own_generic_param(m_tmpl,
-                    type_tmpl.find_child(.k_type_gen_params))
+                if m_tmpl != null && sema_decl_mono_name.has_own_generic_param(r, m_tmpl)
                     return .own_args(type_name)
                 return .type_args(type_name, inst.template, inst.args)
         // Reached through the template's own name, the type arguments are the call's.
@@ -539,11 +549,11 @@ impl Sema_ctx
         type_name: = base_core.arena.dup_str(tmp_b.slice())
         return .type_args(type_name, type_fqn, fi.args)
 
-    fn instantiate_fn(r: Self$@, fi: Fn_instance, skip_infer: Bool): Str_builder!Sema_error //<
+    fn instantiate_fn(r: Self$@, fi: Fn_instance, skip_infer: Bool): Str!Sema_error //<
         //< Makes the instance fi records of a generic function or method, once
         //< It returns the instance's mangled name (fn_instance_names derives it). The signature is
         //< resolved at once; the body joins the work list (`queue_fn_body`) unless skip_infer.
-        defer $bound_text: = Str_builder()
+        defer $bound_text: = Str()
         r.env.type_args_to(fi.args, bound_text)
         if sema_decl_mono_name.contains_unknown(bound_text.slice())
             return sema_decl_mono_name.unknown_type_str()
@@ -551,9 +561,12 @@ impl Sema_ctx
         // The type arguments the template's own parameters bind: a table's method binds its
         // type's.
         $bound_args: I32[] = fi.args
+        m_tmpl_node: = r.generics.templates.get(fi.template).unwrap_or(null)
         switch owner
         case .type_args(_n, _t, type_args)
             bound_args = type_args
+            if impl_node: = r.generics.method_impls.get(Sz::m_tmpl_node)
+                bound_args = sema_decl_mono_target.impl_param_args(impl_node, type_args)
         default {}
         $is_method: = false
         $struct_inst_name_str: U8[] = ""
@@ -570,21 +583,18 @@ impl Sema_ctx
             struct_inst_name_str = type_name
         default {}
 
-        $inst_name: = Str_builder() // the result, handed to the caller
-        defer $full_inst_name: = Str_builder()
+        $inst_name: = Str() // the result, handed to the caller
+        defer $full_inst_name: = Str()
         r.fn_instance_names(fi, owner, full_inst_name@, inst_name@)
 
         $backup: = r.backup_mono_state()
         switch owner
         case .own_args
-            // Bind the type's own parameters from the instance's record, for this call only. The
+            // Bind the impl's own parameters from the instance's record, for this call only. The
             // struct's instantiation left generics.args long ago. restore_mono_state undoes it.
             if inst: = r.env.instance_of(fi.owner)
-                type_tmpl: = r.generics.templates.get(inst.template).unwrap_or(null)
-                struct_gen_params: =
-                    type_tmpl.find_child(.k_type_gen_params) if type_tmpl != null else null
-                if struct_gen_params != null
-                    r.bind_generic_args(struct_gen_params, inst.args, false)
+                if impl_node: = r.generics.method_impls.get(Sz::m_tmpl_node)
+                    r.bind_impl_params(impl_node, inst.args)
         default {}
         fin_s: = full_inst_name.slice()
         in_s: = inst_name.slice()
@@ -629,7 +639,7 @@ impl Sema_ctx
             if sig_node != null
                 ret_type_node = sig_node.find_child(.k_type_expr)
         if ret_type_node != null
-            sym.type_id = ret_type_node.resolve_type(r) catch e
+            sym.type_id = ret_type_node.resolve_type_in_own_file(r) catch e
                 r.fn_ctx.impl_name = old_impl_name
                 throw e
         else

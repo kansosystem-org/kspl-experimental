@@ -9,7 +9,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/json"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 priv const HEAD: U8[] = "%ksmd 2\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n"
@@ -27,7 +27,7 @@ fn run()
 priv fn carried() //< a copy carries each cell's typed text and its value as calculated
     defer arena: = Arena(64 * 1024)
     ed: = opened(join(HEAD, "| \"1F\" | =hex_to_dec(A1) | \"12\" |\n:::\n", arena), arena)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     ed.copied_cells(0, -1, 0, 0, 2, Sz[]::{}, out@) catch e
         verdict.check("a copy of cells", false, e.message())
     want: =
@@ -114,7 +114,7 @@ priv fn values_only() //< Paste values puts each value as calculated, and no for
     defer arena: = Arena(64 * 1024)
     source: = join(HEAD, "| \"1F\" | =hex_to_dec(A1) | =A1&\"!\" |\n| | | |\n:::\n", arena)
     $ed: = opened(source, arena)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     ed.copied_cells(0, 0, 1, 0, 2, Sz[]::{}, out@) catch e
         verdict.check("a copy of cells", false, e.message())
     doc: = json.parse(out.slice(), arena) catch
@@ -135,7 +135,7 @@ priv fn leaving_rows() //< a copy that leaves rows out, as hidden ones, pastes t
     defer arena: = Arena(64 * 1024)
     rows: = "| 1 | =A1*2 | |\n| 2 | =A2*2 | |\n| 3 | =A3*2 | |\n| | | |\n| | | |\n:::\n"
     $ed: = opened(join(HEAD, rows, arena), arena)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     ed.copied_cells(0, 0, 1, 2, 1, Sz[]::{ 1 }, out@) catch e
         verdict.check("a copy that leaves a row out", false, e.message())
     want: = "{\"cells\":[[\"=A1*2\"],[\"=A3*2\"]],\"values\":[[\"2\"],[\"6\"]],\"rows\":[0,2]}"
@@ -185,7 +185,7 @@ priv fn turned() //< F4 in an open cell turns `$` in the reference at the caret
 priv fn turns(text: U8[], from: Sz, to: Sz, want: U8[], at: Sz) //<
     //< F4 at bytes `from` to `to` of a cell's text, its `=` included, gives `want`, the caret at
     //< `at`; -1 for `at` checks the text alone
-    defer $out: = Str_builder()
+    defer $out: = Str()
     out.c('=')
     end: = cycle_fixed(text.sub_from(1), from - 1, to - 1, out@)
     defer arena: = Arena(4096)

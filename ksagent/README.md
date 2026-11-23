@@ -8,6 +8,8 @@ This page is the way in. What each command, option and file does is [`ksagent/do
 
 **`make chat DIR=<folder>` asks about a folder in one command**: it starts the model server, opens the chat page, and answers its questions until Ctrl+C. The steps, from installing llama.cpp to the first answer, are [`ksagent/docs/TUTORIAL-ask-about-your-files.md`](docs/TUTORIAL-ask-about-your-files.md). Which model to use, and where to download it, are in [`data/README.md`](../data/README.md).
 
+**Building ksagent needs OpenSSL**, which it links to reach a model server over https. Install `libssl-dev` on Debian and Ubuntu, `mingw-w64-ucrt-x86_64-openssl` on MSYS2, or Homebrew's `openssl@3` on macOS ("Pitfalls" in [kstls](../lib/kstls/README.md)).
+
 **`ask`, `watch` and `eval` need a model server already running.** `make model-server` starts one alone, and keeps it until Ctrl+C. Run it in a second terminal:
 
 ```sh
@@ -31,7 +33,7 @@ make ksagent                                   # -> out/ksagent.exe
 | [`ksagent/office/`](office/) | Word and Excel files as lines of text: the zip, DEFLATE and XML readers, and a file for each format |
 | [`ksagent/sorted_names.kspl`](sorted_names.kspl) | Names read from a file, sorted once and found by halving: the Office readers' and the chat file's |
 | [`ksagent/answer.kspl`](answer.kspl) | An answer, the citation check, and the lines ksagent adds in English or Japanese |
-| [`ksagent/model.kspl`](model.kspl) | One request to the model server, and its reply as it arrives |
+| [`ksagent/model.kspl`](model.kspl) | One request to the model server, over http or https, and its reply as it arrives |
 | [`ksagent/defaults.kspl`](defaults.kspl) | Where ksagent asks by default, the API key's variable, and the conversation's length a model server must hold |
 | [`ksagent/events.kspl`](events.kspl) | The server-sent events a streamed reply comes in |
 | [`ksagent/progress.kspl`](progress.kspl) | What the console and the live file show while an answer is written |
@@ -45,7 +47,7 @@ make ksagent                                   # -> out/ksagent.exe
 
 ## The tests
 
-**`make test` runs them from this folder** ([`ksagent/Makefile`](Makefile)). It needs a `ksplc` and a C compiler, and no model or Python. The tests start a stand-in model server in a thread, which gives prepared replies ([`ksagent/tests/stub.kspl`](tests/stub.kspl)), and check what ksagent does with each. **They also run each row of [`SPEC-commands.md`](docs/SPEC-commands.md) through the program itself**, which `make test` builds first. The Word and Excel files they read are in [`ksagent/tests/office_data/`](tests/office_data/), made by [`ksagent/tests/make_office_fixtures.py`](tests/make_office_fixtures.py).
+**`make test` runs them from this folder** ([`ksagent/Makefile`](Makefile)). It needs a `ksplc`, a C compiler and OpenSSL, and no model or Python. The tests start a stand-in model server in a thread, which gives prepared replies ([`ksagent/tests/stub.kspl`](tests/stub.kspl)), and check what ksagent does with each. The stand-in speaks http, or https with certificates made at run time. **They also run each row of [`SPEC-commands.md`](docs/SPEC-commands.md) through the program itself**, which `make test` builds first. The Word and Excel files they read are in [`ksagent/tests/office_data/`](tests/office_data/), made by [`ksagent/tests/make_office_fixtures.py`](tests/make_office_fixtures.py).
 
 ## Further reading
 
@@ -56,3 +58,4 @@ make ksagent                                   # -> out/ksagent.exe
 | [`ksagent/docs/DESIGN-agent.md`](docs/DESIGN-agent.md) | Why ksagent is shaped this way: files as the channel, search, the citation check and the caps | Whoever changes ksagent |
 | [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md) | The rules of the local server a page uses to read and write files | Whoever wants to know why ksagent does not talk to the page |
 | [std](../std/README.md) | The `net`, `http`, `json` and `fs` it is built on; `ksplc doc std` lists every file std publishes | Whoever changes ksagent |
+| [kstls](../lib/kstls/README.md) | The TLS client an `https://` model URL goes through, and the test certificates | Whoever changes ksagent |

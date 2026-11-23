@@ -5,7 +5,7 @@ import "std/ds"
 import "std/json" + { Json_builder }
 import "std/mem" { Arena, dealloc }
 import "std/sha256"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 import "std/verdict"
 
@@ -77,8 +77,8 @@ fn test_sha256_padding_edges() //< the lengths where the padding needs a block o
     //< **From 56 to 63 bytes past a block's start, the length field does not fit**, so the padding
     //< fills that block and adds one more. 55 is the last length that fits.
     verdict.start("[Sha256] the padding at the edge of a block test...")
-    defer $text: = Str_builder()
-    defer $name: = Str_builder()
+    defer $text: = Str()
+    defer $name: = Str()
     $hex: U8[sha256.HEX_LEN] = ::{}
     for c in PAD_CASES
         text.clear()
@@ -116,12 +116,12 @@ fn test_base64_codec()
 // Caution: **Keep an integer and a fraction in separate variants.** F64 alone silently rounds an
 // integer beyond 53 bits (an offset in a safetensors file); integers alone cannot hold a fraction.
 // ==========================================
-priv fn dumped(value: json.Value, out: Str_builder$@): U8[]
+priv fn dumped(value: json.Value, out: Str$@): U8[]
     out.clear()
     value.dump(out)
     return out.slice()
 
-priv fn round_trip(src: U8[], want: U8[], arena: Arena$@, out: Str_builder$@)
+priv fn round_trip(src: U8[], want: U8[], arena: Arena$@, out: Str$@)
     v: = json.parse(src, arena) catch panic("json: a well-formed number must parse")
     round_ok: = dumped(v.val, out).equals(want)
     assert(round_ok, "json: number round-trip must keep both the value and the kind")
@@ -256,7 +256,7 @@ fn test_to_f64_long_digits() //< a spelling the fast path cannot decide, with an
     verdict.check("a plus sign and 0s before the digits keep the scale",
         parsed("0.0100000000000000011102230246251565404236316680908203126e+2") ==
         1.0000000000000002, "")
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s(AFTER_ONE_TIE)
     for _i in Range.asc(730)
         b.c('0')
@@ -301,7 +301,7 @@ fn test_json_escapes(arena: Arena$@) //< std/json: a string holding `\uXXXX`
 
 fn test_json_numbers(arena: Arena$@)
     verdict.start("[Json] reading and writing integers and fractions test...")
-    defer $b: = Str_builder()
+    defer $b: = Str()
 
     // A fraction and an exponent read back. A whole value keeps its decimal point, or reading it
     // again gives the integer variant.
@@ -407,7 +407,7 @@ fn test_json_string_escapes(arena: Arena$@) //<
     raw: = U8[]::ctrl_bytes
     $jb: = Json_builder(arena)
     built: = jb.obj().set("t", jb.str_val(raw)).build()
-    defer $ob: = Str_builder()
+    defer $ob: = Str()
     built.dump(ob@)
     written: = ob.slice()
     escaped_ok: = written.equals("{\"t\":\"a\\u0001\\b\\f\\u001fb\"}")
@@ -470,7 +470,7 @@ fn test_json_malformed_input(arena: Arena$@) //<
 
 priv fn nested_outcome(depth: Sz, arena: Arena$@): U8[] //<
     //< What parsing `depth` nested arrays gives: "parses", "too_deep", or "other"
-    defer $doc: = Str_builder()
+    defer $doc: = Str()
     for _i in Range.asc(depth)
         doc.c('[')
     for _i in Range.asc(depth)
@@ -526,7 +526,7 @@ fn test_json_utf8(arena: Arena$@) //<
     // written with U+FFFD in their place. Well-formed bytes are written as they are.
     mixed: U8[6] = ::{ 'a', 0xffU8, 0xe3U8, 0x81U8, 0x82U8, 0xc0U8 }
     $jb: = Json_builder(arena)
-    defer $ob: = Str_builder()
+    defer $ob: = Str()
     jb.str_val(U8[]::mixed).dump(ob@)
     back: = json.parse(ob.slice(), arena) catch panic("json: what the writer puts out must parse")
     assert(back.val.as_str().unwrap_or("").equals("a\uFFFDあ\uFFFD"),
@@ -549,7 +549,7 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
     //< Caution: **Test both sizes of object.** Past `KEY_SCAN_MAX` members the parser sorts the
     //< keys, a path a small object never takes.
     verdict.start("[Json] a duplicated key test...")
-    defer $out: = Str_builder()
+    defer $out: = Str()
     flat: U8[] = "{\"a\":1,\"a\":2}"
     verdict.check("a repeated key is refused at the second name", repeat_at(flat, arena) == 7, "")
     around: U8[] = "{\"a\":1,\"b\":{\"a\":2},\"a\":3}"
@@ -558,7 +558,7 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
     verdict.check("the same key in an inner object is not a repeat",
         repeat_at("{\"a\":{\"a\":1}}", arena) == -1, "")
     // The 40th member repeats the 1st, past where keys are compared one by one.
-    defer $big: = Str_builder()
+    defer $big: = Str()
     big.c('{')
     $last_at: Sz = 0
     for i in Range.asc(40)
@@ -582,7 +582,7 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
         .set("x", jb.int_val(3I64)).build()
     assert(dumped(order, out@).equals("{\"x\":3,\"y\":2}"), "json: replacing must keep the order")
     verdict.pass("a repeated key is refused at any size, and building replaces in order.")
-priv fn members_to(out: Str_builder$@, count: Sz) //<
+priv fn members_to(out: Str$@, count: Sz) //<
     //< writes `{` and `count` members `"k0":0` to `"k<count-1>"`
     out.c('{')
     for i in Range.asc(count)
@@ -596,7 +596,7 @@ fn test_json_large_object_repeats(arena: Arena$@) //<
     //< Caution: **The reported position and error must not depend on that.** A repeat earlier
     //< than a syntax error is the error reported, as in a small object.
     verdict.start("[Json] a repeated key in a large object test...")
-    defer $src: = Str_builder()
+    defer $src: = Str()
     members_to(src@, 40)
     at_late: = src.slice().len + 1
     src.s(",\"k25\":0,\"k30\":0}")
@@ -633,7 +633,7 @@ fn test_json_large_object_repeats(arena: Arena$@) //<
     doc: = json.parse(src.slice(), arena) catch panic("json: 20000 distinct keys must parse")
     $i: Sz = 0
     $wrong: Sz = 0
-    defer $want: = Str_builder()
+    defer $want: = Str()
     for m in doc.val.obj_members()
         want.clear()
         want.s("k\{i\}")
@@ -646,7 +646,7 @@ fn test_json_large_object_repeats(arena: Arena$@) //<
         i == n && wrong == 0, want.slice())
     verdict.pass("a large object refuses the first repeat in the text, before any later error.")
 
-priv fn nested_members(out: Str_builder$@, depth: Sz, swap: Bool, leaf: I32) //<
+priv fn nested_members(out: Str$@, depth: Sz, swap: Bool, leaf: I32) //<
     //< writes `depth` objects, each holding the next under "x" beside "y":1; `swap` puts "y" first
     for _i in Range.asc(depth)
         out.s("{\"y\":1,\"x\":" if swap else "{\"x\":")
@@ -656,7 +656,7 @@ priv fn nested_members(out: Str_builder$@, depth: Sz, swap: Bool, leaf: I32) //<
 
 priv fn deep_pair_equal(depth: Sz, leaf_b: I32, arena: Arena$@): Bool //<
     //< Whether two nested documents compare equal: members in the other order, leaves 7 and leaf_b
-    defer $src: = Str_builder()
+    defer $src: = Str()
     nested_members(src@, depth, false, 7)
     a: = json.parse(src.slice(), arena) catch panic("json: the nested document must parse")
     src.clear()
@@ -706,7 +706,7 @@ fn test_json_equals_each_kind(arena: Arena$@) //<
 
 fn test_json_literals_written(arena: Arena$@) //< std/json: null, false and true read and written
     verdict.start("[Json] the three literals read and written back test...")
-    defer $b: = Str_builder()
+    defer $b: = Str()
     round_trip("[null,false,true]", "[null,false,true]", arena, b@)
     v: = json.parse("{\"n\":null,\"f\":false,\"t\":true}", arena)
         catch panic("json: an object of literals parses")
@@ -748,7 +748,7 @@ fn test_json_indent(arena: Arena$@) //<
     //< the strings sent to others. **Keep an empty `{}` and `[]` on one line**, as others do. The
     //< expected values come from Python's `json.dumps(indent=2)`.
     verdict.start("[Json] writing out with indentation test...")
-    defer $out: = Str_builder()
+    defer $out: = Str()
     src: U8[] = "{\"a\":{\"b\":1},\"e\":{},\"f\":[],\"g\":[1,[2]]}"
     v: = json.parse(src, arena) catch panic("json: the fixture must parse")
 
@@ -779,7 +779,7 @@ fn test_json_obj_members(arena: Arena$@) //< std/json: an object's members, in t
     verdict.start("[Json] an object's members walk in the order the text gave them test...")
     doc: = json.parse("{\"b\": 1, \"a\": {\"x\": 2}, \"c\": []}", arena) catch
         panic("the object parses")
-    defer $text: = Str_builder()
+    defer $text: = Str()
     for m in doc.val.obj_members()
         text.s(m.key).c('=')
         m.val.dump(text@)

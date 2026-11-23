@@ -30,7 +30,7 @@ import "ksmd/tests/tables"
 import "ksmd/tests/wildcards"
 import "std/ds"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 fn main(): I32
@@ -101,11 +101,11 @@ priv fn valid_sources()
     verdict.check("exact source size limit", true, "")
 
 priv fn invalid_sources()
-    fails("", "expected version header %ksmd 2", 0, 1, 1)
-    fails("%ksmd 3\ninvalid body", "expected version header %ksmd 2", 0, 1, 1)
-    fails("%ksmd 1\n", "expected version header %ksmd 2", 0, 1, 1)
-    fails("%ksmd 2 \n", "expected version header %ksmd 2", 0, 1, 1)
-    defer $unicode: = Str_builder()
+    fails("", NO_HEADER, 0, 1, 1)
+    fails("%ksmd 3\ninvalid body", NO_HEADER, 0, 1, 1)
+    fails("%ksmd 1\n", NO_HEADER, 0, 1, 1)
+    fails("%ksmd 2 \n", NO_HEADER, 0, 1, 1)
+    defer $unicode: = Str()
     unicode.s("%ksmd 2\n日").c(0xFFU8)
     fails(unicode.slice(), "invalid UTF-8", 11, 2, 2)
     bad_utf8(U8[]::{ 0xC0U8, 0xAFU8 })
@@ -119,6 +119,10 @@ priv fn invalid_sources()
         large[i] = 'x'
     fails(large, "source exceeds 8 MiB", 0, 1, 1)
 
+priv const NO_HEADER: U8[] =
+    "the first line is not the version header. Write '%ksmd 2' as the first line" //<
+        //< the refusal of a first line other than `%ksmd 2`, which says what to write
+
 priv fn fails(bytes: U8[], message: U8[], offset: Sz, line: Sz, column: Sz)
     _source: = Source("bad.ksmd", bytes) catch e
         verdict.check(message,
@@ -128,6 +132,6 @@ priv fn fails(bytes: U8[], message: U8[], offset: Sz, line: Sz, column: Sz)
     verdict.check("invalid source was accepted", false, "")
 
 priv fn bad_utf8(tail: U8[])
-    defer $text: = Str_builder()
+    defer $text: = Str()
     text.s("%ksmd 2\n").s(tail)
     fails(text.slice(), "invalid UTF-8", 8, 2, 1)

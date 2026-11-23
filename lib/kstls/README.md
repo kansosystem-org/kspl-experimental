@@ -22,7 +22,9 @@ Run `ksplc doc lib/kstls/<file>` to list a file's published API.
 
 ## Pitfalls
 
-**Only the connection and the TLS handshake have a deadline.** `Tls_stream.connect` opens the TCP connection with the wait of `std/net`'s `Tcp_stream.connect`. It then gives the handshake `handshake_ms` milliseconds, and fails with `handshake_timed_out` past that time. Reads, writes, and closing the TLS stream have no deadline, so a silent peer can leave the caller waiting indefinitely. Do not use this API where every network operation must finish within a fixed time.
+**`read` and `write` have no deadline; `read_for` and `write_all_for` do.** `Tls_stream.connect` opens the TCP connection with the wait of `std/net`'s `Tcp_stream.connect`. It then gives the handshake `handshake_ms` milliseconds, and fails with `handshake_timed_out` past that time. `read`, `write` and closing the stream wait for the peer for as long as it takes, so a silent peer can hold the caller. Where every move must end in time, use `read_for` and `write_all_for`, which `std/net`'s `Byte_stream` names. `std/http` speaks HTTP over a `Tls_stream` through them.
+
+**The client trusts the system's CAs, or only those in `ca_file`.** `Tls_stream.connect` takes a PEM file of CAs for a server the system's CAs do not vouch for. An example is a server a person set up on their own network. Given, the file replaces the system's CAs.
 
 **The server half never waits, so its caller keeps every deadline.** Each call on a `Tls_session` returns `would_block` where the socket is not ready. The caller waits for the socket, and closes a connection whose handshake takes too long.
 

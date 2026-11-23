@@ -14,7 +14,7 @@ import "ksos/drivers/rp2040/usb_cdc" as usb
 import "ksos/kernel/heap"
 import "std/http"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 // ==========================================
 // Kanso OS — **starting up and obtaining the policy**, for the car that runs on a policy
@@ -41,7 +41,7 @@ const POLICY_PATH: U8[] = "/pilot_policy.safetensors" //< the policy file, under
     //< the folder to serve (`lib/ksos/demo/cortex_m`, where the file is kept).
 
 // Global: too large for the car's task stack (`stack_car`, 2560 bytes).
-$heap_buf: U8[4096] // used by Str_builder (building the request)
+$heap_buf: U8[4096] // used by Str (building the request)
 $resp_buf: U8[4096] // the whole downloaded response (the header plus the policy)
 
 fn stored_policy(): U8[]!ksdblog.Ksdb_error //< reads the policy saved in the record
@@ -57,7 +57,7 @@ fn fetch_policy(ln: con.Line$@, arena: Arena$@): U8[] //< requests the policy on
     //< `stored_policy`).
     //< Caution: **Keep reading until it is complete**: on `incomplete` from std/http, which checks
     //< the length, it reads more.
-    defer $req: = Str_builder()
+    defer $req: = Str()
     head: = http.headers(arena).add("Host", "192.168.137.1").add("Connection", "close").build()
     http.format_request(req@, "GET", POLICY_PATH, head, "") catch
         con.say(ln, "[pilot]", "FAILED to build the request")

@@ -118,6 +118,17 @@ KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
     return (st.st_mode & S_IXUSR) ? 1 : 0;
 }
 
+/* Whether a file stands there that its owner cannot write (for std/fs.kspl's is_read_only).
+ * The owner's bit, not access(W_OK), which is nearly always true under root (as kspl_is_exec).
+ * A folder is never read-only here: its write bit guards its entries, not a content. */
+KSPL_LINK Bool kspl_is_read_only(const U8 *path_ptr, Sz path_len) {
+    char path[KSPL_PATH_CAP];
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
+    struct stat st;
+    if (stat(path, &st) != 0 || S_ISDIR(st.st_mode)) return false;
+    return (st.st_mode & S_IWUSR) ? 0 : 1;
+}
+
 /* Whether that path itself is a symbolic link. 1 = a link, 0 = not a link, -1 = unknown.
  * **Use lstat, not stat**, which follows the link and answers "not a link".
  * Caution: **Do not mix -1 with 0.** A step that could not be peeked passing as "not a link" opens

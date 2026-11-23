@@ -12,6 +12,7 @@ import "ksplc/base/ast_kinds" as base_ast_kinds
 import "ksplc/base/core" as _base_core
 import "ksplc/base/lines" as _base_lines // `line_starts`
 import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/state" { Doc_state }
 import "std/chars" // `sub`
 import "std/ds" { List }
@@ -89,7 +90,11 @@ priv fn end_of(ctx: Ctx$@, node: Ast_node@): Sz //<
     //< the body.
     if node == null || !node.loc.file().equals(ctx.file)
         return 0
-    $far: Sz = node.loc.offset + node.text.len
+    // **A node's text is its length only where the source spells it.** A field's node is named
+    // `struct_field`, 12 bytes whatever was written: a short field (`x: I8`) then reached into the
+    // next declaration's line, and the type's range with it.
+    own: Sz = node.text.len if lsp_position.is_source_text(node, ctx.src) else 0
+    $far: Sz = node.loc.offset + own
     for ch in node.children
         got: = end_of(ctx, ch)
         if got > far

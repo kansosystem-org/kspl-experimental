@@ -1,5 +1,5 @@
 #!/usr/bin/env -S ksplc run
-//< Answers questions about the files in one folder, through a model server on this machine
+//< Answers questions about the files in one folder, through a model server the person runs
 //< Each answer cites the file and lines it comes from, and each cited quote is checked against
 //< the file. `ask` answers one question, `watch` answers the questions a chat page asks, and
 //< `eval` scores a model on questions whose answers are known.
@@ -36,6 +36,7 @@ priv struct Options //< the command line, read and checked
     command: U8[]
     rest: U8[][] //< the positional arguments after the command
     url: U8[]
+    ca_file: U8[] //< `--model-ca`; empty where it is not given
     model: U8[]
     timeout_s: I64
     out: U8[] //< `eval`'s table file under the folder; empty writes none
@@ -43,6 +44,7 @@ priv struct Options //< the command line, read and checked
 priv fn read_args(options: Options$@, arena: Arena$@): Bool //<
     //< Reads the command line into `options`; false once a refusal is printed
     $url: U8[] = defaults.DEFAULT_URL
+    $ca_file: U8[] = ""
     $model_name: U8[] = "local"
     $timeout_s: I64 = 600I64
     $out: U8[] = ""
@@ -58,7 +60,9 @@ priv fn read_args(options: Options$@, arena: Arena$@): Bool //<
     cli.command_form("eval", "[options...] <folder> <questions file>")
     cli.positional("<folder> [<question> | <questions file>]")
     cli.str_opt("--model-url", url@,
-        "the model server, http only and without /v1 (default http://127.0.0.1:8081)")
+        "the model server, http:// or https://, without /v1 (default http://127.0.0.1:8081)")
+    cli.str_opt("--model-ca", ca_file@,
+        "the PEM file of the CA that made an https model server's certificate")
     cli.str_opt("--model", model_name@, "the model name each request names (default local)")
     cli.int_opt("--timeout", timeout_s@, "the seconds one model reply may take (default 600)")
     cli.str_opt("--out", out@, "also write eval's table to this file under <folder> (.md or .ksmd)")
@@ -72,7 +76,7 @@ priv fn read_args(options: Options$@, arena: Arena$@): Bool //<
         cli.print_command_usage(command, io.err())
         return false
     options$ = Options::{ .command = command, .rest = cli.rest.slice(), .url = url,
-        .model = model_name, .timeout_s = timeout_s, .out = out }
+        .ca_file = ca_file, .model = model_name, .timeout_s = timeout_s, .out = out }
     return true
 
 fn main(): I32
@@ -88,7 +92,7 @@ fn main(): I32
         io.err().s("\{NAME\}: --timeout must be from 1 to \{MAX_TIMEOUT_S\} seconds\n")
         return 1
     $server: =
-        model.parse_url(o.url, o.model, I32::(o.timeout_s * 1000I64), arena) catch why
+        model.parse_url(o.url, o.model, I32::(o.timeout_s * 1000I64), o.ca_file, arena) catch why
             io.err().s("\{NAME\}: ").s(why).c('\n')
             return 1
     job: = agent.Ask::{ .server = server@, .folder = files.Folder(root), .trace = true }

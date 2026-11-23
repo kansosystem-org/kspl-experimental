@@ -351,7 +351,7 @@ impl Ast_node
         defer sema_session_prof.prof.body_end(ctx, fn_name, r.loc, prof_started)
 
         // An instance's tree carries its template's file (prepare_inst_node in mono.kspl).
-        def_file: = r.loc.file()
+        def_file: = ctx.names_file(r)
         prev_file: = ctx.file_name
         if def_file.len > 0
             ctx.set_current_file(def_file)
@@ -378,7 +378,12 @@ impl Ast_node
             if sym.flags.is_export
                 is_export = true
 
-        if type_node != null
+        // A return type reported missing is the unknown type, as a parameter's is: the function's
+        // declaration resolved it before the report.
+        if type_node != null && !ctx.is_instantiating() &&
+            sema_decl_type_check.names_missing_type(ctx, type_node)
+            ctx.fn_ctx.ret_id = I32::sema_type_env.Builtin_type_id.unknown
+        else if type_node != null
             ctx.fn_ctx.ret_id = type_node.resolve_type(ctx)!
             if is_export
                 ctx.check_ffi_safety(ctx.fn_ctx.ret_id, type_node)

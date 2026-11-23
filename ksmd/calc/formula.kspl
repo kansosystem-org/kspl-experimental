@@ -10,7 +10,7 @@ import "ksmd/model/model" { Cell, Corner, Document, Piece, Table }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 const BROKEN: U8[] = "#REF!" //< what a reference becomes when its row or column is removed
 priv const CAP: Sz = 1000000000 //< past every table; a longer address stops growing here
@@ -95,7 +95,7 @@ fn token_at(text: U8[], from: Sz): Token //< the token after any spaces and tabs
     if c.is_digit() || (c == '.' && i + 1 < text.len && text[i + 1].is_digit())
         t.end = number_end(text, i)
         t.text = text.sub(i, t.end - i)
-        defer $plain: = Str_builder()
+        defer $plain: = Str()
         t.kind = .number if is_decimal(literal_decimal(t.text, plain@)) else .bad
         return t
     if c.is_lower()
@@ -251,7 +251,7 @@ fn text_piece(text: U8[]): Piece //< a piece of bytes kept as written
         .to = no_corner() }
 
 fn write_formula(doc: Document@, table: Table@, cell: Cell, at: Positions@, rows: Sz, columns: Sz,
-    out: Str_builder$@) //<
+    out: Str$@) //<
         //< Writes a formula with each reference's coordinates as they are now
         //< `rows` and `columns` shift every axis without `$`, as a copy that far away does. A
         //< reference shifted outside its table becomes `#REF!`.
@@ -265,7 +265,7 @@ fn write_formula(doc: Document@, table: Table@, cell: Cell, at: Positions@, rows
         case .columns
             write_columns(doc, p, at, columns, out)
 
-fn shift_formula(doc: Document@, home: Sz, text: U8[], rows: Sz, columns: Sz, out: Str_builder$@) //<
+fn shift_formula(doc: Document@, home: Sz, text: U8[], rows: Sz, columns: Sz, out: Str$@) //<
     //< Writes a formula's text, without its `=`, as a copy `rows` down and `columns` right writes
     //< it into table `home`, each reference shifted as `moved` shifts it
     //< A paste of cells copied in ksmd calls it: the text may come from another document. A
@@ -293,9 +293,8 @@ priv fn table_of(doc: Document@, home: Sz, tok: Token): Sz? //< the table a refe
         return .some(home)
     return find_written(doc, tok.table)
 
-priv fn write_shifted(text: U8[], tok: Token, table: Table@, rows: Sz, columns: Sz,
-    out: Str_builder$@) //<
-        //< One reference token, shifted, its table's name as written; `#REF!` where it leaves `table`
+priv fn write_shifted(text: U8[], tok: Token, table: Table@, rows: Sz, columns: Sz, out: Str$@) //<
+    //< One reference token, shifted, its table's name as written; `#REF!` where it leaves `table`
     $a: = tok.from
     $b: = tok.to
     // Whole columns hold every row, so only their columns shift.
@@ -309,7 +308,7 @@ priv fn write_shifted(text: U8[], tok: Token, table: Table@, rows: Sz, columns: 
         return
     write_token(text, tok, a, b, out)
 
-priv fn write_token(text: U8[], tok: Token, left: Address, right: Address, out: Str_builder$@) //<
+priv fn write_token(text: U8[], tok: Token, left: Address, right: Address, out: Str$@) //<
     //< A reference token with new corners: its table's name as written, then its addresses in the
     //< order written, a second only where the text has one
     if tok.table.len > 0
@@ -328,7 +327,7 @@ priv fn write_token(text: U8[], tok: Token, left: Address, right: Address, out: 
     else
         write_address(right, out)
 
-fn cycle_fixed(text: U8[], from: Sz, to: Sz, out: Str_builder$@): Sz //<
+fn cycle_fixed(text: U8[], from: Sz, to: Sz, out: Str$@): Sz //<
     //< Writes a formula's text, without its `=`, with `$` turned to its next form in each reference
     //< from byte `from` to byte `to`, as F4 turns it in a spreadsheet's cell. It gives where the
     //< last reference turned ends in `out`, or -1 where none turned.
@@ -384,7 +383,7 @@ priv fn brackets_of(text: U8[]): Brackets //< the brackets of a formula's tokens
             b.quoted = true
         at = tok.end
 
-fn closing(text: U8[], out: Str_builder$@) //<
+fn closing(text: U8[], out: Str$@) //<
     //< Writes what closes a formula left open at its end: a `"` for quoted text still open, then
     //< a `)` for each `(` no `)` closes. It writes nothing where the formula closes already.
     //< **It writes nothing where an ending alone cannot close it**, as where a `)` closes nothing.
@@ -392,7 +391,7 @@ fn closing(text: U8[], out: Str_builder$@) //<
     b: = brackets_of(text)
     if b.stray || (b.open == 0 && !b.quoted)
         return
-    defer $whole: = Str_builder()
+    defer $whole: = Str()
     whole.s(text)
     if b.quoted
         whole.c('"')
@@ -429,7 +428,7 @@ fn partner(text: U8[], at: Sz, arena: Arena$@): Sz //<
         from = tok.end
 
 priv fn write_reference(doc: Document@, piece: Piece@, at: Positions@, rows: Sz, columns: Sz,
-    out: Str_builder$@) //<
+    out: Str$@) //<
         //< `[name.]A1`, or a range from its upper left corner to its lower right one
     $a: = at.place(piece.table, piece.from, rows, columns)
     $b: = at.place(piece.table, piece.to, rows, columns)
@@ -461,9 +460,8 @@ priv fn write_reference(doc: Document@, piece: Piece@, at: Positions@, rows: Sz,
     out.c(':')
     write_address(b, out)
 
-priv fn write_columns(doc: Document@, piece: Piece@, at: Positions@, columns: Sz,
-    out: Str_builder$@) //<
-        //< `[name.]D`, or `[name.]D:F` from the left column to the right one
+priv fn write_columns(doc: Document@, piece: Piece@, at: Positions@, columns: Sz, out: Str$@) //<
+    //< `[name.]D`, or `[name.]D:F` from the left column to the right one
     $a: = at.column_place(piece.table, piece.from, columns)
     $b: = at.column_place(piece.table, piece.to, columns)
     if a.column < 0 || b.column < 0
@@ -481,14 +479,14 @@ priv fn write_columns(doc: Document@, piece: Piece@, at: Positions@, columns: Sz
         out.c(':')
         write_letters(b, out)
 
-fn write_address(address: Address, out: Str_builder$@) //<
+fn write_address(address: Address, out: Str$@) //<
     //< `$A$1`: letters for the column, then the row
     write_letters(address, out)
     if address.fixed_row
         out.c('$')
     out.s("\{address.row + 1\}")
 
-priv fn write_letters(address: Address, out: Str_builder$@) //< `$A`: the column's letters
+priv fn write_letters(address: Address, out: Str$@) //< `$A`: the column's letters
     if address.fixed_column
         out.c('$')
     write_column(address.column, out)
@@ -583,14 +581,14 @@ priv fn attach(doc: Document@, home: Sz, tok: Token): Piece? //<
     return .some(Piece::{ .kind = .range if tok.range else .cell, .text = "", .table = table,
         .named = tok.table.len > 0, .from = corner(t, tok.from), .to = corner(t, tok.to) })
 
-fn write_table_name(name: U8[], out: Str_builder$@) //<
+fn write_table_name(name: U8[], out: Str$@) //<
     //< A table's name as a reference writes it: plain, or in quotes as formula text is written
     if is_plain_name(name)
         out.s(name)
     else
         write_quoted(name, out)
 
-fn write_quoted(text: U8[], out: Str_builder$@) //<
+fn write_quoted(text: U8[], out: Str$@) //<
     //< Text in a formula's quotes: each byte as it is, and each '"' twice, as `unquoted` reads it
     out.c('"')
     for c in text
@@ -742,7 +740,7 @@ priv fn number_end(text: U8[], from: Sz): Sz //<
             i = j
     return i
 
-fn as_decimal(written: U8[], out: Str_builder$@): U8[] //<
+fn as_decimal(written: U8[], out: Str$@): U8[] //<
     //< A number in decimal, as a cell's number writes it: `1.` as `1`, `.5` as `0.5`, `-.5` as `-0.5`
     //< Excel takes a point with digits on one side only, so a formula copied from it reads, and a
     //< typed `.5` is a number. A number with digits on both sides, or none, is given as written,
@@ -761,7 +759,7 @@ fn as_decimal(written: U8[], out: Str_builder$@): U8[] //<
     out.s(written.sub_from(point if fraction > 0 else point + 1))
     return out.slice()
 
-fn literal_decimal(written: U8[], out: Str_builder$@): U8[] //<
+fn literal_decimal(written: U8[], out: Str$@): U8[] //<
     //< A formula's number in decimal: as `as_decimal`, after its leading zeros, as Excel reads it
     //< `007` is 7, and `00.5` is 0.5. A number cell keeps JSON's form, which has no leading zero:
     //< as a cell, `007` is a code that would lose its zeros.

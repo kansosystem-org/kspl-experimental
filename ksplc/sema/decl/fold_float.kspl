@@ -12,7 +12,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds"
 import "std/math"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum"
 
 priv const MAX_FLOAT_FOLD_DEPTH: Sz = 1024 //< how deep the fold follows nested expressions
@@ -95,7 +95,7 @@ impl Ast_node
         $v: F64 = 0.0
         switch r.kind_id
         case .k_float
-            defer $clean: = Str_builder()
+            defer $clean: = Str()
             _stop: = r.text.append_clean_number(clean@, "Ff")
             v = clean.slice().to_f64() catch
                 return .none
@@ -121,7 +121,13 @@ impl Ast_node
                 return rounded_as(ctx, src.fold_float_at(ctx, depth + 1), r.type_id)
             n: = ctx.try_eval_constexpr_wide(src) catch
                 return .none
-            v = F64::n
+            // The fold carries a `U64` as its bits, so the upper half reads back as unsigned.
+            // A cast to `F32` rounds once, from the integer: through `F64` it would round twice.
+            is_uns: = ctx.env.is_unsigned(ctx.env.scalar_repr_id(src.type_id))
+            if is_f32(ctx, r.type_id)
+                v = F32::(U64::n) if is_uns else F32::n
+            else
+                v = F64::(U64::n) if is_uns else F64::n
         default
             return .none
         return rounded_as(ctx, .some(v), r.type_id)
@@ -178,10 +184,13 @@ priv fn rounded_as(ctx: Sema_ctx$@, folded: F64?, type_id: I32): F64? //<
     //< A folded value rounded to `F32` where the node's type is one
     v: = folded catch
         return .none
-    if ctx.env.get_clean_real_type(type_id) == (I32::sema_type_env.Builtin_type_id.f32_type)
+    if is_f32(ctx, type_id)
         narrowed: = F32::v
         return .some(narrowed)
     return .some(v)
+
+priv fn is_f32(ctx: Sema_ctx@, type_id: I32): Bool //< whether a node of the type computes in `F32`
+    return ctx.env.get_clean_real_type(type_id) == (I32::sema_type_env.Builtin_type_id.f32_type)
 
 priv fn two_to(exponent: I32): F64 //<
     //< 2 to the `exponent`, exact in `F64` for every exponent used here

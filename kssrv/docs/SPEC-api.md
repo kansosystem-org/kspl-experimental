@@ -208,6 +208,8 @@ These are the places where the server does less than a client can expect.
 * **A name longer than the file system holds answers 404**, as if absent, on every OS. Linux and macOS hold 255 bytes, Windows 255 UTF-16 units, so 100 kana (300 bytes) fit on Windows alone. No file can stand at such a name, so it is not found, not refused.
 * **Only a regular file is served.** A FIFO or a device in the root answers 404, as if absent, since its read can go on forever.
 * **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception (RFC 8615). In `path=`, `GET /api/file` reads a dot name, and `PUT /api/file` and `GET /api/list` refuse one with 403.
+* **`path=` keeps a `+` as a `+`**, as a path does: only `%XX` is decoded there.
+* **`PUT /api/file` does not replace a file marked read-only** (409 with `"cause":"read_only"`), on any OS. The rules are "Files" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 * **A path in a form that Windows reads as another name is refused** (403) on every OS, both here and in `path=`. These are a `\`, an empty segment (`/a//b`), a `:`, a name ending in `.` or a space, and a device name (`CON`). So are a name shaped like a short name (`GIT~1`, `A~1.TXT`) and a wildcard (`*`, `?`). One `/` at the end names a folder: `/sub/` is its index, `/sub` is sent there, and a file named so (`/sub/f.txt/`) is a 404. So a file whose name holds one of these forms is not served, and `GET /api/list` leaves it out.
 
 ## The answers, request by request

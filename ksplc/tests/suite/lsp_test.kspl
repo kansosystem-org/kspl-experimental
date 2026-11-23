@@ -25,7 +25,7 @@ import "std/io"
 import "std/json" + { Json_builder }
 import "std/jsonrpc"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
@@ -651,7 +651,7 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
     defer w.kill()
     $b: = Json_builder(arena)
     root: = b.obj().set("rootUri", b.str_val(top)).build()
-    defer $frames: = Str_builder()
+    defer $frames: = Str()
     jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", root, 1, arena))
     opened: = jsonrpc.encode("textDocument/didOpen",
         lsp_client.did_open(CH_FILE, ch_text, arena), -1, arena)
@@ -668,7 +668,7 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
             "the worker took no request")
         return
     w.close_stdin() // if not closed, the worker keeps waiting: it answers after reading everything
-    defer $answers: = Str_builder()
+    defer $answers: = Str()
     buf: = U8$[]::{ .ptr = U8$@::arena.alloc(64 * 1024), .len = 64 * 1024 }
     for _k in Range.asc(4000)
         got: = w.read(buf, 300000) catch

@@ -6,6 +6,7 @@
 //< **Nor once the asker has returned** (`done_asking`): a reply kept to catch a request too many
 //< then costs no wait.
 import "ksagent/files"
+import "kstls/tls_server" { Tls_server, Tls_session, Tls_session_error }
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -13,7 +14,7 @@ import "std/http"
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
 import "std/net"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/thread"
@@ -38,6 +39,7 @@ struct Stub //< one stand-in server and what it saw
     sent: thread.Atomic_sz //< the bytes of the last reply that went out before the client left
         //< **A count, not a time**: a test reads it after `finish` to know how far the stream got
         //< before it was stopped, however slowly the machine ran.
+    secure: Tls_server$@ //< the certificate it answers https with; null answers plain http
 
 fn start(replies: U8[][], arena: Arena$@): Stub$@ //< starts a stand-in that gives these replies
     return start_editing(replies, "", "", arena)
@@ -53,10 +55,24 @@ fn start_dripping(replies: U8[][], edit_path: U8[], edit_body: U8[], drip_ms: I3
     listener.set_nonblocking() catch panic("the stand-in's socket can stop blocking")
     port: = listener.port() catch panic("a bound socket knows its port")
     s: = arena
-        .create(Stub::{ .listener = listener, .port = port, .replies = replies,
+        .create(Stub::{ .secure = null, .listener = listener, .port = port, .replies = replies,
         .bodies = List<|U8[]|>(null), .own = Arena(64 * 1024), .edit_path = edit_path,
         .edit_body = edit_body, .drip_ms = drip_ms, .asked = thread.Atomic_sz(0),
         .sent = thread.Atomic_sz(0) })
+    s.bodies = List<|U8[]|>(s.own)
+    s.worker = thread.Thread.spawn<|Stub|>(serve, s) catch panic("the stand-in's thread starts")
+    return s
+
+fn start_secure(replies: U8[][], server: Tls_server$@, arena: Arena$@): Stub$@ //<
+    //< Starts a stand-in that answers https with `server`'s certificate, giving these replies
+    //< **The certificate is set before the thread starts**, so the thread only reads it.
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("the stand-in can listen")
+    listener.set_nonblocking() catch panic("the stand-in's socket can stop blocking")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    s: = arena
+        .create(Stub::{ .secure = server, .listener = listener, .port = port, .replies = replies,
+        .bodies = List<|U8[]|>(null), .own = Arena(64 * 1024), .edit_path = "", .edit_body = "",
+        .drip_ms = 0, .asked = thread.Atomic_sz(0), .sent = thread.Atomic_sz(0) })
     s.bodies = List<|U8[]|>(s.own)
     s.worker = thread.Thread.spawn<|Stub|>(serve, s) catch panic("the stand-in's thread starts")
     return s
@@ -79,24 +95,79 @@ extern fn serve(stub: Stub$@): Void$@ //<
     for i in Range.asc(stub.replies.len)
         conn: = accept_within(stub) catch
             return null
-        body: = read_body(conn, stub.own)
-        if i == 0 && stub.edit_path.len > 0
-            fs.replace_file(stub.edit_path, stub.edit_body, .kept) catch {}
-        stub.bodies.push(body)
-        stub.sent.store(drip(conn, stub.replies[i], stub.drip_ms))
+        if stub.secure != null
+            serve_tls(stub, conn, i)
+        else
+            answer(stub, conn, i)
         conn.free()
     return null
 
-priv fn drip(conn: net.Tcp_stream@, reply: U8[], drip_ms: I32): Sz //<
+priv fn answer(stub: Stub$@, conn: net.Byte_stream, i: Sz) //<
+    //< Reads the request on one connection, and gives it reply `i`
+    body: = read_body(conn, stub.own)
+    if i == 0 && stub.edit_path.len > 0
+        fs.replace_file(stub.edit_path, stub.edit_body, .kept) catch {}
+    stub.bodies.push(body)
+    stub.sent.store(drip(conn, stub.replies[i], stub.drip_ms))
+
+priv fn serve_tls(stub: Stub$@, conn: net.Tcp_stream$@, i: Sz) //<
+    //< Answers one connection over TLS; a client that refuses the certificate gets nothing
+    conn.set_nonblocking() catch panic("an accepted socket can stop blocking")
+    session: = Tls_session.start(stub.secure) catch panic("the stand-in's TLS starts")
+    $link: = Served_tls::{ .tcp = conn, .session = session }
+    answer(stub, link, i)
+    session.close(conn)
+    session.free()
+
+priv struct Served_tls //< one connection's TLS on the stand-in's side, read and written with waits
+    //< **The server half never waits**, so this waits for it: a short sleep between tries.
+    tcp: net.Tcp_stream$@
+    session: Tls_session$@
+
+priv const TLS_POLL_MS: I32 = 1 //< the sleep between two tries of the server half
+
+impl Served_tls: net.Byte_stream //< so the stand-in reads and writes https as it does http
+    fn read_for(r: Self$@, buf: U8$[], timeout_ms: I32): Sz!net.Net_error
+        deadline: = sys.deadline_after_ms(timeout_ms)
+        for
+            n: = r.session.read(r.tcp, buf) catch e
+                if e != Tls_session_error.would_block
+                    throw .io_failed
+                if sys.mono_us() >= deadline
+                    throw .timed_out
+                sys.sleep_ms(TLS_POLL_MS)
+                continue
+            return n
+
+    fn write_all_for(r: Self$@, buf: U8[], timeout_ms: I32): Void!net.Net_error
+        deadline: = sys.deadline_after_ms(timeout_ms)
+        $at: Sz = 0
+        for at < buf.len || r.session.pending()
+            if sys.mono_us() >= deadline
+                throw .timed_out
+            if at == buf.len
+                r.session.flush(r.tcp) catch e
+                    if e != Tls_session_error.would_block
+                        throw .io_failed
+                    sys.sleep_ms(TLS_POLL_MS)
+                continue
+            n: = r.session.write(r.tcp, buf.sub_from(at)) catch e
+                if e != Tls_session_error.would_block
+                    throw .io_failed
+                sys.sleep_ms(TLS_POLL_MS)
+                continue
+            at += n
+
+priv fn drip(conn: net.Byte_stream, reply: U8[], drip_ms: I32): Sz //<
     //< Writes a reply whole, or in pieces `drip_ms` apart until the client stops reading it
     //< It returns how many bytes went out; a reply written at once counts as sent whole.
     if drip_ms == 0
-        conn.write_all(reply) catch {}
+        conn.write_all_for(reply, READ_WAIT_MS) catch {}
         return reply.len
     $at: Sz = 0
     for at < reply.len
         n: = DRIP_PIECE if reply.len - at > DRIP_PIECE else reply.len - at
-        conn.write_all(reply.sub(at, n)) catch
+        conn.write_all_for(reply.sub(at, n), READ_WAIT_MS) catch
             return at
         at += n
         sys.sleep_ms(drip_ms)
@@ -117,9 +188,9 @@ priv fn accept_within(stub: Stub$@): net.Tcp_stream$@? //<
         return .some(conn)
     return .none
 
-priv fn read_body(conn: net.Tcp_stream@, arena: Arena$@): U8[] //<
+priv fn read_body(conn: net.Byte_stream, arena: Arena$@): U8[] //<
     //< The body of the one request on the connection, or empty where it never arrives whole
-    defer $got: = Str_builder()
+    defer $got: = Str()
     for
         $chunk: U8[4096] = ::{}
         n: = conn.read_for(U8$[]::chunk, READ_WAIT_MS) catch
@@ -141,7 +212,7 @@ priv fn read_body(conn: net.Tcp_stream@, arena: Arena$@): U8[] //<
 // ==========================================
 
 fn http_ok(body: U8[], arena: Arena$@): U8[] //< a whole 200 response carrying a JSON body
-    defer $out: = Str_builder()
+    defer $out: = Str()
     head: = http.headers(arena).add("Content-Type", "application/json").build()
     http.format_response(out@, 200, head, body) catch panic("the stand-in's reply is well-formed")
     return arena.dup_str(out.slice())
@@ -179,7 +250,7 @@ fn sse_reply(events: U8[][], arena: Arena$@): U8[] //<
 
 fn sse_raw(events: U8[][], after: U8[], arena: Arena$@): U8[] //<
     //< A streamed reply whose events are followed by `after` as it stands, then the last chunk
-    defer $out: = Str_builder()
+    defer $out: = Str()
     head: = http.headers(arena).add("Content-Type", "text/event-stream").build()
     http.format_chunked_head(out@, 200, head) catch panic("the stand-in's head is well-formed")
     for e in events
@@ -287,7 +358,7 @@ fn source(path: U8[], from: I32, to: I32, quote: U8[], arena: Arena$@): U8[] //<
     return dumped(v, arena)
 
 priv fn dumped(value: json.Value, arena: Arena$@): U8[] //< a value as JSON text
-    defer $out: = Str_builder()
+    defer $out: = Str()
     value.dump(out@)
     return arena.dup_str(out.slice())
 

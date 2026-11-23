@@ -15,7 +15,7 @@ import "std/json"
 import "std/jsonrpc"
 import "std/mem" { Arena, dealloc }
 import "std/regex" { Match, Regex }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 import "std/url"
 
@@ -45,7 +45,7 @@ priv fn read_json(src: U8[], arena: Arena$@): I32 //<
     //< **Turning the tree back into text and walking it are different code paths.**
     doc: = json.parse(src, arena) catch
         return 1
-    defer $out: = Str_builder()
+    defer $out: = Str()
     doc.val.dump(out@, 2)
     use_bytes(out.slice())
     walk_json(doc.val, arena)
@@ -57,12 +57,12 @@ priv fn json_round_trip(value: json.Value, indent: Sz, arena: Arena$@) //<
     //< Checks that the value, written out and read back, is equal, and is then written the same
     //< `equals` holds a decimal to the same F64, bit for bit: the writer's shortest form must read
     //< back as the number it was.
-    defer $once: = Str_builder()
+    defer $once: = Str()
     value.dump(once@, indent)
     back: = json.parse(once.slice(), arena) catch
         panic("json: what dump wrote does not parse back")
     assert(back.val.equals(value), "json: the value read back is not the one written")
-    defer $twice: = Str_builder()
+    defer $twice: = Str()
     back.val.dump(twice@, indent)
     assert(twice.slice().equals(once.slice()), "json: the value read back is written otherwise")
 
@@ -197,7 +197,7 @@ priv fn read_http_response(src: U8[], arena: Arena$@): I32
     use_headers(res.headers)
     use_bytes(res.body)
     use_len(res.consumed)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     // A head the reader takes can still be one the writer refuses (a 204 naming a length).
     http.format_response(out@, res.status, res.headers, res.body) catch
         return 0
@@ -238,7 +238,7 @@ priv fn read_http_written(src: U8[], arena: Arena$@): I32 //<
         from += 2
     head: = hb.build()
     body: = fields.get(from) if from < fields.len else ""
-    defer $out: = Str_builder()
+    defer $out: = Str()
     if is_response
         status: =
             (I32::first[0] - 48) * 100 + (I32::first[1] - 48) * 10 + (I32::first[2] - 48)
@@ -255,7 +255,7 @@ priv fn read_http_written(src: U8[], arena: Arena$@): I32 //<
         req.body.equals(body) && req.consumed == out.len,
         "http: a request the writer wrote reads back as another")
     same_headers(req.headers, head, body.len, arena)
-    defer $again: = Str_builder()
+    defer $again: = Str()
     http.format_request(again@, req.method, req.target, req.headers, req.body) catch
         panic("http: a request read back is refused by the writer")
     assert(again.slice().equals(out.slice()), "http: a request read back is written otherwise")
@@ -271,7 +271,7 @@ priv fn response_reads_back(written: U8[], status: I32, head: Headers, body: U8[
     // Only a status that can carry a body names its length.
     names_length: = status >= 200 && status != 204 && status != 304
     same_headers(res.headers, head, body.len if names_length else -1, arena)
-    defer $again: = Str_builder()
+    defer $again: = Str()
     http.format_response(again@, res.status, res.headers, res.body) catch
         panic("http: a response read back is refused by the writer")
     assert(again.slice().equals(written), "http: a response read back is written otherwise")
@@ -315,7 +315,7 @@ priv fn read_rpc(src: U8[], arena: Arena$@): I32 //<
             same = same && other.bodies.get(i).equals(whole.bodies.get(i))
         assert(same, "jsonrpc: the frames taken depend on where a read ends")
     for body in whole.bodies.slice()
-        defer $again: = Str_builder()
+        defer $again: = Str()
         jsonrpc.frame_into(again@, body)
         back: = jsonrpc.take_frame(again@, jsonrpc.MAX_BODY_BYTES, arena) catch
             panic("jsonrpc: a body framed again is broken")
@@ -328,7 +328,7 @@ priv fn read_rpc(src: U8[], arena: Arena$@): I32 //<
 
 priv fn frames_of(src: U8[], run: Sz, arena: Arena$@): Frames //<
     //< The frames taken while the bytes arrive `run` at a time
-    defer $acc: = Str_builder()
+    defer $acc: = Str()
     $got: = Frames::{ .bodies = List<|U8[]|>(arena), .clean = 0, .broken = false }
     $at: Sz = 0
     for
@@ -387,7 +387,7 @@ priv fn read_argv(src: U8[], arena: Arena$@): I32 //<
     p.parse_list(args@) catch e
         use_bytes(arena.text().s("\{e\}").take())
         return 1
-    defer $usage: = Str_builder()
+    defer $usage: = Str()
     p.print_usage(usage@)
     use_bytes(usage.slice())
     $second: = cli_new(arena)

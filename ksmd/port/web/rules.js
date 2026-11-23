@@ -47,8 +47,14 @@ function ksmdRules(ks) {
     const numbers = columns.flatMap((c) => wrap.values.map((row) => row[c]).filter((v) => v && v[0] === ks.CELL.NUMBER)
       .map((v) => v[1]));
     if (numbers.length === 0) return;
-    const lo = Math.min(...numbers);
-    const span = Math.max(...numbers) - lo;
+    // A loop, since a call holds only so many arguments and a table holds more numbers than that.
+    let lo = numbers[0];
+    let hi = numbers[0];
+    for (const n of numbers) {
+      if (n < lo) lo = n;
+      if (n > hi) hi = n;
+    }
+    const span = hi - lo;
     for (const c of columns) {
       wrap.values.forEach((row, r) => {
         const v = row[c];

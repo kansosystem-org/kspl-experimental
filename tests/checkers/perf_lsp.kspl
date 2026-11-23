@@ -17,7 +17,7 @@ import "std/io"
 import "std/json" + { Json_builder }
 import "std/jsonrpc"
 import "std/mem" { Arena }
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
@@ -108,7 +108,7 @@ priv fn app_text(edit: Sz, arena: Arena$@): U8[] //<
 
 struct Worker //< the worker under Cachegrind, what it sent past the last marker, and the faults
     child: subproc.Piped_child
-    acc: Str_builder
+    acc: Str
     next_id: I32
     top: U8[]
     faults: List<|U8[]|>
@@ -121,7 +121,7 @@ impl Worker
         json.Value[] //<
             //< Sends one message and returns every message the worker answered it with
             //< Empty where the worker did not end its answer; the fault then says why.
-        defer $frame: = Str_builder()
+        defer $frame: = Str()
         jsonrpc.frame_into(frame@, jsonrpc.encode(method, params, id, arena))
         r.child.write(frame.slice(), ANSWER_WAIT_MS) catch
             r
@@ -137,7 +137,7 @@ impl Worker
             r.acc.s(buf.sub(0, got))
             at = r.acc.slice().find_str(DONE_MARK)
         end: = at.unwrap_or(0)
-        defer $body: = Str_builder()
+        defer $body: = Str()
         body.s(r.acc.slice().sub(0, end).replace(ALIVE_MARK, "", arena))
         rest: = arena.dup_str(r.acc.slice().sub_from(end + DONE_MARK.len))
         r.acc.clear()
@@ -321,7 +321,7 @@ fn main(): I32
     command.push("lsp-worker")
     child: = subproc.spawn_piped_shared_err(command.slice(), "") catch
         return failed("the worker did not start", command.get(0))
-    $w: = Worker::{ .child = child, .acc = Str_builder(), .next_id = 0, .top = top,
+    $w: = Worker::{ .child = child, .acc = Str(), .next_id = 0, .top = top,
         .faults = List<|U8[]|>(arena) }
     defer w.acc.free()
     play(w@, arena)

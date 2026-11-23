@@ -6,7 +6,7 @@ import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/formula" { Token_kind }
 import "ksmd/model/format" { Number_format, show, show_plain, shows_numbers, shows_same }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/str" // `text`
 import "std/strnum"
 
@@ -153,7 +153,7 @@ fn equal_keys(key: Value, cell: Value): Bool //< whether a cell's value is the k
     default
         return false
 
-fn write_shown(value: Value, format: Number_format, out: Str_builder$@) //<
+fn write_shown(value: Value, format: Number_format, out: Str$@) //<
     //< The text a cell shows of its value in `format`: a number in the format, a date as
     //< `2026-10-23` or `2026/10/23`, `true` or `false`, text as it is, an error's mark
     //< **The page shows a cell through this**, so every other text of a cell agrees with it.
@@ -343,7 +343,10 @@ priv fn date_arithmetic(left: Value, right: Value, op: Token_kind): Value //<
         days = a.number
     else
         return Value.because(.wrong_kind, .date_arithmetic, "", -1)
-    if days != F64::(I64::days) || days > 4000000.0 || days < -4000000.0
+    // A number of days past every date is `#NUM!`, though it is whole: 1e300 reads as no I64.
+    if days > 4000000.0 || days < -4000000.0
+        return Value.because(.not_finite, .day_out_of_range, "", -1)
+    if days != F64::(I64::days)
         return Value.because(.wrong_kind, .date_arithmetic, "", -1)
     day: = I64::at + I64::days
     if !in_range(day)

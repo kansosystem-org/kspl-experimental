@@ -53,7 +53,7 @@ Put the C compiler `clang` on your PATH before starting. `ksplc` passes its gene
   | macOS on Apple Silicon | `ksplc-<version>-macos-arm64.zip`. Continuous integration (CI) builds it, but nobody confirms it ([Where it is supported](#where-it-is-supported)) |
   | Windows x64 | `ksplc-<version>-windows-x64.zip` |
 
-  **Check the download first.** The Releases page also carries `SHA256SUMS`, one SHA-256 per file. In the folder that holds both, run `sha256sum -c --ignore-missing SHA256SUMS` on Linux, or `shasum -a 256 -c --ignore-missing SHA256SUMS` on macOS. On Windows, compare the hash `Get-FileHash <zip>` prints in PowerShell with the zip's line. A line that is not `OK`, or a hash that differs, means the file is not what the release built.
+  **Check the download first**, against the `SHA256SUMS` file beside the zips ("Checking a downloaded zip" in [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md)).
 
   Unpack the zip, which places `ksplc` beside the standard library, `std/`. On Linux and macOS, run `chmod +x ksplc`. To run it from anywhere, read "Working in another folder" in [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md).
 
@@ -92,7 +92,7 @@ Next, [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md) covers 
 | **A compiler a tool can read** | `--diagnostic-format=json` gives error messages as JSON, and `ksplc explain <code>` explains each message code, for editors, scripts and AI models. |
 | **AI runs in it** | KSPL runs and trains AI models (`lib/ksai/`) with no second implementation language, on microcontrollers and servers alike. |
 
-The reasons are in [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md); its section "Models write it, and AI runs in it" covers the last two rows. [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) defines imports in "The three strict rules of path resolution", and memory management in "8.4 Memory management".
+The reasons are in [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md); its section "Models write it, and AI runs in it" covers the last two rows. [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) defines imports in "The three strict rules of path resolution", and memory management in "8.4 Memory management". Words such as *arena* and *reference counting* are defined in "Words used throughout" in [`docs/SPEC-documents.md`](docs/SPEC-documents.md).
 
 ## 📊 What works, and how far
 
@@ -106,7 +106,7 @@ A row counts only what actually ran.
 | **The bindings** (`lib/kstls/`) | TLS over OpenSSL: a client, and the server half kssrv uses | **Run on Linux** in CI. The Windows job runs the tests too; no run there has confirmed them yet |
 | **The AI engine** (`lib/ksai/`) | Tensor operations, inference, training by backpropagation, fine-tuning with low-rank adaptation (LoRA), tokenization and safetensors weight files | KSPL alone, with no external library, including continued training on the device |
 | **Kanso OS** (`lib/ksos/`) | Cooperative and preemptive scheduling, mutual exclusion, waiting, a heap, memory-mapped I/O drivers, and a minimal ARP/IPv4/TCP stack | Ports for Cortex-M, Armv6-M, RP2040 and POSIX. **Runs on real RP2040 hardware** and in QEMU. Wireless is out of scope: its license does not fit this repository’s attribution. |
-| **Kanso Server** (`kssrv/`) | Serving static files (the car's policy file among them) over HTTP or HTTPS, and the file endpoints a local page uses | Many connections on one thread, in constant resident memory. HTTPS is checked on Linux alone |
+| **Kanso Server** (`kssrv/`) | Serving static files over HTTP or HTTPS, and the file endpoints a local page uses. It serves the policy file of the car in the next row | Many connections on one thread, in constant resident memory. HTTPS is checked on Linux alone |
 | **Edge AI** (AI on the device) | A policy trained on a PC runs on a microcontroller alone | **A closed loop on a palm-sized four-wheeled car** (a Freenove kit with a Raspberry Pi Pico W), deciding with the PC disconnected. Measured timings are under "What has been checked on real hardware" in [ksos](lib/ksos/README.md). |
 | **The folder agent** (`ksagent/`) | Answers questions about a folder's files through a model server on the same machine, citing lines it checks | **Only against a stand-in model server**; no real model runs in CI |
 | **The document editor** (`ksmd/`) | Prose, lists, formatting, calculating tables with resizable columns, images and included files, in a `.ksmd` source a person can read. Opens and saves a folder's files through `kssrv --local`, and opens a document on a double-click. | Runs in a browser with wasm32. Browser tests drive headless Chromium on Linux. Other browsers, a real input method editor (IME) and screen readers are untested. The double-click was checked by hand on Windows only. [ksmd](ksmd/README.md) lists what works and its limits. |
@@ -167,6 +167,7 @@ A document’s name identifies its kind: `TUTORIAL-` teaches, `HOWTO-` gives tas
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
 | [`docs/TUTORIAL-programming-language.md`](docs/TUTORIAL-programming-language.md) | Learning KSPL by walking through one small program, one declaration at a time | Whoever knows another language and starts with KSPL |
+| [`docs/TUTORIAL-kspl-for-c-programmers.md`](docs/TUTORIAL-kspl-for-c-programmers.md) | Learning KSPL by what C already does: each step shows the C, then the KSPL, then what differs | Whoever knows C well and starts with KSPL |
 | [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) | The language, rule by rule. Its Appendix A lists the habits from other languages that KSPL refuses | Whoever writes KSPL and needs a rule exactly |
 | [`ksagent/docs/TUTORIAL-ask-about-your-files.md`](ksagent/docs/TUTORIAL-ask-about-your-files.md) | Asking questions about a folder of Word, Excel and text files, with a model on your own computer | Whoever wants answers from their own documents, with the sources checked |
 | [`docs/README.md`](docs/README.md) | Every document that belongs to no single package, and who each is for: the tutorial, the language specification, building from source and changing Kanso | Whoever writes KSPL, builds it or changes Kanso |

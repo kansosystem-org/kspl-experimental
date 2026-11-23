@@ -239,9 +239,9 @@ priv struct Merge //< a range of merged cells, and the text its first cell holds
 priv struct Value //< what one `c` element holds while it is read
     kind: U8[] //< its `t`: `s` (shared string), `inlineStr`, `str`, `b`, `e`, `d`, or `n`
     style: I32
-    v: str.Arena_text$@ //< the stored value
-    f: str.Arena_text$@ //< the formula, without its `=`
-    inline: str.Arena_text$@ //< an inline string's text
+    v: str.Arena_str$@ //< the stored value
+    f: str.Arena_str$@ //< the formula, without its `=`
+    inline: str.Arena_str$@ //< an inline string's text
 
 priv fn read_sheet(book: Book$@, name: U8[], src: U8[]): Void!U8[] //<
     //< Adds one sheet's rows to the view
@@ -322,7 +322,11 @@ priv fn show(book: Book$@, cell: Value$@): U8[]!U8[] //< what a cell shows, from
         return unescaped(cell.inline.take(), a)
     if v.len == 0
         // A formula no program has computed yet, as libraries write them: its text is all there is.
-        return "" if f.len == 0 else a.text().c('=').s(f).take()
+        // **A cell of kind `str` holds a computed text, and that text is empty**: Excel writes
+        // `=IF(A1="","",A1)` so where its answer is `""`, and the person sees an empty cell.
+        if f.len == 0 || cell.kind.equals("str")
+            return ""
+        return a.text().c('=').s(f).take()
     if cell.kind.equals("s")
         idx: = whole(v)
         if idx < 0 || Sz::idx >= book.strings.len

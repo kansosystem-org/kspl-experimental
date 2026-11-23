@@ -21,6 +21,8 @@ struct Pair
   right: I32
 
 
+struct Dot
+  x: I8
 enum Side
   near
   far
@@ -53,6 +55,8 @@ priv struct Seen //< one symbol as the check reads it
     kind: I32
     depth: Sz
     inside: Bool //< whether the selection lies inside the range
+    from: I64 //< where the range starts, as `line_char` counts
+    to: I64 //< where the range ends
 
 priv fn line_char(value: json.Value): I64 //<
     //< a position as one number, the line before the character
@@ -68,7 +72,8 @@ priv fn collect(list: json.Value, depth: Sz, out: List<|Seen|>$@, arena: Arena$@
             line_char(sel.get("end")) <= line_char(range.get("end"))
         out
             .push(Seen::{ .name = one.get("name").as_str().unwrap_or(""),
-            .kind = one.get("kind").as_int().unwrap_or(-1I32), .depth = depth, .inside = inside })
+            .kind = one.get("kind").as_int().unwrap_or(-1I32), .depth = depth, .inside = inside,
+            .from = line_char(range.get("start")), .to = line_char(range.get("end")) })
         collect(one.get("children"), depth + 1, out, arena)
 
 priv fn found(seen: List<|Seen|>$@, name: U8[], kind: I32, depth: Sz): Bool //<
@@ -114,6 +119,16 @@ fn run_outline(client: jsonrpc_client.Client$@, caps: json.Value, arena: Arena$@
             stray = true
         if !s.inside
             outside = true
+    // **A field's node is not as long as its name for it** (`struct_field`): `x: I8` is shorter,
+    // and its type's range ran two columns into the `enum` on the next line.
+    $overlap: = false
+    $last_end: I64 = -1
+    for s in seen.slice()
+        if s.depth != 0
+            continue
+        overlap = overlap || s.from < last_end
+        last_end = s.to
+    verdict.check("no declaration's range reaches into the next declaration", !overlap, d)
     verdict.check("nothing inside a body comes out", !stray, d)
     verdict.check("each name's place lies inside its declaration's range", !outside, d)
 

@@ -15,7 +15,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/subproc"
 import "std/sys"
 import "tools/surface_rows" as rows
@@ -66,7 +66,7 @@ priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
     //< its entries shown as removed. The record needs the source alone, so no file is compiled.
     fs.mkdir_all(WORK_DIR)!
     files: = sources(pkg, arena)!
-    defer $out: = Str_builder()
+    defer $out: = Str()
     for src in files
         stem: = stem_of(src, arena)
         tsv: = fs.join(WORK_DIR, arena.text().s(stem).s(".tsv").take(), arena)
@@ -162,14 +162,14 @@ priv fn do_check(pkg: U8[], ksplc: U8[], arena: Arena$@): Sz!fs.Fs_error
         throw .not_found
     whole: = built(pkg, ksplc, arena)!
     body: = declarations_only(whole, arena)
-    defer $b: = Str_builder()
+    defer $b: = Str()
     $was: = rows.rows_of(had, arena)
     $now: = rows.rows_of(signatures_only(body, arena), arena)
     n: = rows.classify(was@, now@, b@)
-    defer $d: = Str_builder()
+    defer $d: = Str()
     $described: = rows.rows_of(body, arena)
     m: = rows.undocumented(described@, d@)
-    defer $t: = Str_builder()
+    defer $t: = Str()
     k: = rows.drifted_twins(now@, t@, arena)
     if n == 0 && m == 0 && k == 0
         io.out().s("\{path\}: the API is as recorded, and every entry says what it is\n")

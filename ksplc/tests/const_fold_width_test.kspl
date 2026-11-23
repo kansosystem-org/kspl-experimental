@@ -5,7 +5,7 @@
 //< the last undefined (property 3 of tests/suite/property_test.kspl covers optimized builds).
 //< Test both a global `const` and a local: sema's fold and the generated code differ.
 import "std/ds"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 priv const U64_BIT40: U64 = 1U64 << 40 //< width: a 64-bit left shift
@@ -75,6 +75,13 @@ priv const CAST_WIDE_U64: U64 = U64::0xFFFFFFFF //<
 priv const CAST_WIDE_HALF: U32 = U32::0x80000000
 priv const CAST_WIDE_NEG: U64 = U64::-3000000000
 priv const CAST_WIDE_F64: F64 = F64::3000000000
+priv const CAST_TOP_F64: F64 = F64::(U64::18446744073709551615) //<
+    //< An unsigned value past I64's top, cast to a float, folds as unsigned
+    //< The fold carries it as the bits of -1, and read as signed it gave -1.0.
+priv const CAST_TOP_NAMED: F64 = F64::U64_BIT63
+priv const CAST_ONCE_F32: F32 = F32::9007199791611905I64 //<
+    //< An integer cast to `F32` rounds once: 2^53 + 2^29 + 1 lies just above a tie between two
+    //< `F32` values, and rounded to `F64` first it falls on the tie and goes down.
 priv const NOT_LEN: I32[~0U8 / 51U8] = ::{ 1, 2, 3, 4, 5 } //<
     //< `~` wraps at a narrow width: 255 / 51
 priv const DIV_NEG: I32[-10 / -3] = ::{ 1, 2, 3 } //<
@@ -223,6 +230,21 @@ priv fn check_narrow_wraps() //<
     assert(i16neg * i16neg == I16::1, "I16 multiplication must wrap mod 2^16 past int's range")
     assert(u16acc == U16::1 && i16acc == I16::1, "a 16-bit `*=` must wrap mod 2^16 too")
 
+priv const HEX_ENDS_F32: I32 = 0x1F32 //< hex digits that spell a float's suffix
+    //< `F32` and `F64` mark a float literal alone. Read as a suffix here, the literal was an `F32`,
+    //< and the declaration was refused as a conversion between `F32` and `I32`.
+priv const HEX_ENDS_F64: U64 = 0xC0FFEE00DEADFF64
+
+fn test_hex_digits_spelling_a_float_suffix()
+    verdict.start("[Literals] a hex literal whose last digits spell F32 or F64 test...")
+    low: = 0x1F32
+    wide: U64 = 0xC0FFEE00DEADFF64
+    assert(low == 7986 && HEX_ENDS_F32 == 7986, "0x1F32 is the integer 7986")
+    assert(0xF64 + 1 == 3941 && 0x0F32U16 == 3890U16, "it computes, and takes a suffix, as one")
+    assert(wide == HEX_ENDS_F64 && wide >> 56U64 == 0xC0U64 && (wide & 0xFFFU64) == 0xF64U64,
+        "a 64-bit one keeps every digit")
+    verdict.pass("the hex digits F32 and F64 are digits, in a function and in a constant.")
+
 priv fn check_cast_wide_literal() //<
     //< A cast's literal that I32 does not hold keeps the value written, folded and at run time
     u64_wide: = U64::0xFFFFFFFF
@@ -242,6 +264,13 @@ priv fn check_cast_wide_literal() //<
     assert(i64_dec == 3000000000I64, "I64::3000000000 keeps its value")
     assert(f64_wide == 3000000000.0 && CAST_WIDE_F64 == 3000000000.0,
         "F64::3000000000 keeps its value")
+    u64_all: = U64::18446744073709551615
+    assert(CAST_TOP_F64 == F64::u64_all && CAST_TOP_F64 > 1.8e19,
+        "F64::(U64's top) folds to the value the cast gives at run time")
+    i64_tie: = 9007199791611905I64
+    assert(CAST_ONCE_F32 == F32::i64_tie && CAST_ONCE_F32 == 9007200328482816.0F32,
+        "F32::(an I64 just above a tie) folds to the value the cast gives at run time")
+    assert(CAST_TOP_NAMED == 9223372036854775808.0, "F64::(2^63 as a U64) folds as unsigned")
     assert(i64_neg == -3000000000I64 && CAST_WIDE_NEG == 18446744070709551616U64,
         "I64::-3000000000 negates at I64")
     assert(i32_wrap == -1294967296, "I32::3000000000 keeps the low 32 bits")
@@ -355,7 +384,7 @@ priv fn check_min_rendering() //<
     // I64::MIN has no absolute value; written without unsigned digits, only `-` is printed
     // (write_int in std/strnum.kspl).
     min_i64: I64 = -9223372036854775807I64 - 1I64
-    defer $shown: = Str_builder()
+    defer $shown: = Str()
     shown.s("\{min_i64\}")
     assert(shown.slice().equals("-9223372036854775808"),
         "I64::MIN must render every digit, not just the sign")

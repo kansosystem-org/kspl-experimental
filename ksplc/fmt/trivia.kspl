@@ -8,7 +8,7 @@ import "ksplc/fmt/printer" { Formatter }
 import "ksplc/fmt/source" as fmt_source
 import "std/chars"
 import "std/ds"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 impl Formatter
     fn pull_trailing_comment(r: Self$@, open_offset: Sz, close_offset: Sz) //<
@@ -139,7 +139,7 @@ impl Formatter
         //< is the summary, so it goes below whole (`opens_summary`).
         r.write_raw("//<")
         r.write_nl()
-        defer $line: = Str_builder()
+        defer $line: = Str()
         line.s("//< ").s(text.sub_from(3).trim_spaces())
         r.write_comment_text(line.slice(), false)
 
@@ -158,7 +158,7 @@ impl Formatter
         //< in `../../docs/SPEC-programming-language.md`).
         return new_lines == 1 && r.summary_last && text.trim_spaces().equals("//<")
 
-    priv fn write_own_comment(r: Self$@, text: U8[], carry: Str_builder$@) //<
+    priv fn write_own_comment(r: Self$@, text: U8[], carry: Str$@) //<
         //< It writes a comment standing on a line of its own, cut where it crosses the limit
         //< What does not fit goes into `carry`, for the paragraph's next line to take up or for
         //< `flush_carry` to write on lines of its own (`cut_at` in `comment.kspl`).
@@ -174,10 +174,10 @@ impl Formatter
         r.write_comment_text(text.sub(0, cut), false)
         carry.s(text.sub_from(cut + 1).trim_start())
 
-    priv fn flush_carry(r: Self$@, mark: U8[], carry: Str_builder$@) //<
+    priv fn flush_carry(r: Self$@, mark: U8[], carry: Str$@) //<
         //< It writes the text carried from a cut comment on lines of its own, as many as it needs
         //< Each line goes through the same cut, so carried text never crosses the limit either.
-        defer $line: = Str_builder()
+        defer $line: = Str()
         for carry.len > 0
             line.clear().s(mark).s(" ").s(carry.slice())
             carry.clear()
@@ -197,9 +197,9 @@ impl Formatter
         is_suppressed: = r.suppress_nl_depth > 0 || force_no_nl
         // The words cut off a comment line, waiting for the paragraph's next line or for a line of
         // their own (`write_own_comment`).
-        defer $carry: = Str_builder()
+        defer $carry: = Str()
         $carry_mark: U8[] = ""
-        defer $joined: = Str_builder()
+        defer $joined: = Str()
 
         for i < end
             c: = (r.src.ptr + i)$

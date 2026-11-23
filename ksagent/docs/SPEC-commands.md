@@ -35,6 +35,18 @@
 
 **An API key comes only from the environment variable `KSAGENT_API_KEY`**, sent as `Authorization: Bearer`. No option takes it, since the command line shows in the process list.
 
+**Over `https://`, ksagent checks the server's certificate before it sends anything.** A trusted CA must vouch for the certificate, and the certificate must name the host or address in the URL. The questions, the file excerpts and the key then cross the network encrypted. No option turns the check off. Over `http://` they cross in the clear, so use http only for a server on this machine or on a network you trust.
+
+**A certificate that does not verify ends the question with one line that says why and what to do:**
+
+| What is wrong | What the line says to do |
+| :-- | :-- |
+| No trusted CA vouches for it, as for a self-signed certificate | Give the CA's PEM file with `--model-ca` |
+| It names another host or address | Give `--model-url` the name the certificate holds |
+| It does not verify for another reason, such as having expired | Renew it on the server |
+| The file `--model-ca` names cannot be read, or holds no certificate | Give the PEM file of the CA that made the certificate |
+| The server does not speak TLS | Give an `http://` address, if it serves plain http |
+
 **The llama-server that `make model-server` or `make chat` starts asks for a key.** Without one, any web page could ask it. The key is new at each start, and stands in `out/tmp/model.<port>.key` until the server stops. `make model-server` prints where; `make chat` gives it to ksagent itself. **The next `make chat` or `make model-server` deletes a key file left behind** where its server is gone. It then tries `KSAGENT_API_KEY`.
 
 ## `ask`, `watch` and `eval`
@@ -43,7 +55,8 @@
 
 | Option | What it does |
 | :-- | :-- |
-| `--model-url=<url>` | The model server. The default is `http://127.0.0.1:8081`. Only `http://` works. Leave out `/v1`: ksagent adds `/v1/chat/completions` itself |
+| `--model-url=<url>` | The model server, as `http://<host>[:<port>]` or `https://<host>[:<port>]`, with an optional path after it. The default is `http://127.0.0.1:8081`. Without a port, http takes 80 and https takes 443. Leave out `/v1`: ksagent adds `/v1/chat/completions` itself |
+| `--model-ca=<file>` | With an `https://` model URL only: the PEM file of the CA that made the server's certificate, such as a server's own self-signed certificate. ksagent then trusts only the CAs in this file. Without it, the system's trusted CAs are used |
 | `--model=<name>` | The model name each request carries. The default is `local`; a server that holds one model needs no other |
 | `--timeout=<seconds>` | How long one reply from the model may take, from the request to its last piece: 1 to 86,400 seconds. The default is 600 |
 | `--out=<file>` | `eval` only: also writes the table to this file under the folder, as `.md` or `.ksmd` |
@@ -65,8 +78,8 @@
 | `ksagent eval team` | 2 | `usage: ksagent eval [options...] <folder> <questions file>` |
 | `ksagent ask nowhere "How many days?"` | 1 | `not a folder: nowhere` |
 | `ksagent ask --timeout=0 team "How many days?"` | 1 | `--timeout must be from 1 to 86400 seconds` |
-| `ksagent ask --model-url=https://127.0.0.1:8081 team "How many days?"` | 1 | `https is not supported yet` |
-| `ksagent ask --model-url=ftp://127.0.0.1:8081 team "How many days?"` | 1 | `must start with http://` |
+| `ksagent ask --model-ca=ca.pem team "How many days?"` | 1 | `--model-ca is for an https:// model URL` |
+| `ksagent ask --model-url=ftp://127.0.0.1:8081 team "How many days?"` | 1 | `must start with http:// or https://` |
 | `ksagent ask --model-url=http://127.0.0.1:8081/v1 team "How many days?"` | 1 | `must leave out /v1` |
 | `ksagent ask --out=table.md team "How many days?"` | 2 | `'--out' does not take effect on the subcommand 'ask'` |
 | `ksagent eval --out=table.txt team team/questions.md` | 1 | `--out must name a .md or a .ksmd file` |
@@ -207,7 +220,7 @@ A last line gives the totals: questions passed and failed, answers with no check
 * **Each search reads every Word and Excel file under its path again**, so large workbooks make each search slower.
 * **A search skips every folder named `out`.** So does `watch`, for ask files. `list` and `read` reach these folders.
 * **A search and `watch` pass over a folder that cannot be read**, and walk the rest. Its files are not searched, and its ask files get no answer. Where the folder itself cannot be read, a search is refused, and `watch` tries again at its next look. A search of one named file that cannot be read is refused too, with the reason `read` would give.
-* **http only.** Run the model server on this machine, or reach it over a network you trust.
+* **The certificate is the only thing checked over https.** ksagent does not check whether a CA withdrew it (revocation), and does not show a client certificate.
 * **The search matches words, not meanings.** A line matches when it holds every word of a search, in any order, so a synonym needs another search.
 * **The check shows that a quote stands at its lines, not that the answer follows from it.** Read the quote.
 * **It writes no file but its own**: the chat files, the live files, the lock `watch` holds (`.ksagent.lock`) and the table that `--out` names.

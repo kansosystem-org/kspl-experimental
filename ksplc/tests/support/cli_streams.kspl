@@ -81,12 +81,12 @@ priv fn case_status_stream(arena: Arena$@) //<
     verdict.check("a failed compile writes its summary and closing line to standard error",
         !c.exited_with(0) && c.stdout_data.len == 0 &&
         c.stderr_data.find_str("Finished with 1 error(s)").is_some() &&
-        c.stderr_data.find_str("sema/analysis_failed: compilation terminated").is_some(),
+        c.stderr_data.find_str("Compilation stopped. Fix the errors above").is_some(),
         streams(c@, arena))
     r: = capture(harness.ksplc_argv(U8[][]::{ "run", bad }), arena)
     verdict.check("`ksplc run` on a script that does not compile leaves standard output empty",
         !r.exited_with(0) && r.stdout_data.len == 0 &&
-        r.stderr_data.find_str("compilation terminated").is_some(), streams(r@, arena))
+        r.stderr_data.find_str("Compilation stopped.").is_some(), streams(r@, arena))
     w: = capture(harness.ksplc_argv(U8[][]::{ "run", warned }), arena)
     verdict.check("`ksplc run` with a warning leaves only the program's output on standard output",
         w.exited_with(0) && w.stdout_data.equals("said\n") &&
@@ -118,7 +118,7 @@ priv fn case_summary_on_every_failure(arena: Arena$@) //<
                 else U8[][]::{ "lint", src })
             r: = capture(harness.ksplc_argv(argv), arena)
             summary: = r.stderr_data.find_str("Finished with 1 error(s), 0 warning(s)")
-            closing: = r.stderr_data.find_str("compilation terminated")
+            closing: = r.stderr_data.find_str("Compilation stopped.")
             verdict.check(arena.text().s(lint).s(" " if lint.len > 0 else "").s(what)
                 .s(" ends with the summary, then the closing line").take(),
                 !r.exited_with(0) && summary.is_some() && closing.is_some() &&

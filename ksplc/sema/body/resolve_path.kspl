@@ -5,6 +5,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as _base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
+import "ksplc/base/near" as base_near
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/body/generic_infer" as sema_body_generic_infer
 import "ksplc/sema/decl/access" as sema_decl_access
@@ -20,7 +21,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars" // testing and slicing single characters
 import "std/ds"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 // The type of a function used as a value without being called (its bare name passed or assigned as
 // a function pointer).
@@ -115,7 +116,7 @@ priv fn specialization_named(node: Ast_node$@, ctx: Sema_ctx$@,
         ctx.err(node, ctx.scratch.slice())
         return .none
     if type_args == null
-        defer $form: = Str_builder()
+        defer $form: = Str()
         form.s(sym.name).s("<|…|>")
         refuse_unwritten_type_args(ctx, node, "function", sym.name, form.slice(), gen_params)
         return .none
@@ -162,10 +163,10 @@ fn infer_method_value(node: Ast_node$@, ctx: Sema_ctx$@, owner_id: I32, owner: A
     owner_real: = ctx.env.get_real_type(owner_id)
     owner_name: = ctx.env.get_str(owner_real)
     // The path as written (`Holder<|I32|>.get`), for a diagnostic.
-    defer $written: = Str_builder()
+    defer $written: = Str()
     owner.get_full_path_str_to(written)
     written.s(".").s(member.text)
-    defer $fqn: = Str_builder()
+    defer $fqn: = Str()
     fqn.s(owner_name).s(".").s(member.text)
     // A trait's method is a slot each conforming type fills, with no function of its own.
     switch ctx.env.get_info(owner_real)
@@ -217,7 +218,7 @@ fn refuse_method_of_bare_generic(ctx: Sema_ctx$@, node: Ast_node$@, owner: Ast_n
         //< `Holder.get`, `Holder.mk(1)`: each instance has its own copy of the method, and nothing
         //< here says which. A call's arguments do not choose it either: a generic type's are
         //< written on the type ("Structs (`struct`)" in docs/SPEC-programming-language.md).
-    defer $name: = Str_builder()
+    defer $name: = Str()
     owner.get_full_path_str_to(name)
     n: = name.slice()
     m: = member.text
@@ -380,7 +381,61 @@ priv fn report_undefined_path(ctx: Sema_ctx$@, node: Ast_node$@, fqn_slice: U8[]
                 ctx.scratch
                     .s("\n  Hint: The prefix '\{prefix\}' is neither a known import alias nor a \
                         type in the current scope.")
+        else if node == ctx.fn_ctx.assign_target
+            // Python and JavaScript declare a name by assigning it; KSPL declares with `: =`. A
+            // name one typo from one in scope is more likely a misspelled assignment.
+            if near: = nearest_name_in_scope(ctx, target_name)
+                ctx.scratch.s("\n  Hint: did you mean '\{near\}'?")
+            else
+                ctx.scratch
+                    .s("\n  Hint: to declare '\{target_name\}', write '\{target_name\}: = …'. Write \
+                        '$\{target_name\}: = …' to change it later.")
         else
-            ctx.scratch.s("\n  Hint: check for typos or missing imports.")
+            append_name_hint(ctx, unresolved_name)
     ctx.err(node, ctx.scratch.slice())
     ctx.note_undefined_at(node)
+
+priv const OTHER_LANGUAGE_NAMES: U8[][2][12] = ::{::{ "True", "write 'true'." },
+    ::{ "False", "write 'false'." }, ::{ "None", "an empty optional is '.none'." },
+    ::{ "nil", "an empty optional is '.none'." },
+    ::{ "undefined", "an empty optional is '.none'." },
+    ::{ "print", "write 'io.out().s(\"text\\n\")' after 'import \"std/io\"'." },
+    ::{ "println", "write 'io.out().s(\"text\\n\")' after 'import \"std/io\"'." },
+    ::{ "printf", "write 'io.out().s(\"\\{x\\}\\n\")' after 'import \"std/io\"'." },
+    ::{ "console", "write 'io.out().s(\"text\\n\")' after 'import \"std/io\"'." },
+    ::{ "range", "count with 'for i in Range.asc(n)', from 0 to n - 1." },
+    ::{ "len", "a slice's length is its field 'len': 's.len'." },
+    ::{ "this", "a method names its receiver as its first parameter ('fn f(r: Self@)')." } } //<
+        //< Names Python, JavaScript, C and Java give to what KSPL spells otherwise, and the fix
+        //< "Appendix A" of `docs/SPEC-programming-language.md` lists the same habits.
+
+priv fn append_name_hint(ctx: Sema_ctx$@, name: U8[]) //<
+    //< Writes to scratch what to write instead of an undefined name, as near as can be told
+    //< In order: another language's word, a name in scope one typo away, then the general advice.
+    for row in OTHER_LANGUAGE_NAMES
+        if name.equals(row[0])
+            ctx.scratch.s("\n  Hint: '\{name\}' is not a KSPL name. In KSPL, ").s(row[1])
+            return
+    if near: = nearest_name_in_scope(ctx, name)
+        ctx.scratch.s("\n  Hint: did you mean '\{near\}'?")
+        return
+    ctx.scratch.s("\n  Hint: check for typos or missing imports.")
+
+priv fn nearest_name_in_scope(ctx: Sema_ctx$@, name: U8[]): U8[]? //<
+    //< The value or function name in scope nearest to `name` (`Nearest` in `base/near.kspl`)
+    //< In scope are the locals and this file's own declarations. Another file's names need an
+    //< alias, which the alias check names.
+    $near: = base_near.nearest_to(name)
+    for scope in ctx.symtab.scope_stack
+        for e in scope.items()
+            near.offer(e.value.name)
+    if ctx.symtab.current_file != null
+        for e in ctx.symtab.current_file.symbols.items()
+            sym: = e.value
+            if (sym.kind.is_value() || sym.kind.names_function()) && !sym.flags.is_method &&
+                !sym.flags.is_generated_instance
+                $short: = sym.name
+                if dot: = short.rfind_char('.')
+                    short = short.sub_from(dot + 1)
+                near.offer(short)
+    return near.found()

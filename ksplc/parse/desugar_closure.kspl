@@ -21,7 +21,7 @@ import "ksplc/parse/desugar_slice" { spell_as_written, spell_before_postfix, is_
     spell_array_element }
 import "ksplc/parse/load" as parse_load
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 impl Ast_node
     fn desugar_fn_lit(r: Ast_node$@, ctx: Desugar_ctx$@) //<
@@ -60,7 +60,7 @@ impl Ast_node
             forwarded_gen_params(ctx, sig, sig.find_child(.k_param_list), null, body)
         if fwd.len > 0
             used: = fwd.get(0).name
-            defer $msg: = Str_builder()
+            defer $msg: = Str()
             msg
                 .s("an anonymous function cannot use the enclosing type parameter '\{used\}'. It \
                     becomes a top-level function passed as a plain function pointer. Add a capture \
@@ -134,7 +134,7 @@ impl Ast_node
         // not visible. Those the signature uses are copied over (with none, it stays non-generic).
         fwd_params: = forwarded_gen_params(ctx, sig, params, captures, body)
 
-        defer $src: = Str_builder()
+        defer $src: = Str()
         if !r.build_closure_src(ctx, sig, params, arity, captures, serial,
             gen_args_text(fwd_params, true), gen_args_text(fwd_params, false), src@)
             return
@@ -189,8 +189,8 @@ impl Ast_node
     // It builds the KSPL source of the declarations to synthesize (false: a diagnostic was
     // reported).
     fn build_closure_src(r: Ast_node@, ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
-        arity: Sz, captures: Ast_node$@, serial: Sz, gen_decl: U8[], gen_args: U8[],
-        src: Str_builder$@): Bool //<
+        arity: Sz, captures: Ast_node$@, serial: Sz, gen_decl: U8[], gen_args: U8[], src: Str$@):
+        Bool //<
             //< Writes the closure's struct, constructor and impl as KSPL source into src
             //< `gen_decl` declares the type parameters copied over (`<|T, const N: Sz|>`), and
             //< `gen_args` passes them (`<|T, N|>`). False when it refused the closure (the
@@ -260,8 +260,8 @@ impl Ast_node
         return true
 
     // One field of the environment struct. A capture is "a name and a type", nothing else.
-    priv fn append_capture_field(r: Ast_node@, ctx: Desugar_ctx$@, cap: Ast_node$@,
-        src: Str_builder$@): Bool
+    priv fn append_capture_field(r: Ast_node@, ctx: Desugar_ctx$@, cap: Ast_node$@, src: Str$@):
+        Bool
         // No `$`: captures are read-only, or the enclosing function's local could be written
         // through the closure, hiding the dependence on call order from the reader.
         for c in cap.children
@@ -277,7 +277,7 @@ impl Ast_node
         ty_node: = cap.get_decl_type_node()
         c_ty: = spell_as_written(ty_node)
         if c_ty.len == 0 || c_ty.equals(base_core.UNKNOWN_TYPE_NAME)
-            defer $m: = Str_builder()
+            defer $m: = Str()
             m
                 .s("capture '\{c_name\}' needs a type annotation ('\{c_name\}: I32'). Only local \
                     variables can omit their type")
@@ -288,7 +288,7 @@ impl Ast_node
         // docs/SPEC-programming-language.md). A slice over it carries the length.
         if is_fixed_array_type(ty_node)
             elem: = spell_array_element(ty_node)
-            defer $m: = Str_builder()
+            defer $m: = Str()
             m
                 .s("capture '\{c_name\}' is a fixed-length array ('\{c_ty\}'). A closure holds each \
                     capture by pointer, and no pointer to a fixed-length array can be made. Capture \
@@ -392,7 +392,7 @@ priv fn reject_repeated_names(ctx: Desugar_ctx$@, params: Ast_node$@, captures: 
                 continue
             for seen in names
                 if seen.text.equals(id_node.text)
-                    defer $m: = Str_builder()
+                    defer $m: = Str()
                     m
                         .s("'\{id_node.text\}' is named twice in this closure's signature. A \
                             capture is a parameter of the closure, so each name stands once among \
@@ -426,7 +426,7 @@ fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
     out: = List<|Gen_param|>.create(base_core.arena)
     if ctx.gen_params.len == 0
         return out
-    defer $types: = Str_builder()
+    defer $types: = Str()
     signature_type_text(sig, params, captures, types@)
     type_text: = types.slice()
     for gp in ctx.gen_params
@@ -491,17 +491,16 @@ priv fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ 
         args.add_child(addr_of)
     return args
 
-priv fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@,
-    out: Str_builder$@) //<
-        //< It joins the closure signature's type spellings: parameters, return value, captures
-        //< The choice of which type arguments to copy over reads this text.
+priv fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@, out: Str$@) //<
+    //< It joins the closure signature's type spellings: parameters, return value, captures
+    //< The choice of which type arguments to copy over reads this text.
     ret_node: = sig.find_child(.k_type_expr)
     if ret_node != null
         out.s(spell_as_written(ret_node)).s(" ")
     append_param_type_text(params, out)
     append_param_type_text(captures, out)
 
-priv fn append_param_type_text(list: Ast_node$@, out: Str_builder$@) //<
+priv fn append_param_type_text(list: Ast_node$@, out: Str$@) //<
     //< It adds the parameter type names in a `param_list` / `capture_list`, separated by spaces
     for p in base_ast_ext.Param_cursor(list, false)
         out.s(spell_as_written(p.get_decl_type_node())).s(" ")

@@ -12,7 +12,7 @@ import "std/http"
 import "std/json" { Json_builder }
 import "std/jsonrpc"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/url"
 
@@ -62,13 +62,13 @@ priv fn built_json(arena: Arena$@): U8[] //<
     arr: = b.arr().push(b.int_val(0I64)).push(inner)
         .push(b.arr().push(b.str_val("")).build()).build()
     root: = b.obj().set("items", arr).set("empty_obj", b.obj().build()).build()
-    defer $out: = Str_builder()
+    defer $out: = Str()
     root.dump(out@, 2)
     return arena.dup_str(out.slice())
 
 priv fn built_query(arena: Arena$@): U8[] //< the query that std's writer produces
     //< Caution: **Keep the `%` and the `+`**: decoding branches on those two.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     for one in U8[][]::{ "name", "value with spaces", "a+b", "%" }
         if out.len > 0
             out.c('&')
@@ -81,7 +81,7 @@ priv fn built_response(arena: Arena$@): U8[] //< the HTTP response that std's wr
     head: = http.headers(arena).add("Content-Type", "text/plain; charset=utf-8")
         .add("X-Long", "0123456789012345678901234567890123456789").add("Connection", "close")
         .build()
-    defer $out: = Str_builder()
+    defer $out: = Str()
     http.format_response(out@, 200, head, "this is the body.") catch
         return ""
     return arena.dup_str(out.slice())
@@ -98,14 +98,14 @@ priv fn built_numbers(arena: Arena$@): U8[] //< `BUILT_FLOATS`, and I64's ends, 
         .push(b.int_val(9223372036854775807I64))
     for f in BUILT_FLOATS
         arr = arr.push(b.float_val(f))
-    defer $out: = Str_builder()
+    defer $out: = Str()
     arr.build().dump(out@)
     return arena.dup_str(out.slice())
 
 priv fn built_frames(arena: Arena$@): U8[] //< two JSON-RPC frames that std's writer produces
     //< A request and a notification, so a mutation reaches the second frame's head too.
     $b: = Json_builder(arena)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     params: = b.obj().set("uri", b.str_val("file:///a b.kspl")).set("n", b.int_val(7I64)).build()
     jsonrpc.frame_into(out@, jsonrpc.encode("textDocument/hover", params, 3, arena))
     jsonrpc.frame_into(out@, jsonrpc.encode("exit", b.arr().build(), -1, arena))

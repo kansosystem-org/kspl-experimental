@@ -31,7 +31,7 @@ import "std/io"
 import "std/math"
 import "std/mem" { Arena, Arena_state, dealloc }
 import "std/seq"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 import "std/sys"
 
@@ -148,7 +148,7 @@ impl Profiler
             total_memo += p.memo_hits
             if p.memo_off
                 memo_off += 1
-        defer $head: = Str_builder()
+        defer $head: = Str()
         head.s("\n[KSPEG Rule] \{Sz::total:,\} rule invocations, ")
             .s("\{Sz::total_memo:,\} from memo, \{memo_off:,\} rules left it (Top 20 by calls)\n")
         io.err().s(head.slice())
@@ -159,7 +159,7 @@ impl Profiler
         for i in Range.asc(limit)
             p: = ranked.get(i)
             failed: = p.calls - p.memo_hits - p.parsed_ok
-            defer $sb: = Str_builder()
+            defer $sb: = Str()
             sb.s("      \{Sz::p.calls:7,\}\{Sz::p.memo_hits:11,\}\{Sz::p.parsed_ok:11,\}")
                 .s("\{Sz::failed:11,\}  \{p.name\}\n")
             io.err().s(sb.slice())
@@ -237,7 +237,7 @@ impl Parse_error
             //< a full-text search. On true the caller throws `syntax_error`, the signal for
             //< "already reported" (as parse_raw_ast does) that outer stages pass along, so it is
             //< reported once.
-        defer $why: = Str_builder()
+        defer $why: = Str()
         switch r
         case .io(io_err)
             // Caution: **Print the absolute name.** Some import names are looked up from the
@@ -266,7 +266,7 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@, laid_out: B
     // grammar reads bytes, so a stray byte in a string or a comment would pass on to C.
     bad: = parse_source_fix.first_bad_utf8(src)
     if bad >= 0
-        defer $msg: = Str_builder()
+        defer $msg: = Str()
         msg
             .s("this byte (0x\{src[bad]:02X\}) does not begin a valid UTF-8 sequence. KSPL source \
                 is UTF-8 throughout, including comments and strings. Save the file as UTF-8. Write \
@@ -570,7 +570,7 @@ priv fn read_mended(import_path: U8[], path_key: U8[]): U8$[]!Parse_error //<
     //< The file import_path names, read from disk and mended, in the arena
     //< The logical name (import_path) and the path read from are different things. A `std/...`
     //< resolves pinned to base_locate.std_dir() (see base/locate.kspl).
-    defer $file_path: = Str_builder()
+    defer $file_path: = Str()
     base_locate.append_file_path(import_path, file_path@)
     raw: = read_source(file_path.slice())!
     base_cache.note_read(file_path.slice(), raw)
@@ -638,7 +638,7 @@ priv fn append_enum_members(decls: List<|Ast_node$@|>$@, file_path: U8[],
         //< constant array that `variants()` returns.
         //< Caution: **Keep the return value at U8[] and do not use a Writer.** Making every enum
         //< depend on std/io would pull all of the trait's thunks into a freestanding build.
-    defer $src: = Str_builder()
+    defer $src: = Str()
     // Where each generated declaration goes (`place_as_made` in `../base/ast_ext.kspl`): the enum's
     // name, in the order the declarations are written into `src`.
     defer $origins: = List<|base_ast.Loc|>(null)
@@ -650,15 +650,15 @@ priv fn append_enum_members(decls: List<|Ast_node$@|>$@, file_path: U8[],
         if name_node == null || name_node.text.len == 0
             continue
         name: = name_node.text
-        defer $params: = Str_builder()
+        defer $params: = Str()
         if !append_gen_params(decl, params@)
             continue // a const generic is out of scope for the synthesis
         // **Each enum's declarations are built separately** and added only once a member was
         // written. Built and cleared in `src`, one enum with nothing to add would discard the
         // declarations of the enums before it.
-        defer $fns: = Str_builder()
+        defer $fns: = Str()
         write_variant_name(decls, decl, name, params.slice(), fns@)
-        defer $list: = Str_builder()
+        defer $list: = Str()
         if params.len == 0 && write_variant_list(decls, decl, name, list@, fns@)
             src.s(list.slice())
             origins.push(name_node.loc)
@@ -680,12 +680,12 @@ priv fn append_enum_members(decls: List<|Ast_node$@|>$@, file_path: U8[],
         decls.get(from + i).place_as_made(origins.get(i))
 
 priv fn write_variant_name(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: U8[], path: U8[],
-    out: Str_builder$@) //<
+    out: Str$@) //<
         //< It writes `variant_name(r: E): U8[]` into out, unless the file writes its own
         //< Nothing is written when no variant could be read.
     if has_user_method(decls, name, "variant_name")
         return
-    defer $one: = Str_builder()
+    defer $one: = Str()
     one.s("  ").s(enum_vis(decl)).s("fn variant_name(r: ").s(name).s(path)
         .s("): U8[] {\n    switch r")
     $any: = false
@@ -698,14 +698,14 @@ priv fn write_variant_name(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: 
     if any
         out.s(one.slice()).s("\n  }\n")
 
-priv fn write_variant_list(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: U8[],
-    list: Str_builder$@, out: Str_builder$@): Bool //<
+priv fn write_variant_list(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: U8[], list: Str$@,
+    out: Str$@): Bool //<
         //< It writes `variants()` and `from_variant_name(name)` into out, and their array into list
         //< False, with nothing written, for an enum with a payload variant, or when neither member
         //< is to be made. **A name the file already uses is left to it**: its own method of that
         //< name, or a variant of that name. The array is a constant, so `variants()` allocates
         //< nothing; its name opens with `_`, which the unused-name and naming checks pass over.
-    defer $items: = Str_builder()
+    defer $items: = Str()
     $count: Sz = 0
     for v in decl.children
         if v.kind_id != .k_enum_variant || v.children.len == 0
@@ -765,7 +765,7 @@ priv fn has_user_method(decls: List<|Ast_node$@|>@, enum_name: U8[], member: U8[
                 return true
     return false
 
-priv fn append_gen_params(decl: Ast_node$@, out: Str_builder$@): Bool //<
+priv fn append_gen_params(decl: Ast_node$@, out: Str$@): Bool //<
     //< It writes an enum's type arguments into out in the `<|T, U|>` shape
     //< Nothing where there are none; false for a const generic, whose names are not restored (the
     //< synthesis is skipped).

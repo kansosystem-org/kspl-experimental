@@ -13,7 +13,7 @@
 import "std/chars"
 import "std/mem" + { Arena, Own_arena }
 import "std/net"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum" // `parse_size`
 
 pub enum Http_error //< why a message could not be read, or cannot be trusted
@@ -312,7 +312,7 @@ impl Header_builder
 
 // ---------------------------------------------------------
 // Request / Response. The reader drops `consumed` bytes to reach the next message
-// (Str_builder.drop_prefix).
+// (Str.drop_prefix).
 // ---------------------------------------------------------
 pub struct Request //< a request or its head, with validated headers and lengths
     pub method: U8$[] //< the method as it arrived, such as `GET`
@@ -591,7 +591,7 @@ priv fn response_in(src: U8[], work: mem.Scratch$@): Response$@!Http_error //<
 // Writing. **The builder refuses whatever the parser refuses** (is_token / is_field_value,
 // `Transfer-Encoding`), and the length is the body's: the builder adds `Content-Length` itself.
 // ---------------------------------------------------------
-priv fn write_header_lines(out: Str_builder$@, head: Headers): Void!Http_error //<
+priv fn write_header_lines(out: Str$@, head: Headers): Void!Http_error //<
     //< Writes each header as `name: value`, refusing one that would not read back as itself
     //< Caution: **Refuse a value with a space or a tab at either end** (RFC 9110 §5.5 has none).
     //< The reader trims it, so it would read back as another value.
@@ -618,7 +618,7 @@ priv fn check_framing(head: Headers, length: Sz, names_length: Bool): Void!Http_
                 throw .length_mismatch
             found = true
 
-priv fn write_framed_head(out: Str_builder$@, head: Headers, length: Sz, names_length: Bool):
+priv fn write_framed_head(out: Str$@, head: Headers, length: Sz, names_length: Bool):
     Void!Http_error //<
         //< Writes the headers, the `Content-Length` they lack, and the empty line ending the head
         //< `check_framing` must have passed.
@@ -634,7 +634,7 @@ pub fn format_request( //< builds one whole request as bytes: the first line, th
     //< a sender
     //< that cannot block. **It refuses what a reader refuses**, since a request it wrote would come
     //< back as a 400. **On failure `out` is left as it was.**
-    out: Str_builder$@, //< where the message is built
+    out: Str$@, //< where the message is built
     method: U8[], //< the method, such as `GET`
     target: U8[], //< the target, including the query string
     head: Headers, //< the headers, `Host` among them once; `Content-Length` is added here
@@ -654,15 +654,15 @@ pub fn format_request( //< builds one whole request as bytes: the first line, th
 pub fn write_request( //< sends one whole request: the first line, the headers and the body
     //< It refuses what `format_request` refuses, before anything is written. **The whole request
     //< goes out within `timeout_ms`**, so a server that stops reading cannot hold the caller for
-    //< good (`net.Tcp_stream.write_all_for`).
-    stream: net.Tcp_stream@, //< the connection to write to, which blocks
+    //< good (`net.Byte_stream.write_all_for`).
+    stream: net.Byte_stream, //< the connection to write to: a `Tcp_stream`, or one with TLS on top
     method: U8[], //< the method, such as `GET`
     target: U8[], //< the target, including the query string
     head: Headers, //< the headers, `Host` among them once
     body: U8[], //< the whole body
     timeout_ms: I32, //< how long the whole request can take to send; past it `.io(.timed_out)`
 ): Void!Http_error
-    defer $b: = Str_builder()
+    defer $b: = Str()
     format_request(b@, method, target, head, body)!
     // Caution: write can stop partway and silently truncate the message. Send it all (see the
     // note in std/net.kspl).
@@ -770,7 +770,7 @@ pub fn format_response( //< builds one whole response as bytes, for the caller t
     //< writable. **The length is the body's**: one given that differs is refused. So is any body or
     //< length for 1xx, 204 and 304, whose head names none. The answer to a HEAD is
     //< `format_response_to_head`. **On failure `out` is left as it was.**
-    out: Str_builder$@, //< where the message is built
+    out: Str$@, //< where the message is built
     status: I32, //< the status number; its phrase is `reason_phrase`'s
     head: Headers, //< the headers; `Content-Length` is added here
     body: U8[], //< the whole body
@@ -782,18 +782,17 @@ pub fn format_response_to_head( //< builds the answer to a HEAD request: a head 
     //< The head is the one a GET would get: its `Content-Length` names `length`, the length of the
     //< body a GET would carry, which is not sent (RFC 9110 §9.3.2). For 1xx, 204 and 304 no length
     //< is named, and `length` must be 0. **On failure `out` is left as it was.**
-    out: Str_builder$@, //< where the head is built
+    out: Str$@, //< where the head is built
     status: I32, //< the status number; its phrase is `reason_phrase`'s
     head: Headers, //< the headers; `Content-Length` is added here
     length: Sz, //< the length of the body a GET would carry
 ): Void!Http_error
     write_response_head(out, status, head, length)!
 
-priv fn write_response_head(out: Str_builder$@, status: I32, head: Headers, length: Sz):
-    Void!Http_error //<
-        //< The head naming `length`, or nothing at all where it is refused
-        //< Caution: **Take back what was written on a failure.** A caller that queues answers in
-        //< `out` would send the half head. The next answer would then read as its continuation.
+priv fn write_response_head(out: Str$@, status: I32, head: Headers, length: Sz): Void!Http_error //<
+    //< The head naming `length`, or nothing at all where it is refused
+    //< Caution: **Take back what was written on a failure.** A caller that queues answers in
+    //< `out` would send the half head. The next answer would then read as its continuation.
     names_length: = may_carry_body(status)
     check_framing(head, length, names_length)!
     start: = out.len
@@ -802,7 +801,7 @@ priv fn write_response_head(out: Str_builder$@, status: I32, head: Headers, leng
         out.len = start
         throw e
 
-priv fn write_status_line(out: Str_builder$@, status: I32): Void!Http_error //<
+priv fn write_status_line(out: Str$@, status: I32): Void!Http_error //<
     //< Writes `HTTP/1.1 <status> <phrase>` and its CRLF, the phrase from `reason_phrase`
     if !valid_status(status)
         throw .invalid_status_line
@@ -814,7 +813,7 @@ pub fn format_response_head( //< builds only a response's head, for a body sent 
     //< body's length is not known in advance, and `format_response` adds it.
     //< **Always include `Connection: close`** (it fails without it), and a status that has a body.
     //< On failure `out` is left as it was.
-    out: Str_builder$@, //< where the head is built
+    out: Str$@, //< where the head is built
     status: I32, //< the status number; its phrase is `reason_phrase`'s
     head: Headers, //< the headers; `Connection: close` must be among them
 ): Void!Http_error
@@ -830,7 +829,7 @@ pub fn format_chunked_head( //< builds a response's head for a body sent in chun
     //< It names `Transfer-Encoding: chunked` itself; send each piece through `format_chunk`, then
     //< end with `format_last_chunk`. **The reader then knows a whole body from one cut short**,
     //< which a body run to the close cannot tell. On failure `out` is left as it was.
-    out: Str_builder$@, //< where the head is built
+    out: Str$@, //< where the head is built
     status: I32, //< the status number, one that carries a body; its phrase is `reason_phrase`'s
     head: Headers, //< the headers, with no `Content-Length` and no `Transfer-Encoding`
 ): Void!Http_error
@@ -840,10 +839,9 @@ pub fn format_chunked_head( //< builds a response's head for a body sent in chun
         throw .length_mismatch
     write_unframed_head(out, status, head, "Transfer-Encoding: chunked\r\n\r\n")!
 
-priv fn write_unframed_head(out: Str_builder$@, status: I32, head: Headers, ending: U8[]):
-    Void!Http_error //<
-        //< Writes the status line, the headers and then `ending`, for a head with no
-        //< `Content-Length`; on failure `out` is left as it was
+priv fn write_unframed_head(out: Str$@, status: I32, head: Headers, ending: U8[]): Void!Http_error //<
+    //< Writes the status line, the headers and then `ending`, for a head with no
+    //< `Content-Length`; on failure `out` is left as it was
     start: = out.len
     write_status_line(out, status)!
     write_header_lines(out, head) catch e
@@ -853,7 +851,7 @@ priv fn write_unframed_head(out: Str_builder$@, status: I32, head: Headers, endi
 
 pub fn format_chunk( //< builds one chunk of a chunked body: its size in hexadecimal, then the piece
     //< **An empty piece writes nothing**: a chunk of size 0 would end the body.
-    out: Str_builder$@, //< where the chunk is built
+    out: Str$@, //< where the chunk is built
     piece: U8[], //< the bytes the chunk carries
 )
     if piece.len == 0
@@ -871,6 +869,6 @@ pub fn format_chunk( //< builds one chunk of a chunked body: its size in hexadec
     out.s("\r\n").s(piece).s("\r\n")
 
 pub fn format_last_chunk( //< builds the end of a chunked body: the chunk of size 0, no trailers
-    out: Str_builder$@, //< where the end is built
+    out: Str$@, //< where the end is built
 )
     out.s("0\r\n\r\n")

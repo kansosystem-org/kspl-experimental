@@ -12,7 +12,7 @@ The six kinds, what each holds, and how a document is named are "Document naming
 
 **A reader opens a document in one of a few modes.** The modes are arriving, learning, carrying out a task, looking a rule up, understanding why, and seeing what is left. The reader needs to know which before opening it. So the kinds are a closed set of six, and the kind is the file's name. A folder's listing is then its reading order.
 
-**Every tutorial is a `TUTORIAL-<topic>.md`, and takes a newcomer from nothing to a first result.** A HOWTO does one task for a reader who knows the subject. A newcomer needs one path, read once from start to end. One name form for every tutorial lets the name check refuse any other. **The language's tutorial is generated, and a package's is written by hand.** The language's is a program the gates run. A package's steps install tools and download files on the reader's own machine, which no gate can run. A gate still checks what it can reach in it, such as each `make` target named (`make test-docref`).
+**Every tutorial is a `TUTORIAL-<topic>.md`, and takes a newcomer from nothing to a first result.** A HOWTO does one task for a reader who knows the subject. A newcomer needs one path, read once from start to end. One name form for every tutorial lets the name check refuse any other. **The language's tutorials are generated, and a package's is written by hand.** Each of the language's is a program the gates run. A package's steps install tools and download files on the reader's own machine, which no gate can run. A gate still checks what it can reach in it, such as each `make` target named (`make test-docref`).
 
 **One of the kinds is Kanso's own: a `PLAN.md` holds what is left to do.** A plan changes with every step, and a rationale only when a decision changes. Inside the slower document, a plan reads as done.
 
@@ -156,6 +156,10 @@ flowchart LR
 
 * **A step can teach only what one declaration of a running program shows.** Splitting a program over files belongs to [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
 * **A step's prose is a comment, held to a comment's limit** (Principle 7). A longer step is split, or points at the specification.
+
+**A reader who knows C gets a tutorial of their own, written the same way.** That reader learns fastest from what they already write, so each step shows the C first. The C stands in a fenced block inside the step's `//<` run. The page shows it before the step's KSPL, and the rest of the run after. One generator writes both pages, so they cannot drift apart in shape.
+
+**The C is not compiled.** A gate could build it only with a C compiler and a second program in C, and the reader copies the KSPL, not the C. So the C blocks are kept to a few lines each, where a slip shows by eye.
 
 ## What crosses a package boundary
 

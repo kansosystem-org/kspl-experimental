@@ -1,10 +1,39 @@
 //< How near one name is to another, for a message that offers the name the writer likely meant
 //< **Near is at most one edit per three characters**, so a short name allows one: more would offer
-//< an unrelated name as the meaning. A field misspelled in code and a subcommand misspelled on the
-//< command line are judged by this one rule.
+//< an unrelated name as the meaning. **Two names equally near offer neither**: a guess between
+//< them would be wrong half the time. A name or member misspelled in code and a subcommand
+//< misspelled on the command line are judged by this one rule (`Nearest`).
+import "std/ds" // `equals`
 import "std/math"
 
 priv const MAX_NEAR_NAME: Sz = 64 //< the longest name compared, in bytes
+
+struct Nearest //< the one name nearest to a written one, among the names offered so far
+    written: U8[]
+    best: U8[] //< empty while none is near
+    best_cost: Sz
+    tied: Bool //< whether another name is as near as `best`
+
+fn nearest_to(written: U8[]): Nearest //< a search with no name offered yet
+    return Nearest::{ .written = written, .best = "", .best_cost = near_enough(written),
+        .tied = false }
+
+impl Nearest
+    fn offer(r: Self$@, name: U8[]) //< takes `name` into the search; the written name itself is not
+        if name.len == 0 || name.equals(r.written) || name.equals(r.best)
+            return
+        cost: = edit_distance(r.written, name)
+        if cost < r.best_cost
+            r.best = name
+            r.best_cost = cost
+            r.tied = false
+        else if cost == r.best_cost && r.best.len > 0
+            r.tied = true
+
+    fn found(r: Self@): U8[]? //< the nearest name, or none where none is near or two tie
+        if r.best.len == 0 || r.tied
+            return .none
+        return .some(r.best)
 
 fn near_enough(written: U8[]): Sz //< the edit count a name must stay under to count as near
     return math.max(written.len, 3) / 3 + 1

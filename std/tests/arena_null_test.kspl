@@ -15,7 +15,7 @@ import "std/jsonrpc"
 import "std/mem" + { Arena, dealloc }
 import "std/regex" { Regex }
 import "std/seq"
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 import "std/subproc"
 import "std/tests/mem_test" { back_to }
 import "std/tests/sys_test"
@@ -210,6 +210,9 @@ fn test_null_arena_messages() //< a query, headers, a message and a parser free 
     $none: = url.parse_query("", null) catch panic("an empty query parses")
     assert(none.is_empty(), "an empty query holds no pair")
     none.free()
+    $kept: = url.parse_uri_query("a+b=c%20d", null) catch panic("a URI's query parses")
+    assert(kept.find("a+b").unwrap_or("").equals("c d"), "parse_uri_query with a null arena")
+    kept.free()
     back_to(before, "a query frees with free(), and a refused one leaves nothing")
     $head_only: = http.headers(null).add("Host", "h").add("Accept", "*/*").build()
     assert(head_only.find("Host").unwrap_or("").equals("h"), "headers with a null arena")
@@ -253,7 +256,7 @@ fn test_null_arena_work_is_freed() //< a function frees the work it does not ret
     body: = jsonrpc.encode("m", b.int_val(1), 3, null)
     freed(body)
     b.free()
-    $acc: = Str_builder()
+    $acc: = Str()
     acc.s("Content-Length: 2\r\n\r\nhi")
     taken: = jsonrpc.take_frame(acc@, 64, null) catch panic("a whole frame is taken")
     freed(taken.unwrap_or(""))

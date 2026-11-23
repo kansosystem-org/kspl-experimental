@@ -5,7 +5,7 @@ import "std/bytes" as _bytes
 import "std/chars"
 import "std/ds"
 import "std/mem" + { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
@@ -49,7 +49,7 @@ priv fn weights(arena: Arena$@)
         "an empty tensor at the data's end keeps its shape")
 
     // Shifting the whole file by one byte makes its aligned payload misaligned.
-    defer $shifted: = Str_builder()
+    defer $shifted: = Str()
     shifted.c(0U8).s(bytes.slice())
     unaligned: =
         Safetensors.load_from_bytes(shifted.slice().sub_from(1), arena)
@@ -72,7 +72,7 @@ priv fn weights(arena: Arena$@)
     assert((fit.data + 5)$ == F32::7.0, "an accepted replacement reads the file")
 
 priv fn refused_header(header: U8[], arena: Arena$@)
-    defer $bytes: = Str_builder()
+    defer $bytes: = Str()
     $prefix: U8[8] = ::{}
     (U8$[]::prefix).put_u64_le(0, U64::header.len)
     bytes.s(U8[]::prefix).s(header).s("012345678901234567890123")
@@ -93,7 +93,7 @@ priv const SIDE_BY_SIDE: U8[] =
 priv fn sharing_tensors(arena: Arena$@) //< two tensors over one byte are refused at load
     //< Read in place, they would change together: training one would change the other.
     for header in U8[][]::{ SHARING, SIDE_BY_SIDE }
-        defer $bytes: = Str_builder()
+        defer $bytes: = Str()
         $prefix: U8[8] = ::{}
         (U8$[]::prefix).put_u64_le(0, U64::header.len)
         bytes.s(U8[]::prefix).s(header).s("0123456789012345")

@@ -538,10 +538,10 @@ fn main(): I32
 // EXPECT: 0 error(s), 3 warning(s)
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv fn length(s: U8[]): Sz //< made and never freed (a finding)
-  $b: = Str_builder()
+  $b: = Str()
   b.s(s)
   return b.len
 
@@ -551,14 +551,14 @@ priv fn maybe(keep: Bool) //< freed on one path only (a finding)
   if keep
     xs.free()
 
-priv fn early(bad: Bool): Str_builder //< handed back, but left behind on an early return (a finding)
-  $out: = Str_builder()
+priv fn early(bad: Bool): Str //< handed back, but left behind on an early return (a finding)
+  $out: = Str()
   if bad
-    return Str_builder()
+    return Str()
   out.s("ok")
   return out
 
-priv fn in_arena(a: Arena$@, rows: List<|List<|I32|>|>$@, given: Str_builder): Sz //< none of these
+priv fn in_arena(a: Arena$@, rows: List<|List<|I32|>|>$@, given: Str): Sz //< none of these
   $xs: = List<|I32|>(a)
   xs.push(1)
   first: = rows.get(0)
@@ -572,11 +572,11 @@ fn main()
   defer a: = Arena(64)
   defer $rows: = List<|List<|I32|>|>(null)
   rows.push(List<|I32|>(a))
-  _m: = in_arena(a, rows@, Str_builder())
+  _m: = in_arena(a, rows@, Str())
 // ==== case value_from_a_call_given_an_arena
 //< [W0109] A value a call hands back on the heap, though the call is given an arena
 //< **An arena owns only a value that keeps it in a field**, directly or in a field held by value
-//< (a `List`, or a struct holding one). A `Str_builder` keeps none, so the arena a function takes
+//< (a `List`, or a struct holding one). A `Str` keeps none, so the arena a function takes
 //< for its scratch work cannot own the builder it returns.
 // EXPECT: value_from_a_call_given_an_arena.kspl:20:3: warning: [W0109] 'frame' is never freed
 // EXPECT-NOT: 'rows'
@@ -585,10 +585,10 @@ fn main()
 // EXPECT: 0 error(s), 1 warning(s)
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
-priv fn framed(text: U8[], a: Arena$@): Str_builder //< built on the heap; the arena is scratch
-  $b: = Str_builder()
+priv fn framed(text: U8[], a: Arena$@): Str //< built on the heap; the arena is scratch
+  $b: = Str()
   b.s(a.dup_str(text))
   return b
 
@@ -645,7 +645,7 @@ fn main()
 //< [W0109] in a body that is checked only in its instances
 //< Those are a generic's method, a generic function and a slice's method. **Each finding is printed
 //< once**, at the line written, though each body here is checked once per instance. A value of
-//< the type argument's own type is not a finding: in the `Str_builder` instance it owns, in the
+//< the type argument's own type is not a finding: in the `Str` instance it owns, in the
 //< `I32` one it does not, and `defer` in front of it would not compile there.
 // EXPECT: value_never_freed_in_generic.kspl:21:6: warning: [W0109] 'b' is never freed
 // EXPECT: value_never_freed_in_generic.kspl:31:6: warning: [W0109] 'xs' is never freed
@@ -655,19 +655,19 @@ fn main()
 // EXPECT-NOT: 'kept'
 // EXPECT: 0 error(s), 4 warning(s)
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 struct Box<|T|>
   v: T
 
 impl<|T|> Box<|T|>
   fn width(_r: Self$@): Sz //< made and never freed (a finding)
-    $b: = Str_builder()
+    $b: = Str()
     b.s("x")
     return b.len
 
   fn freed_width(_r: Self$@): Sz //< freed by `defer` in front (silent)
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s("x")
     return b.len
 
@@ -687,15 +687,15 @@ priv fn size_of<|T|>(_v: T$@): Sz
   return sizeof(T)
 
 priv fn length<|T|>(_v: T): Sz //< a generic function's value, never freed (a finding)
-  $b: = Str_builder()
+  $b: = Str()
   b.s("y")
   return b.len
 
 impl U8[]
-  priv fn quoted(r: Self, bad: Bool): Str_builder //< left behind on an early return (a finding)
-    $out: = Str_builder()
+  priv fn quoted(r: Self, bad: Bool): Str //< left behind on an early return (a finding)
+    $out: = Str()
     if bad
-      return Str_builder()
+      return Str()
     out.s(r)
     return out
 
@@ -707,7 +707,7 @@ fn main()
   $a: = Box<|I32|>::{ .v = 1 }
   $c: = Box<|U8|>::{ .v = 2 }
   _w: = a.width() + c.width() + a.freed_width() + a.count() + c.count()
-  $s: = Box<|Str_builder|>::{ .v = Str_builder() }
+  $s: = Box<|Str|>::{ .v = Str() }
   _r: = a.read() + s.read()
   s.v.free()
   _n: = length<|I32|>(1) + length<|U8|>(2) + "ab".kept()
@@ -717,16 +717,16 @@ fn main()
 //< does a free with a statement between.
 // EXPECT: free_written_twice.kspl:10:3: hint: [H0303] 'defer b.free()' follows the declaration of 'b'. Put 'defer' in front of the declaration instead ('defer $b: = …'), and remove this line.
 // EXPECT: 0 error(s), 0 warning(s), 0 information(s), and 1 hint(s)
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv fn twice(): Sz
-  $b: = Str_builder()
+  $b: = Str()
   defer b.free()
   b.s("x")
   return b.len
 
 priv fn once(): Sz
-  defer $b: = Str_builder()
+  defer $b: = Str()
   b.s("x")
   return b.len
 
@@ -909,7 +909,7 @@ priv fn in_branch(xs: List<|I32|>$@, grow: Bool) //< one branch grows the list
   io.out().s("\{v[0]\}\n") // MARK-branch
 
 priv fn builder_slice() //< a builder's view, then a write that grows the builder
-  defer $b: = str.Str_builder()
+  defer $b: = str.Str()
   b.s("ab")
   v: = b.slice()
   b.s("cd")

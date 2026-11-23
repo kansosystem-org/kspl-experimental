@@ -10,7 +10,7 @@ import "ksplc/base/core" as base_core
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 
 // last_path_segment_node, like the find_child family in ksplc/base/ast.kspl, is a tree-walking
@@ -50,10 +50,9 @@ struct Sig_part //< one piece of a function's signature: a parameter, or the ret
     default_text: U8[] //< the default argument as written (one literal), or empty
     is_rest: Bool //< the `...` of a C variadic
 
-fn write_sig_part(part: Sig_part, spell: Callable2<|Sig_part, Str_builder$@, Bool|>,
-    out: Str_builder$@): Bool //<
-        //< One parameter, `name: Type = default` or `...`, its type written by `spell`
-        //< It returns false where `spell` could not write the type.
+fn write_sig_part(part: Sig_part, spell: Callable2<|Sig_part, Str$@, Bool|>, out: Str$@): Bool //<
+    //< One parameter, `name: Type = default` or `...`, its type written by `spell`
+    //< It returns false where `spell` could not write the type.
     if part.is_rest
         out.s("...")
         return true
@@ -64,15 +63,14 @@ fn write_sig_part(part: Sig_part, spell: Callable2<|Sig_part, Str_builder$@, Boo
         out.s(" = ").s(part.default_text)
     return true
 
-fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@, Bool|>,
-    out: Str_builder$@): Bool //<
-        //< A function's signature on one line, `(a: I32, b: I32 = 2): I32`, types spelt by `spell`
-        //< **Only this function decides what a signature holds** (which children are parameters,
-        //< the `...`, the defaults, the return type). So the editor's hover and its completion list
-        //< show one signature. Only a type's spelling is up to the caller. It returns false where
-        //< `spell` could not.
-        //< Caution: **Do not drop a default.** Without it, a reader takes the parameter for one
-        //< every call must pass.
+fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str$@, Bool|>, out: Str$@): Bool //<
+    //< A function's signature on one line, `(a: I32, b: I32 = 2): I32`, types spelt by `spell`
+    //< **Only this function decides what a signature holds** (which children are parameters,
+    //< the `...`, the defaults, the return type). So the editor's hover and its completion list
+    //< show one signature. Only a type's spelling is up to the caller. It returns false where
+    //< `spell` could not.
+    //< Caution: **Do not drop a default.** Without it, a reader takes the parameter for one
+    //< every call must pass.
     defer $parts: = List<|Sig_part|>(null)
     fn_node.sig_parts(parts@)
     out.c('(')
@@ -84,9 +82,8 @@ fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@, Boo
     out.c(')')
     return write_sig_ret(fn_node, spell, out)
 
-fn write_sig_ret(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@, Bool|>,
-    out: Str_builder$@): Bool //<
-        //< The return type as `: T`, written by `spell`, or nothing where the function returns none
+fn write_sig_ret(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str$@, Bool|>, out: Str$@): Bool //<
+    //< The return type as `: T`, written by `spell`, or nothing where the function returns none
     ret: = fn_node.get_decl_type_node()
     if ret == null
         return true
@@ -225,8 +222,8 @@ impl Ast_node
         else
             res.s(r.text)
 
-    fn extract_type_name(r: Self$@): Str_builder
-        $res: = Str_builder()
+    fn extract_type_name(r: Self$@): Str
+        $res: = Str()
         r.extract_type_name_to(res, 0)
         return res
 

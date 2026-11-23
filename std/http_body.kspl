@@ -12,7 +12,7 @@ import "std/chars"
 import "std/http" + { Headers, Http_error, Response }
 import "std/mem" + { Arena, Own_arena }
 import "std/net"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 
 pub const MAX_CHUNK_LINE: Sz = 4096 //< the longest chunk-size line, its extensions included
@@ -34,8 +34,8 @@ pub enum Body_piece //< what one `Body_reader.next` gives
 
 pub struct Body_reader //< a response's body, handed out piece by piece as it arrives
     //< **It holds the connection, not owns it**: the caller closes the connection after it.
-    priv stream: net.Tcp_stream$@
-    priv buf: Str_builder //< bytes received and not handed out yet
+    priv stream: net.Byte_stream
+    priv buf: Str //< bytes received and not handed out yet
     priv handed: Sz //< the bytes at `buf`'s start the last piece viewed; dropped at the next call
     priv framing: Framing
     priv scanned: Sz //< how far the line at `buf`'s start has been searched (`scan_line`)
@@ -44,9 +44,9 @@ pub struct Body_reader //< a response's body, handed out piece by piece as it ar
     priv deadline_us: I64 //< when the whole response must have arrived (`sys.mono_us`)
 
 impl Body_reader
-    priv fn on(stream: net.Tcp_stream$@, max_body: Sz): Body_reader //< a reader with no head yet
-        return Body_reader::{ .stream = stream, .buf = Str_builder(), .handed = 0,
-            .framing = .done, .scanned = 0, .room = max_body, .used = 0, .deadline_us = 0I64 }
+    priv fn on(stream: net.Byte_stream, max_body: Sz): Body_reader //< a reader with no head yet
+        return Body_reader::{ .stream = stream, .buf = Str(), .handed = 0, .framing = .done,
+            .scanned = 0, .room = max_body, .used = 0, .deadline_us = 0I64 }
 
     pub fn next( //< the next piece of the body, or that none came within the wait, or its end
         //< A chunked body comes out as its data alone: sizes, extensions and trailers are read,
@@ -322,7 +322,7 @@ priv fn open(reader: Body_reader$@, arena: Arena$@, timeout_ms: I32): Opened!Htt
 pub fn read_response_head( //< reads a response's head, leaving its body to be read piece by piece
     //< For a reply that streams, such as server-sent events: each piece is handed on as it comes.
     //< Free it when done (`defer head: = …`); the connection stays the caller's.
-    stream: net.Tcp_stream$@, //< the connection to read from, which blocks
+    stream: net.Byte_stream, //< the connection to read from: a `Tcp_stream`, or one with TLS on top
     arena: Arena$@, //< where the parts go; null means an arena of the head's own and a `free()`
     max_body: Sz, //< the largest body accepted; a larger one fails once its length is known
     timeout_ms: I32, //< how long the whole response, body included, can take to arrive
@@ -339,7 +339,7 @@ pub fn read_response_head( //< reads a response's head, leaving its body to be r
 
 pub fn read_response( //< reads one whole response from a connection and splits it into its parts
     //< A chunked body comes back as its data joined, its framing dropped.
-    stream: net.Tcp_stream$@, //< the connection to read from, which blocks
+    stream: net.Byte_stream, //< the connection to read from: a `Tcp_stream`, or one with TLS on top
     arena: Arena$@, //< where the parts go; null means an arena of the response's own and a `free()`
     max_body: Sz, //< the largest body accepted; a larger one is refused, not read
     timeout_ms: I32, //< how long the whole response can take to arrive; past it `.io(.timed_out)`
@@ -348,7 +348,7 @@ pub fn read_response( //< reads one whole response from a connection and splits 
     defer $work: = mem.scratch(arena)
     defer $reader: = Body_reader.on(stream, max_body)
     o: = open(reader@, work.arena, timeout_ms)!
-    defer $body: = Str_builder()
+    defer $body: = Str()
     for
         left: = (reader.deadline_us - sys.mono_us()) / 1000I64
         switch reader.next(I32::(left if left < 0x7FFFFFFFI64 else 0x7FFFFFFFI64))!

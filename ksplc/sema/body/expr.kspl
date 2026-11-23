@@ -55,6 +55,12 @@ impl Ast_node
     fn infer_expr(r: Self$@, ctx: Sema_ctx$@, expected_id: I32): I32!Sema_error
         if r == null
             return I32::sema_type_env.Builtin_type_id.unknown
+        // **A type argument an impl wrote into a copied default body is read in the impl's file**
+        // (write_impl_args in `../decl/trait_default.kspl`). Only such a body is asked.
+        prev_file: = ctx.file_name
+        if ctx.copied_body_file().len > 0
+            ctx.enter_written_file(r)
+        defer ctx.set_current_file(prev_file)
 
         // k_expr_catch / k_result_wrap / k_expr_catch_chain build or unpack a Result, so they see
         // the expected Result unchanged. Any other expression gets only the inner value type,
@@ -96,8 +102,7 @@ impl Ast_node
             ctx.err(r,
                 "string interpolation can only be written as an argument of a writer chain, such as \
                     'io.out().s(\"...\")' or 'b.s(\"...\")'. It streams into the writer instead of \
-                    producing a value. Build the value with 'Str_builder' first. Then pass its \
-                    '.slice()'")
+                    producing a value. Build the value with 'Str' first. Then pass its '.slice()'")
             type_id = ctx
                 .slice_type_of(ctx.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
         case .k_expr_implicit_dot, .k_implicit_enum, .k_enum_init, .k_enum_init_call
@@ -116,6 +121,8 @@ impl Ast_node
             type_id = infer_ternary_expr(r, ctx, effective_expected)!
         case .k_expr_upcast
             type_id = infer_upcast_expr(r, ctx, effective_expected)!
+        case .k_type_expr
+            refuse_type_as_value(r, ctx)
         default
             type_id = infer_unknown_expr_type(r, ctx, effective_expected)
 
@@ -314,10 +321,21 @@ priv fn infer_unary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I
         ctx.err(node, ctx.scratch.slice())
         return I32::sema_type_env.Builtin_type_id.unknown
 
+    // A pointer has no negative, and C has none for it either: let through, `-p` reached the C
+    // compiler as `invalid argument type`, and LLVM IR that does not build (Principle 5).
+    if op.equals("-") && ctx.env.is_pointer(inner_type_id)
+        shown: = ctx.env.display(inner_type_id)
+        ctx.clear_scratch()
+            .s("unary '-' cannot be applied to the pointer type '\{shown\}'. A pointer steps by 'p \
+                + i' and 'p - i'. To negate what it points at, write 'p$' first")
+        ctx.err(node, ctx.scratch.slice())
+        return I32::sema_type_env.Builtin_type_id.unknown
+
     method_name: = "neg" if op.equals("-") else ("not" if op.equals("!") else "")
     trait_name: = "Neg" if op.equals("-") else ("Not" if op.equals("!") else "")
 
-    if method_name.len > 0
+    // A pointer's target is not asked, as for a binary operator (infer_binary_expr).
+    if method_name.len > 0 && !ctx.env.is_pointer(inner_type_id)
         resolved: = ctx.resolve_operator_call(inner_type_id, trait_name, method_name,
             "Unary operator", op, node)
         switch resolved
@@ -432,6 +450,19 @@ priv fn infer_ternary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32):
     false_node.apply_type_coercion(ctx, f_id, final_id)
 
     return final_id
+
+priv fn refuse_type_as_value(node: Ast_node$@, ctx: Sema_ctx$@) //<
+    //< Reports a type that is more than a name where a trait's default body uses its parameter
+    //< as a value or before a `.`
+    //< Only a copied default body holds one: the impl's argument stands where the body names
+    //< the trait's parameter (value_form in `../decl/trait_default.kspl`).
+    type_id: = node.resolve_type(ctx) catch I32::sema_type_env.Builtin_type_id.unknown
+    ctx.clear_scratch()
+        .s("the trait's default body uses its type parameter as a value or before a '.' (as in \
+            'T.make()'), and this impl gives '\{ctx.env.display(type_id)\}' for it. A pointer, a \
+            fixed array and a function type have no members and cannot be called. Write the method \
+            in this impl, or give the trait a type that has the member")
+    ctx.err(node, ctx.scratch.slice())
 
 priv fn infer_unknown_expr_type(node: Ast_node$@, ctx: Sema_ctx$@, _expected_id: I32): I32 //<
     //< An expression form no rule above takes: reported, then Unknown

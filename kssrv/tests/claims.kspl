@@ -17,6 +17,7 @@ import "std/net"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/strnum"
+import "std/tests/scratch"
 import "std/verdict"
 
 priv const ROWS_HEADING: U8[] = "## The answers, request by request" //< where the rows stand
@@ -48,8 +49,9 @@ priv const TOKEN_SAYS: U8[] = "**The token is " //< the rule naming the token's 
 priv const TOKEN_FORM: U8[] = " lowercase hexadecimal digits**" //< what follows the length
 
 // The state the rows start from, as each specification's "The rows start from this state" says.
-priv const LOCAL_RELS: U8[][2] = ::{ "note.txt", "sub/deep.txt" }
-priv const LOCAL_BODIES: U8[][2] = ::{ "note", "deep" }
+priv const LOCAL_RELS: U8[][3] = ::{ "note.txt", "sub/deep.txt", LOCKED_REL }
+priv const LOCAL_BODIES: U8[][3] = ::{ "note", "deep", "locked" }
+priv const LOCKED_REL: U8[] = "locked.txt" //< the file the state marks read-only
 priv const OUTWARD_RELS: U8[][14] = ::{ "index.html", "note.txt", "sub/index.html", "sub/deep.txt",
     "sub/.hidden", ".env", ".well-known/x.txt", "PHOTO.JPG", "model.safetensors", "a b.txt",
     "a+b.txt", "%2e", "api/status", "style.css" }
@@ -113,7 +115,7 @@ fn place(dir: U8[], mode: Mode, arena: Arena$@): Bool //<
         return true
     fs.write_tree(root, U8[][]::LOCAL_RELS, U8[][]::LOCAL_BODIES, arena) catch
         return false
-    return true
+    return scratch.mark_read_only(root, LOCKED_REL, arena)
 
 priv fn where(spec: Spec@, index: Sz, arena: Arena$@): U8[] //< `<file>:<line>` of a line's index
     return arena.text().s(spec.name).c(':').s("\{index + 1\}").take()

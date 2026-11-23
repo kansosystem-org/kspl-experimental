@@ -1,0 +1,204 @@
+//< Another language's habits: each message says what KSPL writes instead
+//< Each case below is compiled alone, as the file its head names.
+// ==== case habit_assignment_declares
+//< `x = 5` with no `x` declared names the declaration, not a typo
+//< Python and JavaScript declare a name by assigning it ("4.1.1 The shape of a declaration" in
+//< `../../../docs/SPEC-programming-language.md`).
+// EXPECT: habit_assignment_declares.kspl:8:3: error: undefined path or identifier 'x'
+// EXPECT: Hint: to declare 'x', write 'x: = …'. Write '$x: = …' to change it later.
+// EXPECT-NOT: check for typos
+fn main()
+  x = 5
+// ==== case habit_assignment_misspelt_offers_the_near_one
+//< `cuont = 4` with `$count` in scope offers 'count', not a declaration
+//< A name one typo away is more likely a misspelling than a new name.
+// EXPECT: habit_assignment_misspelt_offers_the_near_one.kspl:8:3: error: undefined path or identifier 'cuont'
+// EXPECT: Hint: did you mean 'count'?
+// EXPECT-NOT: to declare
+fn main()
+  $count: = 3
+  cuont = 4
+  count = count + 1
+// ==== case habit_block_head_colon
+//< Python's `if (x > 2):` names the `:`, and the line without it and its parentheses
+//< **The note for a postfix `if` pointed the wrong way**: a line that opens with `if` is a branch.
+// EXPECT: habit_block_head_colon.kspl:8:13: error: expected
+// EXPECT: Note: a block's head ends with its line, with no ':'. Write 'if x > 2'.
+// EXPECT-NOT: postfix
+fn main()
+  x: = 3
+  if (x > 2):
+    return
+// ==== case habit_logic_word
+//< Python's `and` names `&&`, and the line written with it
+// EXPECT: habit_logic_word.kspl:7:12: error: expected
+// EXPECT: Note: KSPL writes '&&' for 'and', '||' for 'or' and '!' for 'not'. Write 'if x > 1 && x < 5'.
+// EXPECT-NOT: postfix
+fn main()
+  x: = 3
+  if x > 1 and x < 5
+    return
+// ==== case habit_not_word
+//< Python's `not x` is `!x`, with no space after the `!`
+// EXPECT: Write 'if !x'.
+fn main()
+  x: = true
+  if not x
+    return
+// ==== case habit_elif
+//< Python's `elif` names `else if`
+// EXPECT: habit_elif.kspl:8:8: error: expected
+// EXPECT: Note: KSPL writes 'else if' for 'elif'. Write 'else if x < 0'.
+fn main()
+  x: = 3
+  if x > 1
+    return
+  elif x < 0
+    return
+// ==== case habit_while_colon
+//< Python's `while (x > 0):` names the `for` head without the `:` and the parentheses
+// EXPECT: every loop is written with 'for'. A condition alone repeats the loop while the condition holds: 'for x > 0'.
+fn main()
+  $x: = 3
+  while (x > 0):
+    x -= 1
+// ==== case habit_let
+//< JavaScript's and Rust's `let x = 5` names the declaration KSPL writes
+// EXPECT: habit_let.kspl:5:7: error: expected
+// EXPECT: Note: KSPL declares a name with ':' and no 'let': 'x: = 5'. Write '$x: = 5' for a value that changes later.
+fn main()
+  let x = 5
+// ==== case habit_let_mut
+//< Rust's `let mut x = 5` is a name that changes, so the note writes the `$` at once
+// EXPECT: habit_let_mut.kspl:6:7: error: expected
+// EXPECT: Note: KSPL declares a name with ':' and no 'let': '$x: = 5'.
+// EXPECT-NOT: for a value that changes later
+fn main()
+  let mut x = 5
+// ==== case habit_step_operator
+//< C's and JavaScript's `i++` names `i += 1`
+// EXPECT: habit_step_operator.kspl:6:5: error: expected
+// EXPECT: Note: KSPL has no '++'. Write 'i += 1'.
+fn main()
+  $i: = 0
+  i++
+// ==== case habit_arrow_return_type
+//< Rust's and Python's `->` before a return type names `:`
+// EXPECT: habit_arrow_return_type.kspl:4:8: error: expected
+// EXPECT: Note: a function's return type follows ':', and its head ends with its line: 'fn f(): I32'.
+fn f() -> I32
+  return 1
+
+fn main()
+  _x: = f()
+// ==== case habit_fn_head_colon
+//< Python's `:` after a function's head fails on the next line, and names the head
+// EXPECT: habit_fn_head_colon.kspl:5:3: error: expected
+// EXPECT: Note: a function's return type follows ':', and its head ends with its line: 'fn main()'.
+fn main():
+  return
+// ==== case habit_def
+//< Python's `def` names `fn`
+// EXPECT: habit_def.kspl:4:5: error: expected ':'
+// EXPECT: Note: KSPL declares a function with 'fn': 'fn main()'.
+def main():
+  return
+// ==== case habit_other_names
+//< Another language's name for a value KSPL spells otherwise names KSPL's spelling
+//< Each stands in a function of its own: after one error, a function's other names are held back.
+// EXPECT: undefined path or identifier 'True'
+// EXPECT: Hint: 'True' is not a KSPL name. In KSPL, write 'true'.
+// EXPECT: undefined path or identifier 'None'
+// EXPECT: undefined path or identifier 'print'
+// EXPECT: undefined path or identifier 'range'
+// EXPECT: undefined path or identifier 'len'
+// EXPECT: Hint: 'None' is not a KSPL name. In KSPL, an empty optional is '.none'.
+// EXPECT: Hint: 'print' is not a KSPL name. In KSPL, write 'io.out().s("text\n")' after 'import "std/io"'.
+// EXPECT: Hint: 'range' is not a KSPL name. In KSPL, count with 'for i in Range.asc(n)', from 0 to n - 1.
+// EXPECT: Hint: 'len' is not a KSPL name. In KSPL, a slice's length is its field 'len': 's.len'.
+// EXPECT-NOT: check for typos
+priv fn a()
+  _x: = True
+
+priv fn b()
+  _x: I32? = None
+
+priv fn c()
+  print("hi")
+
+priv fn d()
+  for _i in range(3)
+    return
+
+priv fn e(s: U8[]): Sz
+  return len(s)
+
+fn main()
+  a()
+  b()
+  c()
+  d()
+  _n: = e("x")
+// ==== case habit_other_types
+//< Another language's type names KSPL's, in one error each
+//< **An undefined type is the unknown type**, so its uses add no mismatch ("expected 'int', but
+//< got 'I32'") that would suggest `int` exists.
+// EXPECT: undefined type 'int'
+// EXPECT: Hint: KSPL names this type 'I32'.
+// EXPECT: undefined type 'String'
+// EXPECT: undefined type 'u8'
+// EXPECT: Hint: KSPL names this type 'U8[]'. A 'Str' builds a string piece by piece.
+// EXPECT: Hint: KSPL names this type 'U8'.
+// EXPECT: Finished with 5 error(s)
+// EXPECT-NOT: but got
+// EXPECT-NOT: cannot infer
+priv fn twice(n: int): int
+  return n * 2
+
+priv fn show(s: String): Sz
+  return s.len
+
+fn main()
+  x: int = 0
+  b: u8 = 1
+  _y: = twice(x)
+  _v: = twice(3)
+  _z: = show("a")
+  _w: = b + 1
+// ==== case name_misspelt_offers_the_near_one
+//< A name one typo from a name in scope offers it; one far from all, or as near to two, offers none
+//< **Near is one edit per three characters** (`Nearest` in `../../base/near.kspl`). Two names as
+//< near tie, and a guess between them would be wrong half the time.
+// EXPECT: undefined path or identifier 'cuont'
+// EXPECT: Hint: did you mean 'count'?
+// EXPECT: undefined path or identifier 'zzzzzz'
+// EXPECT: undefined path or identifier 'ad'
+// EXPECT: Hint: check for typos or missing imports.
+// EXPECT: Finished with 3 error(s)
+// EXPECT-NOT: did you mean 'ab'
+// EXPECT-NOT: did you mean 'ac'
+priv fn near(): I32
+  count: = 3
+  return cuont
+
+priv fn far(): I32
+  count: = 3
+  return zzzzzz + count
+
+priv fn tied(): I32
+  ab: = 1
+  ac: = 2
+  return ad + ab + ac
+
+fn main()
+  _x: = near() + far() + tied()
+// ==== case method_misspelt_offers_the_near_one
+//< A method one typo from the receiver's offers it, in place of the extension method's note
+// EXPECT: has no field or method named 'slcie'
+// EXPECT: Note: the method with the nearest name is 'slice'.
+// EXPECT-NOT: extension method
+import "std/str" { Str }
+
+fn main()
+  defer $b: = Str()
+  _s: = b.slcie()

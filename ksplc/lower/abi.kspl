@@ -17,7 +17,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // the one-character tests and cuts
 import "std/ds" { Map }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 fn run(root: Ast_node$@, ctx: Sema_ctx$@, runtime_names: U8[][]) //<
     //< The ABI conversion pass's entry point
     //< It overwrites names with their mangled forms in place, recursively over the whole tree.
@@ -47,7 +47,7 @@ impl C_names
         //< Records the C names of the types C defines with no declaration: arrays and functions
         //< They are what genc defines from `complex_types` (`../gen/c/decl.kspl`). One name reached
         //< by two ids (a read-only one and the plain one) is one C type, so the first id holds it.
-        defer $spelled: = Str_builder()
+        defer $spelled: = Str()
         for type_id in ctx.env.complex_types
             switch ctx.env.get_info(type_id)
             case .array(_b, size)
@@ -78,9 +78,7 @@ impl C_names
                     ctx.env.get_real_type(type_id) == ctx.env.get_real_type(other.type_id)
                     return
                 holder = base_core.arena.text().s("'\{other.name\}'").take()
-            // A generic trait's default method has a clone per instance of the trait, each with
-            // its symbol; a clone keeps its declaration's position.
-            else if sym.node != null && !other.node.loc.same_as(sym.node.loc)
+            else
                 file: = base_diag.shown_file(other.node.loc.file())
                 line: = ctx.line_of(other.node.loc)
                 holder = base_core.arena.text().s("'\{other.name\}' at \{file\}:\{line\}").take()
@@ -109,7 +107,7 @@ priv fn global_c_names(ctx: Sema_ctx$@): Map<|U8[], Bool|> //<
         sym: = e.value
         if !sym.flags.is_method && sym.uses_verbatim_c_name()
             names.set(sym.name, true)
-    defer $spelled: = Str_builder()
+    defer $spelled: = Str()
     for $type_id: = 1; type_id < ctx.env.id_to_type.len; type_id += 1
         // A pointer and a read-only type have no name in C: genc writes `T*` and `const T` around
         // their base (`map_c_type_to_impl`). Leave them out, or a chain too deep for C is spelled
@@ -125,7 +123,7 @@ priv fn global_c_names(ctx: Sema_ctx$@): Map<|U8[], Bool|> //<
 
 impl Ast_node
     priv fn apply_abi_recursive(r: Ast_node$@, ctx: Sema_ctx$@, names: C_names$@, owner_id: I32) //<
-        //< owner_id: the type of the `impl` whose direct child r is, or 0
+        //< owner_id: the type of the `impl`, or the trait, whose direct child r is, or 0
         if r == null
             return
         kind: = r.kind_id
@@ -134,8 +132,15 @@ impl Ast_node
             // unchanged, so rewriting would break the variant name.
             return
 
-        target: = r.get_decl_type_node() if kind == .k_decl_impl else null
-        child_owner_id: = target.type_id if target != null else 0
+        // A trait's default body is named as its trait's method, as an `impl`'s is. A template's
+        // has no symbol: only its instances are named.
+        $child_owner_id: = 0
+        if kind == .k_decl_impl
+            target: = r.get_decl_type_node()
+            child_owner_id = target.type_id if target != null else 0
+        else if kind == .k_decl_trait
+            if trait_sym: = get_global_symbol_by_def(r)
+                child_owner_id = trait_sym.type_id
         for child in r.children
             child.apply_abi_recursive(ctx, names, child_owner_id)
 
@@ -170,7 +175,7 @@ impl Ast_node
 
     priv fn transform_decl_name(r: Ast_node$@, ctx: Sema_ctx$@, owner_id: I32, names: C_names$@) //<
         //< Gives a declaration its final C name, which both backends write as it stands
-        //< owner_id: the type of the `impl` r is a method of, or 0
+        //< owner_id: the type of the `impl` or the trait r is a method of, or 0
         id_node: = r.find_child(.k_identifier)
         r.ice_assert(id_node != null, "transform_decl_name: declaration node missing identifier")
 

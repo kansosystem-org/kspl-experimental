@@ -21,7 +21,7 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/seq" // `order_by`
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 import "std/sys"
 
@@ -46,12 +46,12 @@ priv fn load_text(path: U8[], arena: Arena$@): U8[] //<
     recs: = oracle.load_jsonl(path, arena) catch
         io.err().s("\{sys.program_name()\}: cannot read \{path\}\n")
         sys.exit(1)
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for i in Range.asc(recs.len)
         if i > 0
             b.c('\n')
         b.s(recs[i].get("code").as_str().unwrap_or(""))
-    // Caution: Copy it into the arena; once returned, the Str_builder's heap memory cannot be
+    // Caution: Copy it into the arena; once returned, the Str's heap memory cannot be
     // freed.
     out: = arena.dup_str(b.slice())
     return out
@@ -160,7 +160,7 @@ priv fn concat_bytes(left: U8[], right: U8[], arena: Arena$@): U8[] //<
 
 priv fn write_vocab(expand: List<|U8[]|>@, path: U8[])
     $f: = io.open(path, "w") catch panic("cannot write vocab.txt")
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for i in Range.asc(expand.len)
         bytes: = expand.get(i)
         b.clear().s("\{i\}\t")
@@ -172,7 +172,7 @@ priv fn write_vocab(expand: List<|U8[]|>@, path: U8[])
 
 priv fn write_merges(merges: List<|Merge|>@, path: U8[])
     $f: = io.open(path, "w") catch panic("cannot write merges.txt")
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for m in merges
         b.clear().s("\{m.a\} \{m.b\} \{m.id\}\n")
         f.s(b.slice())

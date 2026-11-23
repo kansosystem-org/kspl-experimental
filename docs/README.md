@@ -5,6 +5,7 @@
 | Document | Contents | Who reads it |
 | :-- | :-- | :-- |
 | [`TUTORIAL-programming-language.md`](TUTORIAL-programming-language.md) | The language one step at a time, each step a declaration of one program. | Whoever is learning to write KSPL |
+| [`TUTORIAL-kspl-for-c-programmers.md`](TUTORIAL-kspl-for-c-programmers.md) | The language by what C already does: each step shows the C, then the KSPL, then what differs. | Whoever knows C well and is learning to write KSPL |
 | [`SPEC-programming-language.md`](SPEC-programming-language.md) | The language specification: syntax, type system, semantics. | Whoever writes KSPL |
 | [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) | Running programs, other folders, executables, several files, VS Code, and opening a `.ksmd` document on a double-click. | Whoever writes KSPL and has `ksplc`; the last section needs a clone that builds |
 | [`SPEC-local-server.md`](SPEC-local-server.md) | The protocol a page opened in a browser uses to ask the local machine for files. | Whoever writes such a page or client, in any language |

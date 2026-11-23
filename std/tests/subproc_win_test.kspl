@@ -1,0 +1,199 @@
+//< Tests of `std/subproc`'s Windows rules: the command line, the lookup and the end code
+//< **Each runs on every OS.** The C runtime builds these rules on every OS, since they touch no OS
+//< (`ksplc/gen/runtime/hosted_spawn.c` and `hosted_proc.c`).
+import "std/chars" // `sub` / `find_char`
+import "std/ds" { List }
+import "std/mem" { Arena, alloc, dealloc }
+import "std/str" // `Str`
+import "std/verdict"
+
+// ==========================================
+// The Windows command line: what a child on Windows is handed, and what a batch file is refused
+// `cmd.exe` reads a batch file's line again by its own rules. **These answers are checked on
+// every OS**, since the rules touch no OS (`kspl_win_line_for` in
+// `ksplc/gen/runtime/hosted_spawn.c`).
+// ==========================================
+extern fn kspl_win_line_for(argv_buf: U8@, argv_buf_len: Sz, argc: I32, cmd: U8$@, cmd_cap: I32):
+    Bool
+
+priv const WIN_LINE_CAP: Sz = 1024 //< room for every line below, with the builder's own margin
+
+priv fn win_line(argv: U8[][], arena: Arena$@): U8[] //<
+    //< The Windows command line for argv, argv[0] being the program; empty where it is refused
+    defer $run: = str.Str()
+    for a in argv
+        run.s(a).c(0U8)
+    $buf: U8[WIN_LINE_CAP] = ::{}
+    if !kspl_win_line_for(run.ptr, run.len, I32::argv.len, buf@, I32::WIN_LINE_CAP)
+        return ""
+    $n: Sz = 0
+    for n < WIN_LINE_CAP && buf[n] != 0U8
+        n += 1
+    return arena.dup_str((U8$[]::buf).sub(0, n))
+
+fn test_win_line_batch(arena: Arena$@) //<
+    //< A batch file's argument stays inside its quotes, or the start is refused
+    verdict.start("[Sys] the line a batch file is started with on Windows...")
+    bat: = "C:\\t\\x.bat"
+    kept: = win_line(U8[][]::{ bat, "a&calc" }, arena)
+    assert(kept.equals("\"C:\\t\\x.bat\" \"a&calc\""), "`&` must stay inside the quotes")
+    // Each of these would end the quoting, expand, or end the command in `cmd.exe`.
+    for bad in U8[][6]::{ "a\"&calc", "%PATH%", "!x!", "a\nb", "a\rb", "\"" }
+        assert(win_line(U8[][]::{ bat, bad }, arena).len == 0,
+            "a batch file must be refused an argument cmd.exe reads as a command")
+    // Windows drops a name's trailing dots and spaces, and reads its letters in either case.
+    for name in U8[][5]::{ "C:\\t\\x.bat.", "C:\\t\\X.BAT", "C:\\t\\x.CmD", "C:\\t\\x.bat ",
+        "x.cmd" }
+        assert(win_line(U8[][]::{ name, "%PATH%" }, arena).len == 0,
+            "each spelling of a batch file's name counts as a batch file")
+    // A program that is no batch file takes them all, by the C runtime's rules.
+    exe: = win_line(U8[][]::{ "C:\\t\\x.exe", "a\"b", "%PATH%" }, arena)
+    assert(exe.equals("\"C:\\t\\x.exe\" \"a\\\"b\" \"%PATH%\""), "a program's line differs")
+    other: = win_line(U8[][]::{ "C:\\t\\x.batch", "!x!" }, arena)
+    assert(other.equals("\"C:\\t\\x.batch\" \"!x!\""), "`.batch` is no batch file")
+    // The backslashes before the closing quote are doubled for a batch file too. It mostly hands
+    // `%1` on to a program, which reads two before a quote as one backslash.
+    tail: = win_line(U8[][]::{ bat, "C:\\d\\" }, arena)
+    assert(tail.equals("\"C:\\t\\x.bat\" \"C:\\d\\\\\""), "a trailing backslash is doubled")
+    // A batch file's plain argument is quoted too: bare, `cmd.exe` would read its `&` as a command.
+    plain: = win_line(U8[][]::{ bat, "+r", "/c", "" }, arena)
+    assert(plain.equals("\"C:\\t\\x.bat\" \"+r\" \"/c\" \"\""), "each one stays in quotes")
+    verdict.pass("a batch file's arguments stay quoted or are refused, under each spelling of it.")
+
+fn test_win_line_quotes_where_needed(arena: Arena$@) //<
+    //< A program's argument goes in quotes only where it needs them
+    //< It stays bare where it holds letters, digits, bytes past ASCII and `- _ . / \ : = + ,`
+    //< alone. Anything else some reader of the line takes for more than text.
+    //< A program with its own argument reader (`attrib`, `cmd`'s `/c`) does not take a quoted
+    //< switch, so a plain one must reach it bare.
+    verdict.start("[Sys] a program's argument on Windows is quoted only where it needs it...")
+    exe: = "C:\\my t\\x.exe"
+    // The program itself is always quoted, and a plain switch, name or path is never.
+    bare: =
+        win_line(U8[][]::{ exe, "+r", "/c", "x.txt", "-o", "a=b,c", "C:\\d\\f_1.c", "😀" }, arena)
+    assert(bare.equals("\"C:\\my t\\x.exe\" +r /c x.txt -o a=b,c C:\\d\\f_1.c 😀"),
+        "a plain argument stays bare")
+    // A program built on Cygwin or MSYS2 (git, sh) expands these into file names, and reads a
+    // leading `@` as a file of arguments.
+    glob: =
+        win_line(U8[][]::{ exe, "a*", "a?", "a[0-9]", "{a,b}", "it's", "@f", "a@b" }, arena)
+    assert(glob
+        .equals("\"C:\\my t\\x.exe\" \"a*\" \"a?\" \"a[0-9]\" \"{a,b}\" \"it's\" \"@f\" \"a@b\""),
+        "an argument a reader would expand needs quotes")
+    rest: =
+        win_line(U8[][]::{ exe, "a(1).txt", "%A%", "!b!", "a;b", "~", "$x", "#" }, arena)
+    assert(rest
+        .equals("\"C:\\my t\\x.exe\" \"a(1).txt\" \"%A%\" \"!b!\" \"a;b\" \"~\" \"$x\" \"#\""),
+        "any other sign goes in quotes too")
+    alone: = win_line(U8[][]::{ "x.exe" }, arena)
+    assert(alone.equals("\"x.exe\""), "the program is quoted even with no space in it")
+    // An empty one would vanish, and a space or a tab would split it.
+    split: = win_line(U8[][]::{ exe, "", "a b", "a\tb", " " }, arena)
+    assert(split.equals("\"C:\\my t\\x.exe\" \"\" \"a b\" \"a\tb\" \" \""),
+        "an empty argument, a space and a tab need quotes")
+    // `cmd.exe`, named as the program, would read each of these bare as part of a command.
+    shell: =
+        win_line(U8[][]::{ exe, "a&b", "a|b", "a<b", "a>b", "a^b", "&", "C:\\d&\\" }, arena)
+    assert(shell
+        .equals("\"C:\\my t\\x.exe\" \"a&b\" \"a|b\" \"a<b\" \"a>b\" \"a^b\" \"&\" \"C:\\d&\\\\\""),
+        "an argument holding `&`, `|`, `<`, `>` or `^` needs quotes")
+    // A `"` is escaped inside quotes, and the backslashes right before it are doubled.
+    quote: = win_line(U8[][]::{ exe, "a\"b", "a\\\"b", "\"" }, arena)
+    assert(quote.equals("\"C:\\my t\\x.exe\" \"a\\\"b\" \"a\\\\\\\"b\" \"\\\"\""),
+        "a quote inside is escaped")
+    // Backslashes at the end: as they are where bare, doubled before a closing quote. A bare run
+    // stands before a space, never a `"`, so the quoted argument after it is still its own.
+    tail: =
+        win_line(U8[][]::{ exe, "C:\\d\\", "C:\\a\\b", "C:\\my d\\", "\\\\", "x y" }, arena)
+    assert(tail.equals("\"C:\\my t\\x.exe\" C:\\d\\ C:\\a\\b \"C:\\my d\\\\\" \\\\ \"x y\""),
+        "trailing backslashes double only before a closing quote")
+    // A line break is no plain sign, so it goes in quotes with the rest.
+    line: = win_line(U8[][]::{ exe, "a\nb" }, arena)
+    assert(line.equals("\"C:\\my t\\x.exe\" \"a\nb\""), "a line break goes in quotes")
+    verdict.pass("Plain arguments stayed bare, and the others were quoted and escaped.")
+
+fn test_win_line_never_cut(arena: Arena$@) //<
+    //< A line too long for its buffer is refused, never cut, and nothing lands past the buffer
+    //< Each buffer comes from the heap at its exact size, so the address sanitizer reports a write
+    //< past it. A run of backslashes before a quote or the end counts twice.
+    verdict.start("[Sys] the Windows line fits its buffer whole or is refused...")
+    argv: = U8[][]::{ "C:\\t\\x.exe", "a\\\\\"b", "end\\\\", "😀\"𝄞", "", "\\\\\\\"" }
+    whole: = win_line(argv, arena)
+    assert(whole.len > 0, "the line must fit the test's own buffer")
+    defer $run: = str.Str()
+    for a in argv
+        run.s(a).c(0U8)
+    for cap in Range.asc(whole.len + 256)
+        buf: = U8$@::alloc(cap)
+        if kspl_win_line_for(run.ptr, run.len, I32::argv.len, buf, I32::cap)
+            got: = U8[]::{ .ptr = buf, .len = cap }
+            end: = got.find_char(0U8).unwrap_or(cap)
+            assert(end < cap && got.sub(0, end).equals(whole),
+                "a line that fits must be the whole line, its NUL inside the buffer")
+        else
+            assert(cap < whole.len + 255, "a buffer with room to spare must take the line")
+        dealloc(Void$@::buf)
+    verdict.pass("Each buffer took the whole line or refused it, and none was written past.")
+
+// ==========================================
+// How a program is found and how it ended, on Windows
+// **These answers too are checked on every OS**: the runtime builds them on every OS, since they
+// touch no OS (`ksplc/gen/runtime/hosted_spawn.c` and `hosted_proc.c`).
+// ==========================================
+extern fn kspl_win_status_code(st: U32): I32
+extern fn kspl_win_is_bare(name: U8@): Bool
+extern fn kspl_win_is_cwd_relative(name: U8@): Bool
+extern fn kspl_win_path_entry(path: U16@, dir: U16$@, cap: Sz, dlen: Sz$@): U16@
+
+priv fn win_name_is(name: U8[], cwd_relative: Bool): Bool //<
+    //< `kspl_win_is_cwd_relative` for name where cwd_relative, else `kspl_win_is_bare`
+    cstr: = name.to_cstr().unwrap_or(null)
+    assert(cstr != null, "a test name must hold no NUL")
+    defer dealloc(Void$@::cstr)
+    return kspl_win_is_cwd_relative(cstr) if cwd_relative else kspl_win_is_bare(cstr)
+
+priv fn win_path_entries(path: U8[], cap: Sz, arena: Arena$@): List<|U8[]|> //<
+    //< An ASCII PATH split as Windows's lookup splits it; an entry longer than cap reads as ""
+    $units: U16[128] = ::{}
+    assert(path.len < units.len, "a test PATH must fit")
+    for i in Range.asc(path.len)
+        units[i] = path[i]
+    $dir: U16[128] = ::{}
+    $out: = List<|U8[]|>(arena)
+    $p: U16@ = units[0]@
+    for p != null
+        $n: Sz = 0
+        p = kspl_win_path_entry(p, dir[0]@, cap, n@)
+        text: = arena.text()
+        for i in Range.asc(n)
+            text.c(U8::dir[i])
+        out.push(text.take())
+    return out
+
+fn test_win_lookup_and_status(arena: Arena$@) //<
+    //< A program name's lookup, PATH's entries and a crash's code, as Windows reads them
+    verdict.start("[Sys] how Windows finds a program and reads its end...")
+    for bare in U8[][2]::{ "git", "git.exe" }
+        assert(win_name_is(bare, false), "a name with no folder or drive is looked up")
+    for named in U8[][4]::{ "C:git", ".\\git", "a/git", "\\git" }
+        assert(!win_name_is(named, false), "a name with a folder or drive is not looked up")
+    for rel in U8[][2]::{ "bin\\x.exe", "bin/x" }
+        assert(win_name_is(rel, true), "a folder part with no root is under the working folder")
+    for rooted in U8[][4]::{ "\\x", "/x", "C:\\x", "C:x" }
+        assert(!win_name_is(rooted, true), "a rooted path or a drive is not under it")
+    // A `;` inside quotes stays in its entry, the quotes go, and an empty entry stays empty.
+    got: = win_path_entries("\"C:\\a;b\";D:\\x;;E", 64, arena)
+    assert(got.len == 4 && got.get(0).equals("C:\\a;b") && got.get(1).equals("D:\\x") &&
+        got.get(2).len == 0 && got.get(3).equals("E"), "PATH's entries are split differently")
+    long: = win_path_entries("abcdef;xy", 4, arena)
+    assert(long.len == 2 && long.get(0).len == 0 && long.get(1).equals("xy"),
+        "an entry too long to keep must be skipped, not cut")
+    // A crash Windows reports as an NTSTATUS reads as 128 + POSIX's signal; any other code stays.
+    codes: U32[8] = ::{ 0xC0000005U32, 0xC00000FDU32, 0xC000001DU32, 0xC0000094U32, 0xC0000409U32,
+        0xC000013AU32, 0xC0000135U32, 3U32 }
+    want: I32[8] = ::{ 139, 139, 132, 136, 134, 130, 127, 3 }
+    for i in Range.asc(codes.len)
+        assert(kspl_win_status_code(codes[i]) == want[i], "an NTSTATUS reads as another code")
+    assert(kspl_win_status_code(0xC0000017U32) == I32::0xC0000017U32,
+        "an NTSTATUS outside the table stays as Windows gives it")
+    verdict.pass("names, PATH's entries and crash codes read as Windows reads them, on every OS.")

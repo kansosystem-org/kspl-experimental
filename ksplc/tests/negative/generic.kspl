@@ -688,6 +688,36 @@ impl<|S|> Chain<|S|>
 fn main(): I32
   c: = Chain<|I32|>::{ .v = 1, .n = 2 }
   return c.deeper().deeper().tag()
+// ==== case impl_param_twice_needs_equal_args
+//< An impl that names one parameter at two positions is not for an instance whose arguments differ
+//< `T` took the first position's argument, so `second` read the `Bool` field as an `I64`. The same
+//< holds for a value parameter: `side` gave 2 for a 2 by 3 grid.
+// EXPECT: impl_param_twice_needs_equal_args.kspl:25:11: error: type 'impl_param_twice_needs_equal_args.Pair<|I64, Bool|>' has no field or method named 'second'
+// EXPECT: impl_param_twice_needs_equal_args.kspl:27:11: error: type 'impl_param_twice_needs_equal_args.Grid<|2, 3|>' has no field or method named 'side'
+// EXPECT: Finished with 2 error(s)
+struct Pair<|A, B|>
+  a: A
+  b: B
+
+impl<|T|> Pair<|T, T|>
+  fn second(r: Self): T
+    return r.b
+
+struct Grid<|const R: Sz, const C: Sz|>
+  rows: I32[R]
+  cols: I32[C]
+
+impl<|const N: Sz|> Grid<|N, N|>
+  fn side(_r: Self@): Sz
+    return N
+
+fn main(): I32
+  p: = Pair<|I64, Bool|>::{ .a = 5, .b = true }
+  _x: = p.second()
+  g: Grid<|2, 3|> = ::{ .rows = ::{ 0, 0 }, .cols = ::{ 0, 0, 0 } }
+  _n: = g.side()
+  same: = Pair<|I64, I64|>::{ .a = 5, .b = 6 }
+  return I32::same.second()
 // ==== case uninferable_var
 //< A variable with neither a type annotation nor an initialiser is an error
 //< Its type cannot be settled.

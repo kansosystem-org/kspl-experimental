@@ -30,7 +30,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
 import "std/ds"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 fn check_variant_call_arity(ctx: Sema_ctx$@, node: Ast_node$@, args_node: Ast_node$@,
     variant_def: sema_type_def.Enum_variant@, has_call_syntax: Bool) //<
@@ -359,7 +359,7 @@ priv fn infer_fn_ptr_call(ctx: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, t
         //< **Type arguments written on it bind nothing**, and are refused as on any other callee.
     parts: = sema_decl_name.named_fn(left)
     is_method: = left.kind_id == .k_method_access
-    defer $fn_name: = Str_builder()
+    defer $fn_name: = Str()
     $is_template: = false
     if is_method
         fn_name.s(ctx.env.base_type_name(left.get_postfix_receiver().type_id)).s(".")
@@ -384,7 +384,7 @@ priv fn infer_method_call(ctx: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, t
         //< A call of a method through a receiver (`list.push(x)`)
         //< **A template always takes the instantiation route**, so its symbol is dropped.
     parts: = sema_decl_name.named_fn(left)
-    defer $fn_name: = Str_builder()
+    defer $fn_name: = Str()
     fn_name.s(ctx.env.base_type_name(left.get_postfix_receiver().type_id)).s(".")
         .s(parts.name.text)
     $callee: = Callee::{ .sym = callee_symbol(left, null, true).unwrap_or(null), .template = null,
@@ -420,14 +420,18 @@ priv fn infer_named_call(ctx: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, ta
         return I32::sema_type_env.Builtin_type_id.unknown
     // The name looked up, without any `<|…|>`, and the type arguments written for the function.
     parts: = sema_decl_name.named_fn(left)
-    defer $base_fn_name: = Str_builder()
+    defer $base_fn_name: = Str()
     // What the callee's name names, read once (read_written_name in sema/decl/name.kspl).
     $named: = sema_decl_name.Written_name::{ .parts = parts, .spelled = "", .fqn = "",
         .head_file = "", .sym = null, .template = null,
         .fn_tmpl = sema_decl_mono.Fn_instance::{ .template = "", .owner = 0,
         .args = I32[]::{} }, .owner_id = 0, .reach = .nowhere }
     if left.is_path_or_ident()
+        // In the file the name is written in: an impl's type argument stands before the `.` in a
+        // copied default body (`T.make()`).
+        prev_file: = ctx.enter_written_file(left)
         named = ctx.read_written_name(left)
+        ctx.set_current_file(prev_file)
         base_fn_name.s(named.spelled)
     else
         for i in Range.asc(left.children.len)

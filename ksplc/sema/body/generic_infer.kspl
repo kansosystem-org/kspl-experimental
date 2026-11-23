@@ -4,7 +4,7 @@
 //< or a conformed trait's arguments, and a function type's parameters and result. A type parameter
 //< binds where it stands bare. A `const` parameter binds where it stands as an array's length or as
 //< a generic's value argument. One no argument binds is refused here, with the form to write.
-import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast" { Ast_node, variance_names_mut }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as _base_ast_place // `is_const_gen_param`
 import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
@@ -47,15 +47,29 @@ priv fn bindings_of(gen_params: Ast_node@, callee: U8[]): Bindings //<
         b.bound_by.push(::{})
     return b
 
-priv fn bind_name(bindings: Bindings$@, name: U8[], arg_id: I32) //<
+priv fn bind_name(ctx: Sema_ctx@, bindings: Bindings$@, name: U8[], arg_id: I32) //<
     //< Binds the type parameter called name to arg_id; the first argument to reach it wins
     //< **The type is taken with its immutability.** `pick(v@)` on an immutable `v` binds `T` of
     //< `a: T$@` to the immutable type. So the call is accepted, and a write through `a` is refused
     //< in the instance. With the immutability dropped, the same call would be refused at the call.
+    //< **A later argument can only add that immutability**: after `xs: T[]` bound `T` to `I32`,
+    //< an immutable `v@` for `a: T$@` makes it the immutable `I32`, as it would have coming first.
     for i in Range.asc(bindings.names.len)
-        if bindings.names.get(i).equals(name) && !bindings.is_value.get(i) &&
-            sema_type_env.is_unknown(bindings.ids.get(i))
+        if !bindings.names.get(i).equals(name) || bindings.is_value.get(i)
+            continue
+        bound: = bindings.ids.get(i)
+        if sema_type_env.is_unknown(bound) ||
+            (ctx.env.is_const(arg_id) && ctx.env.strip_const(arg_id) == bound)
             bindings.ids.set(i, arg_id)
+
+priv fn own_read_only(ctx: Sema_ctx@, part_id: I32, names_mut: Bool): I32 //<
+    //< The type a parameter's part binds, given the target or element found in the argument
+    //< **A read-only mark the parameter writes itself is not the type parameter's.** `xs: T[]`
+    //< and `p: T@` say "read-only" in their own spelling, so an `I32[]` binds `T` to `I32`. Taken
+    //< with the mark, `T` was the immutable `I32`, and a `Box<|T|>` beside it refused a
+    //< `Box<|I32|>`. Where the parameter writes `$` (`T$@`, names_mut), the argument's own
+    //< immutability is `T`'s (`bind_name`).
+    return part_id if names_mut else ctx.env.strip_const(part_id)
 
 priv fn bind_value(ctx: Sema_ctx$@, bindings: Bindings$@, written: Ast_node$@, value_id: I32) //<
     //< Binds the `const` parameter written names to the value the argument has there
@@ -103,13 +117,13 @@ priv fn bind_type(ctx: Sema_ctx$@, bindings: Bindings$@, written: Ast_node$@, ar
             if ch.kind_id != .k_literal && ch.kind_id != .k_keyword
                 bind_type(ctx, bindings, ch, arg_id)
                 return
-        bind_name(bindings, written.text, arg_id)
+        bind_name(ctx, bindings, written.text, arg_id)
     case .k_type_path, .k_expr_path
         bind_path(ctx, bindings, written, arg_id)
     case .k_type_fn_sig
         bind_fn_sig(ctx, bindings, written, arg_id)
     case .k_identifier
-        bind_name(bindings, written.text, arg_id)
+        bind_name(ctx, bindings, written.text, arg_id)
     default {}
 
 priv fn bind_type_expr(ctx: Sema_ctx$@, bindings: Bindings$@, written: Ast_node@, arg_id: I32) //<
@@ -129,7 +143,7 @@ priv fn bind_type_expr(ctx: Sema_ctx$@, bindings: Bindings$@, written: Ast_node@
         case .pointer(pointee)
             if !pt.equals("@")
                 return
-            cur = pointee
+            cur = own_read_only(ctx, pointee, p.text.starts_with("$"))
         case .array(elem, size)
             if !pt.starts_with("[")
                 return
@@ -140,7 +154,7 @@ priv fn bind_type_expr(ctx: Sema_ctx$@, bindings: Bindings$@, written: Ast_node@
         default
             return
     if base == null
-        bind_name(bindings, written.text, cur)
+        bind_name(ctx, bindings, written.text, cur)
     else
         bind_type(ctx, bindings, base, cur)
 
@@ -153,13 +167,17 @@ priv fn bind_path(ctx: Sema_ctx$@, bindings: Bindings$@, path: Ast_node$@, arg_i
     written: = ctx.read_written_type(path)
     if written.args == null
         if written.member == null && written.alias_file.len == 0
-            bind_name(bindings, written.name, arg_id)
+            bind_name(ctx, bindings, written.name, arg_id)
         return
     $fqn: = written.fqn
     if path.is_sugar_made()
-        fqn =
-            (base_core.OPTION_FQN if written.name.equals(base_core.option_ident())
-            else base_core.SLICE_FQN)
+        // `T?`, `T!E` and `T[]` are written as their generic's last word, with no file.
+        if written.name.equals(base_core.option_ident())
+            fqn = base_core.OPTION_FQN
+        else if written.name.equals(base_core.result_ident())
+            fqn = base_core.RESULT_FQN
+        else
+            fqn = base_core.SLICE_FQN
     real: = ctx.env.get_clean_real_type(arg_id)
     $args: = ctx.env.instance_args(real)
     if !ctx.env.instance_base(real).equals(fqn)
@@ -174,6 +192,7 @@ priv fn bind_path(ctx: Sema_ctx$@, bindings: Bindings$@, path: Ast_node$@, arg_i
         for gp in tmpl_params.children
             if gp.gen_param_name().len > 0
                 own_params.push(gp)
+    mask: = ctx.env.variance_masks.get(fqn).unwrap_or(0)
     $pos: Sz = 0
     for w in written.args.children
         if w.kind_id == .k_literal || w.kind_id == .k_keyword || w.kind_id == .k_empty
@@ -182,6 +201,10 @@ priv fn bind_path(ctx: Sema_ctx$@, bindings: Bindings$@, path: Ast_node$@, arg_i
             return
         if pos < own_params.len && own_params.get(pos).is_const_gen_param()
             bind_value(ctx, bindings, w, args[pos])
+        else if variance_names_mut(mask, pos)
+            // A position the generic marked (`Slice<|$T|>`): unmarked, it reads "immutable".
+            names_mut: = w.kind_id == .k_type_arg && w.has_literal_child("$")
+            bind_type(ctx, bindings, w, own_read_only(ctx, args[pos], names_mut))
         else
             bind_type(ctx, bindings, w, args[pos])
         pos += 1

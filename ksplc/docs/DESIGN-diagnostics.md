@@ -76,6 +76,22 @@ Caution: **Do not use this flag to suppress the use-after-free check as well.** 
 
 An alias is shown by its own name, unresolved: resolving it would name a type the line does not spell.
 
+### An undefined name: one error, saying what to write
+
+**An undefined name's error says what to write, as far as ksplc can tell** ("1. Diagnostic codes, and the errors that have none" in [`SPEC-diagnostics.md`](SPEC-diagnostics.md)). `append_name_hint` in `sema/body/resolve_path.kspl` tries three things in order:
+
+1. **Another language's word** (`True`, `print`, `range`): a table beside it gives KSPL's spelling. A type's table is in `sema/decl/type_check.kspl` (`int`, `String`, and Rust's `i32` in lower case).
+2. **A name in scope one typo away**: the locals and this file's own values and functions. `Nearest` in `base/near.kspl` holds the rule, which a misspelled member (`sema/body/dot.kspl`) and subcommand (`cli.kspl`) share.
+3. Otherwise, the general advice.
+
+**`x = 5` with no `x` declared names the declaration** (`Fn_ctx.assign_target`, read by `report_undefined_path`), since Python and JavaScript declare by assigning. Inside an anonymous function the capture's note stands instead.
+
+**An undefined type is the unknown type**, as a refused typedef is. The report records the name (`Resolving_state.missing_types`), and `is_reported_missing` in `sema/decl/resolve.kspl` reads it. As a type of its own, each use added "expected 'int', but got 'I32'", which suggests `int` exists.
+
+* **Only the report can tell an undefined name from a type parameter**, since it knows the parameters in scope. A resolver that asked again took a generic's `N` for undefined.
+* **A signature is resolved before the report.** So a parameter's, a local's and a return type's binding is made unknown where it is used (`names_missing_type` in `sema/decl/type_check.kspl`).
+* What is given up: a call's result keeps the written name, so `twice(x) + 1` with `fn twice(): int` adds an error.
+
 ### No diagnostic that depends on a generic's type argument
 
 **Inside a generic function's body, advice whose verdict changes with the type argument is not given at all.** The worked examples are [I0301]'s unnecessary `::` cast and [I0307]'s empty block.

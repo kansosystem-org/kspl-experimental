@@ -9,7 +9,7 @@ import "ksplc/base/mangle" as base_mangle
 import "ksplc/sema/type/env" { Env, Instance }
 import "std/ds" { Map }
 import "std/io"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 
 priv const MAX_MANGLE_DEPTH: Sz = 1000 //<
@@ -31,7 +31,7 @@ impl Env
             return r.mangle_type_id_to_impl(type_id, out, 0)
         entry: = r.id_to_type.get(type_id)
         if entry.c_name.len == 0
-            defer $spelled: = Str_builder()
+            defer $spelled: = Str()
             r.mangle_type_id_to_impl(type_id, spelled, 0)
             entry.c_name = base_core.arena.dup_str(spelled.slice())
         return out.s(entry.c_name)
@@ -88,7 +88,7 @@ impl Env
         base_str: = r.get_str(type_id)
         return base_str.mangle_c_type_name_to(res)
 
-    fn mangled_into(r: Self$@, type_id: I32, out: Str_builder$@): U8$[] //<
+    fn mangled_into(r: Self$@, type_id: I32, out: Str$@): U8$[] //<
         //< type_id's mangled name, written afresh into `out`: valid until `out` is used again
         out.clear()
         r.mangle_type_id_to(type_id, out)
@@ -104,7 +104,7 @@ impl Env
         if _plain: = r.variance_stripped(type_id)
             // Caution: **Look up the key by the mangled name.** An instance is in the type table
             // under its mangled name, and `mangle_type_id_to` already drops the immutability.
-            defer $key: = Str_builder()
+            defer $key: = Str()
             r.mangle_type_id_to(type_id, key)
             return r.type_to_id.get(key.slice()).unwrap_or(type_id)
         return type_id
@@ -129,7 +129,7 @@ impl Env
         //< type_id's registration key on the arena, or "" where it is no instance
         inst: = r.instance_of(type_id) catch
             return ""
-        defer $key: = Str_builder()
+        defer $key: = Str()
         r.instance_key_to(inst, key)
         return base_core.arena.dup_str(key.slice())
 
@@ -140,10 +140,10 @@ impl Env
         //< The arguments' `std.lang.` is dropped before the `_` joins them: after it, the module
         //< would not open a name and would stay. Caution: **Mangle the joined text whole**, or a
         //< separator is lost at the join and `f<|-3|>` takes `f<|3|>`'s name.
-        defer $full: = Str_builder()
+        defer $full: = Str()
         full.s(inst.template)
         if inst.args.len > 0
-            defer $args: = Str_builder()
+            defer $args: = Str()
             for i in Range.asc(inst.args.len)
                 if i > 0
                     args.s(base_ast.TYPE_ARG_SEP)
@@ -151,7 +151,7 @@ impl Env
             args.slice().drop_c_type_module_to(full.s("_"))
         return full.slice().mangle_c_type_name_to(out)
 
-    priv fn c_arg_text_to(r: Self$@, type_id: I32, out: Str_builder$@, depth: Sz) //<
+    priv fn c_arg_text_to(r: Self$@, type_id: I32, out: Str$@, depth: Sz) //<
         //< Writes one type argument's text for an instance's C name: its canonical string, except
         //< that an immutable instance is written `Const_` and then the instance's name
         //< Why: rule 4 of "Immutability marks in a type, and the API that asks" in
@@ -182,7 +182,7 @@ impl Env
         default
             out.s(r.get_str(type_id))
 
-    priv fn c_arg_base_to(r: Self$@, base_id: I32, out: Str_builder$@, depth: Sz) //<
+    priv fn c_arg_base_to(r: Self$@, base_id: I32, out: Str$@, depth: Sz) //<
         //< The base a postfix applies to, a function type bracketed as `write_suffix_base` does
         switch r.get_info(base_id)
         case .fn_type
@@ -198,7 +198,7 @@ struct Mangle_seen //< the record for emitting a composite type "once per mangle
     //< (stripping a const can later give it the same name).
     priv env: Env$@
     priv seen: Map<|U8[], I32|>$@
-    priv buf: Str_builder
+    priv buf: Str
 
 // It releases what it owns with `free()`; see `Manual_free` in std/lang.kspl for why it conforms.
 impl Mangle_seen: Manual_free
@@ -209,7 +209,7 @@ impl Mangle_seen: Manual_free
 impl Mangle_seen
     fn new(env: Env$@): Mangle_seen
         return Mangle_seen::{ .env = env,
-            .seen = base_core.arena.create(Map<|U8[], I32|>(null)), .buf = Str_builder() }
+            .seen = base_core.arena.create(Map<|U8[], I32|>(null)), .buf = Str() }
 
     fn admit(r: Self$@, type_id: I32): Bool //<
         //< A mangled name seen for the first time is noted and true; the second time, false

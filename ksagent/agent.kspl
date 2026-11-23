@@ -11,7 +11,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/strnum"
 
@@ -225,7 +225,7 @@ priv fn tool_room(builder: Json_builder$@, server: model.Server@, msgs: List<|js
         //< The bytes the result of call `id` may take in the next request (`files.sent_len`)
         //< What the request already holds, the result's own message and `TOOL_RESERVE` are taken
         //< from `MAX_REQUEST_BYTES`; 0 where nothing is left.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     write_request(builder, server.model, msgs, tools, server.stream, out@)
     // The empty message, and the comma that comes before it in the list of messages.
     tool_message(builder, id, "").dump(out@)
@@ -307,12 +307,12 @@ priv fn assistant_message(builder: Json_builder$@, reply: model.Reply@): json.Va
 priv fn request_body(builder: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
     tools: json.Value, stream: Bool): U8[] //<
         //< One request's JSON text: the model, the whole conversation, the tools and the stream
-    defer $out: = Str_builder()
+    defer $out: = Str()
     write_request(builder, model_name, msgs, tools, stream, out@)
     return builder.arena.dup_str(out.slice())
 
 priv fn write_request(builder: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
-    tools: json.Value, stream: Bool, out: Str_builder$@) //< writes one request's JSON text to `out`
+    tools: json.Value, stream: Bool, out: Str$@) //< writes one request's JSON text to `out`
     $all: = builder.arr()
     for i in Range.asc(msgs.len)
         all = all.push(msgs.get(i))

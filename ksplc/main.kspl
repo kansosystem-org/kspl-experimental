@@ -31,7 +31,7 @@ import "std/ds" { List }
 import "std/io"
 import "std/mem" + { Arena }
 import "std/seq"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 import "std/sys"
 
@@ -75,7 +75,7 @@ impl cli.Mode
             answer_info(topic)!
         case .clean
             defer arena: = Arena(8 * 1024)
-            defer $dir: = Str_builder()
+            defer $dir: = Str()
             if !base_cache.clear_all(dir@, arena)
                 base_cache.exit_unlocated("ksplc")
             io.err().s("ksplc: cleared ").s(dir.slice()).c('\n')
@@ -143,7 +143,7 @@ priv fn answer_info(topic: usage.Info_topic): Void!pipeline.Compile_error //< it
     case .exe_flags
         print_flag_words(tools_run.append_exe_flags)
     case .cache_dir
-        defer $dir: = Str_builder()
+        defer $dir: = Str()
         if !base_cache.append_cache_root(dir@)
             base_cache.exit_unlocated("ksplc")
         io.out().s(dir.slice()).c('\n')
@@ -254,7 +254,7 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
     current_size: = base_core.pools.get_kind_pool_size()
     if current_size > expected_max
         unknown_name: = base_core.pools.get_kind_str(expected_max, "Unknown")
-        defer $err_msg: = Str_builder()
+        defer $err_msg: = Str()
         err_msg
             .s("Grammar sync error: Rule '\{unknown_name\}' is defined in kspl.kspeg but missing \
                 from Ast_kind enum.")
@@ -325,20 +325,26 @@ impl io.Io_error
         //< it.
         usage.error_exit(base_diag.io_line(r, kind))
 
+priv const COMPILE_STOPPED: U8[] =
+    "Compilation stopped. Fix the errors above, then run the command again.\n" //<
+        //< The line closing a compile that failed on the diagnostics printed above it
+        //< **No internal name**: the reader acts on the diagnostics, not on the stage that found
+        //< them.
+
 impl pipeline.Compile_error
     priv fn report_and_exit(r: Self@) //<
         //< It reports a propagated error as one line, `<category>/<variant>: <details>`, and exits
-        //< The part before the colon (`parse/syntax_error`, or a bare `codegen`) is the error's
-        //< identifier unchanged. Every line goes to standard error. **A line closing a compile
-        //< whose diagnostics are printed** becomes the closing object under json (`end_compile`).
-        defer $msg: = Str_builder()
+        //< The part before the colon (`parse/circular_import`) is the error's identifier unchanged.
+        //< Every line goes to standard error. **A compile whose diagnostics are printed** closes
+        //< with `COMPILE_STOPPED`, or with the closing object under json (`end_compile`).
+        defer $msg: = Str()
         $closes: = false
         switch r$
         case .parse(p_err)
             switch p_err
             case .syntax_error
                 closes = true
-                msg.s("parse/syntax_error: compilation terminated (see diagnostics above)\n")
+                msg.s(COMPILE_STOPPED)
             case .circular_import(path)
                 msg
                     .s("parse/circular_import: circular import across directory boundaries is \
@@ -355,7 +361,7 @@ impl pipeline.Compile_error
             switch s_err
             case .analysis_failed
                 closes = true
-                msg.s("sema/analysis_failed: compilation terminated (see diagnostics above)\n")
+                msg.s(COMPILE_STOPPED)
             case .not_constant
                 msg.s("sema/not_constant: expression is not a compile-time constant\n")
             case .division_by_zero
@@ -364,12 +370,12 @@ impl pipeline.Compile_error
                 msg.s("sema/invalid_argument: invalid argument\n")
             case .nesting_too_deep
                 closes = true
-                msg.s("sema/nesting_too_deep: compilation terminated (see diagnostics above)\n")
+                msg.s(COMPILE_STOPPED)
         case .io(io_err)
             io_err.report_and_exit("io") // the helper reports and exits
         case .codegen
             closes = true
-            msg.s("codegen: compilation terminated (see diagnostics above)\n")
+            msg.s(COMPILE_STOPPED)
         case .fmt_failed
             // Not `closes`: fmt ends no compile, so it has no closing object either.
             msg.s("fmt/failed: some files could not be formatted (listed above)\n")
@@ -414,7 +420,7 @@ fn main(): Void!I32
 
     heap_used: = mem.heap_used_bytes()
     if heap_used != 0
-        defer $final_msg: = Str_builder()
+        defer $final_msg: = Str()
         final_msg
             .s("Final Global Heap : \{heap_used:,\} bytes (Expected 0. A nonzero value indicates a \
                 memory leak)\n")

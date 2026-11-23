@@ -53,7 +53,7 @@ The second leaves a call that compiles everywhere and does nothing until a build
 
 | File | The usual way to do it | The known problem | How kstls handles it |
 | :-- | :-- | :-- | :-- |
-| `tls` | Calling OpenSSL directly | **Forgotten verification.** Not calling `SSL_CTX_set_verify`, or setting SNI (`SSL_set_tlsext_host_name`) without the host name check (`SSL_set1_host`), are the standard mistakes | A client context always verifies (`SSL_VERIFY_PEER`, the default CA store), at TLS 1.2 or above; SNI and the host name check are both set |
+| `tls` | Calling OpenSSL directly | **Forgotten verification.** Not calling `SSL_CTX_set_verify`, or setting SNI (`SSL_set_tlsext_host_name`) without the host name check (`SSL_set1_host`), are the standard mistakes | A client context always verifies (`SSL_VERIFY_PEER`) against the default CA store or the caller's CA file, at TLS 1.2 or above. SNI and the host name check are both set. No parameter turns verification off |
 | `tls` (the end of a stream) | `SSL_read` | **A cut stream read as a proper end.** `SSL_read` returns 0 both for the peer's close_notify and for a TCP connection dropped without one | `read` returns 0 only after a close_notify; a connection ending any other way is `io_failed` |
 | `tls` (a peer that is gone) | `SSL_set_fd`, OpenSSL writing to the socket itself | **A write to a peer that is gone kills the program.** OpenSSL writes with no `MSG_NOSIGNAL` and cannot be asked to, so SIGPIPE is raised. The program a KSPL library is linked into can leave it in force | OpenSSL reads and writes memory. Every byte crosses the socket through `std/net`, whose write never raises SIGPIPE. A write to a peer that is gone fails as `io_failed` |
 | `tls_server` (the key) | `PEM_read_bio_PrivateKey` with no callback | **A start that waits for good.** For a key under a passphrase, OpenSSL's own callback prompts on the terminal, and a server restarted unattended waits there | A callback that answers no passphrase and marks the request. The key is refused as `key_encrypted` |
@@ -63,13 +63,19 @@ The second leaves a call that compiles everywhere and does nothing until a build
 **`tls`: forgotten verification.** Verifying means checking that a trusted authority (a CA) signed the server's certificate, and that it names the host you asked for. SNI tells the server which host name you want, and checks nothing.
 
 * The floor of TLS 1.2 holds whatever openssl.cnf says.
-* **The verification's own answer decides the error.** A certificate that does not verify stops the handshake as `cert_verify_failed`. A peer that speaks no TLS is `handshake_failed`.
+* **The verification's own answer decides the error.** A peer that speaks no TLS is `handshake_failed`. A certificate that does not verify stops the handshake with one of three errors, since each has its own remedy:
+  * `cert_untrusted`: no trusted CA vouches for it, as for a self-signed one. The caller gives the CA's file.
+  * `cert_wrong_host`: a trusted CA vouches for it, but for another host or address. OpenSSL checks the chain first, so an untrusted certificate never reads as this one.
+  * `cert_verify_failed`: any other reason, such as having expired.
+* **A CA file replaces the default store** rather than adding to it (`ca_file` of `Tls_stream.connect`). The caller names the CAs it trusts for this one server, so no other CA can vouch for it. A file that cannot be read, or holds no certificate, is `ca_file_unreadable`.
 * A host name holding a NUL, or longer than OpenSSL takes, **fails rather than being cut**, which would verify a different host.
 * **A host given as an IP address is checked as an address**, against the certificate's IP entries. It is not sent as SNI, which takes only a name. OpenSSL before 3.0 checks a name only, so an address would fail against its own certificate there.
 
 **The handshake has one deadline.** `Tls_stream.connect` gives it 10 seconds by default, or the budget `handshake_ms` sets; a non-positive budget expires at once. The TCP connection and certificate-store setup come before it. The deadline covers every handshake read and write, the final queued message included, so a peer sending occasional bytes cannot restart it.
 
-The socket is non-blocking during the handshake, and success restores blocking mode. A failure frees the TLS state and closes TCP without a shutdown exchange, so cleanup cannot wait for the peer.
+The socket is non-blocking during the handshake, and success restores blocking mode.
+
+**`read_for` and `write_all_for` keep a deadline the same way**: the socket is non-blocking for the length of the call, and each wait counts toward the one deadline. They make `Tls_stream` a `std/net` `Byte_stream`, so `std/http` reads and writes HTTP over it with the waits it keeps over TCP. A failure there is a `Net_error`: `timed_out` past the deadline, `io_failed` otherwise. A failure frees the TLS state and closes TCP without a shutdown exchange, so cleanup cannot wait for the peer.
 
 **`tls`: the end of a stream.** A close_notify is the message a TLS peer sends to say "I am finished". Taking a dropped TCP connection as the end too lets whoever can drop it cut a reply short unnoticed (a truncation attack).
 

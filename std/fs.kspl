@@ -15,7 +15,7 @@ import "std/io"
 import "std/mem" + { Arena, dealloc }
 import "std/rand"
 import "std/seq" // `List.order_by`
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" // `:x` in the interpolation of the random name suffix
 import "std/sys"
 
@@ -23,6 +23,7 @@ extern fn kspl_dir_open(path_ptr: U8@, path_len: Sz): I64
 extern fn kspl_dir_read(handle: I64, buf: U8$@, cap: Sz): I32
 extern fn kspl_dir_close(handle: I64)
 extern fn kspl_is_exec(path_ptr: U8@, path_len: Sz): Bool
+extern fn kspl_is_read_only(path_ptr: U8@, path_len: Sz): Bool
 extern fn kspl_path_mtime_ns(path_ptr: U8@, path_len: Sz, ns_out: I64$@): Bool
 extern fn kspl_is_link(path_ptr: U8@, path_len: Sz): I32 //<
     //< 1=a link, 0=not a link, -1=cannot tell
@@ -147,6 +148,13 @@ pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is se
     //< bit.
     //< Caution: **Do not use this to decide "can it be started"**: `can_run` below answers that.
     return kspl_is_exec(path.ptr, path.len)
+
+pub fn is_read_only(path: U8[]): Bool //< whether a file stands there marked "not to be written"
+    //< On POSIX its owner's write bit is down (`chmod a-w`); on Windows its read-only mark is up.
+    //< False for a folder, and where nothing stands. A link is followed on POSIX.
+    //< Caution: **`replace_file`, `remove_path` and `rename_path` do not ask this**: a rename needs
+    //< only the folder's permission, so they go through. A caller that honours the mark asks first.
+    return kspl_is_read_only(path.ptr, path.len)
 
 priv const RUN_EXTS: U8[][4] = ::{ ".exe", ".com", ".bat", ".cmd" } //<
     //< The extensions that can be started on Windows

@@ -114,7 +114,7 @@ It ends with `# installed ->` lines, then says **which `ksplc` your PATH starts*
 | Your system | Use |
 | :-- | :-- |
 | Linux | `.devcontainer/` (Docker) as it is |
-| macOS | `make` natively with Xcode's clang: built in CI but not confirmed ("Where it is supported" in the root [`README.md`](../README.md#where-it-is-supported)). `make kssrv` and `make ksmd` also need Homebrew's `openssl@3` ("Run it" in [kssrv](../kssrv/README.md)) |
+| macOS | `make` natively with Xcode's clang: built in CI but not confirmed ("Where it is supported" in the root [`README.md`](../README.md#where-it-is-supported)). `make kssrv`, `make ksmd` and `make ksagent` also need Homebrew's `openssl@3` ("Run it" in [kssrv](../kssrv/README.md)) |
 | Windows, to run the complete Linux checks | The `.devcontainer/` on WSL2, where all Linux gates run |
 | Windows, to confirm native behavior on real hardware | [MSYS2](https://www.msys2.org/), in the three steps below |
 

@@ -17,8 +17,9 @@ import "ksplc/usage"
 import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
+import "std/fs"
 import "std/io"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum" // `to_i64`
 import "std/sys"
 
@@ -103,7 +104,7 @@ impl Face
         //< **Refused, never guessed**: a guess folds sizes the C compiler disagrees with.
         //< Caution: **The refusal goes to standard error**, the language server's too. Its
         //< standard output is the protocol, where a line of text reads as a broken message.
-        defer $said: = Str_builder()
+        defer $said: = Str()
         machine_refusal_to(r.face_name(), base_core.config.machine, base_target.host_name(), said@)
         if said.len > 0
             usage.error_exit(said.slice())
@@ -426,6 +427,29 @@ priv fn refuse_output_on_input(command: U8[], input: U8[], outputs: U8[][]) //<
                     replace the source. Name another output\n").take()
             usage.error_exit(msg)
 
+priv fn refuse_shared_output(command: U8[], outputs: U8[][]) //<
+    //< Exits where two of the files `ksplc <command>` writes are one file
+    //< **Each is written whole and renamed into place**, so the file would hold the later one
+    //< alone, and the compile would still end with 0: `--emit-deps=a.c` beside the output `a.c`
+    //< left the list of sources where the C was asked for. The paths are compared as
+    //< `refuse_output_on_input` compares them. An empty output is one not asked for.
+    //< Caution: **A device takes any number of writes** (`/dev/null` named twice discards both).
+    for i in Range.asc(outputs.len)
+        if outputs[i].len == 0 || is_device(outputs[i])
+            continue
+        one: = base_locate.canonical_path(outputs[i])
+        for j in Range.asc(i)
+            if outputs[j].len > 0 && base_locate.canonical_path(outputs[j]).equals(one)
+                msg: = base_core.arena.text()
+                    .s("ksplc \{command\}: the outputs '\{outputs[j]\}' and '\{outputs[i]\}' are \
+                        one file, so one would replace the other. Name a file for each\n").take()
+                usage.error_exit(msg)
+
+priv fn is_device(path: U8[]): Bool //< whether a path names a device or a FIFO that exists
+    info: = fs.stat(path) catch _e
+        return false
+    return info.kind == fs.File_kind.other
+
 priv fn read_mode(parser: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, cli: Cli$@): Mode //<
     //< The mode the subcommand names, with its inputs checked
     switch face
@@ -514,8 +538,15 @@ priv fn read_mode(parser: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$
                         <input.kspl> <output.c>')", in_files)
                 io.err().s(why)
             usage.usage_exit()
-        refuse_output_on_input(face.face_name(), in_files.get(0),
-            U8[][]::{ in_files.get(1), cli.deps_path, cli.libs_path })
+        // **Every file the compile writes**, an interface `--library=` names included: a
+        // `--library=a.kspl` beside the input `a.kspl` replaced the source with its interface.
+        outputs: = List<|U8[]|>.create(base_core.arena)
+        outputs.push(in_files.get(1))
+        outputs.push(cli.deps_path)
+        outputs.push(cli.libs_path)
+        outputs.push_all(base_core.config.interface_paths.slice())
+        refuse_output_on_input(face.face_name(), in_files.get(0), outputs.slice())
+        refuse_shared_output(face.face_name(), outputs.slice())
         return .compile(source_input(in_files.get(0)), in_files.get(1), cli.deps_path,
             cli.libs_path)
 
@@ -541,21 +572,16 @@ priv fn refuse_missed_subcommand(in_files: List<|U8[]|>@) //<
             .s(" 'ksplc --help' lists the subcommands and options.\n").take())
 
 priv fn nearest_face(written: U8[]): U8[]? //<
-    //< The subcommand whose name is near `written` (`near_enough` in `base/near.kspl`)
+    //< The subcommand whose name is near `written` (`Nearest` in `base/near.kspl`)
     //< **A file's name is never one**: a path or an extension shows it is meant as an input.
     if written.find_str(".").is_some() || written.find_str("/").is_some() ||
         written.find_str("\\").is_some()
         return .none
-    $best: U8[] = ""
-    $best_cost: = base_near.near_enough(written)
+    $near: = base_near.nearest_to(written)
     for row in FACES
-        if row.declared != Declared.named && row.declared != Declared.trailing
-            continue
-        cost: = base_near.edit_distance(written, row.face.face_name())
-        if cost < best_cost
-            best = row.face.face_name()
-            best_cost = cost
-    return .some(best) if best.len > 0 else .none
+        if row.declared == Declared.named || row.declared == Declared.trailing
+            near.offer(row.face.face_name())
+    return near.found()
 
 impl Mode
     fn new(): Self //< the mode the process's command line asks for; a refused line exits
@@ -595,7 +621,7 @@ impl Mode
         apply_options(o@, face)
         return read_mode(p, face, in_files, o@)
 
-fn machine_refusal_to(face: U8[], named: U8[], host: U8[], out: Str_builder$@) //<
+fn machine_refusal_to(face: U8[], named: U8[], host: U8[], out: Str$@) //<
     //< Why the subcommand cannot lay values out for the machine, onto `out`; nothing where it can
     //< `named` is `--machine`'s (empty where none is given), `host` the machine ksplc runs on.
     //< **Every subcommand whose row says `lays_out` asks this before it starts**: a machine left

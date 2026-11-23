@@ -9,7 +9,7 @@ import "ksmd/model/model" { Cell_kind, Table }
 import "ksmd/syntax/inline" { is_destination }
 import "std/chars"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum"
 
 struct Value //< what typed text puts in a cell
@@ -33,7 +33,7 @@ fn value_of(typed: U8[], read: Reading, arena: Arena$@): Value //< how `set_cell
         return Value::{ .kind = .text, .text = unquoted(typed, arena) }
     // A number past the largest a cell holds stays the text typed, as Excel keeps `1e400`. A
     // typed `1.` or `.5` is kept in JSON's form, which the file holds: `1` and `0.5`.
-    defer $plain: = Str_builder()
+    defer $plain: = Str()
     number: = as_decimal(typed, plain@)
     if is_decimal(number) && is_finite(number)
         kept: = typed if number.len == typed.len else arena.dup_str(number)
@@ -47,7 +47,7 @@ fn value_of(typed: U8[], read: Reading, arena: Arena$@): Value //< how `set_cell
     if day.is_none() && read.year > 0I64
         day = month_day(typed, read.year)
     if d: = day
-        defer $text: = Str_builder()
+        defer $text: = Str()
         write_date(d, text@)
         return Value::{ .kind = .date, .text = arena.dup_str(text.slice()) }
     return Value::{ .kind = .text, .text = typed }
@@ -57,7 +57,7 @@ priv fn is_finite(number: U8[]): Bool //< whether a number as JSON writes one is
         return false
     return value - value == 0.0
 
-fn write_text(text: U8[], out: Str_builder$@) //<
+fn write_text(text: U8[], out: Str$@) //<
     //< Text as a person types it in quotes, which `value_of` reads back as that text
     write_quoted(text, out)
 
@@ -70,7 +70,7 @@ fn looks_like_number(text: U8[]): Bool //<
     //< **Arithmetic and `sum` leave such text out**, so the page marks it in a column of numbers
     //< (`numbers_column`). Full-width digits and signs read as their ASCII ones, and spaces at the
     //< ends are dropped. Digits may be grouped in threes by `,`.
-    defer $plain: = Str_builder()
+    defer $plain: = Str()
     $i: Sz = 0
     for i < text.len
         rest: = text.sub_from(i)

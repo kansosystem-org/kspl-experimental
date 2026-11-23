@@ -9,7 +9,7 @@ import "ksplc/base/cache" as base_cache
 import "ksplc/base/core" as base_core
 import "std/chars"
 import "std/ds" { List, Map }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 // The runtime's sources (the type definitions, the tracing machinery, the panic and bounds checks,
 // the process isolation). They are kept in `.h` and `.c` files and built into the compiler with
 // embed. Each file's head says which half it is.
@@ -254,8 +254,8 @@ priv const ABI_HASH_LEN: Sz = 16 //< the length of the version in the version sy
     //< alone changed would pass. genllvm references the symbol (the IR always links the runtime
     //< from outside), so an IR file and a runtime of another version do not link.
 
-fn append_abi_symbol(out: Str_builder$@)
-    defer $text: = Str_builder()
+fn append_abi_symbol(out: Str$@)
+    defer $text: = Str()
     write_impl(write_decls(text@))
     hex: = base_cache.hash_hex(text.slice())
     out.s("kspl_runtime_abi_").s((U8[]::hex).sub(0, ABI_HASH_LEN))
@@ -266,7 +266,7 @@ fn write_unit($out: Writer): Writer //<
     //< Caution: **Use the same function as the preamble.** Built separately, the name embedded in
     //< an artifact and the name in the shipped runtime could disagree, with both passing unnoticed.
     out = write_impl(write_decls(out))
-    defer $sym: = Str_builder()
+    defer $sym: = Str()
     append_abi_symbol(sym@)
     // Caution: **Do not put anything before it.** tests/suite/emit_runtime_test.kspl cuts "the
     // runtime itself" out of the emitted file at this line.
@@ -278,7 +278,7 @@ fn c_names(): List<|U8[]|> //<
     //< A program's own global spelled the same meets it in C (`C_names` in `../lower/abi.kspl`).
     //< Comments and literals are skipped, so a name only a comment mentions is no name. The
     //< names are copies on the compilation's arena; the list is the caller's to free.
-    defer $text: = Str_builder()
+    defer $text: = Str()
     write_impl(write_decls(text@))
     s: = text.slice()
     $out: = List<|U8[]|>(null)

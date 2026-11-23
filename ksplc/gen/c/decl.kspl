@@ -21,7 +21,7 @@ import "std/buf" { Buf_writer }
 import "std/chars"
 import "std/ds" { Map, List }
 import "std/mem" { dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 
 priv const MAX_ALIAS_DEP_DEPTH: Sz = 64 //<
@@ -56,7 +56,8 @@ impl Ast_node
         if r.sym_ptr == null
             return true
         sym: = Sema_symbol$@::r.sym_ptr
-        return !sym.has_program_unique_c_name()
+        // A trait's default body copied into another file's impl calls it from that file's unit.
+        return !sym.has_program_unique_c_name() && !sym.flags.is_used_by_copied_body
     fn emit_attributes(r: Self$@, cg: Genc_ctx$@)
         if r == null
             return
@@ -553,7 +554,7 @@ priv fn emit_array_typedef_fwd(cg: Genc_ctx$@, type_id: I32, m_slice: U8[]) //<
     if plain_arr_id == type_id
         cg.s("typedef struct \{m_slice\} \{m_slice\};\n")
         return
-    defer $plain_arr_b: = Str_builder()
+    defer $plain_arr_b: = Str()
     cg.env.mangle_type_id_to(plain_arr_id, plain_arr_b)
     cg.s("typedef struct \{plain_arr_b.slice()\} \{m_slice\};\n")
 

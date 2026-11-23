@@ -15,7 +15,7 @@ import "std/json" + { Json_builder }
 import "std/jsonrpc"
 import "std/math"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 enum Lsp_error
     io_error
@@ -52,8 +52,8 @@ impl Json_builder
             .set("range", r.range(sl, sc, el, ec)).build()
 
 impl U8[]
-    fn with_forward_slashes(r: U8[]): Str_builder //< the path with each `\` turned into `/`
-        $res: = Str_builder()
+    fn with_forward_slashes(r: U8[]): Str //< the path with each `\` turned into `/`
+        $res: = Str()
         base_locate.write_slashed(r, res)
         return res
 
@@ -105,7 +105,7 @@ impl U8[]
             i += step
         return i
 
-impl Str_builder
+impl Str
     fn ensure_kspl_ext(r: Self$@) //<
         //< It adds the default extension to a URI or path string lacking one (shared by the LSP)
         //< `SOURCE_EXT` in `base/core.kspl` is the one.
@@ -150,7 +150,7 @@ fn offset_at(src: U8[], params: json.Value, arena: Arena$@): Sz //<
     return src.get_offset_from_pos(pos.get("line").as_int().unwrap_or(0),
         pos.get("character").as_int().unwrap_or(0), arena)
 
-fn read_message(out: Str_builder$@): Void!Lsp_error //<
+fn read_message(out: Str$@): Void!Lsp_error //<
     //< It reads one message from stdin, its header and then its body, into `out`
     //< **The worker and the supervisor both read through here.** A body the peer cut short is
     //< passed on as far as it arrived, and the JSON reader rejects it.
@@ -175,7 +175,7 @@ fn report_broken_header() //<
             stops\n")
 
 priv fn read_content_length(): I32!Lsp_error
-    defer $head: = Str_builder()
+    defer $head: = Str()
     // Read the whole bounded header so duplicate lengths are checked together. Count CR bytes
     // too: a peer must not bypass the bound by sending only carriage returns or short lines.
     for head.len < jsonrpc.MAX_HEAD_BYTES
@@ -200,7 +200,7 @@ priv fn build_jsonrpc_envelope($builder: Json_builder, id_val: json.Value): json
     return builder.obj().set("jsonrpc", builder.str_val(jsonrpc.VERSION)).set("id", id_val)
 
 priv fn dump_and_send_val(val: json.Value)
-    defer $body: = Str_builder()
+    defer $body: = Str()
     val.dump(body@)
     send_rpc_message(body.slice())
 
@@ -226,7 +226,7 @@ fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>@)
     defer arena: = Arena(2 * 1024 * 1024)
     $b: = Json_builder(arena)
 
-    defer $final_uri: = Str_builder()
+    defer $final_uri: = Str()
     final_uri.s(uri)
     final_uri.ensure_kspl_ext()
 
@@ -272,7 +272,7 @@ priv fn send_publish_diagnostics($builder: Json_builder, params: json.Value)
     dump_and_send_val(msg_obj)
 
 priv fn send_rpc_message(json_body: U8$[])
-    defer $frame: = Str_builder()
+    defer $frame: = Str()
     jsonrpc.frame_into(frame@, json_body)
     io.out().s(frame.slice())
     io.out().flush()
@@ -308,7 +308,7 @@ fn marker_at(src: U8[], start: Sz, tag: U8[]): I32 //<
 
 priv fn send_marker(tag: U8[]) //< it writes the marker for `tag`
     //< NUL-separated, it never collides with the JSON output.
-    defer $m: = Str_builder()
+    defer $m: = Str()
     m.c(0U8).s(tag).c(0U8)
     io.out().s(m.slice())
     io.out().flush()

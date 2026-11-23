@@ -9,7 +9,7 @@ import "ksmd/calc/help" { Arg, Help }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 struct Param //< one parameter of a function a formula calls
     name: U8[]
@@ -272,7 +272,7 @@ fn table_source( //< the KSPL source of the table for these functions
     from: U8[], //< what to name as the source in the header, such as `ksmd/calc/functions.kspl`
     arena: Arena$@,
 ): U8[]
-    defer $out: = Str_builder()
+    defer $out: = Str()
     out.s("//< The table that lets a formula call the functions of `\{from\}`\n")
         .s("//< Written by `ksmd/calc/glue.kspl` from their signatures: do not edit it by hand. \
             `make\n").s("//< ksmd-functions` writes it again after a signature changes.\n")
@@ -326,7 +326,7 @@ priv fn joined(xs: List<|U8[]|>@, arena: Arena$@): U8[] //< the names, `, ` betw
         t.s(", " if i > 0 else "").s(xs.get(i))
     return t.take()
 
-priv fn reader(function: Function@, out: Str_builder$@, arena: Arena$@) //<
+priv fn reader(function: Function@, out: Str$@, arena: Arena$@) //<
     //< the reader of one function
     out.s("\npriv fn call_\{function.name\}(args: Raw_args$@): Value //< `\{function.name\}(…)`\n")
     fallible: = can_fail(function)
@@ -371,7 +371,7 @@ priv fn can_fail(function: Function@): Bool //<
 priv fn local(name: U8[], arena: Arena$@): U8[] //< a parameter's local, apart from the reader's own
     return arena.text().s("p_").s(name).take()
 
-priv fn read_param(param: Param@, out: Str_builder$@, arena: Arena$@) //< reads one argument
+priv fn read_param(param: Param@, out: Str$@, arena: Arena$@) //< reads one argument
     if param.kind == .arena
         return
     name: = local(param.name, arena)
@@ -410,7 +410,7 @@ priv fn read_param(param: Param@, out: Str_builder$@, arena: Arena$@) //< reads 
         .s("        got: = args.\{method\}() catch e\n            first.take(e)\n            \
             fallback ").s(zero).s("\n        \{name\} = .some(got)\n")
 
-priv fn help_source(help: Help@, out: Str_builder$@) //< one entry of `HELP`, as KSPL source
+priv fn help_source(help: Help@, out: Str$@) //< one entry of `HELP`, as KSPL source
     out.s("    Help::{ .name = ")
     literal(help.name, out)
     out.s(", .group = ")
@@ -434,7 +434,7 @@ priv fn help_source(help: Help@, out: Str_builder$@) //< one entry of `HELP`, as
     literal(help.gives, out)
     out.s(" },\n")
 
-priv fn literal(text: U8[], out: Str_builder$@) //< `text` as a KSPL string literal
+priv fn literal(text: U8[], out: Str$@) //< `text` as a KSPL string literal
     out.c('"')
     for c in text
         if c == '"' || c == '\\'

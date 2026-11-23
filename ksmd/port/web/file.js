@@ -572,6 +572,12 @@ function ksmdFiles(ks, api) {
       askFolder();
       return false;
     }
+    // A file marked read-only holds what the page expects, so reading it again would only say
+    // "changed on disk". The server's words say what is true: the file takes no write.
+    if (got.status === 409 && got.cause === "read_only") {
+      ks.say(`${doc.path} could not be saved. ${got.why}`);
+      return false;
+    }
     if (got.status === 409) {
       const now = await readDoc(doc.path);
       seen = now.seen || seen;

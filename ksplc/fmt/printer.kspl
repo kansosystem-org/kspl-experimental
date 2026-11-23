@@ -21,7 +21,7 @@ import "ksplc/parse/line_cont" { breaks_off_a_value, ends_in_catch, joins_next,
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 fn init()
     fmt_kinds.rules.init()
@@ -38,7 +38,7 @@ struct Outer_layout //<
     suppress_nl_depth: Sz //< given back at a block's `}`; a block's `{` moves it on
 
 struct Formatter
-    out: Str_builder
+    out: Str
     config: Config
     indent_level: Sz
     level_extra: Sz //<
@@ -62,7 +62,7 @@ struct Formatter
         //< **It becomes one only where the spacing rule gives one** (`calc_spacing_requirement`),
         //< as a space in the source would. Written at once, it stayed where the rule gives none
         //< (`U8` and `[]` on two lines came out `U8 []`), and a second pass took it out.
-    last_text: Str_builder
+    last_text: Str
     code_end: Sz //<
         //< How far into `out` the code on the line being written reaches
         //< `out` can end in a trailing comment, and `line_continues` in `../parse/line_cont.kspl`
@@ -192,16 +192,15 @@ priv fn scan_body(node: Ast_node@): Body_scan
 
 impl Formatter
     fn new(config: Config, src: U8[], from_layout: Bool): Formatter
-        return Formatter::{ .out = Str_builder(), .config = config, .indent_level = 0,
-            .level_extra = 0, .block_head_col = -1, .head_wanted = false, .head_col = -1,
-            .current_col = 0, .src = src, .last_offset = 0, .last_char = '\n',
-            .last_text = Str_builder(), .code_end = 0, .suppress_nl_depth = 0, .pending_seg_len = 0,
-            .pending_dot_break_ok = false, .link_next = false, .stmt_start = false,
-            .too_deep = false, .postfix_mark_next = false, .from_layout = from_layout,
-            .paren_depth = 0, .open_brackets = 0, .paren_indent_level = 0, .line_indent = 0,
-            .line_wrapped = false, .summary_cont_col = 0, .summary_run_open = false,
-            .summary_said = false, .summary_last = false, .ternary_depth = -1,
-            .ternary_broke = false, .block_on_one_line = false,
+        return Formatter::{ .out = Str(), .config = config, .indent_level = 0, .level_extra = 0,
+            .block_head_col = -1, .head_wanted = false, .head_col = -1, .current_col = 0,
+            .src = src, .last_offset = 0, .last_char = '\n', .last_text = Str(), .code_end = 0,
+            .suppress_nl_depth = 0, .pending_seg_len = 0, .pending_dot_break_ok = false,
+            .link_next = false, .stmt_start = false, .too_deep = false, .postfix_mark_next = false,
+            .from_layout = from_layout, .paren_depth = 0, .open_brackets = 0,
+            .paren_indent_level = 0, .line_indent = 0, .line_wrapped = false, .summary_cont_col = 0,
+            .summary_run_open = false, .summary_said = false, .summary_last = false,
+            .ternary_depth = -1, .ternary_broke = false, .block_on_one_line = false,
             .paren_spans = List<|Sz|>(null),
             .flags = Fmt_flags::{
             .is_line_start = true,
@@ -330,7 +329,7 @@ impl Formatter
     priv fn set_last_text(r: Self$@, content: U8[]) //<
         //< It replaces last_text with content and moves `code_end` to the output's end
         r.last_text.free()
-        r.last_text = Str_builder()
+        r.last_text = Str()
         r.last_text.s(content)
         r.code_end = r.out.len
         if r.head_wanted
@@ -617,7 +616,7 @@ impl Formatter
         raw_text: = U8[]::{ .ptr = r.src.ptr + node.loc.offset, .len = span }
         // A literal is laid out from its joined spelling. So its place on the line decides where it
         // breaks, and formatting twice gives the same result.
-        defer $joined: = Str_builder()
+        defer $joined: = Str()
         carry: = join_string_lines(raw_text, joined@)
         text: = joined.slice() if carry else raw_text
         last_txt: = r.last_text.slice()

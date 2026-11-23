@@ -21,7 +21,7 @@ import "ksmd/syntax/markdown"
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 
 // **The launcher calls `checked`, `as_markdown` and `today_from`, outside this package, so [I0402]
@@ -34,7 +34,7 @@ pub fn checked( //< writes the report on the file at `path` in the workspace `ro
     root: U8[], //< the workspace folder on disk
     path: U8[], //< the file, from `root`, `/` between folders
     today: U8[], //< the date `today()` gives, written `2026-10-23`
-    out: Str_builder$@,
+    out: Str$@,
     arena: Arena$@,
 ): Bool
     disk: = Disk::{ .root = root }
@@ -46,7 +46,7 @@ pub fn today_from(said: U8[], given: Bool, arena: Arena$@): U8[]? //<
     //< UTC is not the local date the page takes: std reads no time zone.
     if given
         return .some(said) if is_date(said) else .none
-    defer $out: = Str_builder()
+    defer $out: = Str()
     write_date(sys.wall_seconds() / SECONDS_A_DAY, out@)
     return .some(arena.dup_str(out.slice()))
 
@@ -82,7 +82,7 @@ fn report( //< writes what `ksmd --check` prints of the file `path` names; wheth
     files: Files,
     path: U8[], //< the file, from the workspace's root, `/` between folders
     today: U8[], //< the date `today()` gives, written `2026-10-23`
-    out: Str_builder$@,
+    out: Str$@,
     arena: Arena$@,
 ): Bool
     seen: = viewed(files, path, today, out, arena) catch
@@ -124,8 +124,8 @@ pub fn as_markdown( //< writes the file at `path` as Markdown, for `ksmd --markd
     root: U8[], //< the workspace folder on disk
     path: U8[], //< the file, from `root`, `/` between folders
     today: U8[], //< the date `today()` gives, written `2026-10-23`
-    out: Str_builder$@,
-    said: Str_builder$@,
+    out: Str$@,
+    said: Str$@,
     arena: Arena$@,
 ): Bool
     disk: = Disk::{ .root = root }
@@ -139,7 +139,7 @@ priv struct Seen //< a file read with its view, and its tables calculated
     results: calc.Results
     problems: Sz //< how many problems its view holds
 
-priv fn viewed(files: Files, path: U8[], today: U8[], said: Str_builder$@, arena: Arena$@): Seen? //<
+priv fn viewed(files: Files, path: U8[], today: U8[], said: Str$@, arena: Arena$@): Seen? //<
     //< Reads the file `path` names with its view, writes each refusal or problem to `said` with
     //< its place, and calculates its tables. None where the reader refuses the file
     top: = load(files, path, arena) catch e
@@ -174,19 +174,18 @@ priv fn unasked(_ctx: Void$@, _name: U8[], _args: Raw_args$@): Value //<
     //< What a person's own function gives here: no names are known, so nothing asks it
     return Value.failed(.blocked)
 
-priv fn place(at: Diagnostic, out: Str_builder$@) //< `file:line:column`
+priv fn place(at: Diagnostic, out: Str$@) //< `file:line:column`
     out.s(at.path).s(":\{at.line\}:\{at.column\}")
 
-priv fn counted(count: Sz, word: U8[], out: Str_builder$@) //< `1 table`, `2 tables`
+priv fn counted(count: Sz, word: U8[], out: Str$@) //< `1 table`, `2 tables`
     out.s("\{count\} ").s(word)
     if count != 1
         out.c('s')
 
-priv fn write_value(value: Value, home: Sz, doc: Document@, results: calc.Results@,
-    out: Str_builder$@) //<
-        //< A value as a cell of the file writes it: text in quotes with its escapes, so `"6"` reads
-        //< apart from `6`. A number shows as in a column of no format; an error is its mark, then
-        //< its reason, as the page gives it.
+priv fn write_value(value: Value, home: Sz, doc: Document@, results: calc.Results@, out: Str$@) //<
+    //< A value as a cell of the file writes it: text in quotes with its escapes, so `"6"` reads
+    //< apart from `6`. A number shows as in a column of no format; an error is its mark, then
+    //< its reason, as the page gives it.
     switch value.kind
     case .empty {}
     case .number

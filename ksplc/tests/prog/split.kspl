@@ -5,9 +5,11 @@
 //< `static` in the generated C. An ARC-managed type: retain/release are `priv fn` elsewhere, and
 //< the call is synthesised into the user's file. A top-level global: the definition in the owning
 //< unit, the `extern` in the shared header. An `embed`: a `static` array plus a slice
-//< pointing at it.
+//< pointing at it. A trait's default body copied into this file's impl: it calls a `priv fn` of the
+//< trait's file, which then cannot be `static`.
 //< Caution: Do not copy "the answer" here. tests/suite/split_test.kspl checks that the output
 //< agrees with the single-TU build, and with two copies only one gets fixed.
+import "ksplc/tests/trait_file/shape" as far
 import "std/ds" { List }
 import "std/io"
 import "std/refcount" { Rc }
@@ -39,6 +41,13 @@ impl Disk: Shape
     fn area(r: Self@): Sz
         g_hits += 1
         return 3 * r.rr * r.rr
+
+priv struct Tile //< it inherits default bodies that name the trait's file's `priv fn`
+    side: I32
+
+impl Tile: far.Far_shape
+    fn area(r: Self@): I32
+        return r.side * r.side
 
 priv fn fold(acc: Sz, value: Sz): Sz //< it becomes `static` in the generated C
     //< Unless it is emitted into the same unit as the caller, the link fails.
@@ -81,6 +90,9 @@ fn main(): I32
     total = fold(total, p_i32.sum_with(add_i32))
 
     total = fold(total, rc_round())
+    tile: = Tile::{ .side = 3 }
+    total = fold(total, tile.stepped())
+    total = fold(total, tile.stepper()())
     total = fold(total, self_src.len)
     total = fold(total, g_hits)
     total = fold(total, g_priv_hits)

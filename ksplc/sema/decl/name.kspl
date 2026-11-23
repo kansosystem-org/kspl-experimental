@@ -22,7 +22,7 @@ import "ksplc/sema/type/query" as _sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 enum Named_value //< what a name written where a type goes names instead
     function
@@ -80,7 +80,7 @@ impl Path_parts
 
 priv fn spelled_before_args(parts: Path_parts): U8[] //<
     //< The segments up to the first `<|…|>`, joined by `.` (`m.Plain.gen` of `m.Plain.gen<|U16|>`)
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for i in Range.asc(parts.len())
         part: = parts.get(i)
         if part.kind_id == .k_type_args
@@ -199,7 +199,7 @@ priv fn spelled_name(path: Ast_node@): U8[] //< a path's segments joined by `.`,
         return ""
     if path.children.len == 0
         return path.text
-    defer $b: = Str_builder()
+    defer $b: = Str()
     $is_first: = true
     for child in path.children
         if child.kind_id == .k_type_args
@@ -467,7 +467,7 @@ impl Sema_ctx
         //< The FQN is the file's path, which no import of this file names as an alias.
         file: =
             named.sym.get_defined_in() if named.sym != null else named.template.loc.file()
-        defer $dotted: = Str_builder()
+        defer $dotted: = Str()
         dotted.s_path_as_dots(file).c('.')
         within: =
             (named.spelled.sub_from(dotted.slice().len)
@@ -520,7 +520,7 @@ impl Sema_ctx
         return .some(tmpl) if tmpl != null else .none
 
     fn instance_written(r: Self$@, written: Written_type, args: I32[], site: Ast_node$@):
-        Str_builder!Sema_error //<
+        Str!Sema_error //<
             //< The instance of the generic type `written` names, binding args, made where `site` is
             //< A violated constraint is reported at site, the user's line, not the template's
             //< (check_type_constraint in resolve.kspl reads inst_site).
@@ -636,7 +636,7 @@ impl Sema_ctx
             //< Caution: **Check the head segment alone** for whether the file holds the name. The
             //< `new` of `ds.List<|I32|>.new` is not in the table until monomorphization, so
             //< checking the whole path would reject a legitimate name; the head is known now.
-        defer $b: = Str_builder()
+        defer $b: = Str()
         $head_name: U8[] = ""
         for $j: = seg_start; j < path.children.len; j += 1
             child: = path.get_child(j)

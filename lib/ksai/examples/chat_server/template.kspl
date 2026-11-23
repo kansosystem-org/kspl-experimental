@@ -12,7 +12,7 @@ import "std/ds" { List }
 import "std/json"
 import "std/mem" { Arena }
 import "std/sha256"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 // ==========================================
 // The template's fixed text, in the order it is written out
@@ -90,7 +90,7 @@ struct Prompt //< token IDs being built: text waits until a marker or the end en
     //< encoded one by one could merge differently at their edges.
     tok: tokenizer.Tokenizer$@
     ids: List<|I32|>$@
-    text: Str_builder$@
+    text: Str$@
     arena: Arena$@
 
 impl Prompt
@@ -143,10 +143,10 @@ impl Prompt
             r.s("}\n").mark(marks.call_close)
         r.mark(marks.im_end).s("\n")
 
-fn tojson(value: json.Value, out: Str_builder$@) //< a value as Python's `json.dumps` writes it
+fn tojson(value: json.Value, out: Str$@) //< a value as Python's `json.dumps` writes it
     //< That is the template's `tojson`: a space after each `,` and `:` between items, and
     //< non-ASCII text as it is. **Members keep the request's order**, as `std/json` reads it.
-    defer $flat: = Str_builder()
+    defer $flat: = Str()
     value.dump(flat@)
     $in_text: = false
     $escaped: = false
@@ -206,7 +206,7 @@ priv fn last_query(msgs: List<|Message|>@): Sz //< the template's `ns.last_query
 fn render(conv: Conversation@, tok: tokenizer.Tokenizer$@, marks: Marks, arena: Arena$@):
     List<|I32|>$@ //<
         //< The token IDs of the whole conversation, ending where the assistant's answer starts
-    defer $text: = Str_builder()
+    defer $text: = Str()
     $p: = Prompt::{ .tok = tok, .ids = List<|I32|>.create(arena), .text = text@, .arena = arena }
     msgs: = conv.messages
     first_system: = msgs.len > 0 && msgs.get(0).role.equals("system")

@@ -7,7 +7,7 @@ import "std/chars"
 import "std/ds"
 import "std/math"
 import "std/mem" + { Arena }
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 import "std/strfmt"
 import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 import "std/subproc"
@@ -130,7 +130,7 @@ fn test_str_ops(arena: Arena$@)
     assert(pv.equals("bcd"), "auto-deref: a method can be called on a U8[]@")
 
     // --- drop_prefix: discards only the parsed prefix and moves the rest to the front ---
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s("msg1|msg2")
     b.drop_prefix(5)
     assert(b.slice().equals("msg2"), "drop_prefix: the rest is packed forward to the head")
@@ -241,7 +241,7 @@ fn test_strnum_roundtrip() //<
     //< saved setting breaks only at the largest value.
     //< Caution: **Include the refusals too**, or a reader that accepts everything passes.
     verdict.start("[strnum] a number's round trip and refusal test...")
-    defer $b: = Str_builder()
+    defer $b: = Str()
 
     vals: I64[_] = ::{ 0I64, 1I64, -1I64, 42I64, -42I64, 2147483647I64, -2147483648I64,
         9223372036854775807I64, -9223372036854775807I64 - 1I64 }
@@ -311,7 +311,7 @@ fn test_fixed_digits_at_the_cut() //< `.N` where the first digit lies at or past
     //< digit down to 10^-3 but rounds up to it; `0.00004` rounds to 0. A tie goes to the even
     //< digit, as `printf` does. The answers are `printf("%.Nf")`'s.
     verdict.start("[strfmt] fixed digits where the value meets the last place test...")
-    defer $b: = Str_builder()
+    defer $b: = Str()
     small: F64 = 0.0006
     below: F64 = 0.0004
     far: F64 = 0.00004
@@ -357,7 +357,17 @@ fn test_math_round() //< rounding goes to the nearest whole number, halves away 
     // 2^52 - 0.5: the last half an F64 holds, which the cast must not lose.
     assert(math.round(4503599627370495.5) == 4503599627370496.0, "the last half rounds up")
     assert(math.round(1.0e300) == 1.0e300, "a value past I64 comes back as it is")
-    verdict.pass("Halves go away from 0, and the largest F64 below one half stays below.")
+    // `== 0.0` holds for -0 too, so the sign is read from the bits.
+    negative_zero: = bignat.f64_to_bits(-0.0)
+    assert(negative_zero == 0x8000000000000000U64, "-0.0 is written with its sign bit")
+    assert(bignat.f64_to_bits(math.round(-0.3)) == negative_zero, "-0.3 rounds to -0")
+    assert(bignat.f64_to_bits(math.round(-below_half)) == negative_zero,
+        "a value above -0.5 rounds to -0")
+    assert(bignat.f64_to_bits(math.round(-0.0)) == negative_zero, "-0 stays -0")
+    assert(bignat.f64_to_bits(math.round(0.3)) == 0U64, "0.3 rounds to +0")
+    verdict
+        .pass("Halves go away from 0, the largest F64 below one half stays below, and 0 keeps its \
+            sign.")
 
 priv const ABS_MIN_SRC: U8[] = //< a child that asks for the absolute value of `I32`'s minimum
     """import "std/io"
@@ -556,11 +566,11 @@ priv const SELF_APPEND_SRC: U8[] = //< a child that writes builders from views o
     """import "std/chars"
 import "std/ds"
 import "std/io"
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 
 fn main()
-  $b: = Str_builder()
-  $want: = Str_builder()
+  $b: = Str()
+  $want: = Str()
   for _i in Range.asc(256)
     b.s("abcdefgh")
   want.s(b.slice()).s(b.slice())
@@ -573,7 +583,7 @@ fn main()
   w: = b.slice()
   b.clear().s("--").s(w.sub(0, 6))
   assert(b.slice().equals("----xycd"), "s: a view overlapping where its bytes land")
-  $e: = Str_builder()
+  $e: = Str()
   want.clear()
   for _i in Range.asc(512)
     e.s("a\"")
@@ -723,7 +733,7 @@ fn test_text_edges()
 
 fn test_builder_room_and_c_strings()
     verdict.start("[str] reserve, and a C string out and back...")
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.reserve(100)
     assert(b.cap >= 100 && b.len == 0, "reserve: room for 100, nothing written")
     room: = b.cap

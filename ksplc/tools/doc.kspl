@@ -24,7 +24,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt // `\{n\}` on a `Sz`
 import "std/sys"
 
@@ -39,7 +39,7 @@ priv fn shown(line: Line): Bool //< whether the line is an entry of its own, not
 // ==========================================
 
 priv fn file_path_of(logical: U8[]): U8[] //< the path a logical name's file is read from
-    defer $out: = Str_builder()
+    defer $out: = Str()
     base_locate.append_file_path(logical, out@)
     return base_core.arena.dup_str(out.slice())
 
@@ -116,7 +116,7 @@ priv fn summary_of(doc: U8[]): U8[] //< the first sentence of a description
         i += 1
     return doc
 
-priv fn anchor_of(head: U8[], out: Str_builder$@) //< the anchor the renderer gives that heading
+priv fn anchor_of(head: U8[], out: Str$@) //< the anchor the renderer gives that heading
     //< Lower case; a space becomes `-`; word characters and `-` stay, the rest goes. **An `_` and a
     //< byte of a multi-byte character stay too**, as the renderer keeps them.
     for ch in head
@@ -131,7 +131,7 @@ priv fn anchor_taken(seen: List<|U8[]|>$@, key: U8[]): U8[] //<
     //< The anchor a heading over `key` gets, counting the ones given out before it
     //< **A repeat is numbered**: the second heading reducing to the same text gets `-1`, the third
     //< `-2` (`#cfg(!freestanding)` and `#cfg(freestanding)` do collide).
-    defer $base: = Str_builder()
+    defer $base: = Str()
     anchor_of(key, base@)
     $n: Sz = 0
     for one in seen
@@ -209,7 +209,7 @@ priv fn next_label(doc: U8[], from: Sz): Sz //< where the next label after `from
             i = here + one.len
     return best
 
-priv fn say(doc: U8[], out: Str_builder$@) //< one description, written out as paragraphs
+priv fn say(doc: U8[], out: Str$@) //< one description, written out as paragraphs
     //< **A label starts a paragraph of its own.** The comment is joined into one line, so a
     //< `Caution:` would otherwise land mid-paragraph.
     $at: Sz = 0
@@ -223,12 +223,11 @@ priv fn say(doc: U8[], out: Str_builder$@) //< one description, written out as p
         // and never advances.
         at = cut + 1
 
-priv fn write_parts(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], key: U8[],
-    out: Str_builder$@) //<
-        //< The list of one declaration's parameters and its return value
-        //< Caution: **Match the owner; do not trust the order.** A part's key ends in a mark that
-        //< sorts after letters, so `sub`'s parts land after `sub_from` and would be read as its
-        //< parts.
+priv fn write_parts(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], key: U8[], out: Str$@) //<
+    //< The list of one declaration's parameters and its return value
+    //< Caution: **Match the owner; do not trust the order.** A part's key ends in a mark that
+    //< sorts after letters, so `sub`'s parts land after `sub_from` and would be read as its
+    //< parts.
     $listing: = false
     for r in rows
         if !tools_surface.owner_of(r.key).equals(key)
@@ -245,9 +244,8 @@ priv fn write_parts(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], key: 
             out.s("**Return value** — ")
         out.s(linked(r.doc, rows, links, tail)).s("\n")
 
-priv fn write_entry(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], at: Sz,
-    out: Str_builder$@) //<
-        //< One entry: its heading, the declaration as written, its description and its parts
+priv fn write_entry(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], at: Sz, out: Str$@) //<
+    //< One entry: its heading, the declaration as written, its description and its parts
     r: = rows.get(at)
     heading: = "###" if r.key.find_char('.').is_some() else "##"
     out.s("\n").s(heading).s(" `").s(r.key).s("`\n\n")
@@ -285,7 +283,7 @@ priv fn scope_says(): U8[] //< the line saying what the reference holds
     return "Published declarations use `pub`. Other declarations are reachable only from inside the \
         package."
 
-priv fn write_file(file: U8[], rows: List<|Line|>@, hidden: Sz, out: Str_builder$@) //<
+priv fn write_file(file: U8[], rows: List<|Line|>@, hidden: Sz, out: Str$@) //<
     //< One file's reference: what it is for, what it holds, and every entry in it
     //< **The order is the record's** (by key), so a type's members follow it.
     //< **A file that publishes nothing names the scope that shows its `hidden` declarations**: an
@@ -334,7 +332,7 @@ priv fn without_type_args(key: U8[]): U8[] //< the key with every `<|…|>` take
         i += 1
     return b.take()
 
-priv fn write_one(file: U8[], rows: List<|Line|>@, name: U8[], out: Str_builder$@): Sz //<
+priv fn write_one(file: U8[], rows: List<|Line|>@, name: U8[], out: Str$@): Sz //<
     //< The entries `name` names: the entry itself and, for a type, its members; how many
     //< **A member is an entry whose key starts with the name and a `.`** (`Arena.alloc` under
     //< `Arena`). So asking for a type shows what can be called on it.
@@ -365,7 +363,7 @@ priv fn skip_dir(name: U8[]): Bool //< `tests/`, build output, and git's own fol
     //< **`tests/` is skipped**: what a package's tests declare is nobody's to call.
     return name.equals("tests") || base_locate.skip_build_output(name)
 
-priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_builder$@): Bool //<
+priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str$@): Bool //<
     //< Every source under the folder that publishes something, with its summary
     //< False where the folder cannot be walked.
     //< **A file that cannot be read is named, not dropped**: a listing missing a file reads exactly
@@ -423,7 +421,7 @@ priv fn unpublished(path: U8[], name: U8[], key: U8[], parser: kspeg.Target$@): 
         return false
     switch read_all_scope(path, name, parser)
     case .some(rows)
-        defer $discard: = Str_builder()
+        defer $discard: = Str()
         return write_one(name, rows@, key, discard@) > 0
     case .none
         return false
@@ -448,7 +446,7 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     if name.len == 0
         name = "."
     key: = "" if cut >= target.len else target.sub_from(cut + 1)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     path: = file_path_of(name)
     record: = base_core.config.surface_path
     if record.len > 0 && (key.len > 0 || !fs.exists(path))

@@ -8,7 +8,7 @@ import "std/io"
 import "std/math" { PI, sqrt }
 import "std/mem" { Arena }
 import "std/prng" + { Prng }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 // ==========================================
@@ -147,6 +147,46 @@ fn test_struct_operators()
 
     verdict.pass("a generic struct's operator impls work through the operators.")
 
+priv struct Counted //< a struct with `==`, `+` and unary `-` of its own
+    n: I32
+
+impl Counted: Eq<|Counted|>
+    fn eq(r: Self, other: Counted): Bool
+        return r.n == other.n
+
+    fn ne(r: Self, other: Counted): Bool
+        return r.n != other.n
+
+impl Counted: Add<|Counted, Counted|>
+    fn add(r: Self, rhs: Counted): Counted
+        return ::{ .n = r.n + rhs.n }
+
+impl Counted: Neg<|Counted|>
+    fn neg(r: Self): Counted
+        return ::{ .n = -r.n }
+
+fn test_pointer_operators_stay_the_pointers()
+    verdict.start("[Operators] a pointer to a struct with operators of its own test...")
+    // The operator traits were looked up on the pointer's target. `p == null` and `p == q` then
+    // called `eq` with a pointer as the value, and a slice of such a struct could not be read:
+    // the `r.ptr + index` inside std/lang called `add`.
+    same: Counted[3] = ::{::{ .n = 4 }, ::{ .n = 4 }, ::{ .n = 9 } }
+    p: = same[0]@
+    q: = same[1]@
+    none: Counted@ = null
+    assert(p != q && !(p == q), "two addresses compare as addresses, their targets being equal")
+    assert(p$ == q$, "the targets compare through `eq`, with the dereference written")
+    assert(p != null && none == null, "a pointer compares with null")
+    assert(p + 1 == q && q - p == 1, "a pointer steps by elements and counts them")
+    assert((p + 2).n == 9, "the stepped pointer reaches its element")
+    assert((p$ + q$).n == 8 && (-p$).n == -4, "the target's own `+` and `-` take the dereference")
+    $total: = 0
+    for c in Counted[]::same
+        total += c.n
+    all: = Counted[]::same
+    assert(total == 17 && all[2].n == 9, "a slice of the struct is walked and indexed")
+    verdict.pass("an operator on a pointer is the pointer's, whatever its target implements.")
+
 // The selective import `import "path" { A, B };` (dropping the namespace).
 // A `typedef` taken by a selective import can be written as a type. **That this declaration
 // compiles at all is the check.**
@@ -245,17 +285,17 @@ fn test_interp_keeps_concrete_writer() //<
     //< Caution: **Write it up to `.slice()` in one expression** — split into two statements it
     //< passes green even with the return value collapsed to `Writer`. **Test a string starting
     //< with `\{…\}` too.** It is the only shape where the chain starts at the receiver itself, and
-    //< a Str_builder passed by value is a copy.
+    //< a Str passed by value is a copy.
     verdict.start("[fmt] a chain with an interpolation in between keeps the concrete type test...")
     n: = 7
-    defer $b: = Str_builder()
+    defer $b: = Str()
     head: = b.s("n=\{n\}").slice()
     assert(head.equals("n=7"),
         "`.slice()` can be continued from a chain of interpolation starting with a literal")
     lead: = b.clear().s("\{n\}<").slice()
     assert(lead.equals("7<"),
         "the builder's length advances even for a string starting with an interpolation")
-    defer $v: = Str_builder()
+    defer $v: = Str()
     two: = v.s("\{n\}\{n\}").slice()
     assert(two.equals("77"), "a string of interpolation alone")
     verdict.pass("")
@@ -613,6 +653,51 @@ fn test_negative_const_type_arg()
     assert(const_arg_of<|3|>() == 3, "a positive literal stays apart from the negative one")
     assert(const_arg_of_<|3|>() == 300, "a name one `_` longer stays apart from the negative one")
     verdict.pass("a negative literal passed as a const type argument carries its value.")
+
+priv fn wide_arg_of<|const N: I64|>(): I64 //< the value its `I64` const type argument carries
+    return N
+
+priv fn u32_arg_of<|const N: U32|>(): U32
+    return N
+
+priv const PAST_I32: I64 = 5000000000
+priv const BELOW_I32: I64 = -5000000000
+priv const U32_UPPER: U32 = 4000000000
+
+fn test_wide_const_type_arg()
+    verdict.start("[Generics] a const type argument past I32's range test...")
+    // A name folded at I32's width gave no value past it. The argument was then read as a type
+    // nobody declared, and the use was refused far from the cause ("cannot infer the struct
+    // type") (const_type_arg_value in sema/decl/resolve.kspl).
+    assert(wide_arg_of<|5000000000|>() == 5000000000I64, "a literal past I32 reaches the body")
+    assert(wide_arg_of<|PAST_I32|>() == 5000000000I64, "a const past I32 gives the same instance")
+    assert(wide_arg_of<|-5000000000|>() == -5000000000I64, "a negated literal below I32 does too")
+    assert(wide_arg_of<|BELOW_I32|>() == -5000000000I64, "and a const below I32")
+    assert(u32_arg_of<|U32_UPPER|>() == 4000000000U32, "a U32 const in its upper half is passed")
+    verdict.pass("a const type argument keeps a value its I64 or U32 parameter holds.")
+
+priv fn i8_arg_of<|const N: I8|>(): I8
+    return N
+
+priv fn const_arg_negated<|const N: I32|>(): I64 //< the argument read under a minus, widened first
+    return -I64::N
+
+priv const I32_LOWEST: I32 = -2147483648
+priv const I64_LOWEST: I64 = -9223372036854775808
+
+fn test_lowest_const_type_arg()
+    verdict.start("[Generics] a type's lowest value as a const type argument test...")
+    // The body reads the argument as one literal that holds its minus. Checked by its magnitude
+    // alone, the lowest value was "out of range" for its own type wherever the body read it
+    // (check_literal_bounds in sema/body/literal.kspl).
+    assert(const_arg_of<|-2147483648|>() == -2147483648, "I32's lowest reaches the body")
+    assert(const_arg_of<|I32_LOWEST|>() == -2147483648, "and by a const's name")
+    assert(const_arg_negated<|-2147483648|>() == 2147483648I64, "it is negated at a wider type")
+    assert(i8_arg_of<|-128|>() == -128I8, "I8's lowest reaches the body")
+    assert(wide_arg_of<|-9223372036854775808|>() == -9223372036854775807I64 - 1I64,
+        "I64's lowest reaches the body")
+    assert(wide_arg_of<|I64_LOWEST|>() < -9223372036854775807I64, "and by a const's name")
+    verdict.pass("a const type argument at its type's lowest value carries that value.")
 
 // ==========================================
 // A non-returning call (`#noreturn`) can be placed as `catch`'s alternative value.

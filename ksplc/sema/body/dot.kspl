@@ -26,7 +26,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv fn refuse_variant_list(ctx: Sema_ctx$@, node: Ast_node$@, enum_id: I32, member: U8[]): Bool //<
     //< Reports `variants` or `from_variant_name` asked of an enum whose variant carries data
@@ -138,7 +138,7 @@ fn infer_namespace_access(ctx: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
             owner_id = ctx.env.type_to_id.get(ctx.fn_ctx.impl_name).unwrap_or(0)
     is_value: = ctx.fn_ctx.callee != node
 
-    $new_path: = Str_builder()
+    $new_path: = Str()
     new_path.s(left.text).s(".").s(member_name)
     if type_args_node != null
         new_path.s(type_args_node.text)
@@ -230,7 +230,7 @@ fn check_builtin_dot_access(ctx: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
                 ctx.warn(left,
                     "[W0102] Expression has side effects. Compile-time array length evaluation \
                         discards the expression.")
-            defer $sb: = Str_builder()
+            defer $sb: = Str()
             sb.s("\{arr_size\}")
             node.morph(.k_integer, sb.slice())
             return .some(I32::sema_type_env.Builtin_type_id.size_type)
@@ -403,7 +403,7 @@ priv fn find_method(ctx: Sema_ctx$@, s_entry: sema_type_def.Entry$@, s_id: I32, 
             hit = Method_hit::{ .def = sym.node, .sym = sym, .type_id = sym.type_id }
             if hit.def != null
                 return hit
-    defer $full_name: = Str_builder()
+    defer $full_name: = Str()
     full_m_name: = full_name.s(search_type).c('.').s(name).slice()
     if tmpl: = sema_decl_mono_name.lookup_method_template(ctx, s_id, name)
         if tmpl.node != null
@@ -453,8 +453,11 @@ priv fn check_method_import(ctx: Sema_ctx$@, member_node: Ast_node$@, found_sym:
     // Caution: **Still check whether it is imported**: that marks the import used. Otherwise
     // [I0401] would tell the reader to delete a template's unmarked import.
     method_file: = found_sym.get_defined_in()
+    // **Nor inside a trait's default body copied into another file's impl**, for the same reason:
+    // the receiver is the implementing type, and the trait's file cannot import each one's file.
     if struct_file.len == 0 || method_file.len == 0 || struct_file.equals(method_file) ||
-        ctx.is_file_imported(method_file) || ctx.is_instantiating()
+        ctx.is_file_imported(method_file) || ctx.is_instantiating() ||
+        ctx.copied_body_file().len > 0
         return
     spec_item: = format_spec_item(member_name_raw)
     if spec_item.len > 0
@@ -532,36 +535,42 @@ priv fn report_missing_member(ctx: Sema_ctx$@, member_node: Ast_node$@, recv_id:
     ctx.clear_scratch()
         .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'")
     // **Without a call, only a field can stand there**, and no other file can add one. Name the
-    // field a typo most likely meant, never the import of an extension method.
-    if !is_call
-        near: = nearest_field(ctx, recv_id, member_name_raw)
-        if near.len > 0
-            ctx.scratch.s("\n  Note: the field with the nearest name is '\{near\}'.")
-    else
+    // field a typo most likely meant, never the import of an extension method. With a call, a
+    // method of a near name is the likelier cause than a file not imported.
+    near: = nearest_member(ctx, recv_id, member_name_raw, is_call)
+    if near.len > 0
+        ctx.scratch
+            .s("\n  Note: the \{"method" if is_call else "field"\} with the nearest name is \
+                '\{near\}'.")
+    else if is_call
         ctx.scratch
             .s("\n  Note: an extension method is visible only where its defining file is imported. \
                 If '\{member_name_raw\}' comes from another file, import that file. Check that the \
                 import is not cyclic.")
     ctx.err(member_node, ctx.scratch.slice())
 
-priv fn nearest_field(ctx: Sema_ctx@, recv_id: I32, name: U8[]): U8[] //<
-    //< The receiver's field whose name is nearest to `name`, or empty where none is near enough
-    //< Near is `near_enough` in `ksplc/base/near.kspl`. On a tie the field declared first wins.
+priv fn nearest_member(ctx: Sema_ctx@, recv_id: I32, name: U8[], is_call: Bool): U8[] //<
+    //< The receiver's field, or method for a call, whose name is nearest to `name`, or empty
+    //< Near is `Nearest` in `ksplc/base/near.kspl`. Another file's `priv` method is not offered.
     entry: = ctx.env.id_to_type
         .get(ctx.env.get_clean_real_type(ctx.env.strip_ptr(recv_id)))
     if entry == null
         return ""
-    $best: U8[] = ""
-    $best_cost: = base_near.near_enough(name)
+    $near: = base_near.nearest_to(name)
+    if is_call
+        if entry.methods != null
+            here: =
+                ctx.symtab.current_file.file_name if ctx.symtab.current_file != null else ""
+            for m in entry.methods.items()
+                if m.value.vis != .file_private || m.value.get_defined_in().equals(here)
+                    near.offer(m.key)
+        return near.found().unwrap_or("")
     switch entry.info
     case .struct_type(def)
         for field in def.fields_list
-            cost: = base_near.edit_distance(name, field.name)
-            if cost < best_cost
-                best = field.name
-                best_cost = cost
+            near.offer(field.name)
     default {}
-    return best
+    return near.found().unwrap_or("")
 
 priv fn refuse_method_value_on_value(ctx: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32) //<
     //< Refuses a method named through a value without being called (`p.m`)

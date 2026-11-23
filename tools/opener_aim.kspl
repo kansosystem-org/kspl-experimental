@@ -11,7 +11,7 @@ import "std/chars"
 import "std/ds"
 import "std/fs"
 import "std/mem" { Arena, dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum"
 import "std/sys"
 import "std/url" as url_text
@@ -171,7 +171,7 @@ fn url_for( //< the URL to open, with the document to open added
     url: U8[], //< the URL kssrv printed, fragment included
     doc: U8[], //< the document to open, relative to the served folder
     win: Bool, //< only when this is set is `\` turned into `/`
-    text: Str_builder$@, //< where the URL is built
+    text: Str$@, //< where the URL is built
 ): U8[]
     head: = without_token(url)
     tail: = url.sub_from(head.len) // with no fragment, the tail is empty
@@ -196,7 +196,7 @@ const PAGE_KEEP_S: I64 = 600 //< how long a handed page is kept [s]
     //< **Long enough for a cold browser to start and read it**; the next run removes it after that
     //< (`sweep_pages`).
 
-fn page_text(open_url: U8[], app: App, text: Str_builder$@): U8[] //<
+fn page_text(open_url: U8[], app: App, text: Str$@): U8[] //<
     //< The page handed to the browser in place of the URL, which moves on to the URL
     //< **The browser is handed this page's path, never the URL.** A command line is open to every
     //< user on the machine (`ps`), and the URL holds the token. The page moves on at once
@@ -210,7 +210,7 @@ fn page_text(open_url: U8[], app: App, text: Str_builder$@): U8[] //<
     text.s("\">open ").s(app.name).s("</a>\n")
     return text.slice()
 
-priv fn attr_into(text: Str_builder$@, value: U8[]) //< writes `value` as a quoted attribute's value
+priv fn attr_into(text: Str$@, value: U8[]) //< writes `value` as a quoted attribute's value
     for c in value
         if c == '&'
             text.s("&amp;")
@@ -231,7 +231,7 @@ fn write_page( //< writes the page for the URL, readable by its owner alone, and
     dir: U8[], //< the folder it goes in
     arena: Arena$@, //< where the path goes
 ): U8[]!fs.Fs_error
-    defer $text: = Str_builder()
+    defer $text: = Str()
     return fs.write_unique(dir, page_prefix(app, arena), PAGE_EXT,
         page_text(open_url, app, text@), arena)
 
@@ -300,7 +300,7 @@ fn state_text( //< the note, rebuilt
     root: U8[], //< the folder it serves
     had: U8[], //< the note as it stood
     answers: Callable1<|U8[], Bool|>, //< whether the server a record's URL names still answers
-    text: Str_builder$@, //< where the note is built
+    text: Str$@, //< where the note is built
 ): U8[]
     state_put(text, url, root)
     count: = state_count(had)
@@ -311,7 +311,7 @@ fn state_text( //< the note, rebuilt
         state_put(text, one[0], one[1])
     return text.slice()
 
-fn state_put(text: Str_builder$@, url: U8[], root: U8[]) //< adds one record to the end of a note
+fn state_put(text: Str$@, url: U8[], root: U8[]) //< adds one record to the end of a note
     //< **The one place that writes a record**, so `state_record` reads back what every writer
     //< wrote.
     //< Caution: **Write nothing for a value holding a line break** (`fits_note`): a folder named

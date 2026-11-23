@@ -6,7 +6,7 @@
 // **`Sema_ctx` is not here**: many files import it, and moving it would change all their import
 // blocks.
 // ==========================================
-import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast" { Ast_node, Loc }
 import "ksplc/base/lint_codes" as base_lint_codes
 import "std/ds" { List, Map }
 
@@ -119,6 +119,12 @@ struct Diag_state //< diagnostics bookkeeping: the counts, what was reported, th
         //< `ctx.kspl`). A repeat is printed once and counted once, yet it still means the step
         //< failed. A follow-on message there only restates it.
     undefined_at: Map<|U8[], Bool|>$@ //< where an undefined name was reported, as "file:offset"
+    default_origin: Map<|Sz, Loc|>$@ //<
+        //< Where each node of a trait's default body, copied into an impl, is written
+        //< That is in the trait, or in the impl's header for a type argument written into the copy.
+        //< The copy stands at its impl (`trait_default.kspl`). A warning is about the body's own
+        //< text, so `report_diagnostic` in `ctx.kspl` places it here, once for every copy. The
+        //< body's names are read in this place's file (`names_file` in `ctx.kspl`).
     lint_settings: List<|Lint_setting_entry|>$@ //< the levels `##lint(CODE = level)` registered
     line_starts: Map<|U8[], List<|Sz|>$@|>$@ //<
         //< The line-start offset tables for diagnostic positions (file name -> table)
@@ -130,6 +136,10 @@ struct Generic_state //< the generics' state
     //< Caution: Do not add monomorphization's working state here (it belongs in Mono_state below).
     templates: Map<|U8[], Ast_node$@|>$@ //< generic template definitions (FQN -> node)
     impls: List<|Ast_node$@|>$@ // the generic impls
+    method_impls: Map<|Sz, Ast_node$@|>$@ //<
+        //< The impl block each method template was written in (the template's node -> the impl)
+        //< A method's instance binds that impl's own type parameters, which the impl names and
+        //< orders as it likes (`impl<|X, Y|> Pair<|Y, X|>` on `struct Pair<|A, B|>`).
     trait_insts: List<|Trait_inst|>$@ //<
         //< Instantiated generic impls' trait conformances (see Trait_inst); lower builds vtables
     args: List<|Generic_arg|>$@ //< the currently bound type arguments
@@ -273,6 +283,10 @@ struct Resolving_state //<
         //< The constants on a chain already reported too deep
         //< **One chain is one error.** Each constant down a long chain starts a fold of its own
         //< that is cut the same way. A cut through any of these is that chain again.
+    missing_types: Map<|U8[], Bool|>$@ //<
+        //< The written types reported undefined, by the FQN their name resolves to
+        //< **Such a name is the unknown type** (`is_reported_missing` in `../decl/resolve.kspl`).
+        //< Only the report, which knows the type parameters in scope, can tell it from one.
     registries: List<|I32|>$@ //<
         //< The struct / enum types whose fields or variants are being filled in
         //< **`pending_decl` alone is not enough.**

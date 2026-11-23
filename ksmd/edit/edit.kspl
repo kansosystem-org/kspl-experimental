@@ -24,7 +24,7 @@ import "ksmd/syntax/settings" { is_label }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum"
 
 enum Edit_error //< why an edit was refused; a refused edit changes nothing
@@ -369,7 +369,7 @@ fn copy_cell(doc: Document$@, from: Sz, row: Sz, column: Sz, to: Sz, to_row: Sz,
         return
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     write_formula(doc, source, cell, at@, to_row - row, to_column - column, out@)
     set_cell(doc, to, to_row, to_column, .formula, out.slice(), arena)!
     target.cells[target.at(to_row, to_column)].look = cell.look
@@ -630,7 +630,7 @@ fn new_table(doc: Document$@, columns: Sz, rows: Sz, arena: Arena$@): Sz!Edit_er
     if (rows + 1) * columns > MAX_CELLS
         throw .too_many_cells
     $n: Sz = 1
-    defer $name: = Str_builder()
+    defer $name: = Str()
     name.s("table1")
     for find_table(doc, name.slice()).is_some()
         n += 1
@@ -662,7 +662,7 @@ fn remove_table(doc: Document$@, table: Sz, arena: Arena$@): Void!Edit_error //<
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
     $found: = List<|Written|>(scratch)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     for v in Range.asc(doc.tables.len)
         if v == table
             continue
@@ -762,7 +762,7 @@ fn fits(doc: Document@): Void!Edit_error //<
     //< Every formula is measured: one whose reference became `#REF!` refers to no table now.
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     for v in Range.asc(doc.tables.len)
         t: = doc.tables[v]@
         for cell in t.cells
@@ -786,7 +786,7 @@ fn attach_loose(doc: Document$@, arena: Arena$@) //<
     //< So a formula's reference is attached whenever it names a cell, as after reading.
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
-    defer $out: = Str_builder()
+    defer $out: = Str()
     for v in Range.asc(doc.tables.len)
         for i in Range.asc(doc.tables[v].cells.len)
             cell: = doc.tables[v].cells[i]

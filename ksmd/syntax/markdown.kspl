@@ -9,7 +9,7 @@ import "ksmd/calc/value" { write_shown }
 import "ksmd/model/model" { Block, Document, Inline_kind, MAX_NESTING }
 import "ksmd/syntax/writer" { is_blank_end, write_code }
 import "std/chars"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 struct Left_out //< what a copy could not carry, by kind; a chart, a diagram and an include each
     //< leave a line that says so
@@ -18,12 +18,13 @@ struct Left_out //< what a copy could not carry, by kind; a chart, a diagram and
     includes: Sz
     drawn: Sz //< the images whose drawn shapes are left out; the image itself is written
 
-fn write(doc: Document@, values: Results@, out: Str_builder$@): Left_out //<
+fn write(doc: Document@, values: Results@, out: Str$@): Left_out //<
     //< Appends the whole document as Markdown, a blank line between blocks
     //< `values` are the document's calculated values (`calc.calculate`), which its tables show.
     $left: = Left_out::{ .charts = 0, .diagrams = 0, .includes = 0, .drawn = 0 }
     $first: = true
     $after_list: = false
+    $other: = false // the list just written took `*` and `1)`
     for b in Range.asc(doc.blocks.len)
         block: = doc.blocks.get(b)
         // A blank line, the settings and a functions clause show nothing a reader needs.
@@ -32,14 +33,16 @@ fn write(doc: Document@, values: Results@, out: Str_builder$@): Left_out //<
         if !first
             out.c('\n')
         first = false
-        write_block(doc, block, values, after_list, left@, out)
+        // **The markers alternate**, so a third list in a row does not join the second.
+        other = block.kind == .list && after_list && !other
+        write_block(doc, block, values, other, left@, out)
         after_list = block.kind == .list
     return left
 
-priv fn write_block(doc: Document@, block: Block, values: Results@, after_list: Bool,
-    left: Left_out$@, out: Str_builder$@) //<
+priv fn write_block(doc: Document@, block: Block, values: Results@, other: Bool, left: Left_out$@,
+    out: Str$@) //<
         //< One block, ending in a newline
-        //< `after_list` says that a list was written just before it.
+        //< `other` says that a list takes `*` and `1)` as its markers.
     switch block.kind
     case .paragraph
         write_inlines(doc, block.first, block.count, "", false, out)
@@ -52,7 +55,7 @@ priv fn write_block(doc: Document@, block: Block, values: Results@, after_list: 
         out.s("> ")
         write_inlines(doc, block.first, block.count, "> ", false, out)
     case .list
-        write_list(doc, block, after_list, out)
+        write_list(doc, block, other, out)
     case .code
         write_fenced(block.label, block.text, out)
     case .divider
@@ -83,7 +86,7 @@ priv fn write_block(doc: Document@, block: Block, values: Results@, after_list: 
         not_copied("the included file", "", block.text, out)
     case .blank, .document, .functions {}
 
-priv fn not_copied(named: U8[], unnamed: U8[], name: U8[], out: Str_builder$@) //<
+priv fn not_copied(named: U8[], unnamed: U8[], name: U8[], out: Str$@) //<
     //< `*Not copied: the chart "Sales".*`, or `*Not copied: a chart.*` where it has no name
     out.s("*Not copied: ")
     if name.len == 0
@@ -94,23 +97,24 @@ priv fn not_copied(named: U8[], unnamed: U8[], name: U8[], out: Str_builder$@) /
         out.c('"')
     out.s(".*\n")
 
-priv fn write_list(doc: Document@, block: Block, after_list: Bool, out: Str_builder$@) //<
+priv fn write_list(doc: Document@, block: Block, other: Bool, out: Str$@) //<
     //< One item to a line, a nested one indented to its parent's text, as Markdown nests it
-    //< A list straight after a list takes `*` and `1)`, so Markdown does not join the two.
+    //< With `other`, the list takes `*` and `1)`: a list straight after a list that took `-` and
+    //< `1.` does, so Markdown does not join the two.
     $text_at: Sz[MAX_NESTING] = ::{}
     for i in Range.asc(block.count)
         item: = doc.items.get(block.first + i)
         indent: = text_at[item.depth - 1] if item.depth > 0 else 0
         for _ in Range.asc(indent)
             out.c(' ')
-        marker: = ("1)" if after_list else "1.") if item.ordered else "*" if after_list else "-"
+        marker: = ("1)" if other else "1.") if item.ordered else "*" if other else "-"
         out.s(marker).c(' ')
         text_at[item.depth] = indent + marker.len + 1
         if item.check != .none
             out.s("[ ] " if item.check == .open else "[x] ")
         write_inlines(doc, item.first, item.count, "", false, out)
 
-priv fn write_fenced(label: U8[], text: U8[], out: Str_builder$@) //<
+priv fn write_fenced(label: U8[], text: U8[], out: Str$@) //<
     //< A fence one backtick longer than the longest run inside, and at least three, so no line of
     //< the code can close it
     $ticks: Sz = 3
@@ -126,7 +130,7 @@ priv fn write_fenced(label: U8[], text: U8[], out: Str_builder$@) //<
         out.c('`')
     out.c('\n')
 
-priv fn write_table(doc: Document@, at: Sz, values: Results@, out: Str_builder$@) //<
+priv fn write_table(doc: Document@, at: Sz, values: Results@, out: Str$@) //<
     //< The caption as a paragraph, then a pipe table: the names, a row of dashes, and each data
     //< row's values as its cells show them. Every row and column is written, hidden or not.
     table: = doc.tables[at]@
@@ -134,7 +138,7 @@ priv fn write_table(doc: Document@, at: Sz, values: Results@, out: Str_builder$@
         write_text(table.caption, true, 0, out)
         out.s("\n\n")
     width: = table.columns.len
-    defer $shown: = Str_builder()
+    defer $shown: = Str()
     for row in Range.asc(table.rows.len + 1)
         out.c('|')
         for column in Range.asc(width)
@@ -163,7 +167,7 @@ priv fn write_table(doc: Document@, at: Sz, values: Results@, out: Str_builder$@
             out.c('\n')
 
 priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, lead: U8[], heading: Bool,
-    out: Str_builder$@) //<
+    out: Str$@) //<
         //< A run of inline nodes, then the line's end; `lead` starts each line after a hard break
         //< Spaces at a line's edges and a hard break at the end are left out, as the writer leaves
         //< them out. Spaces at a mark's inner edge stand outside it, where Markdown can open it.
@@ -245,7 +249,7 @@ priv fn text_inside(doc: Document@, from: Sz, end: Sz): Sz //<
         i += 1
     return i if i < end && doc.inlines.get(i).kind == .text else end
 
-priv fn write_text(text: U8[], line_start: Bool, end: U8, out: Str_builder$@) //<
+priv fn write_text(text: U8[], line_start: Bool, end: U8, out: Str$@) //<
     //< Text, with a backslash before each byte Markdown would read as markup
     //< At a line's start a block marker is escaped too. `end` is a byte escaped where it ends the
     //< text, or 0. A line break becomes `<br>`, as a row of a pipe table is one line.
@@ -262,7 +266,7 @@ priv fn write_text(text: U8[], line_start: Bool, end: U8, out: Str_builder$@) //
             out.c('\\')
         out.c(c)
 
-priv fn write_marker(text: U8[], out: Str_builder$@): Sz //<
+priv fn write_marker(text: U8[], out: Str$@): Sz //<
     //< Escapes a block marker that starts the text; returns how many bytes it wrote
     c: = text[0]
     next: = text[1] if text.len > 1 else ' '
@@ -320,7 +324,7 @@ priv fn is_reference(rest: U8[]): Bool //<
         n += 1
     return n > 0 && i + n < rest.len && rest[i + n] == ';'
 
-priv fn write_destination(dest: U8[], out: Str_builder$@) //<
+priv fn write_destination(dest: U8[], out: Str$@) //<
     //< A link's or an image's destination; in `<` and `>` where it holds a space or a bracket
     //< A backslash and `|` are escaped, so the destination reads back whole, in a table too.
     $angled: = false

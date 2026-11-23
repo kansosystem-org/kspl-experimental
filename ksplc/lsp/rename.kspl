@@ -4,7 +4,8 @@
 //< name as an identifier (`Identifier` in `../kspl.kspeg`). ② A place lies in a file the
 //< workspace walk does not list (`holds` in `workspace.kspl`). ③ The new name is already
 //< declared where it would land. ④ A type call selects the function (`place_refusal`). ⑤ A trait
-//< declares the method, or the method implements one (`trait_refusal`).
+//< declares the method, or the method implements one (`trait_refusal`). ⑥ The source does not
+//< spell the name where it is declared (`unwritten_refusal`).
 //< `prepareRename` asks ② of the declaration alone, so the editor refuses before a name is typed.
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast" { Ast_node }
@@ -24,7 +25,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv const NO_NAME: U8[] = "there is no name here to rename"
 
@@ -73,6 +74,8 @@ fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Val
     spots: = lsp_uses.collect_spots(ws_state, t, base_locate.uri_style_of(uri), arena)
     if why.len == 0
         why = place_refusal(spots@, old_name, arena)
+    if why.len == 0
+        why = unwritten_refusal(t, spots@, old_name, new_name, arena)
     if why.len == 0 && ws_state.sema != null
         why = trait_refusal(ws_state.sema, spots@, old_name, arena)
     if why.len == 0 && !new_name.equals(old_name) && ws_state.sema != null
@@ -124,7 +127,7 @@ priv fn name_refusal(name: U8[], parser: kspeg.Target$@, arena: Arena$@): U8[] /
 
 priv fn disk_path(logical: U8[], arena: Arena$@): U8[] //<
     //< where the file of a logical name is read
-    defer $out: = Str_builder()
+    defer $out: = Str()
     base_locate.append_file_path(logical, out@)
     return arena.dup_str(out.slice())
 
@@ -154,6 +157,29 @@ priv fn place_refusal(spots: List<|Spot|>@, name: U8[], arena: Arena$@): U8[] //
         if !in_workspace(s.file, arena)
             return read_only(name, s.file, s.is_decl, arena)
     return ""
+
+priv fn unwritten_refusal(target: Target, spots: List<|Spot|>@, name: U8[], new_name: U8[],
+    arena: Arena$@): U8[] //<
+        //< Why a name whose declaration the source does not spell is not renamed; else empty
+        //< **Only the uses would change**, and the program would stop compiling. An import with no
+        //< `as` is named by its path's last part, which is no name to edit. A closure's `call` is
+        //< declared by the compiler.
+    // **A generic type's instance stands at its template's place**, so the template's name there
+    // is the declaration, although it is another node than the instance's.
+    id: = target.def.find_child(.k_identifier) if target.def != null else null
+    for i in Range.asc(spots.len)
+        s: = spots.get(i)
+        if s.is_decl ||
+            (id != null && s.node.loc.offset == id.loc.offset &&
+            s.node.loc.file().equals(id.loc.file()))
+            return ""
+    if target.def != null && target.def.kind_id == .k_decl_import
+        return arena.text()
+            .s("'\{name\}' is the name its import gives where no 'as' is written. Write 'as \
+                \{new_name\}' on the import line, then rename the uses").take()
+    return arena.text()
+        .s("'\{name\}' is not written where it is declared (the compiler declares a closure's \
+            'call'). Only its uses would change, and the program would stop compiling").take()
 
 // ==========================================
 // ③ The new name is free where it lands
@@ -317,7 +343,7 @@ priv fn names_itself(node: Ast_node$@, spot: Spot): Bool //<
     return spot.is_decl && node.find_child(.k_identifier) == spot.node
 
 priv fn shown(logical: U8[], arena: Arena$@): U8[] //< a file as a diagnostic names it
-    defer $out: = Str_builder()
+    defer $out: = Str()
     base_locate.recorded_name_to(logical, out@)
     return arena.dup_str(out.slice())
 

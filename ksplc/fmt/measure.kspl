@@ -10,7 +10,7 @@ import "ksplc/fmt/source" { skip_space_from }
 import "ksplc/fmt/space" { Fmt_flags, calc_spacing_requirement, join_string_lines }
 import "std/chars" // the one-character checks and cuts
 import "std/ds"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 impl Ast_node
     fn get_assign_op_len(r: Ast_node@, src: U8[]): Sz
@@ -50,10 +50,10 @@ impl Ast_node
         //< Its tokens are counted, with a space only where the printer puts one.
         //< Caution: **Use it where a decision sits at the limit.** `calc_text_len` counts a space
         //< between every two children: safe for "plainly too wide", but it moves a line that fits.
-        defer $last: = Str_builder()
+        defer $last: = Str()
         return r.add_printed_width(src, last@, 0)
 
-    priv fn add_printed_width(r: Ast_node$@, src: U8[], last: Str_builder$@, width: Sz): Sz //<
+    priv fn add_printed_width(r: Ast_node$@, src: U8[], last: Str$@, width: Sz): Sz //<
         //< width with this node's tokens added; `last` holds the token written before them
         kind: = r.kind_id
         if kind == .k_empty || kind == .k_underscore
@@ -96,7 +96,7 @@ impl Ast_node
         //< too wide to stay on its line. The next run reads the joined literal and puts it back
         //< (`join_string_lines` in `space.kspl`, which `format_string_token` lays out from).
         span: = r.get_string_span(src)
-        defer $joined: = Str_builder()
+        defer $joined: = Str()
         if join_string_lines(U8[]::{ .ptr = src.ptr + r.loc.offset, .len = span }, joined@)
             return fmt_comment.disp_width(joined.slice())
         return span

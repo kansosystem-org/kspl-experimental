@@ -1311,6 +1311,7 @@ It is refused at line 5, column 4.
 | `=A1/0+B1` | the divisor is 0 |
 | `=1+"x"+A1` | arithmetic cannot use text, even text that looks like a number |
 | `=1e300*1e300` | the number is too large for a cell |
+| `=date(2026, 1, 1)+1e300` | the date falls outside the years 1 to 9999 |
 | `=round(1, 16)` | round: the result is too large, or a value is outside the range it takes |
 | `=#REF!` | a reference lost its cell, when its row or column was removed |
 | `=t.Z9` | a reference names no cell |
@@ -2160,6 +2161,7 @@ It is refused at line 3, column 19.
 | `=date(2026, 2, 29)` | `#NUM!` |
 | `=date(2026.5, 1, 1)` | `#NUM!` |
 | `=date(9999, 12, 31)+1` | `#NUM!` |
+| `=date(2026, 1, 1)+1e300` | `#NUM!` |
 | `=day(date(2026, 2, 1)-1)` | `31` |
 | `=year(B1)` | `#VALUE!` |
 | `=date(2026, 1, 1)<date(2026, 1, 2)` | `true` |
@@ -2832,7 +2834,7 @@ Caution: **Strong or emphasised text that Markdown cannot close where it stands 
 
 * **Every numbered item is written `1.`**, and Markdown numbers the items.
 * **A nested item is indented to the text of the item above it**: two spaces under `- `, and three under `1. `.
-* **A list straight after another list takes `*` and `1)` as its markers.** Markdown would otherwise join the two lists into one.
+* **A list straight after another list takes the other markers: `*` and `1)` after `-` and `1.`, and `-` and `1.` after `*` and `1)`.** Markdown would otherwise join the two lists into one.
 
 **A table gives what the page shows.**
 

@@ -9,7 +9,7 @@ import "std/chars"
 import "std/ds"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 fn run()
@@ -71,7 +71,7 @@ priv fn small_diff() //< changing one word of the model changes one line of the 
     defer arena: = Arena(64 * 1024)
     doc: =
         read("%ksmd 2\n\nFirst\nparagraph.\n\nSecond paragraph.\n\nThird paragraph.\n", arena)
-    defer $before: = Str_builder()
+    defer $before: = Str()
     writer.write(doc@, before@)
     $edited: = doc
     node: = edited.inlines.get(1)
@@ -79,7 +79,7 @@ priv fn small_diff() //< changing one word of the model changes one line of the 
         .set(1,
         Inline::{ .kind = node.kind, .text = "Second, edited, paragraph.", .offset = node.offset,
         .color = "" })
-    defer $after: = Str_builder()
+    defer $after: = Str()
     writer.write(edited@, after@)
     verdict.check("an edit to one paragraph changes only its line",
         changed_lines(before.slice(), after.slice()) == 1, after.slice())
@@ -152,7 +152,7 @@ priv fn lists()
     refused("%ksmd 2\n\n- a\\\n",
         "a list item takes one line and has no hard break. Write '\\\\' for a literal backslash", 3,
         4)
-    defer $deep: = Str_builder()
+    defer $deep: = Str()
     deep.s("%ksmd 2\n\n")
     for depth in Range.asc(17)
         for _ in Range.asc(depth)
@@ -426,7 +426,7 @@ priv fn clause_refusals()
     refused("%ksmd 2\n\n:::table name=\"t\" char_widths=\",\"\n| \"a\" | \"b\" |\n:::\n",
         "leave out char_widths when no column has a width", 3, 19)
     for bad in U8[][]::{ "0.4", "256", "1.25", "1.", "x" }
-        defer $src: = Str_builder()
+        defer $src: = Str()
         src.s("%ksmd 2\n\n:::table name=\"t\" char_widths=\"\{bad\},1\"\n| \"a\" | \"b\" |\n:::\n")
         refused(src.slice(),
             "a column's width is 0.5 to 255 characters, with at most one decimal place, or nothing",
@@ -451,7 +451,7 @@ priv fn clause_refusals()
     for wrong in U8[][]::{ "0%", "101%", "40", "40px", "4.5%" }
         refused(sized("width", wrong, arena),
             "width is a share of the text width, \"1%\" to \"100%\", or leave it out", 3, 29)
-    defer $wide: = Str_builder()
+    defer $wide: = Str()
     wide.s("%ksmd 2\n\n:::table name=\"t\"\n")
     for _ in Range.asc(257)
         wide.s("| \"a\" ")
@@ -508,7 +508,7 @@ priv fn first_shape(doc: Document, arena: Arena$@): U8[] //<
 priv fn shape(doc: Document, first: Sz, count: Sz, arena: Arena$@): U8[] //<
     //< Nodes as text: a mark as `<e>` `<s>` `<a destination>` and their ends, code in braces,
     //< a hard break as `|`
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for i in Range.asc(count)
         node: = doc.inlines.get(first + i)
         switch node.kind
@@ -539,10 +539,10 @@ priv fn read_count(bytes: U8[]): Sz
 priv fn canonical(what: U8[], bytes: U8[], expected: U8[]) //<
     //< The first save gives `expected`, and reading and saving that again changes nothing
     defer arena: = Arena(64 * 1024)
-    defer $first: = Str_builder()
+    defer $first: = Str()
     doc: = read(bytes, arena)
     writer.write(doc@, first@)
-    defer $second: = Str_builder()
+    defer $second: = Str()
     again: = read(first.slice(), arena)
     writer.write(again@, second@)
     verdict.check(what, first.slice().equals(expected), first.slice())

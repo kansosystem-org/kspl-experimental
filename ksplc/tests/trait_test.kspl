@@ -1,4 +1,5 @@
 //< Traits: copied default bodies, methods reached only through a value, trait values in arrays
+import "ksplc/tests/trait_file/shape" as far
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/verdict"
@@ -98,6 +99,495 @@ fn test_trait_default_body()
     verdict
         .pass("a default body is copied to the implementations that did not write one, and no \
             further.")
+
+// ==========================================
+// A method with a default body can give a parameter a default value. The copy keeps it as the
+// trait's own, so the rule that refuses a default written on an impl lets it pass.
+// ==========================================
+priv trait Padded
+    fn width(r: Self): I32
+
+    fn padded(r: Self, pad: I32 = 50): I32
+        return r.width() + pad
+
+    fn asked_at(_r: Self, line: Sz = caller_line): Sz
+        return line
+
+priv struct Slim
+    priv w: I32
+
+impl Slim: Padded
+    priv fn width(r: Self): I32
+        return r.w
+
+priv struct Wide<|T|> //< a generic implementation: each instance copies the copy
+    priv v: T
+
+impl<|T|> Wide<|T|>: Padded
+    priv fn width(r: Self): I32
+        return I32::sizeof(r.v)
+
+priv struct Stiff //< it writes the method itself, and still takes the trait's default
+    priv w: I32
+
+impl Stiff: Padded
+    priv fn width(r: Self): I32
+        return r.w
+
+    priv fn padded(r: Self, pad: I32): I32
+        return r.w - pad
+
+priv fn padded_of<|P: Padded|>(item: P): I32 //< the call through a type parameter
+    return item.padded()
+
+fn test_default_body_keeps_a_parameter_default()
+    verdict.start("[Trait] a default body's parameter default is inherited test...")
+    slim: = Slim::{ .w = 2 }
+    assert(slim.padded() == 52 && slim.padded(1) == 3, "the default, and a written value")
+    wide: = Wide<|I64|>::{ .v = 0 }
+    assert(wide.padded() == 58 && wide.padded(2) == 10, "in a generic implementation's instance")
+    assert(Stiff::{ .w = 100 }.padded() == 50, "a method the impl writes takes it as before")
+    assert(padded_of(slim) == 52 && padded_of(wide) == 58, "through a type parameter")
+    here: = slim.asked_at()
+    assert(here > 0 && slim.asked_at() == here + 1, "the caller's line is the call's")
+    verdict.pass("an inherited default body keeps the trait's parameter defaults.")
+
+// ==========================================
+// A default body's names are read in the trait's file, where the body is written, not in the file
+// of the impl it is copied into. `trait_file/shape.kspl` holds the trait, and each of its default
+// bodies names what only that file can.
+// ==========================================
+priv struct Far_square
+    priv side: I32
+
+impl Far_square: far.Far_shape
+    priv fn area(r: Self): I32
+        return r.side * r.side
+
+priv struct Far_box<|T|> //< a generic implementation: each instance copies the copy
+    priv v: T
+
+impl<|T|> Far_box<|T|>: far.Far_shape
+    priv fn area(r: Self): I32
+        return 3 if sizeof(r.v) > 0 else 0
+
+priv fn far_scale(): U8[] //< the trait's file declares a `far_scale` of its own, a number
+    return "text"
+
+fn test_default_body_reads_its_own_file()
+    verdict.start("[Trait] a default body's names are read in the trait's file test...")
+    sq: = Far_square::{ .side = 2 }
+    assert(sq.stepped() == 5, "a `priv` function of the trait's file")
+    assert(sq.based() == 104, "a `priv` constant")
+    assert(sq.paired() == 6, "a `priv` type")
+    assert(sq.imported() == 7, "a file only the trait's file imports")
+    assert(sq.scaled() == 50 && far_scale().len == 4,
+        "a name both files declare means the trait's file's")
+    assert(sq.stepper()() == 1, "a `priv` function as a value")
+    bx: = Far_box<|U8[]|>::{ .v = "x" }
+    assert(bx.stepped() == 4 && bx.scaled() == 40, "in a generic implementation's instance too")
+    verdict.pass("a default body copied into another file's impl keeps its own file's names.")
+
+// ==========================================
+// A trait's type argument means what the impl's file reads it as. The rest of the copied body is
+// read in the trait's file, where that spelling can name nothing, or another type.
+// ==========================================
+priv struct Far_pair //< the trait's file declares a `Far_pair` of its own, with other fields
+    priv word: U8[]
+
+priv struct Purse //< the trait stands in this file
+    priv n: I32
+
+impl Purse: Seqish<|Far_pair|>
+    priv fn head(_r: Self): Far_pair?
+        return .none
+
+priv struct Far_purse //< the trait stands in another file, which reads `Far_pair` as its own
+    priv n: I32
+
+impl Far_purse: far.Far_conv<|Far_pair|>
+    priv fn get(_r: Self): Far_pair
+        return Far_pair::{ .word = "own" }
+
+priv struct Far_till //< the argument is named through an import
+    priv n: I32
+
+impl Far_till: far.Far_conv<|far.Far_coin|>
+    priv fn get(r: Self): far.Far_coin
+        return far.Far_coin::{ .v = r.n }
+
+impl<|T|> Far_box<|T|>: far.Far_conv<|Far_pair|> //< a generic implementation
+    priv fn get(_r: Self): Far_pair
+        return Far_pair::{ .word = "boxed" }
+
+fn test_default_body_takes_the_impls_type_argument()
+    verdict.start("[Trait] a copied default body takes the type argument the impl wrote test...")
+    alt: = Far_pair::{ .word = "other" }
+    assert(Purse::{ .n = 1 }.head_or(alt).word.equals("other"), "a type this file declares")
+    fp: = Far_purse::{ .n = 1 }
+    assert(fp.get_or(alt, false).word.equals("own") &&
+        fp.get_or(alt, true).word.equals("other"),
+        "this file's type, not the one of that name in the trait's file")
+    assert(Far_till::{ .n = 4 }.get_or(far.Far_coin::{ .v = 9 }, false).v == 4,
+        "a type named through an import")
+    assert(Far_box<|I32|>::{ .v = 0 }.get_or(alt, false).word.equals("boxed"),
+        "in a generic implementation's instance too")
+    verdict.pass("a trait's type argument is the type the impl's file names.")
+
+// ==========================================
+// The impl's argument can be any type, not one name alone. The argument's tree is written into the
+// copied body, and read in the impl's file. Each form stands on a plain impl, with the trait in
+// another file (`far.Far_conv`) and in this one (`Near_conv`).
+// ==========================================
+priv struct Far_wrap<|T|> //< the trait's file declares a `Far_wrap` of its own, with two fields
+    priv v: T
+
+impl<|T|> Far_wrap<|T|>
+    priv fn weight(): I32 //< the trait's file declares none
+        return 7
+
+impl Far_pair
+    priv fn weight(): I32
+        return 9
+
+priv const FAR_ROOM: Sz = 3 //< the trait's file declares a `FAR_ROOM` of its own, 100
+
+priv trait Near_conv<|T|> //< default bodies like `far.Far_conv`'s, in the impl's file
+    fn near(r: Self): T
+
+    fn near_or(r: Self, alt: T, opt: T?): T
+        $out: T = alt
+        kept: = r.near()
+        if v: = opt
+            out = v
+        else
+            out = kept
+        return out
+
+    fn near_wrapped(r: Self): Far_wrap<|T|>
+        w: Far_wrap<|T|> = ::{ .v = r.near() }
+        return w
+
+    fn near_width(_r: Self): Sz
+        return sizeof(T) + sizeof(Far_wrap<|T|>)
+
+priv struct Arg_slice //< `Far_pair[]`
+    priv n: I32
+
+impl Arg_slice: far.Far_conv<|Far_pair[]|>
+    priv fn get(_r: Self): Far_pair[]
+        return Far_pair[]::{}
+
+impl Arg_slice: Near_conv<|Far_pair[]|>
+    priv fn near(_r: Self): Far_pair[]
+        return Far_pair[]::{}
+
+impl Arg_slice: far.Far_nest<|Far_pair[]|>
+    priv fn item(_r: Self): Far_pair[]
+        return Far_pair[]::{}
+
+priv struct Arg_opt //< `Far_pair?`
+    priv n: I32
+
+impl Arg_opt: far.Far_conv<|Far_pair?|>
+    priv fn get(_r: Self): Far_pair?
+        return .some(Far_pair::{ .word = "own" })
+
+impl Arg_opt: Near_conv<|Far_pair?|>
+    priv fn near(_r: Self): Far_pair?
+        return .none
+
+priv struct Arg_ptr //< `Far_pair@`
+    priv at: Far_pair@
+
+impl Arg_ptr: far.Far_conv<|Far_pair@|>
+    priv fn get(r: Self): Far_pair@
+        return r.at
+
+impl Arg_ptr: Near_conv<|Far_pair@|>
+    priv fn near(r: Self): Far_pair@
+        return r.at
+
+impl Arg_ptr: far.Far_nest<|Far_pair@|>
+    priv fn item(r: Self): Far_pair@
+        return r.at
+
+priv struct Arg_array //< `Far_pair[2]`
+    priv n: I32
+
+impl Arg_array: far.Far_conv<|Far_pair[2]|>
+    priv fn get(_r: Self): Far_pair[2]
+        return ::{ Far_pair::{ .word = "one" }, Far_pair::{ .word = "two" } }
+
+impl Arg_array: Near_conv<|Far_pair[2]|>
+    priv fn near(_r: Self): Far_pair[2]
+        return ::{ Far_pair::{ .word = "one" }, Far_pair::{ .word = "two" } }
+
+priv struct Arg_wrap //< `Far_wrap<|Far_pair|>`: a generic of this file, around a type of this file
+    priv n: I32
+
+impl Arg_wrap: far.Far_conv<|Far_wrap<|Far_pair|>|>
+    priv fn get(_r: Self): Far_wrap<|Far_pair|>
+        return Far_wrap<|Far_pair|>::{ .v = Far_pair::{ .word = "own" } }
+
+impl Arg_wrap: Near_conv<|Far_wrap<|Far_pair|>|>
+    priv fn near(_r: Self): Far_wrap<|Far_pair|>
+        return Far_wrap<|Far_pair|>::{ .v = Far_pair::{ .word = "own" } }
+
+impl Arg_wrap: far.Far_nest<|Far_wrap<|Far_pair|>|>
+    priv fn item(_r: Self): Far_wrap<|Far_pair|>
+        return Far_wrap<|Far_pair|>::{ .v = Far_pair::{ .word = "item" } }
+
+impl Arg_wrap: far.Far_made<|Far_wrap<|Far_pair|>|>
+    priv fn tag(r: Self): I32
+        return r.n
+
+priv struct Arg_wrap_int //< `Far_wrap<|I32|>`
+    priv n: I32
+
+impl Arg_wrap_int: far.Far_conv<|Far_wrap<|I32|>|>
+    priv fn get(r: Self): Far_wrap<|I32|>
+        return Far_wrap<|I32|>::{ .v = r.n }
+
+impl Arg_wrap_int: Near_conv<|Far_wrap<|I32|>|>
+    priv fn near(r: Self): Far_wrap<|I32|>
+        return Far_wrap<|I32|>::{ .v = r.n }
+
+priv struct Arg_list //< `List<|I32|>$@`
+    priv at: List<|I32|>$@
+
+impl Arg_list: far.Far_conv<|List<|I32|>$@|>
+    priv fn get(r: Self): List<|I32|>$@
+        return r.at
+
+impl Arg_list: Near_conv<|List<|I32|>$@|>
+    priv fn near(r: Self): List<|I32|>$@
+        return r.at
+
+priv struct Arg_ints //< `I32[]`: no name of either file
+    priv n: I32
+
+impl Arg_ints: far.Far_conv<|I32[]|>
+    priv fn get(_r: Self): I32[]
+        return I32[]::{}
+
+impl Arg_ints: Near_conv<|I32[]|>
+    priv fn near(_r: Self): I32[]
+        return I32[]::{}
+
+priv struct Arg_name //< one name before a `.`, and a value argument
+    priv n: I32
+
+impl Arg_name: far.Far_made<|Far_pair|>
+    priv fn tag(r: Self): I32
+        return r.n
+
+impl Arg_name: far.Far_sized<|FAR_ROOM|>
+    priv fn base(_r: Self): Sz
+        return 1000
+
+priv struct Arg_four
+    priv n: I32
+
+impl Arg_four: far.Far_sized<|4|>
+    priv fn base(_r: Self): Sz
+        return 2000
+
+fn test_default_body_takes_a_compound_type_argument(arena: Arena$@)
+    verdict.start("[Trait] a copied default body takes a type argument of any form test...")
+    pair: = Far_pair::{ .word = "other" }
+    pairs: Far_pair[2] = ::{ pair, pair }
+    row: = Far_pair[]::pairs
+    far_pair: Sz = 8 // the trait's file's `Far_pair`: two I32
+    s: = Arg_slice::{ .n = 1 }
+    assert(s.get_or(row, true).len == 2 && s.opt_or(.some(row)).len == 2 &&
+        s.opt_or(.none).len == 0, "`Far_pair[]`: a parameter, a `?` and a local")
+    assert(s.width() == sizeof(Far_pair[]) + far_pair &&
+        sizeof(s.wrapped()) == 2 * sizeof(Far_pair[]), "`Far_pair[]`: sizes")
+    assert(s.near_or(row, .none).len == 0 && s.near_or(row, .some(row)).len == 2 &&
+        s.near_width() == 2 * sizeof(Far_pair[]) &&
+        sizeof(s.near_wrapped()) == sizeof(Far_pair[]), "`Far_pair[]`: the trait in this file")
+    o: = Arg_opt::{ .n = 1 }
+    assert(o.get_or(.some(pair), false).unwrap_or(pair).word.equals("own") &&
+        o.opt_or(.some(.some(pair))).unwrap_or(pair).word.equals("other") &&
+        o.width() == sizeof(Far_pair?) + far_pair &&
+        sizeof(o.wrapped()) == 2 * sizeof(Far_pair?), "`Far_pair?`")
+    assert(o.near_or(.some(pair), .none).is_none() &&
+        o.near_width() == 2 * sizeof(Far_pair?), "`Far_pair?`: the trait in this file")
+    p: = Arg_ptr::{ .at = pair@ }
+    assert(p.get_or(null, false).word.equals("other") && p.opt_or(.some(null)) == null &&
+        p.width() == sizeof(Far_pair@) + far_pair && p.wrapped().b.word.equals("other"),
+        "`Far_pair@`")
+    assert(p.near_or(null, .none).word.equals("other") && p.near_wrapped().v == pair@,
+        "`Far_pair@`: the trait in this file")
+    a: = Arg_array::{ .n = 1 }
+    assert(a.get_or(pairs, false)[1].word.equals("two") &&
+        a.get_or(pairs, true)[1].word.equals("other") &&
+        a.opt_or(.none)[0].word.equals("one") &&
+        a.width() == sizeof(Far_pair[2]) + far_pair &&
+        a.wrapped().b[1].word.equals("two"), "`Far_pair[2]`")
+    assert(a.near_or(pairs, .none)[1].word.equals("two") &&
+        a.near_wrapped().v[0].word.equals("one"), "`Far_pair[2]`: the trait in this file")
+    l: = Arg_list::{ .at = null }
+    $ints: = List<|I32|>(arena)
+    ints.push(5)
+    assert(l.get_or(ints@, true).get(0) == 5 && l.opt_or(.none) == null &&
+        l.width() == sizeof(List<|I32|>$@) + far_pair && l.near_or(ints@, .none) == null,
+        "`List<|I32|>$@`")
+    i: = Arg_ints::{ .n = 1 }
+    three: I32[3] = ::{ 1, 2, 3 }
+    assert(i.get_or(I32[]::three, true).len == 3 && i.opt_or(.none).len == 0 &&
+        i.width() == sizeof(I32[]) + far_pair &&
+        i.near_or(I32[]::three, .none).len == 0, "`I32[]`")
+    rows: Far_pair[][1] = ::{ row }
+    assert(s.first(Far_pair[][]::rows, null).len == 2 &&
+        s.first(Far_pair[][]::{}, null).len == 0 &&
+        s.first(Far_pair[][]::{}, row@).len == 2 && s.tally(arena) == 2,
+        "`Far_pair[]` under a slice, a pointer and a call's type argument")
+    assert(p.first(Far_pair@[]::{}, null) == pair@ && p.tally(arena) == 2, "`Far_pair@` under them")
+    verdict.pass("an argument of more than one name is the type the impl's file names.")
+
+fn test_default_body_takes_a_generic_type_argument(arena: Arena$@)
+    verdict.start("[Trait] a copied default body takes a generic type as its argument test...")
+    pair: = Far_pair::{ .word = "other" }
+    far_pair: Sz = 8
+    w: = Arg_wrap::{ .n = 1 }
+    alt: = Far_wrap<|Far_pair|>::{ .v = pair }
+    assert(w.get_or(alt, false).v.word.equals("own") &&
+        w.get_or(alt, true).v.word.equals("other") &&
+        w.opt_or(.some(alt)).v.word.equals("other") &&
+        w.wrapped().b.v.word.equals("own"),
+        "`Far_wrap<|Far_pair|>`: this file's generic, inside the trait's file's")
+    assert(w.width() == sizeof(Far_wrap<|Far_pair|>) + far_pair &&
+        w.near_or(alt, .none).v.word.equals("own") &&
+        w.near_wrapped().v.v.word.equals("own") && w.near_width() == 2 * sizeof(Far_pair),
+        "`Far_wrap<|Far_pair|>`: sizes, and this file's trait")
+    none: = Far_wrap<|Far_pair|>[]::{}
+    assert(w.first(none, alt@).v.word.equals("other") &&
+        w.first(none, null).v.word.equals("item") && w.tally(arena) == 2,
+        "`Far_wrap<|Far_pair|>` under a slice, a pointer and a call")
+    n: = Arg_wrap_int::{ .n = 6 }
+    assert(n.get_or(Far_wrap<|I32|>::{ .v = 1 }, false).v == 6 && n.wrapped().a.v == 6 &&
+        n.width() == sizeof(I32) + far_pair && n.near_wrapped().v.v == 6, "`Far_wrap<|I32|>`")
+    assert(w.weight() == 8 && Arg_name::{ .n = 1 }.weight() == 10,
+        "a member of the argument's type: this file's `Far_wrap` and `Far_pair`")
+    assert(Arg_name::{ .n = 1 }.room() == 1134 && Arg_four::{ .n = 1 }.room() == 2145,
+        "a value argument: this file's constant, and a literal")
+    verdict.pass("a generic type, a member of the argument and a value argument are the impl's.")
+
+// ==========================================
+// A generic impl writes its own type parameter inside the argument. Each instance binds it there.
+// `Gen_same` names its parameter as the trait names its own: the trait's `T` is the impl's `T[]`.
+// ==========================================
+priv struct Gen_slice<|X|>
+    priv v: X
+
+impl<|X|> Gen_slice<|X|>: far.Far_conv<|X[]|>
+    priv fn get(_r: Self): X[]
+        return X[]::{}
+
+impl<|X|> Gen_slice<|X|>: Near_conv<|X[]|>
+    priv fn near(_r: Self): X[]
+        return X[]::{}
+
+priv struct Gen_opt<|X|>
+    priv v: X
+
+impl<|X|> Gen_opt<|X|>: far.Far_conv<|X?|>
+    priv fn get(r: Self): X?
+        return .some(r.v)
+
+priv struct Gen_ptr<|X|>
+    priv at: X@
+
+impl<|X|> Gen_ptr<|X|>: far.Far_conv<|X@|>
+    priv fn get(r: Self): X@
+        return r.at
+
+priv struct Gen_array<|X|>
+    priv v: X
+
+impl<|X|> Gen_array<|X|>: far.Far_conv<|X[2]|>
+    priv fn get(r: Self): X[2]
+        return ::{ r.v, r.v }
+
+priv struct Gen_wrap<|X|>
+    priv v: X
+
+impl<|X|> Gen_wrap<|X|>: far.Far_conv<|Far_wrap<|X|>|>
+    priv fn get(r: Self): Far_wrap<|X|>
+        return Far_wrap<|X|>::{ .v = r.v }
+
+impl<|X|> Gen_wrap<|X|>: Near_conv<|Far_wrap<|X|>|>
+    priv fn near(r: Self): Far_wrap<|X|>
+        return Far_wrap<|X|>::{ .v = r.v }
+
+impl<|X|> Gen_wrap<|X|>: far.Far_nest<|Far_wrap<|X|>|>
+    priv fn item(r: Self): Far_wrap<|X|>
+        return Far_wrap<|X|>::{ .v = r.v }
+
+impl<|X|> Gen_wrap<|X|>: far.Far_made<|Far_wrap<|X|>|>
+    priv fn tag(_r: Self): I32
+        return 20
+
+priv struct Gen_same<|T|>
+    priv v: T
+
+impl<|T|> Gen_same<|T|>: far.Far_conv<|T[]|>
+    priv fn get(_r: Self): T[]
+        return T[]::{}
+
+impl<|T|> Gen_same<|T|>: Near_conv<|T[]|>
+    priv fn near(_r: Self): T[]
+        return T[]::{}
+
+priv struct Lone<|X|> //< an impl for one instance alone
+    priv v: X
+
+impl Lone<|U8|>: far.Far_conv<|Far_pair[]|>
+    priv fn get(_r: Self): Far_pair[]
+        return Far_pair[]::{}
+
+fn test_default_body_takes_a_generic_impls_argument(arena: Arena$@)
+    verdict.start("[Trait] a copied default body takes a generic impl's compound argument test...")
+    pair: = Far_pair::{ .word = "other" }
+    pairs: Far_pair[2] = ::{ pair, pair }
+    row: = Far_pair[]::pairs
+    far_pair: Sz = 8
+    s: = Gen_slice<|Far_pair|>::{ .v = pair }
+    assert(s.get_or(row, true)[1].word.equals("other") && s.opt_or(.none).len == 0 &&
+        s.width() == sizeof(Far_pair[]) + far_pair &&
+        sizeof(s.wrapped()) == 2 * sizeof(Far_pair[]), "`X[]`, with this file's type as `X`")
+    assert(s.near_or(row, .none).len == 0 && s.near_wrapped().v.len == 0,
+        "`X[]`: the trait in this file")
+    bytes: = Gen_slice<|U8|>::{ .v = 1 }
+    assert(bytes.get_or("abc", true).len == 3 && bytes.width() == sizeof(U8[]) + far_pair,
+        "`X[]`: another instance")
+    o: = Gen_opt<|Far_pair|>::{ .v = pair }
+    assert(o.get_or(.none, false).unwrap_or(pairs[0]).word.equals("other") &&
+        o.width() == sizeof(Far_pair?) + far_pair, "`X?`")
+    p: = Gen_ptr<|Far_pair|>::{ .at = pair@ }
+    assert(p.get_or(null, false) == pair@ && p.opt_or(.some(null)) == null &&
+        p.width() == sizeof(Far_pair@) + far_pair, "`X@`")
+    a: = Gen_array<|I64|>::{ .v = 4 }
+    assert(a.get_or(::{ 1, 2 }, false)[1] == 4 && a.get_or(::{ 1, 2 }, true)[1] == 2 &&
+        a.width() == 2 * sizeof(I64) + far_pair && a.wrapped().b[0] == 4, "`X[2]`")
+    w: = Gen_wrap<|Far_pair|>::{ .v = pair }
+    assert(w.get_or(w.get(), true).v.word.equals("other") &&
+        w.wrapped().a.v.word.equals("other") && w.width() == sizeof(Far_pair) + far_pair &&
+        w.near_wrapped().v.v.word.equals("other") &&
+        w.first(Far_wrap<|Far_pair|>[]::{}, null).v.word.equals("other") && w.tally(arena) == 2 &&
+        w.weight() == 27, "`Far_wrap<|X|>`: this file's generic, and a member of it")
+    same: = Gen_same<|I32|>::{ .v = 0 }
+    three: I32[3] = ::{ 1, 2, 3 }
+    ints: = I32[]::three
+    assert(same.get_or(ints, true).len == 3 && same.width() == sizeof(I32[]) + far_pair &&
+        same.near_or(ints, .none).len == 0 && same.near_width() == 2 * sizeof(I32[]),
+        "the impl's parameter named as the trait's own")
+    lone: = Lone<|U8|>::{ .v = 0 }
+    assert(lone.get_or(row, true).len == 2 && lone.width() == sizeof(Far_pair[]) + far_pair,
+        "an impl for one instance")
+    verdict.pass("a generic impl's own parameter inside the argument is bound per instance.")
 
 // ==========================================
 // Where a generic's instantiation crosses a vtable, **a method called only through a trait value
@@ -309,3 +799,88 @@ fn test_slot_after_a_default_body()
     assert(last_through(p) == 7, "the call reaches the method after the default body")
     assert(p.doubled() == 6, "the default body still runs on the concrete type")
     verdict.pass("a call through a trait value finds the slot of a method after a default body.")
+
+// ==========================================
+// Two traits can each give a default body of one name. A default body is written into C only as
+// its copies in the impls; the trait's own took the bare `kspl_<method>`, so two traits met on it
+// and the program was refused. `count` is also the default body of `std/lang`'s `Iter`.
+// ==========================================
+priv trait Shelf
+    fn held(r: Self): Sz
+
+    fn count(r: Self, extra: Sz): Sz
+        return r.held() + extra
+
+priv trait Crate
+    fn held(r: Self): Sz
+
+    fn count(r: Self, extra: Sz): Sz
+        return r.held() * 2 + extra
+
+priv trait Nest<|T|>
+    fn item(r: Self): T
+
+    fn count(_r: Self, extra: Sz): Sz
+        return sizeof(T) + extra
+
+priv trait Heap<|T|>
+    fn top(r: Self): T
+
+    fn count(_r: Self, extra: Sz): Sz
+        return sizeof(T) * 2 + extra
+
+priv struct On_shelf
+    n: Sz
+
+impl On_shelf: Shelf
+    fn held(r: Self): Sz
+        return r.n
+
+priv struct In_crate
+    n: Sz
+
+impl In_crate: Crate
+    fn held(r: Self): Sz
+        return r.n
+
+priv struct In_nest
+    n: I32
+
+impl In_nest: Nest<|I32|>
+    fn item(r: Self): I32
+        return r.n
+
+priv struct In_wide_nest
+    n: I64
+
+impl In_wide_nest: Nest<|I64|>
+    fn item(r: Self): I64
+        return r.n
+
+priv struct In_heap
+    n: U8
+
+impl In_heap: Heap<|U8|>
+    fn top(r: Self): U8
+        return r.n
+
+priv struct Up_to_three
+    at: I32
+
+impl Up_to_three: Iter<|I32|>
+    fn next(r: Self$@): I32?
+        if r.at >= 3
+            return .none
+        r.at += 1
+        return .some(r.at)
+
+fn test_default_bodies_of_one_name()
+    verdict.start("[Trait] two traits' default bodies of one name test...")
+    assert(On_shelf::{ .n = 5 }.count(1) == 6, "a plain trait's")
+    assert(In_crate::{ .n = 5 }.count(1) == 11, "another plain trait's")
+    assert(In_nest::{ .n = 5 }.count(1) == 5, "a generic trait's")
+    assert(In_wide_nest::{ .n = 5 }.count(1) == 9, "the same trait's other instance")
+    assert(In_heap::{ .n = 5 }.count(1) == 3, "another generic trait's")
+    up: = Up_to_three::{ .at = 0 }
+    assert(up.count() == 3, "std/lang's Iter beside them")
+    verdict.pass("each trait's default body of one name runs for its own implementations.")

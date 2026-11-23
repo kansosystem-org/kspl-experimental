@@ -5,7 +5,7 @@
 //< Caution: **Test it inside a generic's body too.** It is drained with the outer type argument
 //< still bound, so a same-named type variable nested twice resolves to the outer one.
 import "std/ds"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/verdict"
 
 priv struct Cell<|T|>
@@ -180,7 +180,7 @@ fn test_enum_born_in_a_signature_formats()
             test...")
     c: = Nest<|I32|>::{ .v = 1, .n = 5 }
     o: = c.maybe()
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s("\{o\}")
     assert(b.slice().equals("some"), "the variant name comes out")
     verdict
@@ -212,3 +212,134 @@ fn test_generic_methods_when_used()
     value: Selective<|I32|> = ::{ .value = 12 }
     assert(value.get() == 12, "only the referenced generic method body is checked")
     verdict.pass("only the methods a program reaches have their bodies checked.")
+
+// ==========================================
+// An impl names and orders its own type parameters as it likes. Each one takes the instance's
+// argument at the position of the target that names it (`impl_param_args` in
+// `ksplc/sema/decl/mono_target.kspl`), whatever the type's declaration calls that position.
+// Caution: **Give the impl's parameters other names than the type's.** With the same names in the
+// same order, a binding by the type's names passes unseen.
+// ==========================================
+priv struct Own_item<|U|>
+    value: U
+
+impl<|T|> Own_item<|T|>
+    priv fn get(r: Self): T
+        held: T = r.value
+        return held
+
+    priv fn turn<|V|>(r: Self, convert: fn(x: T): V): V //<
+        //< a method's own parameter beside the impl's
+        held: T = r.value
+        return convert(held)
+
+priv struct Own_pair<|A, B|>
+    a: A
+    b: B
+
+impl<|X, Y|> Own_pair<|Y, X|> //< the impl's first parameter is the type's second
+    priv fn first(r: Self): Y
+        held: Y = r.a
+        return held
+
+    priv fn second(r: Self): X
+        held: X = r.b
+        return held
+
+    priv fn second_size(_r: Self): Sz
+        return sizeof(X)
+
+    priv fn both<|W|>(r: Self, extra: W): W
+        _x: X = r.b
+        _y: Y = r.a
+        return extra
+
+impl<|T|> Own_pair<|T, T|> //< one parameter at both positions: only a pair of one type has it
+    priv fn swapped(r: Self): Self
+        held: T = r.b
+        return ::{ .a = held, .b = r.a }
+
+priv struct Own_grid<|const R: Sz, const C: Sz|>
+    rows: I32[R]
+    cols: I32[C]
+
+impl<|const N: Sz|> Own_grid<|N, N|> //< a value parameter at both positions: only a square has it
+    priv fn side(_r: Self@): Sz
+        return N
+
+priv struct Own_keyed<|A, B|>
+    a: A
+    b: B
+
+impl<|T|> Own_keyed<|Bool, T|> //< one position concrete: `T` is the second argument, not the first
+    priv fn rest(r: Self): T
+        held: T = r.b
+        return held
+
+priv struct Own_buf<|E, const N: Sz|>
+    data: E[N]
+
+impl<|T, const M: Sz|> Own_buf<|T, M|>
+    priv fn cap(_r: Self@): Sz
+        return M
+
+    priv fn head(r: Self@): T
+        held: T = r.data[0]
+        return held
+
+priv trait Own_source<|E|>
+    fn one(r: Self): E
+
+    fn one_again(r: Self): E //< a default body, copied into the impl
+        held: E = r.one()
+        return held
+
+impl<|T|> Own_item<|T|>: Own_source<|T|>
+    priv fn one(r: Self): T
+        held: T = r.value
+        return held
+
+impl<|Elem|> Elem[] //< `Slice`'s own parameter has another name
+    priv fn own_first(r: Self): Elem
+        held: Elem = r[0]
+        return held
+
+impl<|E, T|> T!E //< `Result<|T, E|>`: the impl's first parameter is the type's second
+    priv fn own_or(r: Self, alt: T): T
+        held: T = alt
+        return r catch held
+
+priv fn own_widen(x: I32): I64
+    return I64::x * 2
+
+priv fn own_drawn(src: Own_source<|I32|>): I32
+    return src.one()
+
+priv fn own_failing(fail: Bool): I32!Sz
+    if fail
+        throw 7
+    return 3
+
+fn test_impl_names_its_own_type_params()
+    verdict.start("[Generic] an impl names and orders its own type parameters test...")
+    item: = Own_item<|I32|>::{ .value = 4 }
+    assert(item.get() == 4, "a parameter named otherwise than the type's binds the argument")
+    assert(item.turn(own_widen) == 8, "a method's own parameter stands beside the impl's")
+    pair: = Own_pair<|U8, I64|>::{ .a = 5, .b = 6 }
+    assert(pair.first() == 5 && pair.second() == 6, "each parameter takes its position's argument")
+    assert(pair.second_size() == 8, "the swapped parameter is the second argument's type")
+    assert(pair.both<|Bool|>(true), "a method with its own parameter sees the swapped ones")
+    twin: = Own_pair<|I32, I32|>::{ .a = 1, .b = 2 }
+    assert(twin.swapped().a == 2 && twin.first() == 1, "a parameter named twice takes equal ones")
+    square: Own_grid<|2, 2|> = ::{ .rows = ::{ 1, 2 }, .cols = ::{ 3, 4 } }
+    assert(square.side() == 2, "a value parameter named twice takes equal values")
+    keyed: = Own_keyed<|Bool, I64|>::{ .a = true, .b = 9 }
+    assert(keyed.rest() == 9, "a parameter after a concrete position takes its own argument")
+    buf: Own_buf<|I32, 3|> = ::{ .data = ::{ 7, 8, 9 } }
+    assert(buf.cap() == 3 && buf.head() == 7, "a value parameter binds under its own name")
+    assert(item.one() == 4 && item.one_again() == 4, "a trait's argument is the impl's parameter")
+    assert(own_drawn(item) == 4, "the instance conforms to the trait the impl names")
+    assert(I32[]::{ 5, 6 }.own_first() == 5, "a slice target's parameter binds the element")
+    assert(own_failing(false).own_or(1) == 3 && own_failing(true).own_or(1) == 1,
+        "a result target's parameters bind by where the target writes them")
+    verdict.pass("an impl's type parameters bind by their position in its target, not by name.")

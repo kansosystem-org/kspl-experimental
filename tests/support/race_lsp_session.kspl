@@ -16,12 +16,12 @@ import "std/ds" { List }
 import "std/io"
 import "std/json" { Json_builder }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum"
 import "std/sys"
 
 priv const LSP_DOCS: Sz = 4 //< how many documents the session opens
-priv const LSP_WAIT_MS: I32 = 60000 //< how long one answer may take under the sanitizer
+priv const LSP_SILENCE_MAX_MS: I64 = 600000I64 //< the longest silence the server lets be set
 priv const LSP_EXIT_MS: I64 = 30000I64 //< how long the server may take to end after `exit`
 priv const LSP_BURST: Sz = 40 //< the edits sent at once, with no answer awaited in between
 
@@ -70,10 +70,12 @@ impl Lsp_session
             r.faults.push(lsp_client.why(r.c, said, arena))
 
     priv fn wait_ms(r: Self@): I32 //< how long the next answer may take; 0 past the deadline
+        //< **The session's own limit is the only one**: an answer has none of its own. On a
+        //< loaded 2-core runner the first analysis takes over a minute under the sanitizer, and
+        //< a shorter wait reads that hover as empty with nothing wrong. A lost answer still ends
+        //< the session at its deadline, and the questions after it say they were not asked.
         left: = (r.deadline - sys.mono_us()) / 1000I64
-        if left <= 0I64
-            return 0
-        return LSP_WAIT_MS if left > I64::LSP_WAIT_MS else I32::left
+        return 0 if left <= 0I64 else I32::left
 
     priv fn crash(r: Self@, arena: Arena$@) //< the worker's crash hook (`$/ksplTestCrash`)
         $b: = Json_builder(arena)
@@ -145,10 +147,11 @@ fn main(): I32
     if limit_ms <= LSP_EXIT_MS
         io.err().s("race_lsp_session: the limit must be over \{LSP_EXIT_MS\} ms\n")
         return 2
-    // **The server waits for its worker as long as this session waits for an answer.** Under the
-    // sanitizer and beside other raced programs, a live worker has fallen silent past the
-    // server's own 10 s; the restart then read as a fault this session never had.
-    sys.set_env("KSPLC_LSP_SILENCE_MS", arena.text().s("\{LSP_WAIT_MS\}").take()) catch
+    // **The server waits for its worker as long as this session may last.** Under the sanitizer
+    // and beside other raced programs, a live worker has fallen silent past the server's own
+    // 10 s; the restart then read as a fault this session never had.
+    silence_ms: = limit_ms if limit_ms < LSP_SILENCE_MAX_MS else LSP_SILENCE_MAX_MS
+    sys.set_env("KSPLC_LSP_SILENCE_MS", arena.text().s("\{silence_ms\}").take()) catch
         io.err().s("race_lsp_session: the server's silence cannot be set\n")
         return 2
     faults: = play(args.get(1), args.get(2), limit_ms, arena)

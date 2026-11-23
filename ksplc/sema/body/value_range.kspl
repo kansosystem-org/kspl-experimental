@@ -108,6 +108,10 @@ fn side_range(ctx: Sema_ctx$@, node: Ast_node$@): Value_range //<
                 side_range(ctx, at.get_binary_right()))
             if got.known
                 return got
+        if op != null && op.text.equals("%")
+            if m: = ctx.try_eval_constexpr_wide(at.get_binary_right())
+                if m != 0 && ctx.env.is_integer(ctx.env.scalar_repr_id(at.type_id))
+                    return remainder(ctx, m, at.type_id)
         if op != null && op.text.equals("*")
             got: = product(ctx, at)
             if got.known
@@ -129,6 +133,15 @@ fn side_range(ctx: Sema_ctx$@, node: Ast_node$@): Value_range //<
             if got.known
                 return got
     return type_range(ctx, at.type_id)
+
+priv fn remainder(ctx: Sema_ctx@, divisor: I64, type_id: I32): Value_range //<
+    //< What `x % divisor` holds for a constant divisor other than 0: less than |divisor| from 0
+    //< The result takes the sign of x, as C's `%` does, so an unsigned one is never below 0.
+    if ctx.env.is_unsigned(ctx.env.scalar_repr_id(type_id))
+        return one_span(small(0), Num::{ .bits = U64::divisor - 1U64, .neg = false }, 0)
+    top: = (U64::divisor if divisor > 0 else 0U64 - U64::divisor) - 1U64
+    return one_span(Num::{ .bits = 0U64 - top, .neg = top != 0U64 },
+        Num::{ .bits = top, .neg = false }, 0)
 
 priv fn same_operands(ctx: Sema_ctx$@, op: U8[], at: Ast_node$@): Value_range? //<
     //< What an operation of one value with itself holds, or with `-1` under `^`

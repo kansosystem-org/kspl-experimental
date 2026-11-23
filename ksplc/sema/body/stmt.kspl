@@ -26,6 +26,7 @@ import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/decl/type_check" as sema_decl_type_check
 import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
@@ -97,6 +98,19 @@ priv fn push_optional_label(ctx: Sema_ctx$@, name_node: Ast_node$@, stmt: Ast_no
 priv fn pop_optional_label(ctx: Sema_ctx$@, name_node: Ast_node@)
     if name_node != null && name_node.text.len > 0
         ctx.jump_stack.truncate(ctx.jump_stack.len - 1)
+priv fn reads_untyped_binding(node: Ast_node$@): Bool //<
+    //< Whether an expression reads a declared name of the unknown type
+    //< Such a binding's written type was reported missing, so the expression has no type either.
+    if node == null
+        return false
+    if node.is_path_or_ident() && node.def_node != null &&
+        sema_type_env.is_unknown(node.type_id)
+        return true
+    for child in node.children
+        if reads_untyped_binding(child)
+            return true
+    return false
+
 priv fn refuse_dropped_result(ctx: Sema_ctx$@, node: Ast_node$@, result_id: I32) //<
     //< Refuses a Result nobody takes apart: a statement's value, or one bound to a `_` name
     //< **A failure is dropped only where it is written down**: `catch {}` says so; a value left
@@ -203,7 +217,12 @@ impl Ast_node
         // The error count before either half is read, for the check further down.
         err_before: = ctx.error_mark()
         $declared_id: = I32::sema_type_env.Builtin_type_id.unknown
-        if type_node.kind_id != .k_empty
+        // **A type reported missing makes the binding unknown**, as a parameter's does
+        // (names_missing_type in `../decl/type_check.kspl`). Its value and uses add nothing.
+        missing: =
+            type_node.kind_id != .k_empty && !ctx.is_instantiating() &&
+            sema_decl_type_check.names_missing_type(ctx, type_node)
+        if type_node.kind_id != .k_empty && !missing
             declared_id = type_node.resolve_type(ctx)!
 
         $expr_id: = I32::sema_type_env.Builtin_type_id.unknown
@@ -231,7 +250,7 @@ impl Ast_node
         sema_body_lint_stmt.lint_repeated_type(ctx, type_node, expr_node, declared_id, expr_id)
 
         $final_id: = declared_id
-        if sema_type_env.is_unknown(final_id) && !sema_type_env.is_unknown(expr_id)
+        if sema_type_env.is_unknown(final_id) && !sema_type_env.is_unknown(expr_id) && !missing
             final_id = expr_id
             // No annotation: the initializer's type is the declaration's. An integer literal's
             // default type becomes **the final type** here. This is the only place its range is
@@ -262,7 +281,7 @@ impl Ast_node
             // goes).
             // Caution: **Say nothing where one of the halves already reported**, or one mistake is
             // reported twice.
-            if ctx.error_mark() == err_before
+            if ctx.error_mark() == err_before && !missing
                 // Nor after an earlier error in the function: the name check holds back an unknown
                 // name there (report_undefined_path), and a message about types would replace it.
                 $say: = true
@@ -274,7 +293,7 @@ impl Ast_node
                             the indented block under it. To label a 'for', 'switch' or 'if', write \
                             the label on its line ('\{id_node.text\}: for i in ...')")
                 else if sema_body_resolve_path.refuse_type_name(ctx, expr_node) ||
-                    ctx.has_error_in_fn()
+                    ctx.has_error_in_fn() || reads_untyped_binding(expr_node)
                     say = false
                 else
                     ctx.clear_scratch()
@@ -502,11 +521,15 @@ impl Ast_node
                 left.infer_discarded_value(ctx)!
             return
 
+        is_simple_assign: = op_node != null && op_node.text.equals("=")
+        // An undefined name on the left of `=` is told how to declare it (report_undefined_path).
+        if is_simple_assign
+            ctx.fn_ctx.assign_target = left
+        defer ctx.fn_ctx.assign_target = null
+
         // A non-place has no root name, so this lets it through; `enforce_assignable_place` below
         // refuses it once the types are known.
         left.enforce_mutability(ctx)!
-
-        is_simple_assign: = op_node != null && op_node.text.equals("=")
 
         // genc writes no assignment for it, so the same question decides both.
         if base_core.config.run_lint_checks && r.is_self_assignment()

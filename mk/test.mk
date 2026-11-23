@@ -81,14 +81,15 @@ debug-tools: $(STAGE1_EXE)
 		DEBUG_EXE_DIR=$(TEST_DIR) $(C_FMT_OFF)
 	./$(TEST_DIR)/debug_tools.exe
 
-# --- kssrv and kstls through the LLVM backend ---
-# **`make LLVM=1 debug` holds neither** (they run only as their own `make test`), so genllvm broken
-# on code only they reach would go unseen. The server is built through LLVM and kssrv's tests drive
-# it; kstls's tests are built through LLVM and run. **Linux alone**: its image holds kstls's
-# libraries, where elsewhere kstls's own tests skip.
+# --- kssrv, kstls and ksagent through the LLVM backend ---
+# **`make LLVM=1 debug` holds none of them** (they link OpenSSL, so they run only as their own
+# `make test`), so genllvm broken on code only they reach would go unseen. The server is built
+# through LLVM and kssrv's tests drive it; kstls's tests are built through LLVM and run; ksagent and
+# its tests are both built through LLVM, and the tests start it. **Linux alone**: its image holds
+# kstls's libraries, where elsewhere kstls's own tests skip.
 # **The compiler built in C translates them** (`STAGE1_EXE` passed down): the nested `LLVM=1`
 # would otherwise build a second compiler through LLVM first, which `selfhost_llvm` already checks.
-## Gates|test-llvm-pkgs|Build kssrv and kstls's tests through the LLVM backend, and run kssrv's and kstls's tests on them
+## Gates|test-llvm-pkgs|Build kssrv, ksagent and the three packages' tests through the LLVM backend, and run the tests on them
 test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
 	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
 		SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm DEBUG_EXE_DIR=$(TEST_DIR)
@@ -100,6 +101,13 @@ test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
 	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
 		SRC_KSPL=lib/kstls/tests/main.kspl OUT_STEM=kstls_llvm DEBUG_EXE_DIR=$(TEST_DIR)
 	./$(TEST_DIR)/kstls_llvm.exe
+	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
+		SRC_KSPL=ksagent/main.kspl OUT_STEM=ksagent_llvm DEBUG_EXE_DIR=$(TEST_DIR)
+	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
+		SRC_KSPL=ksagent/tests/main.kspl OUT_STEM=ksagent_tests_llvm DEBUG_EXE_DIR=$(TEST_DIR)
+	rm -rf "$(TMP_DIR)/ksagent_llvm_test"
+	cd ksagent && "$(abspath $(TEST_DIR))/ksagent_tests_llvm.exe" \
+		"$(abspath $(TEST_DIR))/ksagent_llvm.exe" "$(abspath $(TMP_DIR))/ksagent_llvm_test"
 
 .PHONY: test-llvm-pkgs
 
@@ -509,16 +517,16 @@ test-surface: $(STAGE1_EXE)
 
 .PHONY: surface test-surface
 
-# --- The language tutorial ---
-## Measure-and-inspect|tutorial|Rewrite the language tutorial (`docs/TUTORIAL-programming-language.md`) from its program
+# --- The language's tutorials ---
+## Measure-and-inspect|tutorial|Rewrite the language's tutorials (`TUTORIALS` in `tools/tutorial_page.kspl`) from their programs
 tutorial: $(STAGE1_EXE)
-	@echo "# WRITING THE TUTORIAL OF THE LANGUAGE"
+	@echo "# WRITING THE TUTORIALS OF THE LANGUAGE"
 	./$(STAGE1_EXE) run tools/tutorial.kspl write --ksplc=$(STAGE1_EXE)
 
-## Gates|test-docs|Whether the language tutorial matches its program, and its code blocks run as it
+## Gates|test-docs|Whether each of the language's tutorials matches its program, and its code blocks run as it
 test-docs: $(STAGE1_EXE)
-	@echo "# CHECKING THE TUTORIAL OF THE LANGUAGE (run 'make tutorial' to update)"
+	@echo "# CHECKING THE TUTORIALS OF THE LANGUAGE (run 'make tutorial' to update)"
 	./$(STAGE1_EXE) run tools/tutorial.kspl check --ksplc=$(STAGE1_EXE)
-	@echo "RESULT: ALL PASS (the tutorial matches its program)"
+	@echo "RESULT: ALL PASS (each tutorial matches its program)"
 
 .PHONY: tutorial test-docs

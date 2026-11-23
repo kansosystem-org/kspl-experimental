@@ -14,7 +14,7 @@ import "std/ds" { List }
 import "std/io"
 import "std/math"
 import "std/mem" { Arena }
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 import "std/sys"
 
 priv const MIN_LINES: Sz = 6 // a file with fewer lines is skipped
@@ -66,7 +66,7 @@ priv struct Build_stats
     examples: Sz
 
 priv fn build(split_name: U8[], arena: Arena$@): Build_stats
-    defer $in_path: = Str_builder()
+    defer $in_path: = Str()
     in_path.s(oracle.CORPUS_DIR).c('/').s(split_name).s(".jsonl")
     recs: = oracle.load_jsonl(in_path.slice(), arena) catch
         io.err().s("[error] cannot read \{in_path.slice()\} (run build_corpus first)\n")
@@ -77,10 +77,10 @@ priv fn build(split_name: U8[], arena: Arena$@): Build_stats
         fim_examples(rec.get("path").as_str().unwrap_or(""),
             rec.get("code").as_str().unwrap_or(""), examples, arena)
 
-    defer $out_path: = Str_builder()
+    defer $out_path: = Str()
     out_path.s(oracle.CORPUS_DIR).c('/').s("fim_").s(split_name).s(".jsonl")
     $f: = io.open(out_path.slice(), "w") catch panic("cannot open output file for writing")
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for ex in examples
         b.clear()
         b.s("{\"path\":\"").escape_and_append(ex.path).s("\",\"prefix\":\"")
@@ -96,7 +96,7 @@ fn main() //< cuts the fill-in-the-middle examples out of the corpus
     train_stats: = build("train", arena)
     val_stats: = build("val", arena)
 
-    defer $stats_path: = Str_builder()
+    defer $stats_path: = Str()
     stats_path.s(oracle.CORPUS_DIR).s("/fim_stats.json")
     $f: = io.open(stats_path.slice(), "w") catch panic("cannot open fim_stats.json for writing")
     f

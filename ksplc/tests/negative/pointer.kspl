@@ -271,6 +271,8 @@ fn main(): I32
 // EXPECT: operator '*' cannot be applied to 'I32@' and 'I32'
 // EXPECT: operator '*=' cannot be applied to the pointer type 'I32@'
 // EXPECT: the step of '+=' on the pointer type 'I32@' must be an integer
+// EXPECT: unary '-' cannot be applied to the pointer type 'I32@'
+// EXPECT: operator '==' on the pointer type 'pointer_forms.Held_eq@' is the pointer's own. It does not reach the 'Eq' that 'pointer_forms.Held_eq' implements. Write the dereference to use it: 'p$ == …'
 // EXPECT: cannot subtract 'U8@' from 'I32@'
 // EXPECT: point to the same type
 // EXPECT: cannot take the address of a call result, literal, or computed value
@@ -293,7 +295,26 @@ fn case_ptr_arith_bad_forms(): I32
   x4: Sz = Sz::(p * 2)
   p *= 2
   p += q
+  _neg: = -q
   return (I32)::(x1 + x2 + x3 + x4)
+
+// An operator does not reach through a pointer to its target's operator trait: only `.` and `[]`
+// do. Let through, `p == v` called `eq` on the target, and `p == q` passed it a pointer as the
+// value, which only the C compiler refused.
+priv struct Held_eq
+  n: I32
+
+impl Held_eq: Eq<|Held_eq|>
+  fn eq(r: Self, other: Held_eq): Bool
+    return r.n == other.n
+
+  fn ne(r: Self, other: Held_eq): Bool
+    return r.n != other.n
+
+fn case_operator_through_pointer(): Bool
+  v: = Held_eq::{ .n = 1 }
+  p: = v@
+  return p == v
 
 // A subtraction between pointers whose target types differ.
 // **The answer being "how many elements", it cannot subtract unless the element size is settled
@@ -333,6 +354,7 @@ fn case_pointer_to_fixed_array()
 
 fn main()
   case_ptr_arith_bad_forms()
+  case_operator_through_pointer()
   case_ptr_diff_mismatched()
   case_addr_of_rvalue()
   case_pointer_to_fixed_array()

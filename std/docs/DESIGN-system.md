@@ -306,6 +306,40 @@ Left to Windows, a `cc.exe` in a cloned repository would run in place of the com
 
 **A relative path with a directory part (`./tool`, `bin/tool`) is read from the child's working directory**, where the start is given one. POSIX reads it so: the child changes directory, then execs. `CreateProcessW` reads it from the parent's directory, so on Windows `std/subproc` joins it onto the working directory itself. Otherwise one call would run a different program, or none, per OS. Rust leaves this case "platform specific and unstable"; Go joins it, as here.
 
+### On Windows, an argument is quoted only where needed
+
+**Windows hands a child one command line, not a list**, and the child splits it again. `std/subproc` builds that line in one place (`kspl_win_build_cmdline` in [`../../ksplc/gen/runtime/hosted_spawn.c`](../../ksplc/gen/runtime/hosted_spawn.c)), by the rules of Microsoft's C runtime.
+
+| Part of the line | In quotes |
+| :-- | :-- |
+| The program (`argv[0]`) | Always: its path can hold a space |
+| An argument made of letters, digits, bytes past ASCII and `- _ . / \ : = + ,` alone, not starting with `@` | No: it is copied as it is |
+| Any other argument, the empty one included | Yes. A `"` inside becomes `\"`, and the backslashes before a `"` are doubled |
+| Every argument of a batch file | Always, for the reason below |
+
+**Why not quote every argument**: a program with its own argument reader does not take a quoted switch. `attrib "+r" "x.txt"` marks nothing and still ends with 0. `cmd`, `findstr` and `net` read their switches the same way. A program that uses the C runtime's reader gets the same arguments either way.
+
+**What this gives up**:
+
+* **A program that splits its line by other rules can still read an argument differently.** No single line serves every reader. An argument with a space reaches `attrib` in quotes, as before.
+* **Only a batch file is fully guarded against `cmd.exe`.** A caller can name `cmd.exe` itself as the program, as in `cmd /c echo <text>`. Nothing is refused there, so do not hand `cmd /c` a text from outside:
+  * `%VAR%` in an argument still expands, and so does `!VAR!` under delayed expansion. Quotes stop neither.
+  * A `"` in an argument is written as `\"`. `cmd.exe` does not know that form, so the `"` ends the quoting.
+  * `echo` and the other commands built into `cmd.exe` show the quotes as part of the text.
+  * A quoted argument right after `/c` loses its quotes: `cmd.exe` drops the first and last quote of the line, so a `&` there acts again.
+
+**Why the rule lists what is safe, not what is not**: three readers stand behind one line, and each has signs of its own.
+
+| Reader | What it does with a bare argument |
+| :-- | :-- |
+| Microsoft's C runtime | Splits at a space or a tab |
+| `cmd.exe`, where the caller names it as the program | Reads `&`, `\|`, `<`, `>`, `^`, `(` and `)` as commands: `cmd /c echo a&b` would run `b` |
+| A program built on Cygwin, MSYS2 or mingw-w64, such as `git` and `sh` | Expands `*`, `?`, `[`, `{` and `'` into file names, and reads a leading `@` as a file of arguments |
+
+Inside quotes, each of the three takes these signs as they are. A list of the unsafe signs would miss the next reader's own. So an argument stays bare only where it holds nothing but the plain ones. A program that uses the C runtime's reader gets the same argument either way.
+
+**A batch file (`.bat` / `.cmd`) refuses an argument that holds `"`, `%`, `!` or a line break.** Windows hands a batch file to `cmd.exe`, which parses the command line again. There, `\"` means nothing, so a `"` closes the quoting and the rest runs as a command, and `%` and `!` expand inside quotes. An escape would depend on settings the parent cannot see (delayed expansion is a registry switch). Without those characters, `cmd.exe` takes `&|<>^()` inside quotes as they are.
+
 ### A child that cannot start fails the start everywhere
 
 **Every function in `std/subproc` gives `spawn_failed` for a program that cannot start**, never an exit code. That covers a program that is missing or cannot run, and one that cannot be given its working directory or output files. **A file named by its path that is not a program the OS can start fails too.** POSIX's `execvp` would hand such a file to `/bin/sh`, so a damaged or empty program would run as a shell script, or as nothing with exit 0. So every start goes to `execv`, which refuses it, a bare name too once the search has found it. `CreateProcessW` fails for each of those by itself. POSIX meets the failure in the forked child, after the fork has succeeded. So the child writes a byte on a pipe that the start already waits on, which closes by itself when `exec` succeeds (*close-on-exec*).
@@ -414,8 +448,6 @@ What this gives up:
   * What it costs: the child holds that socket until it ends. Until then, its peer does not see the connection close, or a closed listener's port cannot be bound again.
   * Why it is accepted: the window is two calls wide, and only a start on another thread at that moment meets it. To close it, every socket open and accept would have to take its turn with the starts. A server's accept waits for a connection, so it would hold up every start in the process for as long.
 
-**A batch file (`.bat` / `.cmd`) refuses an argument that holds `"`, `%`, `!` or a line break.** Windows hands a batch file to `cmd.exe`, which parses the command line again. There, `\"` means nothing, so a `"` closes the quoting and the rest runs as a command, and `%` and `!` expand inside quotes. An escape would depend on settings the parent cannot see (delayed expansion is a registry switch). Without those characters, `cmd.exe` takes `&|<>^()` inside quotes as they are.
-
 ### The clock has separate functions for 'elapsed' and 'date-time'
 
 | Function | The clock | Use it for |
@@ -521,7 +553,7 @@ Note: **A child's working directory stays under 260**, since the OS keeps a proc
 | Function | Its answer to an empty path |
 | :-- | :-- |
 | A function of `std/fs` that fails with `Fs_error` | `invalid_path` |
-| `fs.exists`, `fs.is_dir`, `fs.is_executable`, `fs.can_run`, `fs.is_link` | false, since no file stands there |
+| `fs.exists`, `fs.is_dir`, `fs.is_executable`, `fs.is_read_only`, `fs.can_run`, `fs.is_link` | false, since no file stands there |
 | `fs.dir_trust`, `fs.secret_trust` | `missing` |
 | `io.read_file`, `io.read_file_capped`, `io.open`, `io.write_file` | `invalid_arg` |
 
@@ -540,7 +572,7 @@ Note: **A child's working directory stays under 260**, since the OS keeps a proc
 | Function | Its answer |
 | :-- | :-- |
 | `fs.stat`, `fs.mtime_ns`, `fs.long_name`, `fs.read_dir`, `fs.walk_files`, the source of `fs.copy_tree` and of `fs.copy_file` | `not_found` |
-| `fs.exists`, `fs.is_dir`, `fs.is_executable`, `fs.can_run`, `fs.is_link` | false |
+| `fs.exists`, `fs.is_dir`, `fs.is_executable`, `fs.is_read_only`, `fs.can_run`, `fs.is_link` | false |
 | `fs.dir_trust`, `fs.secret_trust` | `missing` |
 | `fs.mkdir`, `fs.remove_path`, `fs.rename_path`, `fs.replace_file`, the destination of `fs.copy_file`, `File_lock.take` | `operation_failed` |
 | `fs.mkdir_all` | `mkdir_failed`, naming the first level it could not make |
@@ -975,6 +1007,7 @@ Caution: **Do not fold across that line.** It decides whether the caller fixes t
 * **The buffer form, `parse_response`, reads a body by its length alone.** It serves a caller that cannot block, and none of those reads a stream. It refuses a chunked body by name, rather than read it as empty.
 * **A wait that brings nothing returns `waiting`**, so the caller can do other work between pieces, such as deciding to stop. The response's own time limit still holds over all the waits.
 * **Each piece is a view of the reader's buffer until the next call**, so a body is never copied twice. A caller that keeps a piece copies it.
+* **The connection is a `net.Byte_stream`, not a TCP socket by name.** `http.write_request` and both readers take any stream with a read and a whole send that each keep a wait. A `Tcp_stream` is one, and so is a stream with TLS on top from a library outside `std`. So `std` links no TLS library, and HTTPS still reads with the same code and the same limits.
 * **The limits**: the body's limit counts the data alone, not the chunks' framing. A size line holds at most 4 KiB (`MAX_CHUNK_LINE`), and the trailers 64 KiB together. A trailer is checked as a header line is, then dropped: RFC 9110 §6.5.1 forbids merging one into the headers unasked.
 
 **A server streams a body with `format_chunked_head`, a `format_chunk` per piece, and `format_last_chunk`.** `format_response_head` writes a head whose body runs to the close, which this reader refuses. That one serves a body that never ends, such as kssrv's keep-alive answer.

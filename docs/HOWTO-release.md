@@ -45,7 +45,7 @@ Caution: **Pushing the tag starts the workflow**, which builds on three platform
 ## After
 
 11. **Open the Release page and check six files are attached**: three zips, two `.vsix` and `SHA256SUMS`.
-12. **Download one zip and `SHA256SUMS` into one folder, and check the zip** as a person who downloads it would. "Quick start" in the root [`README.md`](../README.md) gives the command for each system. A line that is not `OK` means the file on the page is not the one the run built.
+12. **Download one zip and `SHA256SUMS` into one folder, and check the zip** as a person who downloads it would. "Checking a downloaded zip" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) gives the command for each system. A line that is not `OK` means the file on the page is not the one the run built.
 
 **A failed job attaches nothing**: `release` runs only once every `build` and `package-vscode-ext` has passed. The other platforms still finish, and their zips stay on the run's page as artifacts. What to do depends on where the cause is:
 

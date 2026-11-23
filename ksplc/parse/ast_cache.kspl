@@ -15,7 +15,7 @@ import "std/ds" { List, Map }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena, dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 
 priv const MAGIC: U8[] = "KSAST"
@@ -49,12 +49,12 @@ $stats: Stats = ::{}
 // The key and the file name
 // ==========================================
 
-priv fn build_paths(logical_name: U8[], src: U8[], path: Str_builder$@, key: Str_builder$@): Bool //<
+priv fn build_paths(logical_name: U8[], src: U8[], path: Str$@, key: Str$@): Bool //<
     //< It writes the cache file's path into path and the key's hexadecimal into key
     //< The path is `<cache directory>/ast/<64 hex digits>.ksast`.
     //<
     //< It returns false where the path cannot be determined (the cache is then not used).
-    defer $material: = Str_builder()
+    defer $material: = Str()
     material.s("\{MAGIC\}\0\{Sz::FORMAT_VERSION\}\0")
     material.s(logical_name).c(0U8)
     // Caution: **Include the `--define` flags**: `#cfg()` drops declarations during normalization
@@ -81,8 +81,8 @@ struct Entry_place //< where one source's entry lives, and the key inside it
 
 fn place_of(logical_name: U8[], src: U8[]): Entry_place? //<
     //< The place of the entry for this source; none where the cache folder cannot be found
-    defer $path: = Str_builder()
-    defer $key: = Str_builder()
+    defer $path: = Str()
+    defer $key: = Str()
     if !build_paths(logical_name, src, path@, key@)
         return .none
     return .some(Entry_place::{ .path = base_core.arena.dup_str(path.slice()),
@@ -91,7 +91,7 @@ fn place_of(logical_name: U8[], src: U8[]): Entry_place? //<
 // ==========================================
 // Writing out
 // ==========================================
-priv fn put_u32(out: Str_builder$@, value: U32)
+priv fn put_u32(out: Str$@, value: U32)
     $buf: U8[4] = ::{}
     slot: = U8$[]::buf
     slot.put_u32_le(0, value)
@@ -128,7 +128,7 @@ priv const U32_MAX: I64 = 0xFFFFFFFF //< the largest U32
     //< Caution: Hold it as `I64`, not `Sz`: `Sz` is ptrdiff_t, at most 2^31-1 on a 32-bit target,
     //< so the value compared is widened to I64.
 
-priv fn write_subtree(node: Ast_node$@, tbl: Str_table$@, body: Str_builder$@, count: Sz$@): Bool //<
+priv fn write_subtree(node: Ast_node$@, tbl: Str_table$@, body: Str$@, count: Sz$@): Bool //<
     //< It writes the nodes in pre-order
     //< Each node is followed by its n_children subtrees, so the tree is restored without indices. A
     //< value that does not fit in U32 returns false, and the cache is not used.
@@ -154,7 +154,7 @@ fn store(place: Entry_place, logical_name: U8[], decls: List<|Ast_node$@|>@) //<
     //< **Every node's `loc.file` must be logical_name** (one per entry, as parse_raw_ast produces);
     //< otherwise nothing is saved, rather than a wrong file name.
     tbl: = Str_table(base_core.arena)
-    defer $body: = Str_builder()
+    defer $body: = Str()
     $n_nodes: Sz = 0
     for d in decls
         if !d.loc.file().equals(logical_name) || !write_subtree(d, tbl, body@, n_nodes@)
@@ -165,7 +165,7 @@ fn store(place: Entry_place, logical_name: U8[], decls: List<|Ast_node$@|>@) //<
     // Caution: **Store them in the entry.** Otherwise a hit returns only the declarations.
     // Whether a file shows the reason would then depend on whether a build cached it. Their
     // flag's spelling goes into the string table, so collect them before the table is written.
-    defer $regions: = Str_builder()
+    defer $regions: = Str()
     $n_regions: Sz = 0
     for region in base_cfg_inactive.cfg_inactive
         if !region.file.equals(logical_name)
@@ -176,7 +176,7 @@ fn store(place: Entry_place, logical_name: U8[], decls: List<|Ast_node$@|>@) //<
         put_u32(regions@, 1U32 if region.is_neg else 0U32)
         n_regions += 1
 
-    defer $out: = Str_builder()
+    defer $out: = Str()
     out.s(MAGIC)
     put_u32(out@, FORMAT_VERSION)
     out.s(place.key)
@@ -194,7 +194,7 @@ fn store(place: Entry_place, logical_name: U8[], decls: List<|Ast_node$@|>@) //<
     // then rename**, or a reader reads half-written content. The temporary name differs per
     // process; if two clash, the key and length checks discard the entry and the next writer
     // repairs it.
-    defer $tmp: = Str_builder()
+    defer $tmp: = Str()
     tmp.s(place.path).s(".tmp\{temp_nonce()\}")
     // A failed write can leave part of the file; remove it, as the rename's failure does.
     io.write_file(tmp.slice(), out.slice()) catch

@@ -6,7 +6,7 @@ import "std/ds" { List, Map }
 import "std/io"
 import "std/mem" + { Arena, dealloc }
 import "std/ring"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 import "std/verdict"
 
@@ -148,7 +148,7 @@ fn test_enum_variant_name()
     assert(b_name.equals("beta"), "variant_name: it returns the name alone with a payload too")
     assert(g.variant_name().equals("gamma"), "variant_name: the third variant")
 
-    defer $sb: = Str_builder()
+    defer $sb: = Str()
     sb.s("\{a\}/\{b\}")
     assert(sb.slice().equals("alpha/beta"), "interpolation goes through variant_name")
     // An expression of the enum's type that holds a variant written out: typed once, the variant
@@ -232,7 +232,7 @@ fn test_alias_element_acts_as_its_base() //<
     //< The interpolation then reports "does not implement 'Formattable'".
     verdict.start("[Alias] an alias read out of an immutable slice acts as its base type test...")
     ms: = Meters[]::{ 3, 4 }
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s("\{ms[0]\} \{-ms[1]\} \{ms[0] < ms[1]\}")
     assert(b.slice().equals("3 -4 true"), "an element formats, negates and compares as an I32")
     verdict.pass("an alias's element peels to its base however the marks and the alias stack.")
@@ -375,7 +375,7 @@ priv fn defer_sees_value_at_scope_exit(): Sz
 priv fn defer_frees_grown_buffer() //<
     //< It checks a deferred free releases the builder's buffer after it has grown
     //< A frozen copy with `cap == 0` would leak the whole buffer.
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for _i in Range.asc(200)
         b.s("0123456789")
     assert(b.slice().len == 2000, "the builder must actually hold the appended bytes")
@@ -760,6 +760,77 @@ fn test_a_copy_binds_the_writable_type()
     assert(made.v == 2 && back.v == 3 && h.v == 1,
         "the whole target read through a `T@` binds `T`, writable; the original is untouched")
     verdict.pass("a copy's type drops the outermost immutability, a generic's binding too.")
+
+// ==========================================
+// A read-only mark the parameter writes itself (`xs: T[]`, `p: T@`) is the parameter's, not `T`'s
+// (`own_read_only` in `ksplc/sema/body/generic_infer.kspl`). So `T` is the plain type, and a
+// `Hold<|T|>` or a closure's `Callable1<|T, Bool|>` beside it takes the plain instance. Taken with
+// the mark, the call was refused: "expected 'Hold<|I32|>', but got 'Hold<|I32|>'".
+// ==========================================
+
+priv fn slice_and_held<|T|>(xs: T[], held: Hold<|T|>): T
+    return held.v if xs.len == 0 else xs[0]
+
+priv fn target_and_held<|T|>(pointer: T@, _held: Hold<|T|>): T
+    return pointer$
+
+priv fn count_passing<|T|>(xs: T[], pred: Callable1<|T, Bool|>): Sz
+    $n: Sz = 0
+    for x in xs
+        if pred.call(x)
+            n += 1
+    return n
+
+priv fn read_both<|T|>(xs: T[], other: T$@): T //<
+    //< `other` writes `$`: an immutable argument there makes `T` immutable, after `xs` too
+    return xs[0] if xs.len > 0 else other$
+
+fn test_a_read_only_parameter_binds_the_plain_type()
+    verdict.start("[Types] a read-only slice or pointer parameter binds the plain type test...")
+    h: = Hold<|I32|>::{ .v = 1 }
+    arr: I32[3] = ::{ 7, 8, 9 }
+    floor: = 7
+    assert(slice_and_held(I32[]::arr, h) == 7, "`xs: T[]` beside `Hold<|T|>` takes `Hold<|I32|>`")
+    assert(target_and_held(floor@, h) == 7, "`p: T@` beside `Hold<|T|>` takes `Hold<|I32|>`")
+    assert(count_passing(I32[]::arr, fn(x: I32; floor: I32): Bool {
+        return x > floor;
+    }) == 2, "`xs: T[]` beside `Callable1<|T, Bool|>` takes a closure over the plain type")
+    assert(read_both(I32[]::arr, floor@) == 7,
+        "an immutable argument for `T$@` still makes `T` immutable, after a slice bound it")
+    verdict.pass("the parameter's own read-only mark does not become the type argument's.")
+
+// ==========================================
+// `T!E` is `Result<|T, E|>` under another spelling, as `T?` is `Option<|T|>` and `T[]` is
+// `Slice<|T|>` (`bind_path` in `ksplc/sema/body/generic_infer.kspl`). Read as a slice, a result
+// bound neither side, and the call was refused: "cannot infer the type argument 'E'".
+// ==========================================
+
+priv fn value_or<|T, E|>(result: T!E, substitute: T): T
+    return result catch substitute
+
+priv fn error_or<|T, E|>(result: T!E, none: E): E
+    switch result
+    case .ok
+        return none
+    case .err(e)
+        return e
+
+priv fn held_or<|T|>(held: T?, substitute: T): T
+    return held.unwrap_or(substitute)
+
+priv fn half_of(number: I32): I64!U8
+    if number % 2 != 0
+        throw 7
+    return I64::number / 2
+
+fn test_a_result_parameter_binds_both_sides()
+    verdict.start("[Types] inferring type arguments from a result's two sides test...")
+    assert(value_or(half_of(8), -1) == 4I64, "`T` binds from the success side")
+    assert(value_or(half_of(9), -1) == -1I64, "a failure gives the substitute at the same `T`")
+    assert(error_or(half_of(9), 0U8) == 7U8, "`E` binds from the failure side")
+    held: I16? = .some(5)
+    assert(held_or(held, 0I16) == 5I16, "an optional's value binds as before")
+    verdict.pass("a `T!E` parameter binds `T` and `E` from the argument's result type.")
 
 // ==========================================
 // A `const` parameter written as an array's length or as a generic's value argument is read off

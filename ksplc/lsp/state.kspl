@@ -13,7 +13,7 @@ import "ksplc/parse/load" as parse_load
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "std/ds" { Map }
 import "std/mem" + { Arena, dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 struct Doc_state //< one analysis: a document's own, or the workspace's for one request
     root_file: Ast_node$@
@@ -27,7 +27,7 @@ struct Doc_cache //< one open document's text
     //< **An entry is not removed even on didClose**, or the store would have to own and free the
     //< uri key itself. is_open says it is closed; the memory is bounded by the distinct uris
     //< opened.
-    text: Str_builder
+    text: Str
     is_open: Bool
 
 struct Doc_store //< the open documents' texts, by uri
@@ -54,7 +54,7 @@ impl Doc_store
             existing.text.s(text)
             existing.is_open = true
             return
-        fresh: = r.arena.create(Doc_cache::{ .text = Str_builder(), .is_open = true })
+        fresh: = r.arena.create(Doc_cache::{ .text = Str(), .is_open = true })
         fresh.text.s(text)
         r.map.set(r.arena.dup_str(uri), fresh)
 

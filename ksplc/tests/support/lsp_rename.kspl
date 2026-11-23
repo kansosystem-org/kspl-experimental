@@ -26,14 +26,14 @@ fn twice(): I32
 """
 priv const USER_SRC: U8[] =
     """import "std/io"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "lib"
 
 fn other(): I32
     return 1
 
 fn built(): Sz
-    defer $sb: = Str_builder()
+    defer $sb: = Str()
     sb.s("x")
     return sb.len
 
@@ -174,6 +174,39 @@ fn sum_up(): I32
     return b.len_of()
 """
 
+priv const SLOT_URI: U8[] = "slot.kspl" //< a generic type, used in its own file and in another
+priv const SLOT_SRC: U8[] =
+    """pub struct Slot<|T|>
+    held: T
+
+impl<|T|> Slot<|T|>
+    pub fn get(r: Self@): T
+        return r.held
+
+fn held_one(): I32
+    s: = Slot<|I32|>::{ .held = 1 }
+    return s.get()
+
+fn first_of<|Elem|>(items: Elem[]): Elem
+    return items[0]
+"""
+priv const SLOT_USE_URI: U8[] = "slot_use.kspl"
+priv const SLOT_USE_SRC: U8[] =
+    """import "slot" { Slot }
+
+fn held_two(): I32
+    s: = Slot<|I32|>::{ .held = 2 }
+    return s.get()
+"""
+priv const CALL_URI: U8[] = "call.kspl" //<
+    //< a closure called through the `call` the compiler declares
+priv const CALL_SRC: U8[] =
+    """fn calls(): I32
+    limit: = 3
+    add: = fn(x: I32; limit: I32): I32 { return x + limit; }
+    return add.call(4)
+"""
+
 priv struct Ask //< one client, and where the probe's names stand in its document
     c: jsonrpc_client.Client$@
     arena: Arena$@
@@ -218,9 +251,9 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     dir: = harness.sandbox("lsp_rename")
     fs.write_tree(dir,
         U8[][]::{ "lib.kspl", USER_URI, PICK_URI, SHADE_URI, PAINT_URI, "tint.kspl", VEC_URI,
-        "sum.kspl", SHAPE_URI },
+        "sum.kspl", SHAPE_URI, SLOT_URI, SLOT_USE_URI },
         U8[][]::{ LIB_SRC, USER_SRC, PICK_SRC, SHADE_SRC, PAINT_SRC, TINT_SRC, VEC_SRC, SUM_SRC,
-        SHAPE_SRC }, arena) catch
+        SHAPE_SRC, SLOT_SRC, SLOT_USE_SRC }, arena) catch
             verdict.check("the rename workspace can be laid out", false, dir)
             return
     defer $c: =
@@ -256,6 +289,8 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     check_other_files(ask)
     check_traits(ask)
     check_call_items(ask)
+    check_generics(ask)
+    check_unwritten(ask)
 
 priv fn check_prepare(ask: Ask) //< prepareRename: the name's range here, a refusal on std's
     local: = lsp_client.answer(ask.c, "textDocument/prepareRename",
@@ -540,6 +575,63 @@ priv fn check_call_items(ask: Ask) //<
         ask.at_in(STRAY_URI, STRAY_SRC, "    pub fn add", "add"), lsp_client.READ_MS, ask.arena)
     ask.refuses("a function the analysis stopped before answers an error, not an empty item", stray,
         "was not analysed")
+
+priv fn check_generics(ask: Ask) //<
+    //< A generic type renamed from `Self`, and a type parameter, are renamed at every use
+    //< **`Self` in a generic type's `impl` names an instance**, whose own name (`slot_Slot_I32`) no
+    //< file spells. **Sema links no use of a type parameter**, so the walk matches it by the
+    //< declaration that binds it.
+    lsp_client.open(ask.c, SLOT_URI, SLOT_SRC, ask.arena)
+    defer lsp_client.close(ask.c, SLOT_URI, ask.arena)
+    from_self: = ask.rename_in(SLOT_URI, SLOT_SRC, "    pub fn get", "Self", "Hold")
+    own: = edits_in(from_self, SLOT_URI, ask.arena)
+    head_line: = decl_line(SLOT_SRC, "impl<|T|>", ask.arena)
+    head_col: = col_in_line(SLOT_SRC, "impl<|T|>", "Slot", ask.arena)
+    self_said: = lsp_client.why(ask.c, lsp_client.dump(from_self, ask.arena), ask.arena)
+    verdict.check("a generic type renamed from `Self` is renamed in its `impl`'s heading too",
+        starts_at(own@, head_line, head_col), self_said)
+    verdict.check("a generic type renamed from `Self` is renamed in the other files too",
+        edits_in(from_self, SLOT_USE_URI, ask.arena).len == 2,
+        lsp_client.why(ask.c, lsp_client.dump(from_self, ask.arena), ask.arena))
+    param: = ask.rename_in(SLOT_URI, SLOT_SRC, "fn first_of", "Elem", "Part")
+    p_edits: = edits_in(param, SLOT_URI, ask.arena)
+    line: = decl_line(SLOT_SRC, "fn first_of", ask.arena)
+    at_param: = col_in_line(SLOT_SRC, "fn first_of", "Elem[]", ask.arena)
+    at_result: = col_in_line(SLOT_SRC, "fn first_of", "): Elem", ask.arena) + 3
+    param_said: = lsp_client.why(ask.c, places(p_edits@, ask.arena), ask.arena)
+    verdict.check("a function's type parameter is renamed where it is declared and at its two uses",
+        p_edits.len == 3 && starts_at(p_edits@, line, at_param) &&
+        starts_at(p_edits@, line, at_result), param_said)
+    // **The nearest declaration that binds the name is the one a use means**: the struct's `T`
+    // and the `impl`'s `T` are two parameters.
+    of_type: = ask.rename_in(SLOT_URI, SLOT_SRC, "pub struct Slot", "T", "Kept")
+    t_edits: = edits_in(of_type, SLOT_URI, ask.arena)
+    verdict.check("a type's type parameter is renamed in its fields, not in its `impl`'s own",
+        t_edits.len == 2 &&
+        starts_at(t_edits@, decl_line(SLOT_SRC, "    held:", ask.arena), 10),
+        lsp_client.why(ask.c, places(t_edits@, ask.arena), ask.arena))
+
+priv fn check_unwritten(ask: Ask) //<
+    //< A name the source does not spell where it is declared is refused, with the reason
+    //< **Only its uses would change.** An import with no `as` is named by its path's last part;
+    //< a closure's `call` is declared by the compiler.
+    ask.refuses("an import's name is refused where no `as` is written, naming what to write",
+        ask.rename("    total: =", "lib", "base"), "Write 'as base'")
+    refs: = lsp_client.answer(ask.c, "textDocument/references", ask.at("    total: =", "lib"),
+        lsp_client.WALK_MS, ask.arena)
+    found: = refs.get("result").arr_list(ask.arena)
+    // **The alias, not the `hit` written after it**: one use, and nothing in `lib.kspl`.
+    verdict.check("the references of an import's name are its own uses, not the member's after it",
+        found.len == 1 &&
+        found.get(0).get("uri").as_str().unwrap_or("").equals(USER_URI) &&
+        found.get(0).get("range").get("start").get("character").as_int().unwrap_or(-1) ==
+        col_in_line(USER_SRC, "    total: =", "lib", ask.arena),
+        lsp_client.why(ask.c, places(found@, ask.arena), ask.arena))
+    lsp_client.open(ask.c, CALL_URI, CALL_SRC, ask.arena)
+    defer lsp_client.close(ask.c, CALL_URI, ask.arena)
+    ask.refuses("a closure's `call` is refused: the compiler declares it",
+        ask.rename_in(CALL_URI, CALL_SRC, "    return add.call", "call", "run"),
+        "not written where it is declared")
 
 priv fn check_import_jump(ask: Ask) //<
     //< A jump from an import's path lands on the file the compiler read for it

@@ -13,7 +13,7 @@ import "std/fs"
 import "std/io"
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/sys"
 
@@ -42,7 +42,7 @@ struct Progress //< how far an answer has been shown, and where
     thought: Sz //< bytes of this round's thinking shown
     written: Sz //< bytes of this round's text shown
     from_call: Bool //< whether the text shown comes from the `answer` call, not the plain text
-    text: Str_builder //< this round's text, for the live file and a stopped answer's record
+    text: Str //< this round's text, for the live file and a stopped answer's record
     reader: Text_reader //< this round's `answer` call, its text decoded as its arguments come
     tools_said: U8[] //< the reading tools last called, for the live file
     stop: U8[] //< why the answer must stop; empty while it goes on
@@ -54,9 +54,9 @@ impl Progress
     fn new(console: Bool, lang: Lang, arena: Arena$@): Progress //<
         //< Progress shown on the console alone, or nowhere
         return Progress::{ .console = console, .live = "", .ask = "", .id = "", .lang = lang,
-            .phase = .waiting, .thought = 0, .written = 0, .from_call = false,
-            .text = Str_builder(), .reader = Text_reader(), .tools_said = "", .stop = "",
-            .last_live_us = 0I64, .last_check_us = 0I64, .arena = arena }
+            .phase = .waiting, .thought = 0, .written = 0, .from_call = false, .text = Str(),
+            .reader = Text_reader(), .tools_said = "", .stop = "", .last_live_us = 0I64,
+            .last_check_us = 0I64, .arena = arena }
 
     fn following(ask_path: U8[], live_path: U8[], id: U8[], lang: Lang, console: Bool,
         arena: Arena$@): Progress //<
@@ -167,7 +167,7 @@ impl Progress
     priv fn put_live(r: Self$@, record: json.Value) //<
         //< replaces the live file; a failure is said once
         r.last_live_us = sys.mono_us()
-        defer $out: = Str_builder()
+        defer $out: = Str()
         record.dump(out@)
         out.c('\n')
         fs.replace_file(r.live, out.slice(), .kept) catch e
@@ -183,7 +183,7 @@ fn refused(live: U8[], why: U8[], arena: Arena$@) //<
     $b: = Json_builder(arena)
     record: = b.obj().set("id", b.str_val("")).set("phase", b.str_val("refused"))
         .set("why", b.str_val(why)).build()
-    defer $out: = Str_builder()
+    defer $out: = Str()
     record.dump(out@)
     out.c('\n')
     // **Say a failure**: without the live file, the page shows nothing of why no question is
@@ -256,7 +256,7 @@ struct Text_reader //< the `text` member of an `answer` call's arguments, decode
     //< **The arguments are JSON cut anywhere, and grow a piece at a time.** Each byte is read once:
     //< `at` and the state say where reading goes on. So a long answer takes time and memory in
     //< step with its length. An escape is decoded once it has fully come.
-    out: Str_builder //< the text decoded so far
+    out: Str //< the text decoded so far
     priv at: Sz //< the first byte of the arguments not read yet
     priv place: Place
     priv key_len: Sz //< the bytes of the current key read so far
@@ -267,8 +267,8 @@ struct Text_reader //< the `text` member of an `answer` call's arguments, decode
 
 impl Text_reader
     fn new(): Text_reader //< a reader at the start of the arguments
-        return Text_reader::{ .out = Str_builder(), .at = 0, .place = .open, .key_len = 0,
-            .is_text = false, .depth = 0, .in_string = false, .escaped = false }
+        return Text_reader::{ .out = Str(), .at = 0, .place = .open, .key_len = 0, .is_text = false,
+            .depth = 0, .in_string = false, .escaped = false }
 
     fn clear(r: Self$@) //< starts again, for the arguments of another call
         r.out.clear()

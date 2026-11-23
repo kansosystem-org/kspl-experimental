@@ -40,8 +40,10 @@ suite_file = tests/suite/$(subst -,_,$(1))_test.kspl
 suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
   $(wildcard tests/suite/*_test.kspl))))
 # `--n=N` / `--seed=N` replace the draw's count and its start (`make fuzz-long` hands a fresh seed).
+# Caution: **Leave out the default `--n=60` where `PROPERTY_ARGS` names one.** The suite refuses
+# an option given twice, so `make fuzz-long` stopped at the property check.
 PROPERTY_ARGS ?=
-suite_args_property = --n=60 $(PROPERTY_ARGS)
+suite_args_property = $(if $(filter --n=%,$(PROPERTY_ARGS)),,--n=60) $(PROPERTY_ARGS)
 # **The random equivalence test is a suite run apart** (`make test-random-equiv`), as the scattering
 # is: it takes about a minute of four cores, and CI runs it in the Linux job alone.
 # `--n=N` / `--seed=N` replace how many programs the random equivalence test writes and its first
@@ -148,8 +150,8 @@ compare-fires:
 	@$(call compare_cmd,$(FIRES)/one.c,$(FIRES)/other.c,$(FIRES)/diff.txt)
 	@if ( $(call verdict_cmd,$(FIRES)/diff.txt,two outputs one space apart) ) \
 	  > "$(RUN_FROM)/$(FIRES)/said.txt" 2>&1; then \
-	  echo "RESULT: SOME FAILED (1) -> the comparison passed two outputs one space apart"; exit 1; fi
-	@echo "# the comparison tells apart two outputs one space apart"
+	  echo "RESULT: SOME FAILED (1) -> the stage comparison missed a difference of one space"; exit 1; fi
+	@echo "# the stage comparison works: it finds a difference of one space in a test pair"
 
 host_ext := $(if $(filter llvm,$(TARGET)),ll,c)
 host_rt := $(if $(filter llvm,$(TARGET)),$(OUT)/gen/ksplc_stage1_runtime.c)

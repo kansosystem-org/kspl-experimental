@@ -1,7 +1,7 @@
-//< Strings that are built and grown: `Str_builder`, and the string functions that allocate
-//< Reading and slicing a `U8[]` without allocating is in `std/chars`. A `Str_builder` receives
+//< Strings that are built and grown: `Str`, and the string functions that allocate
+//< Reading and slicing a `U8[]` without allocating is in `std/chars`. A `Str` receives
 //< automatic cleanup. Where growth is not acceptable use `std/buf`'s `Buf_writer`; for text that
-//< lives as long as an arena, use `Arena_text`.
+//< lives as long as an arena, use `Arena_str`.
 import "std/chars" // classifying and converting characters, and code points as strings
 import "std/ds" + { List }
 import "std/mem" + { Arena, alloc, dealloc }
@@ -19,14 +19,16 @@ pub fn from_cstr(c_str: U8$@): U8$[] //<
     //< A null pointer gives an empty slice, so what a C function returns can be passed as it is.
     return c_str.to_slice()
 
-pub struct Str_builder //< a growing buffer whose owner frees it with `free()`
+pub struct Str //< the growing string, whose owner frees it with `free()`
+    //< A view of text is a `U8[]`; `Str` is the one string that owns and grows its bytes. It is
+    //< not Rust's read-only `str`.
     pub ptr: U8$@ //< the memory holding the written bytes
     pub len: Sz //< how many bytes have been written
     pub cap: Sz //< how many bytes fit before it has to grow
 
-impl Str_builder
-    pub fn new(): Str_builder //< an empty builder, which has allocated no memory yet
-        return Str_builder::{ .ptr = null, .len = 0, .cap = 0 }
+impl Str
+    pub fn new(): Str //< an empty builder, which has allocated no memory yet
+        return Str::{ .ptr = null, .len = 0, .cap = 0 }
     #ends_views
     pub fn escape_and_append( //< writes a JSON string's contents; the caller writes the quotes
         //< Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC
@@ -150,7 +152,7 @@ impl Str_builder
     pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until the next change
         return U8$[]::{ .ptr = r.ptr, .len = r.len }
 
-impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
+impl Str: Writer //< so it can be used anywhere a `Writer` is expected
     #ends_views
     #inline
     pub fn s(r: Self$@, text: U8[]): Self$@ //< writes a string, growing if needed
@@ -179,7 +181,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     pub fn flush(r: Self$@): Self$@ //< does nothing, and is here to complete `Writer`
         return r
 
-impl Str_builder: Formattable //< so it can be used inside an interpolation
+impl Str: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self$@, out: Writer): Writer //< writes its contents to `out`
         return out.s(r.slice())
 
@@ -234,7 +236,7 @@ impl U8[]
         new: U8[], //< the text to put in its place
         arena: Arena$@, //< where the new string goes; null uses the global heap, freed with `dealloc`
     ): U8[]
-        defer $b: = Str_builder()
+        defer $b: = Str()
         $pos: Sz = 0
         for old.len > 0 && pos < r.len
             rest: = r.sub_from(pos)
@@ -365,7 +367,7 @@ impl U8[]
         r: U8[],
         arena: Arena$@, //< where the new string goes; null uses the global heap, freed with `dealloc`
     ): U8[]
-        defer $res: = Str_builder()
+        defer $res: = Str()
         if r.len == 0
             return arena.dup_str("")
         // Pass 1: the leading whitespace every non-blank line shares, compared byte by byte, as
@@ -423,7 +425,7 @@ impl U8[]
             res.len = line_start
         return arena.dup_str(res.slice())
 
-impl Str_builder: Manual_free //< it owns its buffer and frees it with `free()`
+impl Str: Manual_free //< it owns its buffer and frees it with `free()`
     pub fn free(r: Self$@) //< frees the memory and empties it
         if r.cap > 0
             dealloc(Void$@::r.ptr)
@@ -435,13 +437,13 @@ impl Str_builder: Manual_free //< it owns its buffer and frees it with `free()`
 // It remembers the arena, so the text cannot end up in the wrong place. Why it grows there, and
 // how to choose among the three write targets, is in std/docs/DESIGN-core.md.
 //   name: = arena.text().s("layer.\{i\}.weight").take();
-pub struct Arena_text //< a short-lived builder that leaves the finished text in the arena
+pub struct Arena_str //< a short-lived builder that leaves the finished text in the arena
     priv ptr: U8$@ //< the text written so far, in the arena
     priv len: Sz //< how many bytes have been written
     priv cap: Sz //< the size of the block at `ptr`; 0 before the first write
     priv arena: Arena$@ //< where the text grows, or null for the heap
 
-impl Arena_text: Writer //< so it can be used anywhere a `Writer` is expected
+impl Arena_str: Writer //< so it can be used anywhere a `Writer` is expected
     pub fn s(r: Self$@, val: U8[]): Self$@ //< writes a string and returns the builder
         //< `val` can be a view of this builder's own bytes.
         if val.len > 0
@@ -466,7 +468,7 @@ impl Arena_text: Writer //< so it can be used anywhere a `Writer` is expected
     pub fn flush(r: Self$@): Self$@ //< does nothing, and is here to complete `Writer`
         return r
 
-impl Arena_text
+impl Arena_str
     priv fn grow(r: Self$@, need: Sz): U8$@? //<
         //< Makes room for `need` bytes, and returns a heap block for the caller to free
         //< **Where the text is the arena's newest block, it grows there**, with nothing copied.
@@ -522,7 +524,7 @@ impl Arena_text
 
 impl Arena
     #gives_view
-    pub fn text(r: Self$@): Arena_text$@ //< a builder for one string in this arena
+    pub fn text(r: Self$@): Arena_str$@ //< a builder for one string in this arena
         //< The builder is in the arena too, so `.s(…)` can chain (a method's receiver must be a
         //< place). With a null arena both are on the heap, and `take` frees the builder.
-        return r.create(Arena_text::{ .ptr = null, .len = 0, .cap = 0, .arena = r })
+        return r.create(Arena_str::{ .ptr = null, .len = 0, .cap = 0, .arena = r })

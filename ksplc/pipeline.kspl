@@ -43,7 +43,7 @@ import "std/ds" { List, Map }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena_headroom }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 import "std/sys"
 
@@ -72,7 +72,7 @@ priv fn worth_detail(part: I64, whole: I64): Bool //< whether part is at least t
 priv fn print_left_out(block: U8[], phase: U8[], us: I64) //< the line that stands for a table
     //< **Say that the table was left out, and why**: a missing block alone leaves the reader
     //< guessing whether it broke.
-    defer $sb: = Str_builder()
+    defer $sb: = Str()
     sb.s("\n\{block\} left out: \{phase\} took \{Sz::(us / 1000):,\} ms, under ")
         .s("\{DETAIL_SHARE_PERCENT\}% of the compile time\n")
     io.err().s(sb.slice())
@@ -126,7 +126,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
         io.err().s("  - Collect / Infer / Constraints / Layouts: N/A\n")
         io.err().s("  - Bodies analyzed: \{Sz::sp.body_count:,\}\n")
     print_layer("Lower & ABI", base_stats.stages.lower)
-    defer $pr: = Str_builder()
+    defer $pr: = Str()
     pr
         .s("  - Pruned fns:  \{lower_prune.stats.fn_dropped:6,\} of \
             \{lower_prune.stats.fn_defs:,\}\n")
@@ -141,7 +141,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
     if !timed || worth_detail(other.us, elapsed_us) || worth_detail(other.bytes, arena_used)
         print_layer("Other", other)
 
-    defer $tail: = Str_builder()
+    defer $tail: = Str()
     tail.s("\n[Overall]\n")
     if timed
         tail.s("Compile time      : \{Sz::(elapsed_us / 1000):,\} ms\n")
@@ -163,7 +163,7 @@ priv fn print_part(label: U8[], us: I64, note: U8[]) //< one line of a stage's b
     //< **A part that took under 1 ms is left out**: its `0 ms` line tells nothing to tune.
     if us < 1000I64
         return
-    defer $sb: = Str_builder()
+    defer $sb: = Str()
     sb.s("  - \{label\}\{Sz::(us / 1000):6,\} ms\{note\}\n")
     io.err().s(sb.slice())
 
@@ -172,7 +172,7 @@ priv fn print_layer(label: U8[], stage: base_stats.Stage) //< one stage's line
     //< the clock is broken it says `N/A`, not a misleading `0 ms`.
     //< Caution: **Print the bytes there too**: the memory allocated is measured the same way on a
     //< target without a clock.
-    defer $sb: = Str_builder()
+    defer $sb: = Str()
     if sys.timing_available()
         sb.s("\{label\}: \{Sz::(stage.us / 1000):,\} ms, \{stage.bytes:,\} bytes\n")
     else
@@ -477,11 +477,11 @@ impl Compiler
             //< Ctx per walk. `<stem>.h`     … the shared header every unit `#include`s (types,
             //< prototypes, extern) `<stem>.<i>.c` … unit i's definitions (i from 0 to units-1)
         stem: = sys.strip_last_ext(out_path)
-        defer $path: = Str_builder()
+        defer $path: = Str()
         path.s(stem).s(".h")
         // The `#include` names the file, not a path, as it is next to the `.c`; it is copied to
         // another Builder because the loop rebuilds path.
-        defer $header_name: = Str_builder()
+        defer $header_name: = Str()
         header_name.s(sys.get_file_name(path.slice()))
 
         shared: = gen_c_ctx.Emit_split::{ .part = .shared_decls, .unit_count = units,

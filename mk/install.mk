@@ -337,15 +337,15 @@ define desktop_install
 	@echo "# installed -> $(1)/icons/hicolor/scalable/mimetypes/$(subst /,-,$(5)).svg"
 endef
 
-# $(call desktop_refresh,<data folder>): rebuilds the caches the desktop reads from <data folder>.
-# **A missing tool is a note, not a failure**: the files are in place, and the next run of the
-# tool, by the person or the system, reads them.
+# $(call desktop_refresh,<data folder>[,<env>]): rebuilds the caches the desktop reads from <data
+# folder>, with <env> (`NAME=value`) set for the tools. **A missing tool is a note, not a failure**:
+# the files are in place, and the next run of the tool, by the person or the system, reads them.
 define desktop_refresh
 	@if command -v update-mime-database >/dev/null 2>&1; then \
-		update-mime-database "$(1)/mime"; \
+		$(2) update-mime-database "$(1)/mime"; \
 	else echo "# note: update-mime-database (shared-mime-info) is not installed, so the types are not known yet"; fi
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
-		update-desktop-database "$(1)/applications"; \
+		$(2) update-desktop-database "$(1)/applications"; \
 	else echo "# note: update-desktop-database (desktop-file-utils) is not installed, so the launchers are not offered yet"; fi
 endef
 
@@ -353,11 +353,13 @@ endef
 # gates' second half. It installs one type into a scratch data folder, as `make install-desktop`
 # does, and checks each file and cache there. A missing cache tool says SKIP, or fails when
 # <require> is 1. It ends with the gate's one verdict line.
+# **The scratch folder stands for the user's data folder**, so the tools see it as `XDG_DATA_HOME`.
+# Otherwise update-mime-database warns, on every machine, that no desktop searches it.
 DESKTOP_CHECK_DIR = $(TMP_DIR)/desktop_install
 define desktop_check
 	@rm -rf "$(DESKTOP_CHECK_DIR)/$(5)"
 	$(call desktop_install,$(DESKTOP_CHECK_DIR)/$(5),$(1),$(2),$(3),$(4))
-	$(call desktop_refresh,$(DESKTOP_CHECK_DIR)/$(5))
+	$(call desktop_refresh,$(DESKTOP_CHECK_DIR)/$(5),XDG_DATA_HOME="$(DESKTOP_CHECK_DIR)/$(5)")
 	@d="$(DESKTOP_CHECK_DIR)/$(5)"; \
 	for pair in "$(1)|applications/$(notdir $(1))" "$(2)|mime/packages/$(notdir $(2))" \
 		"$(3)|icons/hicolor/scalable/mimetypes/$(subst /,-,$(4)).svg"; do \

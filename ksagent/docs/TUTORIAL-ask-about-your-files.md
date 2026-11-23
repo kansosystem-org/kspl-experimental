@@ -116,7 +116,7 @@ Add the folder it prints to `PATH` in `~/.bashrc`, as in step 1, with `Packages/
 
 ## On Linux and macOS
 
-**`make chat` builds kssrv, which needs OpenSSL.** On Windows, the MSYS2 set-up named at the top installs it. On Linux and macOS, install it as each line below says.
+**`make chat` builds kssrv and ksagent, which need OpenSSL.** On Windows, the MSYS2 set-up named at the top installs it. On Linux and macOS, install it as each line below says.
 
 * **Linux**: install llama.cpp from your distribution, or build it, so that `llama-server` is on `PATH`. Install `libssl-dev` (Debian and Ubuntu) for OpenSSL. The other steps are the same.
 * **macOS**: run `brew install llama.cpp` in place of step 1. It runs the model on the Mac's own graphics. For OpenSSL, run `brew install openssl@3`, then `export LIBRARY_PATH="$(brew --prefix openssl@3)/lib"` so that the linker finds it.

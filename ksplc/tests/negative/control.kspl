@@ -24,7 +24,7 @@ fn main(): I32
 // EXPECT: 'xs' is freed when its block ends, so it cannot be stored here
 // EXPECT: 'h' is freed when its block ends, so it cannot be moved here
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv struct Handle
   id: I32
@@ -36,8 +36,8 @@ impl Handle: Manual_free
 
 priv fn eat(_h: Handle) {}
 
-priv fn build(): Str_builder
-  defer $sb: = Str_builder()
+priv fn build(): Str
+  defer $sb: = Str()
   sb.s("x")
   return sb
 
@@ -60,10 +60,10 @@ fn main()
 // EXPECT: 'sb' is freed when its block ends, so it cannot be returned here
 // EXPECT: 'xs' is freed when its block ends, so it cannot be returned here
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
-priv fn tagged<|T|>(_v: T): Str_builder
-  defer $sb: = Str_builder()
+priv fn tagged<|T|>(_v: T): Str
+  defer $sb: = Str()
   sb.s("x")
   return sb
 
@@ -164,10 +164,10 @@ fn main()
 //< (ksplc/docs/DESIGN-diagnostics.md "A check of one kind lives in one place").
 // EXPECT: variable 'b' may already be freed here
 import "std/str"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 fn main()
-  $b: = Str_builder()
+  $b: = Str()
   defer b.free()
   b.free()
 // ==== case defer_move_at_scope_exit
@@ -218,7 +218,7 @@ fn main(): I32
 // EXPECT: variable 's' may already be freed here (use-after-free or double free) (this `defer` body runs when line 83 leaves the scope)
 // EXPECT: Finished with 8 error(s)
 import "std/str"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv enum Er
   bad
@@ -283,7 +283,7 @@ priv fn by_throw(n: I32): I32!Er
   return f
 
 priv fn freed_on_early_path(early: Bool)
-  $s: = Str_builder()
+  $s: = Str()
   defer s.free()
   if early
     s.free()
@@ -536,17 +536,17 @@ fn main(): I32
 // EXPECT: loop_carries_a_release.kspl:15:10: error: variable 'b' may already be freed here
 // EXPECT: loop_carries_a_release.kspl:21:5: error: variable 'b' may already be freed here
 // EXPECT: Finished with 3 error(s)
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv fn freed_in_the_body(n: I32): Sz
-  $b: = Str_builder()
+  $b: = Str()
   b.s("x")
   for $i: I32 = 0; i < n; i += 1
     b.free()
   return b.slice().len
 
 priv fn freed_by_a_defer(n: I32)
-  $b: = Str_builder()
+  $b: = Str()
   for $i: I32 = 0; i < n; i += 1
     defer b.free()
     b.s("x")
@@ -563,10 +563,10 @@ fn main(): I32
 // EXPECT: loop_carries_a_release_reported_once.kspl:17:3: error: variable 'b' may already be freed here (use-after-free or double free)
 // EXPECT-NOT: loop_carries_a_release_reported_once.kspl:17:3: error: variable 'b' may already be freed here (use-after-free or double free), by
 // EXPECT: Finished with 2 error(s)
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 fn main()
-  $b: = Str_builder()
+  $b: = Str()
   for i in Range.asc(2)
     defer b.free()
     if i == 0

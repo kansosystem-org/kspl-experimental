@@ -5,7 +5,7 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
 import "std/mem" { dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 import "std/tests/scratch"
 import "std/thread"
@@ -516,7 +516,7 @@ fn test_fs_long_path()
     verdict.start("[Fs] a path too long to hand to the OS...")
     // **A path exceeding max_path_len is refused with invalid_path**, not operation_failed, which
     // would not tell the caller the length was the cause.
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for $i: Sz = 0; i <= fs.MAX_PATH_LEN; i += 1
         b.c('x')
     long_path: = b.slice()
@@ -561,7 +561,7 @@ fn test_fs_inner_nul()
     // before it: here, create `dir`.
     dir: = "out/tmp/kspl_test_debug_nul"
     fs.remove_path(dir) catch {}
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s(dir).c(0U8).s("tail")
     $saw_invalid: = false
     fs.mkdir(b.slice()) catch e
@@ -573,7 +573,7 @@ fn test_fs_inner_nul()
     assert(!fs.exists(dir), "the part before the NUL is not created")
     assert(!fs.is_link(b.slice()), "a path holding a NUL names no file, so it is not a link")
     // The runtime refuses it too, so a call std/fs does not check is not cut either.
-    defer $sh: = Str_builder()
+    defer $sh: = Str()
     sh.s("/bin/sh").c(0U8).s("x")
     assert(!fs.is_executable(sh.slice()), "the runtime refuses a path holding a NUL")
     verdict.pass("a path holding a NUL is refused, both by std/fs and by the runtime.")
@@ -701,8 +701,8 @@ fn test_fs_empty_path(arena: Arena$@) //<
 
 priv const DEEP_ROOT: U8[] = "out/tmp/kspl_test_debug_deep"
 
-priv fn build_deep_tree(levels: Sz): Str_builder
-    $b: = Str_builder()
+priv fn build_deep_tree(levels: Sz): Str
+    $b: = Str()
     b.s(DEEP_ROOT)
     for _i in Range.asc(levels)
         b.s("/d")

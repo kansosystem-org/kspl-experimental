@@ -27,7 +27,7 @@ import "ksmd/syntax/reader"
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 enum Table_edit //< a row or column edit a page asks for, at a row or column of the table
     insert_row //< an empty row before row `at`; at the count of rows, after the last
@@ -109,7 +109,7 @@ impl Editor
         at: = Positions(from@, scratch)
         $t: = from.tables[0]
         $texts: = List<|U8[]|>(scratch)
-        defer $out: = Str_builder()
+        defer $out: = Str()
         for cell in t.cells
             if cell.kind == .formula
                 out.clear()
@@ -289,7 +289,7 @@ impl Editor
         //< the text as typed, so the person finds their own mistake where they made it.
         if row < 0 || !ed.auto.brackets || !text.starts_with("=")
             return false
-        defer $end: = Str_builder()
+        defer $end: = Str()
         closing(text, end@)
         if end.slice().len == 0
             return false
@@ -475,7 +475,7 @@ impl Editor
                 if f: = from
                     if at_row >= 0 && text.starts_with("=")
                         copied_row: = f.rows[r] if f.rows.len > 0 else f.row + r
-                        defer $out: = Str_builder()
+                        defer $out: = Str()
                         out.c('=')
                         shift_formula(ed.doc@, table, text.sub_from(1), at_row - copied_row,
                             column - f.column, out@)
@@ -777,17 +777,17 @@ impl Editor
             if value_of(cell.text, ed.reading(), arena).kind == .text &&
                 !cell.text.starts_with("\"")
                 return cell.text
-            defer $out: = Str_builder()
+            defer $out: = Str()
             write_text(cell.text, out@)
             return arena.dup_str(out.slice())
         case .formula
-            defer $out: = Str_builder()
+            defer $out: = Str()
             out.c('=')
             write_formula(ed.doc@, t, cell, at, 0, 0, out@)
             return arena.dup_str(out.slice())
 
     fn copied_cells(ed: Self@, block: Sz, top: Sz, left: Sz, bottom: Sz, right: Sz,
-        left_out: Sz[], out: Str_builder$@): Void!Refused //<
+        left_out: Sz[], out: Str$@): Void!Refused //<
             //< Writes what a copy of a rectangle of cells carries for a paste in ksmd:
             //< `{"cells":[[…]],"values":[[…]],"rows":[…]}`, row -1 the names
             //< `cells` holds each cell's text as a person edits it, a formula with its `=`.
@@ -817,7 +817,7 @@ impl Editor
                     if column > left
                         out.c(',')
                     defer cell: = Arena(1024)
-                    defer $typed: = Str_builder()
+                    defer $typed: = Str()
                     if part == 0 || row < 0
                         typed.s(ed.cell_text_at(table, row, column, at@, cell))
                     else
@@ -886,7 +886,7 @@ priv fn pasted(text: U8[], read: Reading, arena: Arena$@): U8[] //<
         digits += 1
     if digits == 0 || digits > 3 || i + digits == t.len || t[i + digits] != ','
         return text
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s(t.sub(0, i + digits))
     $j: = i + digits
     for j < t.len && t[j] == ','
@@ -900,7 +900,7 @@ priv fn pasted(text: U8[], read: Reading, arena: Arena$@): U8[] //<
     joined: = arena.dup_str(b.slice())
     return joined if value_of(joined, read, arena).kind == .number else text
 
-priv fn write_typed(value: calculated.Value, out: Str_builder$@) //<
+priv fn write_typed(value: calculated.Value, out: Str$@) //<
     //< A calculated value as text typed into a cell puts it: a number as it shows without a
     //< format, a date as `2026-10-23`, and any other value as quoted text, so `"12"` stays text
     //< A true or false value and an error become the text they show.

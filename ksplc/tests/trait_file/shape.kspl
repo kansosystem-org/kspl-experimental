@@ -1,0 +1,105 @@
+//< A fixture: a trait whose default bodies use this file's own names, for `../trait_test.kspl`
+//< **The test implements the trait in another file**: a default body's names are read here, where
+//< the body is written, so the two cannot be one file.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+priv const FAR_BASE: I32 = 100 //< a constant only this file can name
+
+priv struct Far_pair //< a type only this file can name
+    a: I32
+    b: I32
+
+struct Far_coin //< a type `../trait_test.kspl` names through its alias of this file
+    v: I32
+
+struct Far_wrap<|T|> //< `../trait_test.kspl` declares a `Far_wrap` of its own, with one field
+    a: T
+    b: T
+
+priv const FAR_ROOM: Sz = 100 //< `../trait_test.kspl` declares a `FAR_ROOM` of its own, 3
+
+trait Far_conv<|T|> //< each copied body takes `T` as the implementing file reads its argument
+    fn get(r: Self): T
+
+    fn get_or(r: Self, alt: T, use_alt: Bool): T //< `T` as a parameter's type and the return type
+        kept: = alt //< a local takes its type from the parameter's
+        if use_alt
+            return kept
+        return r.get()
+
+    fn opt_or(r: Self, opt: T?): T //< under a parameter's `?`, and as a local's type
+        $out: T = r.get()
+        if v: = opt
+            out = v
+        return out
+
+    fn wrapped(r: Self): Far_wrap<|T|> //< inside this file's `Far_wrap`, as a local's type too
+        w: Far_wrap<|T|> = ::{ .a = r.get(), .b = r.get() }
+        return w
+
+    fn width(_r: Self): Sz //< beside this file's `Far_pair`
+        return sizeof(T) + sizeof(Far_pair)
+
+priv fn far_count<|V|>(items: V[]): Sz //< a generic function a default body calls with `T`
+    return items.len
+
+trait Far_nest<|T|> //< `T` under a slice, a pointer and a call's type argument
+    fn item(r: Self): T
+
+    fn first(r: Self, more: T[], at: T@): T
+        if more.len > 0
+            return more[0]
+        if at != null
+            return at$
+        return r.item()
+
+    fn tally(r: Self, arena: Arena$@): Sz
+        $all: = List<|T|>(arena)
+        all.push(r.item())
+        all.push(r.item())
+        seen: T[] = all.slice()
+        return far_count<|T|>(seen)
+
+trait Far_made<|T|> //< `T` before a `.`: a member of the type the implementing file names
+    fn tag(r: Self): I32
+
+    fn weight(r: Self): I32
+        return T.weight() + r.tag()
+
+trait Far_sized<|const N: Sz|> //< a value argument, as an array's length and as a value
+    fn base(r: Self): Sz
+
+    fn room(r: Self): Sz
+        $cells: U8[N] = ::{}
+        cells[0] = 1
+        return cells.len * 10 + N + r.base() + Sz::cells[0] + FAR_ROOM
+
+priv fn far_step(): I32 //< a function only this file can name
+    return 1
+
+priv fn far_scale(): I32 //< `../trait_test.kspl` declares a `far_scale` of its own, a text
+    return 10
+
+trait Far_shape //< each default body names something the implementing file cannot
+    fn area(r: Self): I32
+
+    fn stepped(r: Self): I32 //< a `priv` function
+        return far_step() + r.area()
+
+    fn based(r: Self): I32 //< a `priv` constant
+        return FAR_BASE + r.area()
+
+    fn paired(r: Self): I32 //< a `priv` type
+        p: = Far_pair::{ .a = r.area(), .b = 2 }
+        return p.a + p.b
+
+    fn imported(r: Self): I32 //< a file only this one imports
+        return I32::chars.codepoint_len(0x3042) + r.area()
+
+    fn scaled(r: Self): I32 //< this file's `far_scale`, and another default body
+        return far_scale() * r.stepped()
+
+    fn stepper(_r: Self): fn(): I32 //< a `priv` function as a value
+        return far_step

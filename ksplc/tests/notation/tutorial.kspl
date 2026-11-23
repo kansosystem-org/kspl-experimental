@@ -5,13 +5,14 @@
 import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 priv const LIMIT: Sz = 4 //< Naming a value, and why the type is written
-    //< **A `const` cannot be assigned to.** `Sz` is the type for sizes and counts. At the top of a
-    //< file the type is written out rather than inferred. A top-level name is the file's
-    //< interface, and a reader of another file has only this line to go on. Inside a function the
-    //< type can be left off.
+    //< **A `const` cannot be assigned to.** `priv` keeps a name inside its file; without it, the
+    //< whole package can use the name. `Sz` is the type for sizes and counts. At the top of a file
+    //< the type is written out rather than inferred. A top-level name is the file's interface, and
+    //< a reader of another file has only this line to go on. Inside a function the type can be left
+    //< off: `n: = 4` takes the type of its value.
 
 priv fn greet(who: U8[]) //< Saying something, and what a function looks like
     //< **`io.out()` returns the writer for the terminal**, and `.s(…)` sends a string to it. A
@@ -46,7 +47,7 @@ impl Point //< Methods of one's own
     //< **The receiver (the value a method is called on) is written out as the first parameter.**
     //< So whether a method can change the value is read off its signature. `Self@` is a pointer
     //< that only reads, `Self$@` one that can write. `p.moved(2)` passes `p` as `r`. A type's own
-    //< function is reached with the same `.` as a module's (`Arena.from_buffer(…)`, `io.out()`).
+    //< function is reached with the same `.` as a file's (`Arena.from_buffer(…)`, `io.out()`).
     //< Its `new` is called only as the type itself (`Arena(…)`). **`::` is never a path** to a
     //< name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
     fn moved(r: Self@, by: I32): Point
@@ -134,15 +135,15 @@ priv fn joined_len(words: U8[][]): Sz //< `defer`, in front of what it frees
     //< every free stands on the page. A function that hands a value to its caller, as
     //< `pick_builder` does, declares it without `defer`; the caller defers it (`defer $b: = …` in
     //< `main`). Another cleanup is a `defer` statement, naming what it cleans up.
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for w in words
         b.s(w)
     return b.len
 
-priv fn pick_builder(ok: Bool): Str_builder!Step_error
+priv fn pick_builder(ok: Bool): Str!Step_error
     if !ok
         throw .too_far
-    return Str_builder()
+    return Str()
 
 priv fn note(on: Bool) //< Leaving early
     //< **A line holding `return` alone ends the function.** A returned value always starts on the
@@ -210,7 +211,7 @@ fn main(): I32 //< Putting it together
         fallback -2
     defer $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
-        fallback Str_builder()
+        fallback Str()
     b.s("held")
     note(true)
     note(false)

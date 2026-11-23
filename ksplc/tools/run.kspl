@@ -21,7 +21,7 @@ import "std/fs"
 import "std/io"
 import "std/math"
 import "std/mem" { Arena, dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/subproc"
 import "std/sys"
 
@@ -78,7 +78,7 @@ priv fn append_compile_flags(list: List<|U8[]|>$@) //< the flags every unit is c
     list.push(NO_STRICT_ALIASING)
     append_section_flags(list)
 
-priv fn append_flags_key(key: Str_builder$@) //< the compile flags as the cache keys spell them
+priv fn append_flags_key(key: Str$@) //< the compile flags as the cache keys spell them
     //< One space between flags: another separator would name every cached slot and object anew.
     defer $flags: = List<|U8[]|>(null)
     append_compile_flags(flags@)
@@ -244,7 +244,7 @@ fn deps_text(loaded_files: List<|U8$[]|>@): U8[]? //<
     //< The reader is deps_are_fresh above; change both when changing the format. The compile
     //< writes it with its other outputs, and **a write that fails fails the compile**, as the libs
     //< file's does ("2.9.3" in ksplc/docs/SPEC-tools.md).
-    defer $out: = Str_builder()
+    defer $out: = Str()
     for import_path in loaded_files
         // **A program with no file has no line**: it has no digest to check, and its run's slot is
         // keyed by its text (`append_slot_key`).
@@ -252,7 +252,7 @@ fn deps_text(loaded_files: List<|U8$[]|>@): U8[]? //<
             continue
         // A name in `loaded_files` is a logical name, so each has one path
         // (`append_file_path` in `../base/locate.kspl`).
-        defer $file_path: = Str_builder()
+        defer $file_path: = Str()
         base_locate.append_file_path(import_path, file_path@)
         if !append_dep_line(file_path.slice(), out@)
             return .none
@@ -276,7 +276,7 @@ fn deps_text(loaded_files: List<|U8$[]|>@): U8[]? //<
         out.c(' ').s(cfg).c('\n')
     return .some(base_core.arena.dup_str(out.slice()))
 
-priv fn append_dep_line(path: U8[], out: Str_builder$@): Bool //<
+priv fn append_dep_line(path: U8[], out: Str$@): Bool //<
     //< It adds the deps line for path (`<64 hex digits> <path>`); false where it has no digest
     //< Caution: **Write the digest taken when the file was read** (`base_cache.note_read`), never
     //< read the file again. Saved during the build, it would give the new bytes' digest, and the
@@ -291,7 +291,7 @@ priv fn exit_mkdir_failed(what: U8[], path: U8[], error: fs.Fs_error) //<
     //< It reports and exits where the directory could not be created
     //< It names the one level that could not be created (`fs.Fs_error.mkdir_failed`); the whole
     //< path alone does not tell a name problem from a permission problem.
-    defer $at: = Str_builder()
+    defer $at: = Str()
     switch error
     case .mkdir_failed(part)
         at.s("\n  failed at: ").s(part)
@@ -299,13 +299,13 @@ priv fn exit_mkdir_failed(what: U8[], path: U8[], error: fs.Fs_error) //<
     io.err().s("ksplc run: cannot create the \{what\}: \{path\}\{at.slice()\}\n")
     sys.exit(1)
 
-priv fn append_slot_key(script: U8[], given: U8[]?, out: Str_builder$@): Bool //<
+priv fn append_slot_key(script: U8[], given: U8[]?, out: Str$@): Bool //<
     //< The key that selects the cache slot
     //< The script's path, the compile settings and ksplc's own identity. Where ksplc cannot be
     //< identified (argv[0] cannot be stat'd) it returns cacheable=false: slower beats an old
     //< binary. **A program with no file adds its text**: its path (`-` in the current folder) is
     //< the same for every program.
-    defer $h: = Str_builder()
+    defer $h: = Str()
     // Caution: **Key the script by its absolute path, not as it was typed.** `tests/main.kspl`
     // names a different file in every folder it is run from. Keyed by the text, two packages' tests
     // would share one slot. Two such runs at once would sweep away each other's objects before
@@ -356,7 +356,7 @@ priv fn has_obj(units: List<|Unit|>@, obj: U8[]): Bool //<
             return true
     return false
 
-priv fn append_unit_path(stem: U8[], index: Sz, out: Str_builder$@) //<
+priv fn append_unit_path(stem: U8[], index: Sz, out: Str$@) //<
     //< It builds the names `<stem>.h` and `<stem>.<i>.c`
     out.s(stem).c('.').s("\{index\}.c")
 
@@ -367,7 +367,7 @@ priv fn object_key(unit_src: U8[], header: U8[]): Hash_hex!io.Io_error //<
     //< Caution: Always include the shared header where there is one: a changed type or prototype
     //< changes the code with the `.c` unchanged. Include the C compiler's name and flags too, or
     //< switching CC links the previous compiler's objects.
-    defer $h: = Str_builder()
+    defer $h: = Str()
     h.s(cc_name()).c(0U8)
     append_flags_key(h@)
     h.c(0U8)
@@ -472,7 +472,7 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
     //< The script's own path goes in an environment variable (script_env_name in std/sys.kspl;
     //< Python's `__file__`), so the arguments the script receives stay unchanged.
     //< Caution: **Write the path of the executable being started alongside it** in the value.
-    defer $env_val: = Str_builder()
+    defer $env_val: = Str()
     env_val.s(exe).c('\n').s(script)
     sys.set_env(sys.SCRIPT_ENV_NAME, env_val.slice()) catch
         io.err()
@@ -491,7 +491,7 @@ priv fn commit_path(from: U8[], to: U8[]): Bool //<
     fs.rename_path(from, to) catch
         if !fs.exists(to)
             return false
-        defer $aside: = Str_builder()
+        defer $aside: = Str()
         fs.rename_path(to, aside_name(to, aside@)) catch
             return false
         fs.rename_path(from, to) catch
@@ -506,7 +506,7 @@ priv fn sync_to_disk(path: U8[]): Bool //< whether the file the linker wrote is 
         return false
     return true
 
-priv fn aside_name(path: U8[], out: Str_builder$@): U8[] //< a name no file in the slot has
+priv fn aside_name(path: U8[], out: Str$@): U8[] //< a name no file in the slot has
     //< The slot's lock is held, so no other run is choosing one at the same moment.
     $n: Sz = 0
     out.clear().s(path).s(".old.0")
@@ -612,14 +612,14 @@ priv struct Run_slot //< a script's place in the run cache, and the paths a buil
 
 priv fn open_run_slot(script: U8[], given: U8[]?, arena: Arena$@): Run_slot //<
     //< The script's slot in the run cache, made where it is new and marked used
-    defer $root: = Str_builder()
+    defer $root: = Str()
     if !base_cache.append_cache_root(root@)
         base_cache.exit_unlocated("ksplc run")
     refusal: = base_cache.refused_root(root.slice(), arena)
     if refusal.len > 0
         base_cache.exit_refused("ksplc run", refusal)
     runs_dir: = fs.join(root.slice(), base_cache.RUN_KIND, arena)
-    defer $slot_key: = Str_builder()
+    defer $slot_key: = Str()
     cacheable: = append_slot_key(script, given, slot_key@)
     dir: = fs.join(runs_dir, slot_key.slice(), arena)
     is_new_slot: = !fs.is_dir(dir)
@@ -662,7 +662,7 @@ priv fn rebuild_in_slot(slot: Run_slot@, script: U8[], given: U8[]?, arena: Aren
     // All objects stand whole and the executable was built from exactly this set: no link either.
     $linked_from_same: = false
     if all_cached
-        defer $want_record: = Str_builder()
+        defer $want_record: = Str()
         if append_link_record(slot.exe, units@, named_libs@, want_record@)
             have_objs: = io.read_file(slot.objs, null) catch ""
             linked_from_same = have_objs.len > 0 && have_objs.equals(want_record.slice())
@@ -718,14 +718,14 @@ priv fn plan_units(slot: Run_slot@, units_n: Sz, units: List<|Unit|>$@, arena: A
     fs.mkdir_all(obj_dir) catch e
         exit_mkdir_failed("object directory", obj_dir, e)
     stem: = sys.strip_last_ext(slot.new_c)
-    defer $header_path: = Str_builder()
+    defer $header_path: = Str()
     if units_n > 1
         header_path.s(stem).s(".h")
     // **The record is read once**, to tell each object that stands whole from one a crash cut.
     record: = io.read_file(slot.objs, arena) catch ""
     $all_cached: = true
     for i in Range.asc(units_n)
-        defer $src: = Str_builder()
+        defer $src: = Str()
         if units_n > 1
             append_unit_path(stem, i, src@)
         else
@@ -781,7 +781,7 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
         sys.exit(1)
     // Caution: **Write it after swapping the executable.** Written first, a failed swap leaves a
     // false record "built from this set", so the next run skips the link and runs the old one.
-    defer $record: = Str_builder()
+    defer $record: = Str()
     if !append_link_record(slot.exe, units, named_libs, record@)
         fs.remove_path(slot.objs) catch {}
         return
@@ -790,7 +790,7 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
 
 priv const EXE_SIZE_HEAD: U8[] = "size " //< what opens the first line of the link's record
 
-priv fn append_exe_size(exe: U8[], out: Str_builder$@): Bool //<
+priv fn append_exe_size(exe: U8[], out: Str$@): Bool //<
     //< It appends the record's first line, `size <bytes>`, for the program now at `exe`
     //< False where no regular file stands there.
     info: = fs.stat(exe) catch _e
@@ -800,8 +800,8 @@ priv fn append_exe_size(exe: U8[], out: Str_builder$@): Bool //<
     out.s(EXE_SIZE_HEAD).s("\{info.size\}\n")
     return true
 
-priv fn append_link_record(exe: U8[], units: List<|Unit|>@, named_libs: List<|U8[]|>@,
-    out: Str_builder$@): Bool //<
+priv fn append_link_record(exe: U8[], units: List<|Unit|>@, named_libs: List<|U8[]|>@, out: Str$@):
+    Bool //<
         //< It appends the link's record: the program's size, a line `<name> <size>` per object,
         //< then the libraries
         //< False where the program or an object has no regular file to measure.
@@ -837,7 +837,7 @@ priv fn exe_is_recorded(slot: Run_slot@, arena: Arena$@): Bool //<
     //< Whether prog.exe has the size the last link recorded
     //< **A crash can leave the program empty or cut** after its rename. Run as it is, an empty one
     //< exits 0 having done nothing, every time. A program whose size differs is built again.
-    defer $want: = Str_builder()
+    defer $want: = Str()
     if !append_exe_size(slot.exe, want@)
         return false
     have: = io.read_file(slot.objs, arena) catch

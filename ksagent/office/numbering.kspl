@@ -238,7 +238,7 @@ priv const ROMAN_VALUES: I32[13] = ::{ 1000, 900, 500, 400, 100, 90, 50, 40, 10,
 priv const ROMAN_MARKS: U8[][13] = ::{ "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V",
     "IV", "I" }
 
-fn write_number(out: str.Arena_text$@, number: I32, format: U8[]) //<
+fn write_number(out: str.Arena_str$@, number: I32, format: U8[]) //<
     //< Writes `number` in a list's number format
     //< A format not known here, or a number the format cannot write, falls back to plain digits.
     //< The katakana formats are written full width, also where Word writes them half width
@@ -280,7 +280,7 @@ fn write_number(out: str.Arena_text$@, number: I32, format: U8[]) //<
     else
         out.s("\{number\}")
 
-priv fn full_width(out: str.Arena_text$@, number: I32) //< digits from U+FF10, as `１２`
+priv fn full_width(out: str.Arena_str$@, number: I32) //< digits from U+FF10, as `１２`
     $div: = top_place(number)
     for div > 0
         out.c(0xEFU8).c(0xBCU8).c(U8::(0x90 + (number / div) % 10))
@@ -292,13 +292,13 @@ priv fn top_place(number: I32): I32 //< the power of ten of a positive number's 
         div = div / 10
     return div
 
-priv fn enclosed(out: str.Arena_text$@, number: I32, first: I32) //< `①` and the like, 1 to 20
+priv fn enclosed(out: str.Arena_str$@, number: I32, first: I32) //< `①` and the like, 1 to 20
     if number > 20
         out.s("\{number\}")
         return
     put(out, first + number - 1)
 
-priv fn letters(out: str.Arena_text$@, number: I32, base: U8) //< `A` … `Z`, then `AA`, `BB` …
+priv fn letters(out: str.Arena_str$@, number: I32, base: U8) //< `A` … `Z`, then `AA`, `BB` …
     times: = (number - 1) / 26 + 1
     if times > 4
         out.s("\{number\}")
@@ -306,7 +306,7 @@ priv fn letters(out: str.Arena_text$@, number: I32, base: U8) //< `A` … `Z`, t
     for _k in Range.asc(times)
         out.c(base + U8::((number - 1) % 26))
 
-priv fn roman(out: str.Arena_text$@, number: I32, lower: Bool) //< `I`, `IV` … up to 3999
+priv fn roman(out: str.Arena_str$@, number: I32, lower: Bool) //< `I`, `IV` … up to 3999
     if number > 3999
         out.s("\{number\}")
         return
@@ -317,7 +317,7 @@ priv fn roman(out: str.Arena_text$@, number: I32, lower: Bool) //< `I`, `IV` …
                 out.c(c.to_lower() if lower else c)
             left -= ROMAN_VALUES[k]
 
-priv fn kanji_count(out: str.Arena_text$@, number: I32) //<
+priv fn kanji_count(out: str.Arena_str$@, number: I32) //<
     //< `一`, `十一`, `二百三` … up to 9999
     if number > 9999
         kanji_digits(out, number)
@@ -333,18 +333,18 @@ priv fn kanji_count(out: str.Arena_text$@, number: I32) //<
         div = div / 10
         place -= 1
 
-priv fn kanji_digits(out: str.Arena_text$@, number: I32) //< each digit as a kanji: `二〇二四`
+priv fn kanji_digits(out: str.Arena_str$@, number: I32) //< each digit as a kanji: `二〇二四`
     $div: = top_place(number)
     for div > 0
         out.s(KANJI_DIGITS[((number / div) % 10)])
         div = div / 10
 
-priv fn nth_char(out: str.Arena_text$@, set: U8[], number: I32) //<
+priv fn nth_char(out: str.Arena_str$@, set: U8[], number: I32) //<
     //< The `number`-th of a set of three-byte characters, from 1, starting over past its end
     count: = set.len / 3
     at: = Sz::(number - 1) % count
     out.s(set.sub(at * 3, 3))
 
-priv fn put(out: str.Arena_text$@, cp: I32) //< writes one character as UTF-8
+priv fn put(out: str.Arena_str$@, cp: I32) //< writes one character as UTF-8
     for k in Range.asc(chars.codepoint_len(cp))
         out.c(chars.codepoint_byte(cp, k))

@@ -36,7 +36,7 @@ The page reads what it shows through `GET /api/file`, a picture beside the docum
 
 | Refusal | What it refuses | Why it is needed |
 | :-- | :-- | :-- |
-| **The text** | `..` levels, an absolute path in any system's spelling (`/etc/passwd`, `C:\x`, `\\server\share\x`, refused on every system), a NUL, a Windows device name (such as `CON` or `NUL`). `%XX` is decoded exactly once (`%252e` is a name reading `%2e`, and does not become `.`) | These spellings leave the root by themselves |
+| **The text** | `..` levels, an absolute path in any system's spelling (`/etc/passwd`, `C:\x`, `\\server\share\x`, refused on every system), a NUL, a Windows device name (such as `CON` or `NUL`). `%XX` is decoded exactly once (`%252e` is a name reading `%2e`, and does not become `.`). Nothing else is decoded: a `+` in `path=` is a `+`, never a space | These spellings leave the root by themselves |
 | **A link inside the root** | A symbolic link at any level of the path. Each level is inspected | The text check alone cannot close this hole: `link.txt` is a legitimate name, so a check looking for `..` lets it through |
 
 Caution: **Do not inspect only the last level**: a link on a folder would pass unseen.
@@ -104,6 +104,8 @@ The page reads a file whole and writes a file whole, by its path under the root.
 Where the folder above is missing, the write answers 409 with `{"error":<message>,"cause":"folders"}`, and the message names that folder. A step of the path that is a file gets the same answer, naming the file. **`cause` keeps this answer apart from a conditional write's mismatch**, which carries none.
 
 A write to a path where a folder stands answers 409 with `"cause":"folder"`, with or without `X-Kanso-If-Content`. The page then offers another name, since writing there again cannot succeed.
+
+**A write does not replace a file marked read-only.** It answers 409 with `"cause":"read_only"`, and the message names the file. Read-only means the owner's write permission is off on POSIX, and the read-only attribute is on in Windows. The answer is the same on every system. A write that carries `X-Kanso-If-Content` gets this answer only where its check passes; a mismatch is answered as any other.
 
 **A write never reaches a name that starts with `.`**, at any step of the path, such as `.git/config` or `.env`. A write to `.git/config` can set a command that the next `git status` runs. A read of such a name is answered as any other.
 
@@ -219,7 +221,7 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 | 403 | It pointed outside the root, wrote to or listed a name that starts with `.`, or named a `Host` other than the loopback. Or it asked to build a file whose bytes the person has not allowed |
 | 404 | A name that does not exist, an unknown endpoint, or a build with no builder named |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |
-| 409 | The conditional write no longer matches the file, or its target is not a regular file. Or a write's folders do not stand, or an allow names bytes the file does not hold |
+| 409 | The conditional write no longer matches the file, or its target is not a regular file. Or a write's folders do not stand, or its file is marked read-only, or an allow names bytes the file does not hold |
 | 413 | The body exceeded the ceiling |
 | 422 | The file named for a build does not build; `error` holds the builder's message |
 | 500 | It could not be written or replaced |
@@ -228,7 +230,7 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 
 **Each row below is a request, and the answer a server that follows this protocol gives it.** The rows show the rules above at work. `make test-server-claims` sends every row to kssrv, in order, and fails on any other answer.
 
-**The rows start from this state.** The server runs with `--local` and a named page. Its root holds the file `note.txt` and the folder `sub`, which holds `deep.txt`. The file `outside.txt` stands beside the root, outside it.
+**The rows start from this state.** The server runs with `--local` and a named page. Its root holds the files `note.txt` and `locked.txt` and the folder `sub`, which holds `deep.txt`. `locked.txt` is marked read-only. The file `outside.txt` stands beside the root, outside it.
 
 The columns read as follows:
 
@@ -305,6 +307,11 @@ The digest in two rows is the SHA-256 of `note`, the bytes `note.txt` holds at t
 | `PUT /api/file?path=sub/made/new.txt` | the token | — | `abc` | 200 `{"wrote":3}` |
 | `PUT /api/file?path=none/deeper/new.txt` | the token | — | `abc` | 409 holding `"cause":"folders"` |
 | `PUT /api/file?path=sub` | the token | — | `abc` | 409 holding `"cause":"folder"` |
+| `PUT /api/file?path=locked.txt` | the token | — | `abc` | 409 holding `"cause":"read_only"` |
+| `GET /api/file?path=locked.txt` | the token | — | — | 200 `locked` |
+| `PUT /api/file?path=a+b.txt` | the token | — | `abc` | 200 `{"wrote":3}` |
+| `GET /api/file?path=a%2Bb.txt` | the token | — | — | 200 `abc` |
+| `GET /api/file?path=a%20b.txt` | the token | — | — | 404 |
 | `PUT /api/file?path=.env` | the token | — | `abc` | 403 |
 | `PUT /api/file?path=sub/.git/config` | the token | — | `abc` | 403 |
 | `PUT /api/file?path=../outside.txt` | the token | — | `abc` | 403 |

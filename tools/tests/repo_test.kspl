@@ -4,7 +4,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 import "std/sys"
 import "std/verdict"
 import "tools/ci_gates" + { Outcome }
@@ -290,7 +290,7 @@ priv fn sample(log: U8[], text: U8[], ended: U8[], arena: Arena$@): Outcome //<
 
 priv fn summarised(outs: List<|Outcome|>@, arena: Arena$@): U8[] //< the screen's summary of them
     j: = ci_gates.Judge::{ .platform = WIN, .relaxed = "" }
-    defer $b: = Str_builder()
+    defer $b: = Str()
     ci_gates.digest_plain(outs, 12I64, j@, b@)
     return arena.dup_str(b.slice())
 
@@ -486,13 +486,13 @@ fn test_a_round_that_ended_early_says_so_last(arena: Arena$@) //<
     $left: = List<|U8[]|>(arena)
     left.push("debug_tools")
     left.push("suites_a")
-    defer $b: = Str_builder()
+    defer $b: = Str()
     ci_gates.early_end("lint", true, left@, b@)
     by_switch: =
         "# not run (2): debug_tools, suites_a\n# ended early at lint: STOP=1 ends the round at the \
             first gate that fails, so this round is not a full verdict\n"
     assert(b.slice().equals(by_switch), "the switch's round names what it left, then why it ended")
-    defer $c: = Str_builder()
+    defer $c: = Str()
     ci_gates.early_end("selfhost", false, left@, c@)
     by_build: =
         "# ended early at selfhost: the gates after it build on what it builds, so this round is \
@@ -508,7 +508,7 @@ fn test_the_page_lists_what_needs_attention(arena: Arena$@) //<
     outs.push(sample("selfhost", "RESULT: ALL PASS\n", "0 30\n", arena))
     outs.push(sample("link_abi", LOG_ARM, "0 5\n", arena))
     outs.push(sample("debug", LOG_FAIL, "1 7\n", arena))
-    defer $md: = Str_builder()
+    defer $md: = Str()
     ci_gates.digest_md(outs@, 4I64, "linux ci-shard-a", md@)
     m: = md.slice()
     assert(m.starts_with("## linux ci-shard-a - 2 PASS / 1 FAIL   (42s, -j4)"),

@@ -251,11 +251,12 @@ fn case_output_is_input(arena: Arena$@) //<
     other: = fs.join(dir, "sub/../a.kspl", arena)
     deps: = arena.text().s("--emit-deps=").s(src).take()
     libs: = arena.text().s("--emit-libs=").s(other).take()
+    face: = arena.text().s("--library=").s(src).take()
     out_c: = fs.join(dir, "a.c", arena)
     cases: = U8[][][]::{ U8[][]::{ std_flag(), src, src },
         U8[][]::{ std_flag(), src, other }, U8[][]::{ "build", std_flag(), src, src },
-        U8[][]::{ std_flag(), deps, src, out_c },
-        U8[][]::{ std_flag(), libs, src, out_c } }
+        U8[][]::{ std_flag(), deps, src, out_c }, U8[][]::{ std_flag(), libs, src, out_c },
+        U8[][]::{ std_flag(), face, src, out_c } }
     for i in Range.asc(cases.len)
         // Written again, so a case that replaced it does not spoil the next.
         io.write_file(src, text) catch {}
@@ -264,6 +265,30 @@ fn case_output_is_input(arena: Arena$@) //<
         kept: = io.read_file(src, null) catch ""
         verdict.check(arena.text().s("the input is kept (case \{i\})").take(),
             kept.equals(text), kept)
+
+fn case_outputs_share_a_file(arena: Arena$@) //<
+    //< A compile refuses two outputs that are one file, in whatever spelling each is named
+    //< **Neither is written**: the later would replace the earlier, and the exit code would be 0.
+    //< A device named twice is no clash: it keeps nothing.
+    dir: = harness.sandbox("cli_outputs_share")
+    src: = fs.join(dir, "a.kspl", arena)
+    io.write_file(src, "fn main(): I32\n  return 0\n") catch {}
+    out_c: = fs.join(dir, "a.c", arena)
+    other: = fs.join(dir, "sub/../a.c", arena)
+    list: = fs.join(dir, "a.d", arena)
+    deps: = arena.text().s("--emit-deps=").s(other).take()
+    deps_list: = arena.text().s("--emit-deps=").s(list).take()
+    libs_list: = arena.text().s("--emit-libs=").s(list).take()
+    ng_case("an --emit-deps file that is the output is refused",
+        U8[][]::{ std_flag(), deps, src, out_c }, "are one file")
+    verdict.check("the output is not written where another output names it too",
+        !fs.exists(out_c), out_c)
+    ng_case("an --emit-deps file that is the --emit-libs file is refused",
+        U8[][]::{ std_flag(), deps_list, libs_list, src, out_c }, "are one file")
+    if sys.is_windows()
+        return
+    ok_case("a device named for two outputs is written twice",
+        U8[][]::{ std_flag(), "--emit-deps=/dev/null", src, "/dev/null" }, "")
 
 fn case_later_output_unwritable(arena: Arena$@) //<
     //< An output written after the code that cannot be written fails the compile, and every older

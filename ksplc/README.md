@@ -69,7 +69,7 @@ Directly in this folder:
 * [`layout.kspl`](parse/layout.kspl) — turns the indentation notation (`.kspl`) into the brace shape; [`line_cont.kspl`](parse/line_cont.kspl) decides what joins a line to the next, for the formatter too.
 * [`source_fix.kspl`](parse/source_fix.kspl) — fixes the source's spelling before analysis.
 * [`desugar.kspl`](parse/desugar.kspl), with [`desugar_slice.kspl`](parse/desugar_slice.kspl) and [`desugar_closure.kspl`](parse/desugar_closure.kspl) — the sugar that needs no types; [`format_spec.kspl`](parse/format_spec.kspl) reads a string interpolation's format specifier (the `6` in `\{x:6\}`).
-* [`ast_cache.kspl`](parse/ast_cache.kspl) — keeps the normalized AST on disk so the next parse is skipped; [`syntax_msg.kspl`](parse/syntax_msg.kspl) writes a syntax error's message.
+* [`ast_cache.kspl`](parse/ast_cache.kspl) — keeps the normalized AST on disk so the next parse is skipped; [`syntax_msg.kspl`](parse/syntax_msg.kspl) writes a syntax error's message. Its notes read the failing line with [`syntax_line.kspl`](parse/syntax_line.kspl). [`syntax_habit.kspl`](parse/syntax_habit.kspl) writes the notes for another language's habits.
 
 It drives the grammar [`kspl.kspeg`](kspl.kspeg) through the engine in [kspeg](../lib/kspeg/README.md).
 

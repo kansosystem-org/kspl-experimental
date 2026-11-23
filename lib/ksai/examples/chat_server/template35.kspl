@@ -12,7 +12,7 @@ import "std/ds" { List }
 import "std/json"
 import "std/mem" { Arena }
 import "std/sha256"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 // ==========================================
 // The template's fixed text, in the order it is written out
@@ -47,7 +47,7 @@ fn render(conv: Conversation@, tok: tokenizer.Tokenizer$@, marks: Marks, arena: 
         //< The token IDs of the whole conversation, ending where the assistant's answer starts
         //< A conversation the template refuses is refused with its message: a system message
         //< after the first, no question, or arguments that are no JSON.
-    defer $text: = Str_builder()
+    defer $text: = Str()
     $p: = Prompt::{ .tok = tok, .ids = List<|I32|>.create(arena), .text = text@, .arena = arena }
     msgs: = conv.messages
     first_system: = msgs.len > 0 && msgs.get(0).role.equals("system")
@@ -153,7 +153,7 @@ priv fn arguments(given: json.Value, arena: Arena$@): json.Value!U8[] //<
         throw "Failed to parse tool call arguments as JSON."
     return doc.val
 
-fn py_str(value: json.Value, out: Str_builder$@) //< a value as the template's `|string` writes it
+fn py_str(value: json.Value, out: Str$@) //< a value as the template's `|string` writes it
     //< Python's `str`: a text as it is, `True`, `False`, `None`, and a float's shortest form,
     //< with an exponent below 1e-4 and from 1e16 up.
     switch value
@@ -168,11 +168,11 @@ fn py_str(value: json.Value, out: Str_builder$@) //< a value as the template's `
     default
         value.dump(out)
 
-priv fn py_float(number: F64, out: Str_builder$@) //< a float as Python's `repr` writes it
+priv fn py_float(number: F64, out: Str$@) //< a float as Python's `repr` writes it
     //< The shortest digits that read back are JSON's (`dump`); only where to put the point
     //< differs. Python writes `1e-05` and `1e+16` where JSON writes `0.00001` and
     //< `10000000000000000.0`.
-    defer $b: = Str_builder()
+    defer $b: = Str()
     json.Value.float_val(number).dump(b@)
     text: = b.slice()
     mag: = -number if number < 0.0 else number
@@ -180,7 +180,7 @@ priv fn py_float(number: F64, out: Str_builder$@) //< a float as Python's `repr`
         out.s(text)
         return
     // The digits without the point and the sign, and the power of ten of the first one.
-    defer $digits: = Str_builder()
+    defer $digits: = Str()
     $exp: Sz = 0
     $seen_point: = false
     $e_at: = text.len

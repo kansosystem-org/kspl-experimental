@@ -16,7 +16,7 @@ import "ksmd/syntax/writer"
 import "std/ds"
 import "std/io"
 import "std/mem" { Arena, dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/sys"
 
@@ -53,7 +53,7 @@ priv fn read_ksmd(bytes: U8[], arena: Arena$@): I32 //<
     doc: = reader.read(src@, arena) catch e
         return refused(src@, e)
     use_results(doc@, arena)
-    defer $once: = Str_builder()
+    defer $once: = Str()
     writer.write(doc@, once@)
     use_bytes(once.slice())
     assert(writer.size(doc@) == once.len, "ksmd: the writer's size is not what it writes")
@@ -61,7 +61,7 @@ priv fn read_ksmd(bytes: U8[], arena: Arena$@): I32 //<
         panic("ksmd: what the writer wrote is not a valid source")
     again: = reader.read(again_src@, arena) catch
         panic("ksmd: what the writer wrote is refused by the reader")
-    defer $twice: = Str_builder()
+    defer $twice: = Str()
     writer.write(again@, twice@)
     assert(twice.slice().equals(once.slice()), "ksmd: what the writer wrote is written otherwise")
     return 0
@@ -70,7 +70,7 @@ priv fn use_results(doc: Document@, arena: Arena$@) //<
     //< Calculates every table, then uses each value, and each error's reason as the page shows it
     results: = calc.calculate(doc, TODAY, arena)
     use_len(results.reads)
-    defer $reason: = Str_builder()
+    defer $reason: = Str()
     for table in Range.asc(doc.tables.len)
         from: = results.starts[table]
         cells: = doc.tables[table].rows.len * doc.tables[table].columns.len

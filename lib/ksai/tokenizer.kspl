@@ -9,11 +9,11 @@ import "std/ds" + { List, Map }
 import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/seq" // `List.order_by`, which sorts the markers once
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum" // `to_count`
 import "std/thread"
 
-pub fn hex_bytes(text: U8[], out: Str_builder$@): Bool //< appends the bytes spelt in hex
+pub fn hex_bytes(text: U8[], out: Str$@): Bool //< appends the bytes spelt in hex
     //< Restores vocab.txt's byte sequences; false, with part of them appended, when the text is
     //< not whole bytes written as hex digits. The digit decoding itself is `U8.hex_val`.
     if text.len % 2 != 0
@@ -108,7 +108,7 @@ priv fn gpt2_bytes( //< appends the bytes a GGUF word's text stands for
     //< that a word is valid text. False when a character is outside the mapping.
     text: U8[],
     shifted: U8[],
-    out: Str_builder$@,
+    out: Str$@,
 ): Bool
     $at: Sz = 0
     for at < text.len
@@ -290,7 +290,7 @@ impl Tokenizer
             throw .broken("types",
                 (types.len if types.len < tokens.len else tokens.len) + 1)
         shifted: = gpt2_shifted()
-        defer $b: = Str_builder()
+        defer $b: = Str()
         defer $found: = List<|Marker|>(null)
         for i in Range.asc(tokens.len)
             b.clear()
@@ -310,8 +310,8 @@ impl Tokenizer
                 found
                     .push(Marker::{ .text = r.arena.dup_str(tokens[i]), .id = I32::i })
         r.add_markers(found@)
-        defer $left: = Str_builder()
-        defer $right: = Str_builder()
+        defer $left: = Str()
+        defer $right: = Str()
         for i in Range.asc(merges.len)
             rule: = merges[i]
             // Split at the first space after the first byte, as llama.cpp does.
@@ -342,7 +342,7 @@ impl Tokenizer
             case .some(tab)
                 id: = parse_token_id(line.sub(0, tab))
                 hex: = line.sub_from(tab + 1)
-                defer $b: = Str_builder()
+                defer $b: = Str()
                 if !hex_bytes(hex, b@)
                     throw .broken(name, i + 1)
                 if got: = id

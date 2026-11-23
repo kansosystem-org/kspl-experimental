@@ -4,7 +4,7 @@
 import "ksmd/calc/formula" { Positions, write_formula }
 import "ksmd/model/model" { Block, Document, Table }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 fn outline(doc: Document@, arena: Arena$@): U8[] //<
     //< One node of the model to a line, each child two spaces in from its parent
@@ -14,17 +14,17 @@ fn outline(doc: Document@, arena: Arena$@): U8[] //<
     //< `functions "path"`, `chart`, `diagram`, `document`; within a line of text, `text "…"`,
     //< `code "…"`, `break`, `strong`, `emphasis`, `link "target"` and `colour "#rrggbb"`; and
     //< `note "…"`. A text in quotes writes `"`, `\` and a newline as `\"`, `\\` and `\n`.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     for i in Range.asc(doc.blocks.len)
         block_outline(doc, doc.blocks.get(i), out@, arena)
     return arena.dup_str(out.slice())
 
-priv fn node(depth: Sz, word: U8[], out: Str_builder$@) //< starts a node's line at `depth`
+priv fn node(depth: Sz, word: U8[], out: Str$@) //< starts a node's line at `depth`
     for _ in Range.asc(depth)
         out.s("  ")
     out.s(word)
 
-priv fn quoted(text: U8[], out: Str_builder$@) //< ` "text"`, with its escapes
+priv fn quoted(text: U8[], out: Str$@) //< ` "text"`, with its escapes
     out.s(" \"")
     for ch in text
         if ch == '"' || ch == '\\'
@@ -35,12 +35,12 @@ priv fn quoted(text: U8[], out: Str_builder$@) //< ` "text"`, with its escapes
             out.c(ch)
     out.c('"')
 
-priv fn leaf(depth: Sz, word: U8[], text: U8[], out: Str_builder$@) //< `word "text"` on its line
+priv fn leaf(depth: Sz, word: U8[], text: U8[], out: Str$@) //< `word "text"` on its line
     node(depth, word, out)
     quoted(text, out)
     out.c('\n')
 
-priv fn block_outline(doc: Document@, block: Block, out: Str_builder$@, arena: Arena$@) //<
+priv fn block_outline(doc: Document@, block: Block, out: Str$@, arena: Arena$@) //<
     //< One block and what it holds, from the outline's left edge
     switch block.kind
     case .paragraph, .quote
@@ -95,7 +95,7 @@ priv fn block_outline(doc: Document@, block: Block, out: Str_builder$@, arena: A
     if block.note.len > 0
         leaf(1, "note", block.note, out)
 
-priv fn inline_outline(doc: Document@, first: Sz, count: Sz, from: Sz, out: Str_builder$@) //<
+priv fn inline_outline(doc: Document@, first: Sz, count: Sz, from: Sz, out: Str$@) //<
     //< A run of inline nodes from depth `from`; a mark's nodes stand one deeper than it
     $depth: = from
     for i in Range.asc(count)
@@ -125,7 +125,7 @@ priv fn inline_outline(doc: Document@, first: Sz, count: Sz, from: Sz, out: Str_
         case .emphasis_end, .strong_end, .link_end
             depth -= 1
 
-priv fn table_outline(doc: Document@, table: Table@, out: Str_builder$@, arena: Arena$@) //<
+priv fn table_outline(doc: Document@, table: Table@, out: Str$@, arena: Arena$@) //<
     //< A table: its caption, then its heading row and each data row, with their cells
     leaf(0, "table", table.name, out)
     if table.caption.len > 0

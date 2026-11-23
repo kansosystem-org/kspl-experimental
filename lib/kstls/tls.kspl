@@ -41,6 +41,7 @@ extern fn SSL_CTX_new(method: SSL_METHOD@): SSL_CTX$@
 extern fn SSL_CTX_free(ctx: SSL_CTX$@)
 extern fn SSL_CTX_set_verify(ctx: SSL_CTX$@, mode: I32, callback: Void@)
 extern fn SSL_CTX_set_default_verify_paths(ctx: SSL_CTX$@): I32
+extern fn SSL_CTX_load_verify_locations(ctx: SSL_CTX$@, ca_file: Void@, ca_path: Void@): I32
 extern fn SSL_CTX_ctrl(ctx: SSL_CTX$@, cmd: I32, larg: Sz, parg: Void$@): I32
 extern fn SSL_new(ctx: SSL_CTX$@): SSL$@
 extern fn SSL_free(ssl: SSL$@)
@@ -73,6 +74,18 @@ const TLS1_2_VERSION: Sz = 0x0303 //< TLS1_2_VERSION
 priv const SSL_CTRL_SET_TLSEXT_HOSTNAME: I32 = 55 //< SSL_CTRL_SET_TLSEXT_HOSTNAME
 priv const TLSEXT_NAMETYPE_HOST_NAME: Sz = 0 //< TLSEXT_NAMETYPE_host_name
 const X509_V_OK: I32 = 0 //< X509_V_OK
+// The verification's answers that say no trusted CA vouches for the certificate.
+priv const X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT: I32 = 2 //< X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT
+priv const X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT: I32 = 18 //<
+    //< X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT
+priv const X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN: I32 = 19 //< X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN
+priv const X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY: I32 = 20 //<
+    //< X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY
+priv const X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE: I32 = 21 //<
+    //< X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE
+// The answers that say the certificate is for another host.
+priv const X509_V_ERR_HOSTNAME_MISMATCH: I32 = 62 //< X509_V_ERR_HOSTNAME_MISMATCH
+priv const X509_V_ERR_IP_ADDRESS_MISMATCH: I32 = 64 //< X509_V_ERR_IP_ADDRESS_MISMATCH
 const SSL_ERROR_WANT_READ: I32 = 2 //< SSL_ERROR_WANT_READ: it waits for the peer's bytes
 const SSL_ERROR_ZERO_RETURN: I32 = 6 //< SSL_ERROR_ZERO_RETURN: the peer's close_notify came
 
@@ -89,8 +102,11 @@ pub enum Tls_error //< why a secure connection could not be opened or used
     handshake_timed_out //< the handshake did not finish within its deadline
     ctx_failed //< OpenSSL setup failed (SSL_CTX_new, SSL_new and similar)
     handshake_failed //< SSL_connect (the handshake) failed for a reason other than the next one
+    ca_file_unreadable //< the CA file given cannot be read, or holds no PEM certificate
+    cert_untrusted //< no CA the client trusts vouches for the certificate, as for a self-signed one
+    cert_wrong_host //< a trusted CA vouches for the certificate, but for another host or address
     cert_verify_failed //<
-        //< the certificate or host name did not verify, so the handshake was refused
+        //< the certificate did not verify for another reason, such as having expired
     io_failed //< a send or receive failed, or the connection ended without the peer's close_notify
 
 pub struct Tls_stream //< a TCP connection with TLS on top, which owns its resources
@@ -100,19 +116,48 @@ pub struct Tls_stream //< a TCP connection with TLS on top, which owns its resou
 
 // `client_ctx`, `client_ssl` and `go_on` are unmarked, so `lib/kstls/tests/records.kspl` can drive
 // a client that holds its records back.
-fn client_ctx(): SSL_CTX$@!Tls_error //<
-    //< A client context that verifies the peer against the default CA store, at TLS 1.2 or above
+fn client_ctx(ca_file: U8[] = ""): SSL_CTX$@!Tls_error //<
+    //< A client context that verifies the peer at TLS 1.2 or above
+    //< It trusts the default CA store, or only the CAs in `ca_file` where one is given.
     //< Caution: **State the lower bound outright.** `TLS_client_method` allows 1.0 up, so otherwise
     //< openssl.cnf's MinProtocol decides, and a loose environment connects at 1.0 or 1.1.
     ctx: = SSL_CTX_new(TLS_client_method())
     if ctx == null
         throw .ctx_failed
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, null)
-    if SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, TLS1_2_VERSION, null) != 1 ||
-        SSL_CTX_set_default_verify_paths(ctx) != 1
+    if SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, TLS1_2_VERSION, null) != 1
         SSL_CTX_free(ctx)
         throw .ctx_failed
+    if ca_file.len == 0
+        if SSL_CTX_set_default_verify_paths(ctx) != 1
+            SSL_CTX_free(ctx)
+            throw .ctx_failed
+        return ctx
+    // **The file replaces the default store**, so only the CAs it names vouch for the peer.
+    c_file: U8$@ = ca_file.to_cstr() catch
+        SSL_CTX_free(ctx)
+        throw .ca_file_unreadable
+    loaded: = SSL_CTX_load_verify_locations(ctx, Void@::c_file, null)
+    dealloc(Void$@::c_file)
+    if loaded != 1
+        SSL_CTX_free(ctx)
+        throw .ca_file_unreadable
     return ctx
+
+priv fn refusal(verify_result: I32): Tls_error //<
+    //< Why the verification refused the certificate, from its answer (`SSL_get_verify_result`)
+    //< **The chain is checked before the host name**, so a certificate no CA vouches for gives
+    //< `cert_untrusted` whatever host it names.
+    if verify_result == X509_V_ERR_HOSTNAME_MISMATCH ||
+        verify_result == X509_V_ERR_IP_ADDRESS_MISMATCH
+        return .cert_wrong_host
+    if verify_result == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT ||
+        verify_result == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT ||
+        verify_result == X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN ||
+        verify_result == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY ||
+        verify_result == X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE
+        return .cert_untrusted
+    return .cert_verify_failed
 
 fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
     //< One connection's SSL, verifying against `host`, and sending it as SNI where it is a name
@@ -230,10 +275,11 @@ impl Tls_stream
         host: U8[], //< the host name to connect to; SNI and the certificate check also use it
         port: I32, //< the port on that host
         handshake_ms: I32 = 10000, //< positive budget; non-positive expires immediately
+        ca_file: U8[] = "", //< a PEM file of the only CAs to trust; empty trusts the default store
     ): Tls_stream$@!Tls_error
         tcp: = net.Tcp_stream.connect(host, port) catch
             throw .connect_failed
-        ctx: = client_ctx() catch e
+        ctx: = client_ctx(ca_file) catch e
             tcp.free()
             throw e
         ssl: = client_ssl(ctx, host) catch e
@@ -257,7 +303,8 @@ impl Tls_stream
         // **The verification's own answer decides the error.** With `SSL_VERIFY_PEER` a certificate
         // that does not verify stops the handshake. Only this tells it from a peer speaking no
         // TLS.
-        verified: = SSL_get_verify_result(ssl) == X509_V_OK
+        verify_result: = SSL_get_verify_result(ssl)
+        verified: = verify_result == X509_V_OK
         if !shook || !verified
             expired: = sys.mono_us() >= deadline
             // No shutdown exchange on a failed handshake: cleanup must not wait for the peer.
@@ -266,7 +313,7 @@ impl Tls_stream
             tcp.free()
             if expired
                 throw .handshake_timed_out
-            throw .handshake_failed if verified else .cert_verify_failed
+            throw .handshake_failed if verified else refusal(verify_result)
         tcp.set_blocking() catch
             SSL_free(ssl)
             SSL_CTX_free(ctx)
@@ -324,6 +371,70 @@ impl Tls_stream
                 return 0
             if !go_on(r.tcp, r.ssl, n)
                 throw .io_failed
+
+    priv fn read_before(r: Self$@, buf: U8$[], deadline: I64): Sz!net.Net_error //<
+        //< `read` with a deadline; the socket must be non-blocking
+        for
+            ERR_clear_error()
+            n: =
+                SSL_read(r.ssl, Void$@::buf.ptr, I32::math.min(buf.len, IO_CHUNK))
+            if n > 0
+                return Sz::n
+            if SSL_get_error(r.ssl, n) == SSL_ERROR_ZERO_RETURN
+                return 0
+            if !go_on(r.tcp, r.ssl, n, deadline)
+                throw past_or_failed(deadline)
+
+    priv fn write_before(r: Self$@, buf: U8[], deadline: I64): Void!net.Net_error //<
+        //< Sends every byte of `buf` before the deadline; the socket must be non-blocking
+        $sent: Sz = 0
+        for sent < buf.len
+            want: = math.min(buf.len - sent, IO_CHUNK)
+            ERR_clear_error()
+            n: = SSL_write(r.ssl, Void@::(buf.ptr + sent), I32::want)
+            if n > 0
+                if !send_queued(r.tcp, r.ssl, deadline)
+                    throw past_or_failed(deadline)
+                sent += Sz::n
+            else if !go_on(r.tcp, r.ssl, n, deadline)
+                throw past_or_failed(deadline)
+
+priv fn past_or_failed(deadline: I64): net.Net_error //<
+    //< Why a move with a deadline ended: `timed_out` once the deadline has passed
+    return .timed_out if sys.mono_us() >= deadline else .io_failed
+
+impl Tls_stream: net.Byte_stream //< so `std/http` and `std/http_body` speak HTTP over it
+    //< **The socket is non-blocking for the length of a call**, as in the handshake, so each wait
+    //< keeps the deadline. It is blocking again when the call returns.
+    pub fn read_for( //< receives as `read` does, waiting at most `timeout_ms` for the first byte
+        //< 0 only after the peer's close_notify. Past the wait it fails with `timed_out`, and any
+        //< other failure is `io_failed`. An empty `buf` fails with `io_failed`, as on a socket.
+        r: Self$@,
+        buf: U8$[], //< where the bytes go
+        timeout_ms: I32, //< how long to wait for something to read
+    ): Sz!net.Net_error
+        if buf.len == 0
+            throw .io_failed
+        deadline: = sys.deadline_after_ms(timeout_ms)
+        r.tcp.set_nonblocking()!
+        n: = r.read_before(buf, deadline) catch e
+            r.tcp.set_blocking() catch {}
+            throw e
+        r.tcp.set_blocking()!
+        return n
+
+    pub fn write_all_for( //< sends every byte, all within `timeout_ms`, or fails with `timed_out`
+        //< How much was sent is not known after a failure.
+        r: Self$@,
+        buf: U8[], //< the bytes to send
+        timeout_ms: I32, //< how long the whole send can take
+    ): Void!net.Net_error
+        deadline: = sys.deadline_after_ms(timeout_ms)
+        r.tcp.set_nonblocking()!
+        r.write_before(buf, deadline) catch e
+            r.tcp.set_blocking() catch {}
+            throw e
+        r.tcp.set_blocking()!
 
 impl Tls_stream: Manual_free //< it owns its memory and frees it with `free()`
     pub fn free(r: Self$@) //< closes the connection and frees everything it owns

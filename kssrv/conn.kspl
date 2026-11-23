@@ -13,7 +13,7 @@ import "std/log" { Log }
 import "std/mem" { Arena }
 import "std/net"
 import "std/refcount" { Rc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 
 const MAX_CONNS: Sz = 128 //< the cap on connections open at once
@@ -83,9 +83,9 @@ struct Conn
     stream: net.Tcp_stream$@
     arena: Arena$@
     // The partly read request. drop_prefix discards what each finished parse used.
-    inbuf: Str_builder
+    inbuf: Str
     // The built, partly sent response. `sent` is the length already sent.
-    outbuf: Str_builder
+    outbuf: Str
     sent: Sz
     // Closes once it is all sent (on `Connection: close`, and after a refusal that closes,
     // `keeps_after`).
@@ -190,8 +190,8 @@ fn conn_new(stream: net.Tcp_stream$@, serial: I64, local: Bool): Rc<|Conn|>
     fresh: Conn = ::{
         .stream = stream,
         .arena = Arena(CONN_ARENA_CHUNK),
-        .inbuf = Str_builder(),
-        .outbuf = Str_builder(),
+        .inbuf = Str(),
+        .outbuf = Str(),
         .serial = serial,
         .moved_us = sys.mono_us(),
         .accepted_us = sys.mono_us(),
@@ -419,7 +419,7 @@ fn queue_error( //< queues an error answer in plain text
     keep: Bool = false, //< whether the request was read whole and its client keeps the connection
     why: U8[] = "", //< a sentence after the status saying what to change; empty for none
 )
-    defer $b: = Str_builder()
+    defer $b: = Str()
     b.s("\{status\} ").s(http.reason_phrase(status).unwrap_or("")).s("\n")
     if why.len > 0
         b.s(why).s("\n")

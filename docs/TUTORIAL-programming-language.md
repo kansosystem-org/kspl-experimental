@@ -1,8 +1,10 @@
 # A tutorial of KSPL
 
-**This page teaches KSPL by walking through one small program, one declaration at a time.** It is for programmers who know another language, such as Python, JavaScript or C. Each section shows one piece of the program and says what that piece teaches. At the end, `main` puts the pieces together, and the page shows what the program prints. Joined in order, the code blocks are the whole program, which the gates compile and run; it is also one file, [`../ksplc/tests/notation/tutorial.kspl`](../ksplc/tests/notation/tutorial.kspl).
+**This page teaches KSPL by walking through one small program, one declaration at a time.** It is for programmers who know another language, such as Python, JavaScript or C. If you know C well, [`TUTORIAL-kspl-for-c-programmers.md`](TUTORIAL-kspl-for-c-programmers.md) teaches the same language by what C already does. Each section shows one piece of the program and says what that piece teaches. At the end, `main` puts the pieces together, and the page shows what the program prints. Joined in order, the KSPL code blocks are the whole program, which the gates compile and run; it is also one file, [`../ksplc/tests/notation/tutorial.kspl`](../ksplc/tests/notation/tutorial.kspl).
 
-**To run it, or anything of your own, the quick start is in the root [`../README.md`](../README.md).** It fetches `ksplc`, writes a first file and runs it in three steps. Nothing on this page needs more than that.
+**To run it, or anything of your own, the quick start is in the root [`../README.md`](../README.md).** It fetches `ksplc`, writes a first file and runs it in three steps. Nothing on this page needs more than that. To try a line, `ksplc run -` reads a program from standard input, and `ksplc run --eval='import "std/io"; fn main() { io.out().s("hi\n") }'` takes one from the command line.
+
+**A word the page uses without explaining it**, such as *arena* or *generic*, is in "Words used throughout" in [`SPEC-documents.md`](SPEC-documents.md).
 
 **Do not edit this page.** It is written by `make tutorial` from the program and the program's own output, and `make test-docs` refuses a page older than its program.
 
@@ -51,12 +53,12 @@
 import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 ```
 
 ## Naming a value, and why the type is written
 
-**A `const` cannot be assigned to.** `Sz` is the type for sizes and counts. At the top of a file the type is written out rather than inferred. A top-level name is the file's interface, and a reader of another file has only this line to go on. Inside a function the type can be left off.
+**A `const` cannot be assigned to.** `priv` keeps a name inside its file; without it, the whole package can use the name. `Sz` is the type for sizes and counts. At the top of a file the type is written out rather than inferred. A top-level name is the file's interface, and a reader of another file has only this line to go on. Inside a function the type can be left off: `n: = 4` takes the type of its value.
 
 ```kspl
 priv const LIMIT: Sz = 4
@@ -100,7 +102,7 @@ priv struct Point
 
 ## Methods of one's own
 
-**The receiver (the value a method is called on) is written out as the first parameter.** So whether a method can change the value is read off its signature. `Self@` is a pointer that only reads, `Self$@` one that can write. `p.moved(2)` passes `p` as `r`. A type's own function is reached with the same `.` as a module's (`Arena.from_buffer(…)`, `io.out()`). Its `new` is called only as the type itself (`Arena(…)`). **`::` is never a path** to a name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
+**The receiver (the value a method is called on) is written out as the first parameter.** So whether a method can change the value is read off its signature. `Self@` is a pointer that only reads, `Self$@` one that can write. `p.moved(2)` passes `p` as `r`. A type's own function is reached with the same `.` as a file's (`Arena.from_buffer(…)`, `io.out()`). Its `new` is called only as the type itself (`Arena(…)`). **`::` is never a path** to a name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
 
 ```kspl
 impl Point
@@ -211,14 +213,14 @@ priv fn step_twice(value: I32): I32!Step_error
 
 ```kspl
 priv fn joined_len(words: U8[][]): Sz
-    defer $b: = Str_builder()
+    defer $b: = Str()
     for w in words
         b.s(w)
     return b.len
-priv fn pick_builder(ok: Bool): Str_builder!Step_error
+priv fn pick_builder(ok: Bool): Str!Step_error
     if !ok
         throw .too_far
-    return Str_builder()
+    return Str()
 ```
 
 ## Leaving early
@@ -299,7 +301,7 @@ fn main(): I32
         fallback -2
     defer $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
-        fallback Str_builder()
+        fallback Str()
     b.s("held")
     note(true)
     note(false)
@@ -343,5 +345,5 @@ defer comes out last.
 | :-- | :-- |
 | Look a rule up: the language rule by rule, not for reading through | [`SPEC-programming-language.md`](SPEC-programming-language.md) |
 | Set a project of your own up. That covers an executable to hand out and a program split over files. It also covers VS Code with the language server and the debugger | [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) |
-| Find what the standard library offers: every module, then one module's names | `ksplc doc std`, then `ksplc doc std/io` |
+| Find what the standard library offers: every file, then one file's names | `ksplc doc std`, then `ksplc doc std/io` |
 | Understand a message from the compiler that carries a code, such as `W0207` | `ksplc explain <code>` |

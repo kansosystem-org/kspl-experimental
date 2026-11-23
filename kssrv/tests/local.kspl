@@ -42,6 +42,8 @@ fn cases(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_e
     stat_cases(port, auth, arena)!
     list_cases(port, auth, root, arena)!
     write_cases(port, auth, root, arena)!
+    plus_cases(port, auth, root, arena)!
+    read_only_cases(port, auth, root, arena)!
     dot_cases(port, auth, root, arena)!
     link_cases(port, auth, root, arena)!
     conditional_cases(port, auth, arena)!
@@ -443,6 +445,57 @@ priv fn write_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
     verdict.check("a write below a file is refused, naming the file",
         on_file.status == 409 && said_file.find_str("\"sub/two.txt\" is a file").is_some(),
         client.shown(on_file, arena))
+    // A file further up is still named as a file, never as a folder to make.
+    below: = client.put_file(port, "/api/file?path=sub/two.txt/more/a.png", auth, "x", arena)!
+    said_below: = client.doc_of(below, arena).get("error").as_str().unwrap_or("")
+    verdict.check("a write two steps below a file names the file too",
+        below.status == 409 && said_below.find_str("\"sub/two.txt\" is a file").is_some() &&
+        client.doc_of(below, arena).get("cause").as_str().unwrap_or("").equals("folders"),
+        client.shown(below, arena))
+
+priv fn plus_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< A `+` in `path=` is a `+`, never a space: only `%XX` is decoded
+    put: = client.put_file(port, "/api/file?path=sub/a+b.txt", auth, "plus\n", arena)!
+    verdict.check("a write to a name holding `+` makes that name, not one with a space",
+        put.status == 200 && fs.exists(fs.join(root, "sub/a+b.txt", arena)) &&
+        !fs.exists(fs.join(root, "sub/a b.txt", arena)), client.shown(put, arena))
+    back: = client.get(port, "/api/file?path=sub/a+b.txt", auth, arena)!
+    verdict.check("and it is read back under the same name",
+        back.status == 200 && back.body.equals("plus\n"), client.shown(back, arena))
+    spaced: = client.get(port, "/api/file?path=sub/a%20b.txt", auth, arena)!
+    client.expect_status("the name with a space is another file", spaced, 404, arena)
+    size: = client.get(port, "/api/stat?path=sub/a+b.txt", auth, arena)!
+    client.expect_status("`/api/stat` reads the `+` the same way", size, 200, arena)
+
+priv fn read_only_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< A file marked read-only is not replaced, and the answer says why
+    //< **The save is a rename**, which the OS lets through whatever the file's own mark says.
+    io.write_file(fs.join(root, "sub/locked.txt", arena), "kept\n") catch
+        panic("sub/ must be writable")
+    if !scratch.mark_read_only(fs.join(root, "sub", arena), "locked.txt", arena)
+        verdict.skip_check("a write to a read-only file is refused",
+            "this machine has no tool that marks a file read-only")
+        return
+    path: = "/api/file?path=sub/locked.txt"
+    expected: = arena.text().s(auth).s("X-Kanso-If-Content: ").s(digest("kept\n", arena)).s("\r\n")
+        .take()
+    for guarded in Range.asc(2)
+        over: = client.put_file(port, path, expected if guarded == 1 else auth, "lost\n", arena)!
+        said: = client.doc_of(over, arena)
+        verdict.check("a write to a read-only file is refused, and says that it is read-only",
+            over.status == 409 &&
+            said.get("cause").as_str().unwrap_or("").equals("read_only") &&
+            said.get("error").as_str().unwrap_or("").find_str("\"sub/locked.txt\" is read-only")
+            .is_some(), client.shown(over, arena))
+    got: = client.get(port, path, auth, arena)!
+    verdict.check("the read-only file keeps its bytes", got.body.equals("kept\n"),
+        client.shown(got, arena))
+    // A write that expects no file there is told so, as for any file that stands.
+    missing: = arena.text().s(auth).s("X-Kanso-If-Content: missing\r\n").take()
+    made: = client.put_file(port, path, missing, "lost\n", arena)!
+    verdict.check("a creation over a read-only file is a plain mismatch",
+        made.status == 409 &&
+        client.doc_of(made, arena).get("cause").as_str().is_none(), client.shown(made, arena))
 
 priv const DOT_RELS: U8[][2] = ::{ ".git/config", ".hidden" } //< the dot names a write tries
 priv const DOT_BODIES: U8[][2] = ::{ "[core]\n", "hidden\n" } //< what each holds before

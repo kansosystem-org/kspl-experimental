@@ -120,14 +120,14 @@ KSPL has no garbage collector. Memory that `std` hands you lives in one of four 
 
 **Choose an arena first, and the heap only when no arena fits.** A value made in an arena needs no `free()`, so it cannot leak.
 
-* **A function given an arena makes what it returns there**: `arena.text().s(…).take()`, not a `Str_builder` on the heap handed back. The text grows inside that arena, so a failure before `take()` leaks nothing ([below](#arenatext-grows-its-text-inside-the-arena)).
+* **A function given an arena makes what it returns there**: `arena.text().s(…).take()`, not a `Str` on the heap handed back. The text grows inside that arena, so a failure before `take()` leaks nothing ([below](#arenatext-grows-its-text-inside-the-arena)).
 * **Use the heap** where nothing that outlives the result holds an arena, or where memory must go back early, such as inside a long loop.
 
 The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory management" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#84-memory-management).
 
 ### An owner is freed where it is declared
 
-**Every type that owns something conforms to `Manual_free`, and its owner frees it.** In `std` these include `Str_builder`, `File_stream`, `File_lock`, `Mutex<|T|>`, `Cond_var`, `thread.Thread`, `Reactor`, `regex`'s search state, `Scratch` and the containers on the heap. A local one is declared with `defer` in front, which frees it on every way out of its block, a propagated failure's included. No type frees itself, so a reader sees each free on the page ("Every cleanup stands in the source" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#every-cleanup-stands-in-the-source)).
+**Every type that owns something conforms to `Manual_free`, and its owner frees it.** In `std` these include `Str`, `File_stream`, `File_lock`, `Mutex<|T|>`, `Cond_var`, `thread.Thread`, `Reactor`, `regex`'s search state, `Scratch` and the containers on the heap. A local one is declared with `defer` in front, which frees it on every way out of its block, a propagated failure's included. No type frees itself, so a reader sees each free on the page ("Every cleanup stands in the source" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#every-cleanup-stands-in-the-source)).
 
 * **A copy of a file, a lock or a thread primitive is refused.** `File_stream`, `File_lock`, `thread.Raw_mutex`, `Cond_var` and `thread.Thread` conform to `Move_only` too, and `Mutex<|T|>` is move-only through its lock. A copy would close or destroy one resource twice.
 * **A slice borrows.** A builder's slice becomes invalid when the builder is freed. Returning the builder hands it to the caller; returning its slice does not.
@@ -137,7 +137,7 @@ The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory manageme
 * **An owner with more than one way to end has no `free()`.** A `subproc.Child` ends by `wait` or by `kill`, and only the caller knows which. So it conforms to `Move_only` alone, and its end is a `defer` statement of its own.
 * **A network stream is handed out as a pointer.** A server keeps `net.Tcp_stream` and `net.Tcp_listener` in its table of connections past any one scope, and frees them there.
 
-**A container on the heap needs its `free()`. One in an arena needs it only when its elements hold ARC values**, since the arena releases no element's count. An element that owns something (a `List` of `Str_builder`s) is freed by its owner before the container.
+**A container on the heap needs its `free()`. One in an arena needs it only when its elements hold ARC values**, since the arena releases no element's count. An element that owns something (a `List` of `Str`s) is freed by its owner before the container.
 
 ### A typed value is made with its value
 
@@ -267,7 +267,7 @@ Caution: **Do not mark an arena parameter with a suffix**, least of all `_in`. `
 
 **Do not take an arena only to discard it.** The caller reads an arena parameter as "I handed over where the content goes", so a discarded one misleads them about clean-up.
 
-**Only a function that takes an arena allocates.** The one exception is `Str_builder`, a growing buffer on the heap that its owner frees. In `std/str`:
+**Only a function that takes an arena allocates.** The one exception is `Str`, a growing buffer on the heap that its owner frees. In `std/str`:
 
 | Functions | Take an arena? | Return |
 | :-- | :-- | :-- |
@@ -514,7 +514,7 @@ Caution: **Do not make `chars` point at `str`.** `str` imports `chars`, so the c
 
 ### A string allocated and returned is returned read-only
 
-**A function that returns a newly allocated string returns `U8[]`**, the read-only type, though you own the copy: `fs.join`, `str.replace`, `str.join` and the rest. A writable `U8$[]` comes back only where a writable buffer was asked for: `arena.dup_str`, `Str_builder.slice`, `chars.sub_mut`, and the buffer that `rand.fill` receives.
+**A function that returns a newly allocated string returns `U8[]`**, the read-only type, though you own the copy: `fs.join`, `str.replace`, `str.join` and the rest. A writable `U8$[]` comes back only where a writable buffer was asked for: `arena.dup_str`, `Str.slice`, `chars.sub_mut`, and the buffer that `rand.fill` receives.
 
 **Write permission spreads through generics.** User-written generics are invariant, so `List<|U8$[]|>` cannot become `List<|U8[]|>` ("6.4 Type conversion (`::`) and implicit casts" in `docs/SPEC-programming-language.md`). A returned `List<|U8$[]|>` would make the caller carry the `$` into every variable, field and argument, as C's `strdup` spreads `char *`.
 
@@ -555,7 +555,7 @@ It is Zig's three-way split (`w.print` / `bufPrint` / `allocPrint`) without the 
 
 **Interpolation that yields a value is not taken** (Python's f-string, Go's `Sprintf`). It hides the new string's allocation and lifetime. That goes against "Responsibility can only be assigned for what the writer can see" in `docs/DESIGN-programming-language.md`. Before you add a fourth shape, confirm that the three cannot write it.
 
-**Why two writers?** `std/str`'s `Str_builder` grows. `std/buf`'s `Buf_writer` writes into the caller's array and never allocates, for places that cannot allocate (freestanding) or must not inside a loop. Both are `Writer`s, so interpolation works with either. **The choice is "can it allocate" and nothing else**; a split by speed or by an upper bound would make two ways to one purpose.
+**Why two writers?** `std/str`'s `Str` grows. `std/buf`'s `Buf_writer` writes into the caller's array and never allocates, for places that cannot allocate (freestanding) or must not inside a loop. Both are `Writer`s, so interpolation works with either. **The choice is "can it allocate" and nothing else**; a split by speed or by an upper bound would make two ways to one purpose.
 
 **Why an overflow is not a panic**: stopping because a display string outgrew its buffer is out of proportion. `Buf_writer` counts what it dropped and reports it through `overflowed()`, as C's `snprintf` returns the length it could have written. The count sits in the writer, since partway along a chain of calls no return value can be checked.
 
@@ -571,7 +571,7 @@ Caution: **Do not free the old buffer before the copy.** The copy then reads fre
 
 ### `arena.text()` grows its text inside the arena
 
-**An `Arena_text` grows its text in the arena that made it, never on the heap.** So a builder dropped before `take()` costs only arena space, which the arena gives back when it is freed. A failure thrown between `text()` and `take()` therefore leaks nothing. With a buffer on the heap, every such path would need its own `free`.
+**An `Arena_str` grows its text in the arena that made it, never on the heap.** So a builder dropped before `take()` costs only arena space, which the arena gives back when it is freed. A failure thrown between `text()` and `take()` therefore leaks nothing. With a buffer on the heap, every such path would need its own `free`.
 
 * **While the text is the arena's newest block, it grows where it is**, with nothing copied. `take()` then gives back the room past the text, and copies nothing either.
 * **Otherwise it moves to a new block twice as large.** Another allocation in the same arena, such as a second builder written in turn, causes that.
@@ -590,7 +590,7 @@ Caution: **In a fixed buffer (`from_buffer`), do not rewind to a mark saved sinc
 
 `std` prints floating-point numbers with its own code, not with libc's `printf`. The same code runs on bare metal, and prints the same digits on every platform. The shortest digits come from Raffaello Giulietti's Schubfach ("One table of powers of ten serves both directions" below). The digits of `.N` are assembled exactly with `std/bignat` (arithmetic on numbers of any length, *multiple precision*), and cut at a fixed place. What it prints is "3.6.1 The default notation for primitives" and "3.6.2 Format specifiers" in `docs/SPEC-programming-language.md`. This section holds why.
 
-**Why here**: freestanding has no libc. Yet `Str_builder` conforms to `Writer`, and the vtable references every method's thunk. So `snprintf` would be linked into a bare-metal program that never writes a float: `--gc-sections` cannot drop a thunk.
+**Why here**: freestanding has no libc. Yet `Str` conforms to `Writer`, and the vtable references every method's thunk. So `snprintf` would be linked into a bare-metal program that never writes a float: `--gc-sections` cannot drop a thunk.
 
 **The default is the shortest representation that reads back to the same value**, as Rust, Swift, Python and Java print it. It switches to the exponent form at JSON's and JavaScript's boundaries, so `\{x\}` and `std/json` print by one rule. An F32 is shortest at its own width, or `0.1F32` would print as `0.10000000149011612`.
 

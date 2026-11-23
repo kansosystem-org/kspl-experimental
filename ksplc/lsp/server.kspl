@@ -25,7 +25,7 @@ import "std/io"
 import "std/json" + { Json_builder }
 import "std/jsonrpc"
 import "std/mem" + { Arena, dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum" // `to_i64`, for the silence the environment sets
 import "std/subproc"
 import "std/sys"
@@ -48,7 +48,7 @@ priv fn worker_timeout_ms(): I32 //< how long the worker may send nothing before
             return I32::ms
     return WORKER_TIMEOUT_MS
 
-priv fn relay_stripping_alive(src: U8[], out: Str_builder$@) //<
+priv fn relay_stripping_alive(src: U8[], out: Str$@) //<
     //< It copies into out while removing the liveness markers
     //< Without this the markers reach the editor unchanged and break the LSP's framing.
     tag: = lsp_msg.WORKER_ALIVE_TAG
@@ -110,7 +110,7 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
     //< Nothing is relayed before the marker comes, so a partial message never breaks the protocol.
     cap: Sz = 65536
     rbuf: = U8$@::arena.alloc(cap)
-    defer $acc: = Str_builder()
+    defer $acc: = Str()
     $ok: = Worker_end.exited
     // Each search resumes marker-length-1 before where the last found none. So a marker crossing a
     // chunk boundary is still found. Re-walking the whole buffer per chunk is quadratic in an
@@ -136,7 +136,7 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
         idx: = lsp_msg.marker_at(acc.slice(), search_from, tag)
         if idx >= 0
             if idx > 0
-                defer $clean: = Str_builder()
+                defer $clean: = Str()
                 relay_stripping_alive(acc.slice().sub(0, idx), clean@)
                 io.out().s(clean.slice())
                 io.out().flush()
@@ -266,13 +266,13 @@ impl Lsp_docs
 impl Lsp_docs: Manual_free
     priv fn free(r: Self$@)
         r.store.free()
-priv fn build_doc_frame(method: U8[], uri: U8[], text: U8[], arena: Arena$@): Str_builder //<
+priv fn build_doc_frame(method: U8[], uri: U8[], text: U8[], arena: Arena$@): Str //<
     //< It builds a message (framed) carrying one document's cached text: a didOpen or a restore
     $b: = Json_builder(arena)
     td: = b.obj().set("uri", b.str_val(uri)).set("languageId", b.str_val("kspl"))
         .set("version", b.int_val(1)).set("text", b.str_val(text)).build()
     params: = b.obj().set("textDocument", td).build()
-    $frame: = Str_builder()
+    $frame: = Str()
     jsonrpc.frame_into(frame@, jsonrpc.encode(method, params, -1, arena))
     return frame
 
@@ -396,7 +396,7 @@ priv const INBOX_CAPACITY: Sz = 1024 //< how many messages the reader holds befo
     //< of one empty builder per slot.
 
 priv struct Editor_reader //< the thread reading the editor's messages, and what it hands over
-    inbox: channel.Channel<|Str_builder|> //<
+    inbox: channel.Channel<|Str|> //<
         //< each message's body, in its own memory and the order it came
         //< The reader closes it at `exit` or the end of input; the supervisor closes it when it
         //< stops taking messages.
@@ -421,7 +421,7 @@ extern fn ksplc_lsp_read_editor(reader: Editor_reader$@): Void$@ //<
     base: = arena.save()
     for
         arena.restore(base)
-        $body: = Str_builder()
+        $body: = Str()
         $got: = true
         lsp_msg.read_message(body@) catch e
             got = false
@@ -448,12 +448,12 @@ extern fn ksplc_lsp_read_editor(reader: Editor_reader$@): Void$@ //<
             break
     return null
 
-priv fn let_go_body($body: Str_builder) //< frees a body the channel did not take
+priv fn let_go_body($body: Str) //< frees a body the channel did not take
     body.free()
 
 priv fn start_editor_reader(): Editor_reader$@? //<
     //< It starts the reading thread; none where the OS gives no thread or lock
-    inbox: = channel.Channel<|Str_builder|>(INBOX_CAPACITY, null) catch
+    inbox: = channel.Channel<|Str|>(INBOX_CAPACITY, null) catch
         return .none
     r: = mem.new(Editor_reader::{ .inbox = inbox, .broken = false })
     r.reading = thread.Thread.spawn<|Editor_reader|>(ksplc_lsp_read_editor, r) catch
@@ -470,7 +470,7 @@ impl Editor_reader
         body.free()
         return .message(text)
 
-    priv fn take(r: Self@, wait: Bool): Str_builder!channel.Receive_end //<
+    priv fn take(r: Self@, wait: Bool): Str!channel.Receive_end //<
         //< the next body; without `wait`, it looks once
         if wait
             return r.inbox.receive()!
@@ -629,7 +629,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         if docs.is_unchecked(named)
             worker = check_doc(docs@, worker, named, arena)
         // forward to the worker (rebuilt with a proper header)
-        defer $frame: = Str_builder()
+        defer $frame: = Str()
         jsonrpc.frame_into(frame@, msg_body)
         end: = exchange(worker@, frame.slice(), arena)
         $handled: = false

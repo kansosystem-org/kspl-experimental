@@ -16,7 +16,7 @@ import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "std/chars"
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 fn report_type_existence_error(ctx: Sema_ctx$@, kind: sema_decl_name.Written_kind,
     base_name: U8[], err_node: Ast_node$@) //<
@@ -39,8 +39,34 @@ fn report_type_existence_error(ctx: Sema_ctx$@, kind: sema_decl_name.Written_kin
     case .not_found
         if !base_name.starts_with("_")
             ctx.clear_scratch().s("undefined type '\{base_name\}'")
+            append_type_word_hint(ctx, base_name)
             ctx.err(err_node, ctx.scratch.slice())
     default {}
+
+priv const OTHER_LANGUAGE_TYPES: U8[][2][17] = ::{::{ "int", "I32" }, ::{ "long", "I64" },
+    ::{ "short", "I16" }, ::{ "float", "F64" }, ::{ "double", "F64" }, ::{ "number", "F64" },
+    ::{ "bool", "Bool" }, ::{ "boolean", "Bool" }, ::{ "char", "U8" }, ::{ "byte", "U8" },
+    ::{ "String", "U8[]" }, ::{ "string", "U8[]" }, ::{ "str", "U8[]" }, ::{ "usize", "Sz" },
+    ::{ "isize", "Sz" }, ::{ "size_t", "Sz" }, ::{ "void", "Void" } } //<
+        //< The types Python, JavaScript, C, Java and Rust name otherwise, and KSPL's name for each
+        //< A Python `float` is 64 bits. Rust's `i32` and the like are KSPL's names in lower case.
+
+priv const PRIMITIVE_NAMES: U8[][13] = ::{ "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64",
+    "F32", "F64", "Sz", "Bool", "Void" } //< the primitive types (3.1 of the specification)
+
+priv fn append_type_word_hint(ctx: Sema_ctx$@, name: U8[]) //<
+    //< Writes to scratch KSPL's name for another language's type, where `name` is one
+    for row in OTHER_LANGUAGE_TYPES
+        if name.equals(row[0])
+            ctx.scratch.s("\n  Hint: KSPL names this type '\{row[1]\}'.")
+            if row[1].equals("U8[]")
+                ctx.scratch.s(" A 'Str' builds a string piece by piece.")
+            return
+    for primitive in PRIMITIVE_NAMES
+        if name.len == primitive.len && name[0] == primitive[0].to_lower() &&
+            name.sub_from(1).equals(primitive.sub_from(1))
+            ctx.scratch.s("\n  Hint: KSPL names this type '\{primitive\}'.")
+            return
 
 fn refuse_type_args_on_plain_type(ctx: Sema_ctx$@, written: sema_decl_name.Written_type) //<
     //< Reports type arguments written after a type that declares none
@@ -55,6 +81,9 @@ fn refuse_type_args_on_plain_type(ctx: Sema_ctx$@, written: sema_decl_name.Writt
 
 priv fn check_and_report_type(node: Ast_node$@, ctx: Sema_ctx$@,
     gen_params: List<|Ast_node$@|>$@, err_node: Ast_node$@)
+    // In the file the name is written in (enter_written_file in `../session/ctx.kspl`).
+    prev_file: = ctx.enter_written_file(node)
+    defer ctx.set_current_file(prev_file)
     w: = ctx.read_written_type(node)
     if w.spelled.len == 0
         return
@@ -77,9 +106,13 @@ priv fn check_and_report_type(node: Ast_node$@, ctx: Sema_ctx$@,
         if w.member == null
             refuse_type_args_on_plain_type(ctx, w)
     case .names_value
-        defer $path_str: = Str_builder()
+        defer $path_str: = Str()
         node.get_full_path_str_to(path_str)
         report_type_existence_error(ctx, kind, path_str.slice(), err_node)
+    case .not_found
+        if !w.spelled.starts_with("_")
+            ctx.resolving.missing_types.set(w.fqn, true)
+        report_type_existence_error(ctx, kind, w.spelled, err_node)
     default
         report_type_existence_error(ctx, kind, w.spelled, err_node)
 
@@ -99,6 +132,11 @@ fn names_missing_type(ctx: Sema_ctx$@, type_node: Ast_node$@): Bool //<
     //< report, an unread-parameter warning included.
     if type_node == null
         return false
+    // **In the file the type is written in**, as the resolver reads it (resolve_type in
+    // `resolve.kspl`): a copied default body holds the impl's type arguments beside the trait's
+    // text.
+    prev_file: = ctx.enter_written_file(type_node)
+    defer ctx.set_current_file(prev_file)
     if type_node.kind_id == .k_type_atom
         if path: = atom_path(type_node)
             w: = ctx.read_written_type(path)
@@ -128,7 +166,7 @@ priv fn refuse_sizeof_of_value_name(ctx: Sema_ctx$@, target: Ast_node$@,
     if path.kind_id != .k_identifier && path.kind_id != .k_type_path &&
         path.kind_id != .k_expr_path
         return false
-    defer $path_str: = Str_builder()
+    defer $path_str: = Str()
     path.get_full_path_str_to(path_str)
     full: = path_str.slice()
     switch ctx.type_kind_of(ctx.read_written_type(path), gen_params)
@@ -348,6 +386,11 @@ impl Ast_node
             //< Reports each type expression under r naming no type
             //< bound lists the names a function binds (parameters and locals), once inside one.
         if r == null
+            return
+        // **A trait's default method copied into another file's impl is not read here.** Its names
+        // are those of the trait's file (names_file in `../session/ctx.kspl`), where the trait's
+        // declaration had this check.
+        if r.kind_id == .k_decl_fn && !ctx.names_file(r).equals(r.loc.file())
             return
         // **A `sizeof` naming a value is the body's to read** (`sizeof(x)`, `sizeof(x.a)`). No
         // local is in scope yet here. So a name the function binds is left to infer_sizeof_expr in

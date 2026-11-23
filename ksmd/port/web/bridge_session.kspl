@@ -26,7 +26,7 @@ import "ksmd/syntax/writer"
 import "std/ds" { List }
 import "std/json"
 import "std/mem" + { Arena, dealloc }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 
 extern fn ksmd_js_gave_up(msg: U8@, msg_len: Sz) //<
     //< Throws in the script with the reason the page stopped; it does not return
@@ -37,7 +37,7 @@ const HEAP_BYTES: Sz = 128 * 1024 * 1024 //< the fixed buffer that stands in for
 const RESERVE: Sz = 16 * 1024 * 1024 //< the free memory an action needs before it starts
 $heap: U8[128*1024*1024] = ::{}
 $ready: Bool = false
-$out: Str_builder$@ = null //< where an action's result is written
+$out: Str$@ = null //< where an action's result is written
 $input: U8$@ = null //< where the script writes text for an action
 $input_cap: Sz = 0
 $session: Arena$@ = null //< holds the open document, its edits and its history
@@ -63,7 +63,7 @@ fn ensure() //< sets up the heap, the output and an empty document, once
     if ready
         return
     mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = HEAP_BYTES })
-    out = mem.new(Str_builder())
+    out = mem.new(Str())
     panic_hook = give_up
     ready = true
     first: = Arena(64 * 1024)
@@ -109,7 +109,7 @@ priv fn release_all_input() //< lets go the input buffer, whatever its size
 fn assembled(scratch: Arena$@): Inside$@ //<
     //< The view of the open document as it is now, over what was fetched. Each file it lacks is
     //< in `fetched.wanted`. Only a page that named a path calls it, so `fetched` is set.
-    defer $text: = Str_builder()
+    defer $text: = Str()
     writer.write(ed.doc@, text@)
     top: = parse(doc_path, scratch.dup_str(text.slice()), scratch) catch
         panic("the editor's document reads back")
@@ -174,7 +174,7 @@ fn result_with(ok: Bool, why: U8[], files: Bool): Sz //<
     out.s(",\"redo\":").s("1" if ed.can_redo() else "0").c('}')
     return out.slice().len
 
-fn here(out: Str_builder$@) //<
+fn here(out: Str$@) //<
     //< `{"k","l","o","c","a","m"}`: the first selected unit's kind, level, numbering, tick box and
     //< alignment, and `[emphasis, strong, code]` as 0 or 1, for the quick access bar to show
     h: = ed.here()

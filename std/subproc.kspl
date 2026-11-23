@@ -18,7 +18,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/io"
 import "std/mem" + { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/sys"
 
 // argv is passed as one buffer with NUL separators (`start`). `stdio` is the sum of the
@@ -56,7 +56,7 @@ priv fn start(argv: U8[][], cwd: U8[], stdio: I32, out_path: U8[], err_path: U8[
     //< Starts the child; returns 0 on failure
     //< Arguments are packed with NUL separators. An embedded NUL fails the start: the C side
     //< checks the count, so it cannot split an argument in two. An empty argument is allowed.
-    defer $argv_buf: = Str_builder()
+    defer $argv_buf: = Str()
     for a in argv
         argv_buf.s(a).c(0U8)
     return kspl_proc_start(argv_buf.ptr, argv_buf.len, I32::argv.len, cwd.ptr, cwd.len, stdio,
@@ -91,7 +91,7 @@ priv fn fold_crlf_into(out: Writer, text: U8[]) //< appends text, with each `\r\
             continue
         out.c(text[i])
 
-priv fn take_into(into: Str_builder$@, chunk: U8[], count: I32, cap: Sz, cut: Bool$@): Bool //<
+priv fn take_into(into: Str$@, chunk: U8[], count: I32, cap: Sz, cut: Bool$@): Bool //<
     //< Appends one read's bytes to the builder; bytes beyond the cap are discarded, setting `cut`
     //< Returns false if the stream closed or failed. `count == -1` means "nothing yet" at timeout
     //< 0; it is rare right after poll reported readable, and the stream stays open.
@@ -152,8 +152,8 @@ fn capture_until(handle: I64, deadline_us: I64, output_cap: Sz, arena: Arena$@):
     //< Past `deadline_us` (a `sys.mono_us` reading), the child and all it started are killed.
     // The two outputs are watched in one wait (`kspl_proc_poll`). **Append only what was read**:
     // the cap is a promise ("beyond this it is cut"), not the size to allocate.
-    defer $out: = Str_builder()
-    defer $err: = Str_builder()
+    defer $out: = Str()
+    defer $err: = Str()
     $chunk: U8[4096] = ::{}
     $cut: = false
     $until: = deadline_us // the deadline, or the end of the grace once the child has ended
@@ -213,8 +213,8 @@ fn capture_until(handle: I64, deadline_us: I64, output_cap: Sz, arena: Arena$@):
     }
 
 #cfg(!freestanding)
-priv fn read_ready(handle: I64, mask: I32, chunk: U8$[], cap: Sz, out: Str_builder$@,
-    err: Str_builder$@, out_open: Bool$@, err_open: Bool$@, cut: Bool$@): Sz //<
+priv fn read_ready(handle: I64, mask: I32, chunk: U8$[], cap: Sz, out: Str$@, err: Str$@,
+    out_open: Bool$@, err_open: Bool$@, cut: Bool$@): Sz //<
         //< Reads once from each open output that `mask` marks ready; returns the bytes read
     $got: Sz = 0
     if out_open$ && (mask & STDIO_OUT) != 0

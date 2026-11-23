@@ -9,7 +9,7 @@ import "std/fs"
 import "std/io"
 import "std/log" { Log }
 import "std/mem" { Arena }
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 import "std/subproc"
 import "std/sys"
 import "std/tests/sys_test"
@@ -216,13 +216,13 @@ fn test_panic_msg_numbers()
 
 // ==========================================
 // Tests of log lines that carry a severity level (`std/log`)
-// **Every test writes into a `Str_builder` rather than a stream**, so the output reads as a
+// **Every test writes into a `Str` rather than a stream**, so the output reads as a
 // string. The destination is only a `Writer`, as in a freestanding build.
 // ==========================================
 fn test_log_keeps_what_is_heavy_enough()
     verdict.start("[Log] a line lighter than the level set being dropped test...")
 
-    defer $out: = Str_builder()
+    defer $out: = Str()
     $lg: = Log(out, .information, "t")
     lg.say(.error, "a")
     lg.say(.warning, "b")
@@ -233,7 +233,7 @@ fn test_log_keeps_what_is_heavy_enough()
         "Log: down to the level set comes out, and what is lighter does not")
 
     // **The most severe level keeps only its own lines.**
-    defer $only: = Str_builder()
+    defer $only: = Str()
     $strict: = Log(only, .error, "t")
     strict.say(.error, "a")
     strict.say(.warning, "b")
@@ -245,7 +245,7 @@ fn test_log_keeps_what_is_heavy_enough()
 fn test_log_at_does_not_run_the_body_when_light()
     verdict.start("[Log] the body of a line that is not emitted not running test...")
 
-    defer $out: = Str_builder()
+    defer $out: = Str()
     $lg: = Log(out, .information, "")
     // **This is the guarantee the whole design exists for**: if `ran` changed for the dropped line,
     // a body would be built and thrown away.
@@ -266,7 +266,7 @@ fn test_log_closes_the_line_it_opened()
     verdict.start("[Log] the line opened being closed by whatever comes next test...")
 
     // **The next line closes a line left open**, so a caller that writes the body never ends it.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     $lg: = Log(out, .hint, "t")
     if w: = lg.at(.information)
         w.s("first")
@@ -288,14 +288,14 @@ fn test_log_says_where_it_was_called_from()
 
     // Passed by name, file and line override the default. **The line number is not this call's**,
     // so the check holds however this file is edited.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     $lg: = Log(out, .hint, "t", ": ", true)
     lg.say(.error, "boom", "a/b.kspl", 42)
     assert(out.slice().equals("t: E: a/b.kspl: 42: boom\n"),
         "Log: the place goes in ahead of the body, parted by the separator")
 
     // With the default it names **this** file, not `std/log`: `say` passes both on to `at`.
-    defer $here: = Str_builder()
+    defer $here: = Str()
     $lg2: = Log(here, .hint, "t", ": ", true)
     lg2.say(.error, "boom")
     assert(here.slice().find_str("verdict_test").is_some(),
@@ -303,7 +303,7 @@ fn test_log_says_where_it_was_called_from()
     assert(here.slice().find_str("std/log").is_none(), "Log: the library is not the one named")
 
     // **The place is off unless the logger is created with it on**, so a plain logger is unchanged.
-    defer $plain: = Str_builder()
+    defer $plain: = Str()
     $lg3: = Log(plain, .hint, "t")
     lg3.say(.error, "boom")
     assert(plain.slice().equals("t: E: boom\n"), "Log: with place off the line carries no place")
@@ -314,7 +314,7 @@ fn test_log_parts_its_fields_with_the_separator_given()
     verdict.start("[Log] the separator handed over parting the fields test...")
 
     // **A comma separator gives rows a spreadsheet can filter**, each with the same field count.
-    defer $out: = Str_builder()
+    defer $out: = Str()
     $csv: = Log(out, .hint, "srv", ",", true)
     csv.say(.error, "cannot listen", "a/b.kspl", 7)
     csv.say(.hint, "chasing it", "a/b.kspl", 9)
@@ -323,7 +323,7 @@ fn test_log_parts_its_fields_with_the_separator_given()
         "Log: every row carries the same fields, parted by the separator handed over")
 
     // **The body is written unchanged**, so a caller that wants extra columns writes them itself.
-    defer $raw: = Str_builder()
+    defer $raw: = Str()
     $loose: = Log(raw, .hint, "t", ",")
     loose.say(.error, "row 1 value,row 2 value")
     loose.done()
@@ -335,7 +335,7 @@ fn test_log_parts_its_fields_with_the_separator_given()
 priv struct Tally //<
     //< A destination that counts how often it is told to flush
     //< **Nothing else shows the flushes**: a missing flush would look like a pass.
-    text: Str_builder
+    text: Str
     flushes: Sz
 
 impl Tally: Writer
@@ -357,7 +357,7 @@ fn test_log_pushes_a_heavy_line_out_at_once()
     // **A buffering destination loses its last lines when the run is killed**, and those are the
     // lines that say what went wrong. So the two most severe levels are flushed as each line
     // closes.
-    $t: Tally = ::{ .text = Str_builder(), .flushes = 0 }
+    $t: Tally = ::{ .text = Str(), .flushes = 0 }
     defer t.text.free()
     $lg: = Log(t@, .hint, "t")
     lg.say(.information, "a")

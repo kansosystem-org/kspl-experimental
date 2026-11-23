@@ -13,7 +13,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
@@ -121,7 +121,7 @@ fn test_a_long_event_line_is_searched_once() //< a count of the bytes searched
     //< every machine. Searched again from its start at each 4 KiB piece, a 256 KiB line would be
     //< searched about 32 times over.
     verdict.start("[ksagent] a long event line that arrives in many pieces is searched once")
-    defer $text: = Str_builder()
+    defer $text: = Str()
     text.s("data: ")
     for text.len < 256 * 1024
         text.s("x")
@@ -179,11 +179,10 @@ fn test_a_long_streamed_answer_takes_memory_in_step_with_its_length()
         .start("[ksagent] an answer streamed in many pieces takes memory in step with its length")
     defer arena: = Arena(64 * 1024)
     defer $shown: = Progress(false, .en, arena)
-    $partial: = model.Partial::{ .reasoning = Str_builder(), .content = Str_builder(),
+    $partial: = model.Partial::{ .reasoning = Str(), .content = Str(),
         .calls = List<|model.Growing_call|>(arena) }
     partial.calls
-        .push(model.Growing_call::{ .id = "call_1", .name = "answer",
-        .arguments = Str_builder() })
+        .push(model.Growing_call::{ .id = "call_1", .name = "answer", .arguments = Str() })
     args: = (partial.calls.ptr + 0).arguments@
     args.s("{\"text\": \"")
     for _k in Range.asc(8000)
@@ -201,7 +200,7 @@ fn test_a_long_streamed_answer_takes_memory_in_step_with_its_length()
 priv fn shown_of(content: U8[], arena: Arena$@): U8[] //<
     //< What the growing text shows of a reply that holds this plain text
     defer $shown: = Progress(false, .en, arena)
-    $partial: = model.Partial::{ .reasoning = Str_builder(), .content = Str_builder(),
+    $partial: = model.Partial::{ .reasoning = Str(), .content = Str(),
         .calls = List<|model.Growing_call|>(arena) }
     partial.content.s(content)
     shown.saw(partial@)
@@ -274,11 +273,10 @@ fn test_a_stopped_answer_stays_marked_unchecked(work: U8[], arena: Arena$@)
     ask: = fs.join(root, "team.ask.jsonl", arena)
     live: = files.live_path(ask, arena)
     defer $shown: = Progress.following(ask, live, "q1", .en, false, arena)
-    $partial: = model.Partial::{ .reasoning = Str_builder(), .content = Str_builder(),
+    $partial: = model.Partial::{ .reasoning = Str(), .content = Str(),
         .calls = List<|model.Growing_call|>(arena) }
     partial.calls
-        .push(model.Growing_call::{ .id = "call_1", .name = "answer",
-        .arguments = Str_builder() })
+        .push(model.Growing_call::{ .id = "call_1", .name = "answer", .arguments = Str() })
     (partial.calls.ptr + 0).arguments.s("{\"text\": \"Ten days, after")
     shown.saw(partial@)
     growing: = io.read_file(live, arena) catch

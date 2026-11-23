@@ -107,6 +107,23 @@ fn test_an_excel_escape_shows_its_character()
     verdict.check("shared, inline and formula strings are decoded; `_x005F_` keeps what follows",
         view.equals(want), view)
 
+fn test_an_excel_formula_shows_its_value_or_its_text()
+    verdict.start("[ksagent] an Excel formula shows its computed value, an empty one included")
+    // **Excel stores a formula whose answer is the empty text as kind `str` with an empty value.**
+    // A library that computes nothing writes no kind, and then the formula's text is all there is.
+    defer arena: = Arena(256 * 1024)
+    sheet: =
+        "<worksheet><sheetData><row r=\"1\"><c r=\"A1\" \
+            t=\"str\"><f>IF(D1=\"\",\"\",D1)</f><v></v></c><c \
+            r=\"B1\"><f>SUM(D2:D5)</f><v></v></c><c r=\"C1\" \
+            t=\"str\"><f>D1&amp;\"x\"</f><v>x</v></c></row><row r=\"2\"><c r=\"A2\" \
+            t=\"str\"><f>IF(D2=\"\",\"\",D2)</f><v/></c></row></sheetData></worksheet>"
+    view: =
+        excel.text_of(office_files.xlsx_of(sheet, "", "", arena), VIEW_CAP, arena) catch why
+            fallback why
+    verdict.check("an empty computed text shows nothing; an uncomputed formula shows its text",
+        view.equals("S!1: =SUM(D2:D5) | x\n"), view)
+
 fn test_word_leaves_out_furigana_and_text_a_style_hides()
     verdict.start("[ksagent] Word's furigana, and text a style hides, are left out of the view")
     defer arena: = Arena(256 * 1024)
@@ -132,6 +149,26 @@ fn test_word_leaves_out_furigana_and_text_a_style_hides()
         "Ruby: 社内規程\nHidden by style: end\nShown over the style\nShown in a hidden style\n"
     verdict.check("the base text without its furigana, and no text a style hides",
         view.equals(want), view)
+
+fn test_a_word_table_row_in_a_content_control_is_read()
+    verdict.start("[ksagent] a Word table's row or cell inside a content control keeps its line")
+    // **A form's repeating rows stand in a content control** (`w:sdt` around `w:tr`), so the row is
+    // two levels below its table.
+    defer arena: = Arena(256 * 1024)
+    row: = "<tr><tc><p><r><t>A2</t></r></p></tc><tc><p><r><t>B2</t></r></p></tc></tr>"
+    inner: =
+        "<tbl><sdt><sdtContent><tr><tc><p><r><t>in</t></r></p></tc></tr></sdtContent></sdt></tbl>"
+    doc: = arena.text().s("<document><body><tbl>")
+        .s("<tr><tc><p><r><t>A1</t></r></p></tc><tc><p><r><t>B1</t></r></p></tc></tr>")
+        .s("<sdt><sdtPr/><sdtContent>").s(row).s("</sdtContent></sdt>")
+        .s("<tr><tc><p><r><t>A3</t></r></p></tc><sdt><sdtContent><tc><p><r><t>B3</t></r></p>")
+        .s(inner).s("</tc></sdtContent></sdt></tr>")
+        .s("</tbl><p><r><t>after</t></r></p></body></document>").take()
+    view: =
+        word.text_of(office_files.docx_of(doc, "", arena), VIEW_CAP, arena) catch why
+            fallback why
+    verdict.check("each row has its line, the one in a content control too",
+        view.equals("A1 | B1\nA2 | B2\nA3 | B3 in\nafter\n"), view)
 
 fn test_a_word_symbol_shows_its_character()
     verdict.start("[ksagent] a symbol Word inserts from a symbol font shows as its character")
@@ -201,6 +238,13 @@ fn test_a_cell_number_is_shown_as_its_format_shows_it()
     for i in Range.asc(expected.len)
         verdict.check(arena.text().s("shows ").s(expected[i]).take(),
             results[i].equals(expected[i]), results[i])
+    // **A colour's name is no elapsed time**, though `[Magenta]` opens with `m` as `[mm]` does.
+    for code in U8[][]::{ "[Magenta]0.0", "[magenta]#,##0.0", "[Red]0.0" }
+        got: = cell_format.show("12.5", cell_format.of_code(code), false, arena)
+        verdict.check(arena.text().s(code).s(" shows 12.5 as a number").take(),
+            got.equals("12.5"), got)
+    minutes: = cell_format.show("1.5", cell_format.of_code("[mm]:ss"), false, arena)
+    verdict.check("[mm]:ss still counts elapsed time", minutes.equals("36:00:00"), minutes)
     // **A Japanese Excel names General `G/標準`**, and its `G` is no era letter.
     for code in U8[][]::{ "G/標準", "G/標準\"個\"", "g/標準;-G/標準" }
         got: = cell_format.show("12", cell_format.of_code(code), false, arena)

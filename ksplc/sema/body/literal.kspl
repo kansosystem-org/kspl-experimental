@@ -15,7 +15,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // testing and slicing single characters
 import "std/ds"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strnum" // reading a floating-point literal's value
 
 fn infer_literal_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32
@@ -44,7 +44,7 @@ priv fn check_float_literal_range(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I3
     //< **An error, as for an integer** (check_literal_bounds): the value would change silently, and
     //< C only warns, for a `double` alone. Rounding to a nearby value and a subnormal pass: every
     //< decimal fraction rounds (`0.1`), and a subnormal is still the number, with fewer digits.
-    defer $clean: = Str_builder()
+    defer $clean: = Str()
     _stop: = node.text.append_clean_number(clean@, "F")
     v: = clean.slice().to_f64() catch
         return
@@ -114,14 +114,15 @@ priv fn literal_type_id(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I3
     suffix_id: = sema_decl_eval.int_suffix_type_id(txt)
     if !sema_type_env.is_unknown(suffix_id)
         return suffix_id
-    if txt.ends_with("F32")
-        return I32::sema_type_env.Builtin_type_id.f32_type
-    if txt.ends_with("F64")
-        return I32::sema_type_env.Builtin_type_id.f64_type
-
     // Caution: **A float literal takes only a float type.** Given an integer one, `x: I32 = 2.5`
     // and a `catch 2.5` for an `I32` passed silently, C keeping 2 and LLVM emitting `i32 2.5`.
     if node.kind_id == .k_float
+        // **Only a float literal carries `F32` / `F64`.** On an integer those letters are hex
+        // digits: read as a suffix, `0x1F32` (7986) became an `F32`.
+        if txt.ends_with("F32")
+            return I32::sema_type_env.Builtin_type_id.f32_type
+        if txt.ends_with("F64")
+            return I32::sema_type_env.Builtin_type_id.f64_type
         if !sema_type_env.is_unknown(expected_id) && ctx.env.is_float(expected_id)
             return expected_id
         return I32::sema_type_env.Builtin_type_id.f64_type
@@ -280,7 +281,7 @@ fn check_inferred_decl_literal(ctx: Sema_ctx$@, expr_node: Ast_node$@, final_id:
         return
     check_literal_bounds(ctx, lit.node, final_id, lit.is_neg)
 
-priv fn check_literal_bounds(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, is_neg: Bool) //<
+priv fn check_literal_bounds(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, negated: Bool) //<
     //< Checks that the literal fits the range of that type
     //< **This is an error, not a lint.** An out-of-range literal's value changes silently (`I32 =
     //< 2147483648` becomes -2147483648).
@@ -291,6 +292,10 @@ priv fn check_literal_bounds(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, is
     lit: = node.text.parse_int_literal_u64()
     if lit.overflow
         return // a literal too long for any type is already an error (check_integer_literal_width)
+    // **A minus in the literal's own text counts as one written before it.** Only a `const`
+    // parameter's value is spelled so (replace_type_vars in `../decl/subst.kspl`). Read as its
+    // magnitude, `Off<|-2147483648|>` for `const N: I32` was refused wherever `N` was read.
+    is_neg: = negated != node.text.starts_with("-")
     // The bits for the absolute value (a signed type spends one on the sign).
     value_bits: =
         ctx.env.get_portable_bit_size(type_id) - (0 if ctx.env.is_unsigned(type_id) else 1)
@@ -314,13 +319,14 @@ priv fn check_literal_bounds(ctx: Sema_ctx$@, node: Ast_node$@, type_id: I32, is
         bottom: = top + 1U64 // the magnitude of its smallest
         cast_value: = sema_decl_eval.wrap_to(I64::(0U64 - lit.value if is_neg else lit.value), bits,
             unsigned)
-        $digits: = node.text
+        magnitude: = node.text.strip_prefix("-")
+        $digits: = magnitude
         suffix_id: = sema_decl_eval.int_suffix_type_id(digits)
         if suffix_id != I32::sema_type_env.Builtin_type_id.unknown
             digits = digits.sub(0,
                 digits.len - sema_type_env.BUILTIN_TYPES[suffix_id].name.len)
         ctx.clear_scratch()
-            .s("literal '\{sign\}\{node.text\}' is out of range for type '\{type_name\}', which \
+            .s("literal '\{sign\}\{magnitude\}' is out of range for type '\{type_name\}', which \
                 holds ")
         if unsigned
             ctx.scratch.s("0 to \{mask\}")

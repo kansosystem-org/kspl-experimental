@@ -51,11 +51,13 @@ priv fn is_already_integral_or_non_finite(value: F64): Bool //<
     return !(value - value == 0.0) || value >= TWO_POW_52 || value <= -TWO_POW_52
 
 // It needs only the integer cast, so hosted and freestanding builds share it.
-pub fn round(value: F64): F64 //< rounds to the nearest whole number, halves away from 0
+pub fn round(value: F64): F64 //<
+    //< rounds to the nearest whole number, halves away from 0, and keeps the sign of a 0
+    //< `round(-0.3)` and `round(-0.0)` are -0.0, as in C's `round` and IEEE 754.
     // Caution: For a NaN, an Infinity or a value outside I64's range, the I64::(...) cast below
     // saturates, and the answer would be that bound. From 2^52 up an F64 is already an integer, so
-    // `value` is returned uncast.
-    if is_already_integral_or_non_finite(value)
+    // `value` is returned uncast. Both zeros come back as they are.
+    if value == 0.0 || is_already_integral_or_non_finite(value)
         return value
     // Caution: **Compare the dropped fraction with 0.5; never add 0.5 and cut.** The addition
     // rounds: 0.49999999999999994 + 0.5 is 1.0 in F64, so it would round to 1.
@@ -64,6 +66,9 @@ pub fn round(value: F64): F64 //< rounds to the nearest whole number, halves awa
         return t + 1.0
     if t - value >= 0.5
         return t - 1.0
+    // The cast drops the sign of a value between -0.5 and 0, which rounds to -0.
+    if t == 0.0 && value < 0.0
+        return -0.0
     return t
 
 // ==========================================

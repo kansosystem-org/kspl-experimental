@@ -15,7 +15,7 @@ import "std/buf" { Buf_writer }
 import "std/ds" { List, Map }
 import "std/libc"
 import "std/mem"
-import "std/str" { Str_builder }
+import "std/str" { Str }
 import "std/strfmt"
 struct Str_pool //<
     //< The interned string literals
@@ -28,8 +28,8 @@ enum Emit_target //< where the output goes
     body //< the function body (Emit_state.body_out)
 
 struct Emit_state //< where a function body's output goes
-    alloca_out: Str_builder //< the alloca group at the function's start
-    body_out: Str_builder //< the function body
+    alloca_out: Str //< the alloca group at the function's start
+    body_out: Str //< the function body
     target: Emit_target //< the current output destination
 
 struct Param_list_opts //<
@@ -58,7 +58,7 @@ struct Genllvm_ctx
     sema: Sema_ctx$@
     env: sema_type_env.Env$@
     source_map: Map<|U8[], U8$[]|>$@
-    scratch: Str_builder
+    scratch: Str
     reg_counter: I32
     label_counter: I32
     local_var_ids: Map<|Sz, I32|>$@
@@ -94,14 +94,14 @@ struct Genllvm_ctx
 
 impl Genllvm_ctx
     fn new(out: Writer, ctx: Sema_ctx$@, source_map: Map<|U8[], U8$[]|>$@): Genllvm_ctx$@
-        scratch: = Str_builder()
+        scratch: = Str()
         local_var_ids: = base_core.arena.create(Map<|Sz, I32|>(base_core.arena))
         str_pool_list: = List<|U8[]|>.create(base_core.arena)
         str_pool_map: = base_core.arena
             .create(Map<|U8[], I32|>.new_with_cap(2048, null))
         const_arrays: = List<|Ast_node$@|>.create(base_core.arena)
-        alloca_out: = Str_builder()
-        body_out: = Str_builder()
+        alloca_out: = Str()
+        body_out: = Str()
         trait_method_idx_cache: = base_core.arena
             .create(Map<|Sz, Map<|U8[], I32|>$@|>(base_core.arena))
         extern_declared: = base_core.arena.create(Map<|U8[], I32|>(base_core.arena))
@@ -139,7 +139,7 @@ impl Genllvm_ctx
         r.const_arrays.push(init)
         return r.const_arrays.len - 1
 
-    fn clear_scratch(r: Self$@): Str_builder$@
+    fn clear_scratch(r: Self$@): Str$@
         return r.scratch.clear()
     fn mangled_in_scratch(r: Self$@, type_id: I32): U8$[] //<
         //< A type's mangled name, written into scratch: valid until scratch is used again
@@ -253,7 +253,7 @@ impl Genllvm_ctx
         //< stands for (append_literal_bytes in base/literal.kspl, which genc uses too).
         text.append_literal_bytes(r, emit_llvm_str_byte)
 
-    priv fn emit_buf(r: Self$@): Str_builder$@? //<
+    priv fn emit_buf(r: Self$@): Str$@? //<
         //< The current output buffer (alloca / body)
         //< Direct mode is none. The routing of the output lives here only.
         switch r.emit.target
@@ -311,7 +311,7 @@ fn format_f32_hex_literal(text: U8[]): U8$[] //<
     //<
     //< It takes the literal as written. `_` separators and the type suffix are removed here.
     //< Otherwise `strtod` would stop at them and read `1_000.5` as 1.
-    defer $clean: = Str_builder()
+    defer $clean: = Str()
     _stop: = text.append_clean_number(clean@, "Ff")
     clean.c(0U8)
     parsed: = libc.strtod(Void$@::clean.slice().ptr, null)

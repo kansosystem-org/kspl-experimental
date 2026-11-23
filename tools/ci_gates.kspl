@@ -8,7 +8,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" + { Str_builder }
+import "std/str" + { Str }
 import "std/strnum"
 import "std/subproc"
 import "std/sys"
@@ -152,7 +152,8 @@ pub const GATES: Gate[_] = ::{
     Gate::{ .log = "debug_llvm", .args = "LLVM=1 debug", .par = .serial, .verdict = true,
         .shard = .b, .macos = true, .stops = false, .early = false,
         .fails = "std/tests/verdict_test.kspl#FALLS_MAIN" },
-    // kssrv's and kstls's tests through LLVM, which `debug` holds neither of (`test-llvm-pkgs`).
+    // kssrv's, kstls's and ksagent's tests through LLVM, which `debug` holds none of
+    // (`test-llvm-pkgs`).
     Gate::{ .log = "llvm_pkgs", .args = "test-llvm-pkgs", .par = .serial, .verdict = true,
         .shard = .linux, .macos = false, .stops = false, .early = false,
         .fails = "std/tests/verdict_test.kspl#FALLS_MAIN" },
@@ -597,7 +598,7 @@ fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I3
             return 1
 
 priv fn over_cap(name: U8[], log: U8[], cap_s: I64) //< says a gate was stopped at its cap
-    defer $line: = Str_builder()
+    defer $line: = Str()
     line.s(OVER_CAP_HEAD).s(name).s(OVER_CAP_MID).s("\{cap_s\}").s(OVER_CAP_TAIL).c('\n')
     io.out().s(line.slice()).flush()
     defer $f: = io.open(log, "ab") catch
@@ -698,7 +699,7 @@ priv fn holds(found: List<|Cause|>@, line: U8[]): Bool //< whether a cause alrea
             return true
     return false
 
-fn put_cause(cause: Cause, out: Str_builder$@) //< one cause as the summary marks it
+fn put_cause(cause: Cause, out: Str$@) //< one cause as the summary marks it
     //< **A line keeps its own mark** (`FAIL`, `panic:`, `RESULT:`, make's `***`). A SKIP line
     //< carries one no expected line does. A line of the tail is set off as quoted.
     if cause.kind == Cause_kind.unexpected_skip
@@ -730,7 +731,7 @@ priv fn tally(outs: List<|Outcome|>@): Tally
         t.sec += o.sec
     return t
 
-fn digest_plain(outs: List<|Outcome|>@, jobs: I64, judge: Judge@, out: Str_builder$@) //<
+fn digest_plain(outs: List<|Outcome|>@, jobs: I64, judge: Judge@, out: Str$@) //<
     //< For the screen: the gates, then why each fallen one fell, last, where a reader looks first
     //< **A SKIP line is counted, not copied**: thirty expected ones would bury the line that failed
     //< the gate. Each is in the gate's log, and one no row holds is listed as a cause.
@@ -740,7 +741,7 @@ fn digest_plain(outs: List<|Outcome|>@, jobs: I64, judge: Judge@, out: Str_build
             ").s(LOG_DIR).s("/<gate>.log)\n")
     for i in Range.asc(outs.len)
         o: = outs.get(i)
-        defer $row: = Str_builder()
+        defer $row: = Str()
         row.s("#   ").s(o.log)
         for $k: Sz = o.log.len; k < 15; k += 1
             row.c(' ')
@@ -781,7 +782,7 @@ fn digest_plain(outs: List<|Outcome|>@, jobs: I64, judge: Judge@, out: Str_build
                 ").s(judge.platform)
             .s("; bring its tool back, or add the row where this platform cannot ").s("have it\n")
 
-fn early_end(at: U8[], by_switch: Bool, not_run: List<|U8[]|>@, out: Str_builder$@) //<
+fn early_end(at: U8[], by_switch: Bool, not_run: List<|U8[]|>@, out: Str$@) //<
     //< The round's last lines where a fallen gate ended it: what did not run, and why it ended
     //< **A gate not run is named as not run**, never left out: the list above holds only what ran.
     out.s("# not run (\{not_run.len\}):")
@@ -795,7 +796,7 @@ fn early_end(at: U8[], by_switch: Bool, not_run: List<|U8[]|>@, out: Str_builder
         out.s("the gates after it build on what it builds")
     out.s(", so this round is not a full verdict\n")
 
-fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], out: Str_builder$@) //<
+fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], out: Str$@) //<
     //< For the job's summary page
     //< Caution: **No log body goes in**: near 1 MiB a summary fails without a word; the logs are
     //< the round's artifacts.

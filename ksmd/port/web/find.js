@@ -59,14 +59,18 @@ function ksmdFind(ks) {
     return out;
   }
 
-  // Each cell's text as a person edits it, names first; kept on the table's element, which every
-  // change to the table makes anew.
+  // Each table's cell texts as a person edits them, names first, by the table's element; kept from
+  // one action to the next, so a query typed letter by letter asks for them once.
+  // Caution: **Drop them after every action** (`ks.rendered` below). A table whose cells alone
+  // changed keeps its element (`update` in `table.js`). Kept on that element, the texts stayed
+  // those of before the change: Replace then wrote a cell from the text it no longer held.
+  let texts = new WeakMap();
   function written(wrap, block) {
-    if (!wrap.written) {
+    if (!texts.has(wrap)) {
       const len = ks.call("ksmd_web_table_texts", block);
-      wrap.written = len > 0 ? JSON.parse(ks.out(len)) : [];
+      texts.set(wrap, len > 0 ? JSON.parse(ks.out(len)) : []);
     }
-    return wrap.written;
+    return texts.get(wrap);
   }
 
   // Finds every match. The text shown from an included file is not searched: it edits in a tab of
@@ -258,11 +262,33 @@ function ksmdFind(ks) {
     if (had && bar.contains(had)) had.focus();
     if (r && r.ok && all) ks.say(`Replaced ${list.length} ${list.length === 1 ? "match" : "matches"}.`);
     refresh(false);
+    if (r && r.ok && !all) {
+      at = found.length === 0 ? -1 : past(list[0], withBox.value);
+      show();
+    }
     reveal();
+  }
+
+  // The first match that starts after the text that took the place of the match `m`, or the first
+  // of all where none follows, as Enter goes round. **A match inside the new text is passed over.**
+  // Else Replace with `cats` for `cat`, or with `CAT` without Match case, found its own text again
+  // at the same place: each press changed that one place again and never reached the next match.
+  function past(m, text) {
+    const k = found.findIndex((n) => {
+      if (n.block !== m.block) return n.block > m.block;
+      if (m.kind === "c") {
+        return n.kind === "c" && (n.row > m.row || (n.row === m.row && (n.column > m.column ||
+          (n.column === m.column && n.from16 >= m.from16 + text.length))));
+      }
+      return n.kind === "t" && (n.item > m.item ||
+        (n.item === m.item && n.from >= m.from + ks.view.u8len(text)));
+    });
+    return k < 0 ? 0 : k;
   }
 
   // After each action, the matches are found again in what the page now shows.
   ks.rendered.push(() => {
+    texts = new WeakMap();
     if (!bar.hidden && box.value !== "") refresh(false);
   });
 
