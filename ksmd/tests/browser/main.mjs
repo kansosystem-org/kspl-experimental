@@ -685,7 +685,9 @@ const sections = {
     check(await opened() === "", "a plain press on a link while editing only places the caret");
     // **Wait for the page to settle before the next press.** The caret placed in the text takes
     // the gap away on the next `selectionchange` (`ksmd/port/web/input.js`), and the text moves. Measured
-    // before that, the Ctrl+press landed where the link had stood, on a slow Windows runner.
+    // before that, the Ctrl+press landed where the link had stood, on a slow Windows runner. Two
+    // frames were not always enough there, so it waits for the gap itself to go.
+    await until("!document.querySelector('#doc .gap')", 3000);
     await frames();
     await click(link("site"), CTRL);
     check(await opened() === "https://kanso.example/x _blank noopener,noreferrer",

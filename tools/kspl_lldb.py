@@ -855,15 +855,32 @@ def check_ast_node(rep, root):
               "kind_id" in fields and "text" in fields, "fields: %s" % fields)
 
 
+# Runs LLDB in batch mode, and gives back what it printed, or None after a timeout, said as a failure.
+# **LLDB gets no input.** In batch mode, a process that stops for another reason than the commands
+# expect leaves LLDB at its prompt, reading its input; with the caller's input left open it waited
+# until the timeout, and nothing said why. A timeout now shows what LLDB had printed.
+def run_lldb(rep, what, args):
+    try:
+        done = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              timeout=120)
+    except subprocess.TimeoutExpired as e:
+        said = [s.decode("utf-8", "replace") if isinstance(s, bytes) else (s or "")
+                for s in (e.stdout, e.stderr)]
+        rep.check(what + " ends within 120 s", False, "".join(said)[-1500:])
+        return None
+    return done.stdout + done.stderr
+
+
 def check_lldb(rep, exe):
     me = os.path.abspath(__file__)
     # A container refuses to turn off address randomisation, and the launch would fail on it.
     base = ["lldb", "--batch", "--no-lldbinit", "-o", "command script import " + me,
             "-o", "settings set target.disable-aslr false"]
-    stop = subprocess.run(base + ["-o", "breakpoint set -n " + SAMPLE_STOP, "-o", "run",
-                                  "-o", "up", "-o", "frame variable", "--", exe],
-                          capture_output=True, text=True, timeout=120)
-    out = stop.stdout + stop.stderr
+    out = run_lldb(rep, "LLDB at the sample's stop",
+                   base + ["-o", "breakpoint set -n " + SAMPLE_STOP, "-o", "run",
+                           "-o", "up", "-o", "frame variable", "--", exe])
+    if out is None:
+        return
     if "stop reason" not in out:
         rep.skip("the printer shows the sample's values in LLDB",
                  "lldb cannot start a process here\n" + out[-800:])
@@ -875,9 +892,10 @@ def check_lldb(rep, exe):
         rep.check("LLDB shows %s as %s" % (local, " or ".join(wants)),
                   any(w in line for w in wants),
                   "the line: %r" % line)
-    panic = subprocess.run(base + ["-o", "run", "-o", "frame info", "--", exe, "panic"],
-                           capture_output=True, text=True, timeout=120)
-    out = panic.stdout + panic.stderr
+    out = run_lldb(rep, "LLDB at the panic",
+                   base + ["-o", "run", "-o", "frame info", "--", exe, "panic"])
+    if out is None:
+        return
     rep.check("the panic stop fires on an index past the end", "Panic Intercepted" in out,
               out[-1500:])
     rep.check("the panic stop selects the user's frame",
