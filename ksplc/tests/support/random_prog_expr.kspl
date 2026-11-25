@@ -302,9 +302,15 @@ fn cond(gen: Gen$@, depth: Sz): U8[] //< an expression of type `Bool`
     a: = gen.arena
     switch gen.rng.below(8)
     case 0, 1, 2
+        // Both sides go through `gid`, unless open: gcc proves `(K4 * v) == (v * K4)` true and
+        // `U8::(x | 32767I16) > y` false, and warns (the open finding `FIXED_COMPARISON`).
         t: = int_ty(gen)
-        x: = expr(gen, t, d)
-        return paren(gen, x, COMPARE[gen.rng.below(6)], expr(gen, t, d))
+        $x: = expr(gen, t, d)
+        $y: = expr(gen, t, d)
+        if !gen.open
+            x = hidden(gen, t, x)
+            y = hidden(gen, t, y)
+        return paren(gen, x, COMPARE[gen.rng.below(6)], y)
     case 3, 4
         x: = cond(gen, d)
         return paren(gen, x, "&&" if gen.rng.chance(50) else "||", cond(gen, d))

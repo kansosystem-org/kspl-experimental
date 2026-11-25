@@ -148,6 +148,18 @@ impl Ast_node
             book.end_views(state, def, r, "")
         book.bind_view(df, state, r, def, r.get_assign_right())
 
+    fn df_view_leaves(r: Self$@, df: sema_flow_track.Df_ctx$@,
+        state: sema_flow_track.Df_state$@, value: Ast_node$@) //<
+            //< A `return` or `throw`, once its value is walked: a view it carries stays in use
+            //< **The statement itself stands as the view**, so a `defer` that frees the owner as
+            //< the function leaves ends it like any other (report_view_left). The value of a
+            //< `T!E` is looked into; a view inside a struct or a payload is not followed.
+        book: = df.views
+        if !book.active || value == null
+            return
+        inner: = value.get_result_wrap_inner() if value.kind_id == .k_result_wrap else value
+        book.bind_view(df, state, r, r, inner)
+
     fn df_view_call(r: Self$@, df: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< A call, once its arguments are walked: `#ends_views` or a `free()` ends its receiver's
         //< views, and a counted local's copy is noted
@@ -294,6 +306,25 @@ impl sema_flow_track.Df_ctx
         //< A counted local read as a value is copied, so a new value given to it frees nothing
         if r.views.active && !r.suppress_move && r.sema.env.is_arc_type(def.type_id)
             r.views.note_shared(def)
+
+    fn report_view_left(r: Self$@, after: sema_flow_track.Df_state@, exit: Ast_node$@) //<
+        //< [W0111] A `return` or `throw` whose view a `defer` ended as the function leaves
+        //< `after` is the state once the exit has run its defer bodies.
+        book: = r.views
+        if !book.active || !after.stale.contains(exit)
+            return
+        end: = book.end_of(exit, exit)
+        if !book.first_report(end)
+            return
+        verb: = "return" if exit.kind_id == .k_stmt_return else "throw"
+        what: = r.sema.clear_scratch()
+        what
+            .s("[W0111] This '\{verb\}' hands out a view into '\{local_name(end.owner)\}', which \
+                \{end.method\} on line \{r.sema.line_of(end.call.loc)\} releases as the function \
+                leaves. The caller would read memory that may belong to something else. Hand out a \
+                copy in memory that outlives the call (the caller's arena), or the owner itself, \
+                declared without 'defer'.")
+        r.sema.warn(exit, what.slice())
 
     fn report_stale_view(r: Self$@, state: sema_flow_track.Df_state@, def: Ast_node$@,
         use: Ast_node$@) //<

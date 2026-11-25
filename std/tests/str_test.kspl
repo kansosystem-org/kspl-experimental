@@ -328,6 +328,19 @@ fn test_fixed_digits_at_the_cut() //< `.N` where the first digit lies at or past
     verdict
         .pass("A value that rounds into the last place, or to 0, is written as printf writes it.")
 
+fn test_size_in_hex() //< `:x` on an `Sz` writes the bits of the target's own width
+    //< **The width is passed in**, so a 32-bit target's answer is checked on any host.
+    verdict.start("[strfmt] an Sz in hex test...")
+    assert(strfmt.size_bits(-1, 4) == 0xFFFFFFFFU64, "-1 as 4 bytes is 8 hex digits")
+    assert(strfmt.size_bits(-0x30000000, 4) == 0xD0000000U64, "a high address keeps 32 bits")
+    assert(strfmt.size_bits(-1, 8) == ~0U64, "-1 as 8 bytes is 16 hex digits")
+    assert(strfmt.size_bits(0x1234, 4) == 0x1234U64, "a positive value is unchanged")
+    big: Sz = -1
+    defer $b: = Str()
+    b.s("\{big:x\}")
+    assert(b.len == 2 * sizeof(Sz), "-1 writes two hex digits per byte of Sz")
+    verdict.pass("An Sz in hex is as wide as Sz, as C's %x is for its type.")
+
 fn test_float_bits() //< reading an F32's bits is a copy, not a conversion
     //< **Include the patterns arithmetic would change**: -0 and infinity survive only if the bits
     //< are copied.
@@ -387,7 +400,8 @@ fn test_math_abs_min_max(ksplc: U8[], arena: Arena$@) //< one name each, for eve
     assert(math.min(3, -4) == -4 && math.max(3, -4) == 3, "min and max on an I32")
     small: Sz = 2
     assert(math.min(small, 7) == 2 && math.max(small, 7) == 7, "min and max on an Sz")
-    assert(math.min(0.5, 1.5) == 0.5 && math.max(U8::200, U8::100) == U8::200,
+    small_u8: U8 = 200
+    assert(math.min(0.5, 1.5) == 0.5 && math.max(small_u8, 100) == small_u8,
         "min and max on an F64 and a U8")
     zero: = 0.0
     nan: = zero / zero
@@ -576,13 +590,6 @@ fn main()
   want.s(b.slice()).s(b.slice())
   b.s(b.slice())
   assert(b.slice().equals(want.slice()), "s: the builder written onto itself as it grows")
-  v: = b.slice()
-  want.clear().s("xyxy").s(v.sub_from(2))
-  b.clear().s("xy").s(v)
-  assert(b.slice().equals(want.slice()), "s: a view taken before clear(), as it grows")
-  w: = b.slice()
-  b.clear().s("--").s(w.sub(0, 6))
-  assert(b.slice().equals("----xycd"), "s: a view overlapping where its bytes land")
   $e: = Str()
   want.clear()
   for _i in Range.asc(512)

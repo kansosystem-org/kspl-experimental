@@ -1,0 +1,76 @@
+%ksmd 2
+
+# The opener's rules, row by row
+
+**This document states the rules of `tools/opener_aim.kspl` that a table can hold.** `make debug-tools` checks each row against the code (`tools/tests/aim_rows_test.kspl`), so a row is a promise.
+
+## What the module decides
+
+**ksmd's opener gives each workspace a server of its own, on a port of its own.** A document's workspace is the nearest folder at or above it that holds `.ksmd-workspace`, else the document's own folder.
+
+- **One folder has one spelling.** `plain` drops `.` names and doubled separators. It refuses a path that holds `..`: behind a link, `a/link/..` is another folder than `a`.
+- **A workspace's port is the same every run.** `home_port` spreads the folder's plain path over the ports 20000 to 29999. The browser keeps drafts per address, so a port that moved would hide them.
+- **Only a `.ksmd` file opens**, whatever the case of its name.
+- **ksmd names a file with `/` between folders.** `slashed` turns each `\` into `/` on Windows. Elsewhere a `\` is a byte of a name.
+- **Only a port from 1 to 65535 is waited on.** `port_num` gives 0 for anything else, so the opener stops at once instead of waiting 30 seconds.
+
+## The rows
+
+**Each table is named after the function it checks.** The columns before the last hold what the function is given, and the last holds its answer. Where the answer differs on Windows, the last two columns hold both answers.
+
+**The rows are a function's own rules, not its callers'.** The opener always gives `home_port` a plain path, but the function itself hashes the text as it is given.
+
+:::table name="home_port" caption="A workspace's port, from its folder's path"
+| "Folder" | "Port" |
+| "/home/me/notes" | 26466 |
+| "/home/me/notes2" | 21056 |
+| "/home/me/notes/" | 26423 |
+| "C:\\Users\\me\\notes" | 24355 |
+| "D:\\work" | 28416 |
+| "/a" | 26029 |
+| "/" | 25758 |
+| "" | 26037 |
+:::
+
+:::table name="is_ksmd" caption="Which files open"
+| "File" | "Opens" |
+| "notes.ksmd" | "yes" |
+| "/a/b/Notes.KSMD" | "yes" |
+| "notes.KsMd" | "yes" |
+| "notes.md" | "no" |
+| "notes.ksmd.txt" | "no" |
+| "ksmd" | "no" |
+| "" | "no" |
+:::
+
+:::table name="plain" caption="One spelling of a path; refused where it holds .."
+| "Path" | "Plain" |
+| "/a/./b//c.ksmd" | "/a/b/c.ksmd" |
+| "/a/b/" | "/a/b" |
+| "/" | "/" |
+| "/a\\.\\b.ksmd" | "/a\\b.ksmd" |
+| "/a/../b.ksmd" | "refused" |
+| "/a/b/.." | "refused" |
+| "/a/..b/c" | "/a/..b/c" |
+| "C:/notes" | "C:/notes" |
+:::
+
+:::table name="slashed" caption="A path from the workspace, as ksmd names it"
+| "Path" | "On Windows" | "Elsewhere" |
+| "parts\\notes.ksmd" | "parts/notes.ksmd" | "parts\\notes.ksmd" |
+| "parts/notes.ksmd" | "parts/notes.ksmd" | "parts/notes.ksmd" |
+| "a\\b/c.ksmd" | "a/b/c.ksmd" | "a\\b/c.ksmd" |
+| "notes.ksmd" | "notes.ksmd" | "notes.ksmd" |
+:::
+
+:::table name="port_num" caption="The port waited on; 0 refuses it"
+| "Printed" | "Port" |
+| "8080" | 8080 |
+| "1" | 1 |
+| "65535" | 65535 |
+| "65536" | 0 |
+| "0" | 0 |
+| "-1" | 0 |
+| "" | 0 |
+| "80a" | 0 |
+:::

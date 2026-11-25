@@ -167,7 +167,9 @@ fn check_source(folder: files.Folder, source: Source, out: Source$@, arena: Aren
     //< often breaks a sentence across lines with no space, and a model copies it with none.
     //< `out` gets the path as the root holds it, and an Excel file's sheet and rows. Caution:
     //< **This shows that the words stand there, not that they back the answer.**
-    quote: = collapse_spaces(source.quote, arena)
+    quote: = without_spaces(source.quote, arena)
+    // **The characters counted are those compared**: a quote of full-width spaces alone counted
+    // 8, then compared as empty, and an empty quote stands in every range.
     if char_count(quote) < MIN_QUOTE_CHARS
         return arena.text().s("the quote is shorter than \{MIN_QUOTE_CHARS\} characters").take()
     if source.from_line < 1I64 || source.to_line < source.from_line
@@ -185,7 +187,7 @@ fn check_source(folder: files.Folder, source: Source, out: Source$@, arena: Aren
     cited: = arena.text()
     for k in Range.asc(Sz::(source.to_line - source.from_line + 1I64))
         cited.s(lines.get(Sz::(source.from_line - 1I64) + k))
-    if without_spaces(cited.take(), arena).find_str(without_spaces(quote, arena)).is_none()
+    if without_spaces(cited.take(), arena).find_str(quote).is_none()
         return "the quote does not stand in those lines"
     out.rows = NO_ROWS
     if files.is_excel(at.full)

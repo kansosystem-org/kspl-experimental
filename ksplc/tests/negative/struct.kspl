@@ -91,6 +91,63 @@ enum E
 
 fn main(): I32
   return I32::E.b
+// ==== case enum_tag_later_sibling
+//< A tag names only a variant above it in its own enum, and the message names what was written
+//< The tags are folded in order, so a later variant has no tag yet. **Name the spelling**: the
+//< tree's word for a dotted name tells the writer nothing.
+// EXPECT: 'E.b' has no tag yet
+// EXPECT-NOT: 'postfix'
+enum E
+  a = I32::E.b + 1
+  b = 5
+
+fn main(): I32
+  return I32::E.a
+// ==== case enum_tag_cycle_between_enums
+//< Two enums whose tags name each other are refused at the variant that closes the ring
+//< Each tag waits for the other, so neither has a value.
+// EXPECT: 'E.a' has no tag yet
+// EXPECT: Finished with 1 error(s)
+enum E
+  a = I32::F.x
+  b = 2
+
+enum F
+  x = I32::E.a + 1
+
+fn main(): I32
+  return I32::E.b
+// ==== case enum_filled_early_reports_its_errors
+//< An enum filled in early, for an array length that names its variant, still stops the build
+//< **The length folds quietly**, yet the enum is filled only once: its own errors must count.
+// EXPECT: variant 'y' has the tag 4. Variant 'x' already has that tag
+struct S
+  a: U8[Sz::F.x]
+
+enum F
+  x = 4
+  y = 4
+
+fn main(): I32
+  s: S = ::{}
+  return I32::s.a[0]
+// ==== case enum_tag_part_of_value
+//< A tag cannot read a field or an element of a constant, and the message names what was written
+// EXPECT: 'P0.x' is not a compile-time constant
+// EXPECT: this is not a compile-time constant
+// EXPECT-NOT: 'postfix'
+struct P
+  x: I32
+
+const P0: P = ::{ .x = 3 }
+const T: I32[2] = ::{ 1, 2 }
+
+enum E
+  a = P0.x
+  b = T[1]
+
+fn main(): I32
+  return I32::E.a
 // ==== case enum_tag_out_of_base
 //< A tag must fit the enum's base type, the written one and the one counted after it alike
 //< **Let it through and the value changes silently**: `300` in a `U8` reads back as 44.

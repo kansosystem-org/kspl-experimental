@@ -184,6 +184,18 @@ priv fn apply(volatile: fn(auto: I32): I32, unsigned: I32): I32 //<
 priv fn twice(auto: I32): I32
     return auto * 2
 
+priv fn first_of(isless: fn(x: F64, y: F64): Bool, x: F64, y: F64): F64 //<
+    //< A parameter called by a name the headers define as a function-form macro
+    //< Bare, C's `isless` ran in its place, and the comparator went unused.
+    isnan: = isless
+    return x if isnan(x, y) else y
+
+priv fn greater(x: F64, y: F64): Bool
+    return x > y
+
+struct Fn_macro_row //< a field called by a name the headers define as a function-form macro
+    isgreater: fn(x: F64, y: F64): Bool
+
 priv fn matched(value: I32): I32 //< matches a `switch` against a name spelled like a reserved word
     //< **Renaming it only at the declaration is not enough.**
     //< Caution: **Test a name that gets rewritten too** (a local carrying `$`).
@@ -288,6 +300,9 @@ fn test_c_keyword_names()
     assert(restrict.NULL == 5, "preamble macro names: libc macro as a field")
     assert(span(2, 7) == 5, "preamble macro names: parameters")
     assert(tally(1, 2, 3) == 6, "preamble macro names: libc and windows macros as parameters")
+    assert(first_of(greater, 1.0, 2.0) == 2.0, "function-form macro names: a parameter and a local")
+    macro_row: = Fn_macro_row::{ .isgreater = greater }
+    assert(macro_row.isgreater(2.0, 1.0), "function-form macro names: a field")
 
     // An enum's payload field, in the declaration (the union) and the binding.
     s: = Shape.box(2, 5)

@@ -65,10 +65,13 @@ fn test_arena_restore()
     grown: = a.get_total_allocated()
     a.restore(mark)
     assert(a.get_total_allocated() < grown, "Arena: the chunk taken after the mark is freed")
-    assert(a.alloc(16) == first,
+    // Under the address sanitizer a growing arena hands no rewound byte out again, so a view kept
+    // past the rewind faults (`restore`); the bytes are reused only without it.
+    reused: = !mem.kspl_mem_poisons()
+    assert(!reused || a.alloc(16) == first,
         "Arena: the next allocation lands where the first after the mark did")
     a.restore(mark)
-    assert(a.alloc(16) == first, "Arena: the same mark rewinds again")
+    assert(!reused || a.alloc(16) == first, "Arena: the same mark rewinds again")
     verdict.pass("Arena.restore frees what came after the mark, and a mark serves more than once")
 
 // ==========================================

@@ -9,6 +9,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as _base_ast_place // `is_const_gen_param`
 import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
+import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/display" as _sema_type_display
@@ -394,15 +395,19 @@ fn inferred_type_args(ctx: Sema_ctx$@, call: Ast_node$@, callee: U8[], def_node:
     // The parameters' types are read in the declaring file, where their names resolve. **A
     // function's name binds last**: it takes its type from where it is written. So where the other
     // arguments fixed the parameter's type, the name is checked against it rather than fixing it.
+    // **A bare number binds after the other arguments**, for the same reason: it takes the type
+    // it is given, so `math.min(u, 64)` on a `U64` binds `T` to `U64`, not to the number's `I32`.
     old_file: = ctx.file_name
     if def_node.loc.file().len > 0
         ctx.set_current_file(def_node.loc.file())
     name_mark: = ctx.env.generic_fn_value_type_id()
-    for pair in pairs
-        if pair.arg.type_id != name_mark
-            b.pair = pair
-            written: = pair.param.get_decl_type_node()
-            bind_type(ctx, b@, written, as_received(ctx, written, pair.arg_id))
+    for bare in Range.asc(2)
+        for pair in pairs
+            if pair.arg.type_id != name_mark &&
+                sema_body_literal.is_untyped_numeric_expr(pair.arg) == (bare == 1)
+                b.pair = pair
+                written: = pair.param.get_decl_type_node()
+                bind_type(ctx, b@, written, as_received(ctx, written, pair.arg_id))
     for pair in pairs
         if pair.arg.type_id == name_mark
             b.pair = pair

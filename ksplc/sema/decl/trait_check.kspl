@@ -96,6 +96,20 @@ impl Sema_ctx
                     '\{m_name\}' to the type's plain 'impl' block.")
             r.err(gen, r.scratch.slice())
             return m_sym
+        // **A default body cannot return `Self`**: each copy returns a value, and an impl must
+        // return `Self$@` (check_trait_method_ret below). So it is refused once, here, and the
+        // symbol stays out of the trait, as above, so no impl adds its own errors.
+        ret_node: = m_node.get_decl_type_node()
+        if m_node.find_child(.k_stmt_block) != null && ret_node != null &&
+            ret_node.names_self_type()
+            r.clear_scratch()
+                .s("trait method '\{m_name\}' has a default body that returns 'Self'. No \
+                    implementation can use it: an implementation returns 'Self' as a pointer \
+                    ('Self$@'), and the copied body returns a value. Remove the body and write \
+                    '\{m_name\}' in each implementation, or give the trait a type parameter for the \
+                    result and return that")
+            r.err(ret_node, r.scratch.slice())
+            return m_sym
         m_sym.flags.is_method = true
         // A method inherits the trait's visibility unless it states its own
         // (`priv fn release(...);`, the grammar rule decl_trait). Ignoring that would let it be

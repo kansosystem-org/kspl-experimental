@@ -675,10 +675,13 @@ fn test_list_pop_and_clear() //< removal keeps capacity and releases ARC ownersh
         xs.push(40)
         xs.clear()
         xs.clear()
-        assert(xs.len == 0 && xs.cap == capacity && xs.ptr == buffer,
+        // Under the address sanitizer a heap list moves on `clear`, so a view kept past it faults
+        // (`mem.moved`); the same storage is reused only without it.
+        same: = storage != null || !mem.kspl_mem_poisons()
+        assert(xs.len == 0 && xs.cap == capacity && (!same || xs.ptr == buffer),
             "clear: capacity and storage remain available for reuse")
         xs.push(50)
-        assert(xs[0] == 50 && xs.ptr == buffer, "push: cleared storage is reused")
+        assert(xs[0] == 50 && (!same || xs.ptr == buffer), "push: cleared storage is reused")
         xs.free()
         before: = mem.heap_used_bytes()
         list_counted_removal(storage)

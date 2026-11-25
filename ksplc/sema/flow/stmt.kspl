@@ -13,6 +13,7 @@ import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/flow/field" as sema_flow_field
 import "ksplc/sema/flow/lock" as sema_flow_lock
 import "ksplc/sema/flow/track" as sema_flow_track
+import "ksplc/sema/flow/view" as sema_flow_view
 import "std/ds" { List }
 
 impl Ast_node
@@ -227,9 +228,13 @@ impl Ast_node
 
         if expr != null
             expr.analyze_df_node(df, state)
+        leaves: = k == .k_stmt_return || k == .k_stmt_throw
+        if leaves
+            r.df_view_leaves(df, state, expr)
         after: = df.df_check_defers_on_exit(r, state, r.defers_left_behind(df))
-        if k == .k_stmt_return || k == .k_stmt_throw
+        if leaves
             df.report_lock_exit(r, after)
+            df.report_view_left(after, r)
         df.record_jump(r, after)
         state.reachable = false
 

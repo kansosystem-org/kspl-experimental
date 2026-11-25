@@ -4,7 +4,7 @@
 
 **Every rule here holds for ksmd's reader and writer.** The reader opens a file; the writer saves one. How the editing page changes a document, and its keys, are in [`SPEC-editing-page.md`](SPEC-editing-page.md).
 
-**To check a file you wrote, run `ksmd --check <file>`.** It prints whether ksmd refuses the file, and what each formula calculates, with no browser ("Checking a file" below).
+**To check a file you wrote, run `ksmd --check <file>`.** It prints whether ksmd refuses the file, and what each formula calculates, with no browser. The command is "Checking a file" in [`SPEC-commands.md`](SPEC-commands.md#checking-a-file).
 
 ## The rows, and what they start from
 
@@ -49,7 +49,7 @@ In a table, a backslash before `|` inside a cell makes a literal `|`.
 * **`Problem at` is the problem's place, as `file:line:column`.** After it, each include clause that leads there follows a `<`, innermost first. `none` means the file opens with no problem.
 * **`The reason says` holds words of the problem's message**, and is empty under `none`.
 * **An `Opened` row's file gives one problem at most.**
-* **A check row promises that exit code, and that output byte for byte.** "Checking a file" below sets what the command prints.
+* **A check row promises that exit code, and that output byte for byte.** What the command prints is "Checking a file" in [`SPEC-commands.md`](SPEC-commands.md#checking-a-file).
 
 **An outline names each part with these words:**
 
@@ -1345,7 +1345,7 @@ It is refused at line 5, column 4.
 * **`if(condition, then, else)` takes all three arguments, and calculates only the branch it takes.** The branch not taken must still read.
 * **`round(number, num_digits)` rounds half away from zero, at the number's shortest decimal digits.** `num_digits` is a whole number from -15 to 15.
 * **`round_down` cuts toward zero and `round_up` away from zero.** They cut at the 15 significant digits that the number shows.
-* **`mod(number, divisor)` takes the sign of `divisor`.** It works at the 15 digits that its operands show, as `round_down` does.
+* **`mod(number, divisor)` takes the sign of `divisor`.** It works at the 15 digits that its operands show, as `round_down` does. Two whole numbers give the exact remainder, so `mod(999999999999999, 2)` is 1.
 * **`power(number, power)` with no real result, or one too large, is `#NUM!`.** `power(0, -1)` is `#DIV/0!`.
 * **`name(E)` gives the name of a whole column, as text**, as the names row holds it. It takes one whole column alone, such as `name(B)` or `name(map.B)`. Any other argument is `#SYNTAX!`.
 
@@ -2798,11 +2798,7 @@ Wrong
 
 **The editing page's File ▸ Copy as Markdown puts the whole document on the clipboard as Markdown**, as GitHub reads it. A paste into another program then keeps the headings, lists, links and tables. The command is in "Opening and saving" in [`SPEC-editing-page.md`](SPEC-editing-page.md#opening-and-saving).
 
-**`ksmd --markdown <file>` prints the same Markdown**, with no browser. It reads the file as `--check` does ("Checking a file" below), with `--workspace` and `--today` alike. The tables show their values on that date.
-
-* **A file the reader refuses prints no Markdown.** Its reason goes to standard error, and the exit code is 1.
-* **A problem in the file's view goes to standard error**, in `--check`'s form, after the Markdown is printed. The exit code is then 1, else 0.
-* **`--markdown` with `--check` ends with code 2**, as a command line the launcher cannot take.
+**`ksmd --markdown <file>` prints the same Markdown**, with no browser. The command is "Printing as Markdown" in [`SPEC-commands.md`](SPEC-commands.md#printing-as-markdown).
 
 | A part of the document | The Markdown it gives |
 | :-- | :-- |
@@ -3003,40 +2999,7 @@ The window
 
 ## Checking a file
 
-**`ksmd --check <file>` reads a file as the editing page opens it, and prints what each formula calculates.** It needs no browser and no server. So whoever wrote the file, a person or a model, sees what ksmd refuses and what it calculates.
-
-* **The command is ksmd's launcher**: `out/ksmd.exe` after `make ksmd`, or `ksmd` after `make install`.
-* **The workspace is found as an opening finds it**: the nearest folder above the file that holds `.ksmd-workspace`, else the file's own folder. `--workspace=<folder>` names it instead.
-* **Includes and images are read from the workspace**, and a link along a path is refused, as the local server refuses it.
-* **`today()` gives today's date in UTC**, or the date that `--today=<date>` names, such as `--today=2026-10-23`. The page takes the computer's local date instead.
-* **No document's own functions are built or run.** A call to one shows `#BLOCKED!`, as on the page before you allow its file.
-
-**The output goes to standard output, and the exit code says how the file stands:**
-
-| The file | What it prints | Exit code |
-| :-- | :-- | :-- |
-| The reader refuses it | One line: `<file>:<line>:<column>: <reason>` | 1 |
-| It opens, with a problem in its view | A line for each problem, then a line for each formula, then the count | 1 |
-| It opens with no problem | A line for each formula, then the count | 0 |
-
-* **A command line that the launcher cannot take ends with code 2**, with the reason and the usage on standard error. `--today` without `--check` or `--markdown` is one, and so is `--check` with `--show`, `--list` or `--stop`.
-* **A name that does not end in `.ksmd`, or a path where no file stands, ends with code 1.** The reason goes to standard error.
-
-**Each line of the output takes one form:**
-
-| Line | Form |
-| :-- | :-- |
-| A problem | `<file>:<line>:<column>: <reason>`. Where the problem lies in an included file, `(included from <file>:<line>:<column>)` follows, with each further include clause after a `<`, innermost first |
-| A formula | `<table>.<cell> = <value>`, such as `t.D1 = 6` |
-| The count | `ok` where no problem stands, else the problems, such as `1 problem`. Then a `:`, and the file's tables, formulas and errors: `ok: 1 table, 3 formulas, 1 error` |
-
-* **A file's path is its path from the workspace's root**, as the page names it.
-* **A problem is an include, an image or a functions clause that the view cannot show** ("The assembled view" above). The page opens such a file, and shows the problem at its clause.
-* **A cell is named as a formula in another table names it.** The lines follow the tables in order, each table row by row, from the left.
-* **A value is written as a cell of the file writes it.** A number shows as in a column with no format. Text stands in quotes with its escapes, so the text `"6"` reads apart from the number `6`.
-* **An error is its mark, then `: ` and its reason**, as the page's tooltip gives it.
-* **An error in a cell leaves the exit code at 0.** The error is the cell's value, and a file can hold one on purpose, such as a share of a total that is still empty.
-* **Only the file named is calculated.** An included file's formulas print when you check that file. Its problems print here too.
+**`ksmd --check <file>` prints whether ksmd refuses a file, and what each formula calculates.** Its options, its output and its exit codes are "Checking a file" in [`SPEC-commands.md`](SPEC-commands.md#checking-a-file). The rows below show what it prints for a few files.
 
 **In this workspace, `report.ksmd` includes `budget.ksmd`, and a file that includes a missing one:**
 

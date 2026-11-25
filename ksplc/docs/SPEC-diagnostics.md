@@ -126,13 +126,23 @@ p.x = 9 // warning: 'p' points into 'xs', which 'push' on line 2 may have moved 
 ```
 
 It follows the dataflow of one function: branches, and a loop's back edge. So a view kept over a loop whose body grows the list is caught on the loop's second turn. A view of a view (`b: = arena.text()`, then `s: = b.take()`) ends with the first owner.
+
+**A `return` or `throw` that hands out a view is a use of it after the function's own `defer` statements run.** The caller gets the view only once they have run. So a `defer` that frees the owner, or calls a method marked `#ends_views` on it, ends the view first:
+
+```kspl
+defer $xs: = List<|I32|>(null)
+xs.push(7)
+return xs.slice() // warning: this 'return' hands out a view into 'xs', which 'free' on line 1 releases as the function leaves
+```
+
+The value of a `T!E` is looked into. A view inside `.some(…)` or a struct literal is not.
 * **Not reported**:
   * a view taken again after the call, or a view of another owner;
   * a copy of an element (`e: = xs[0]`);
   * a view only compared (`p == q`), which reads no memory;
   * an `Rc` the function copied, which may have another owner.
 * **It is a lint, not a guarantee.** It does not follow a view or an owner reached through a field. Nor does it follow a view passed to another function or stored in a container, or an owner changed by another function.
-* **Fix**: take the view again after the call, or keep an index (`i`) or a copy of the value instead of the view.
+* **Fix**: take the view again after the call, or keep an index (`i`) or a copy of the value instead of the view. For a view handed out, copy it into memory that outlives the call (the caller's arena), or hand out the owner itself, declared without `defer`.
 
 ### [W0201] Unreachable code
 Code after a `return`, a `throw`, a `for` that never ends, a `#noreturn` call (`sys.exit`, `panic`) or the like. What follows a labelled `switch`, `if` or block that a `break` to its label leaves is reachable.

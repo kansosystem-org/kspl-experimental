@@ -1,0 +1,76 @@
+//< The known stale views that the address sanitizer sees only because std marks or moves memory
+//< `tests/suite/holes_test.kspl` runs each program here as it runs those in `holes_mem.kspl`,
+//< which says what a verdict holds to. Without std's help, each program below reads the new bytes
+//< silently: the memory its view points into is still live, and holds something else
+//< ("The sanitizer sees a stale view" in `std/docs/DESIGN-core.md`).
+import "tests/support/holes_mem" { Hole }
+
+priv const V01_NODE_ACROSS_REWIND: U8[] =
+    """
+import "std/io"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+priv struct Node
+    value: I32
+fn main()
+    defer arena: = Arena(4096)
+    _one: = arena.create(Node::{ .value = 1 })
+    mark: = arena.save()
+    four: = arena.create(Node::{ .value = 4 })
+    arena.restore(mark)
+    _reused: = arena.create(Node::{ .value = 99 })
+    io.out().s("the stale node reads \{four.value\}\n")
+"""
+
+priv const V05_SOURCE_CLEARED: U8[] =
+    """
+import "std/chars"
+import "std/io"
+import "std/str" { Str }
+import "std/strfmt" as _strfmt
+priv struct Leaf
+    text: U8[]
+fn main()
+    defer $line: = Str()
+    line.s("ab+cd")
+    leaf: = Leaf::{ .text = line.slice().sub(0, 2) }
+    line.clear()
+    line.s("XYZXY")
+    io.out().s("the leaf reads \{leaf.text\}\n")
+"""
+
+priv const V10_ELEMENT_ACROSS_GROWTH: U8[] =
+    """
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+priv struct Table
+    rows: Sz
+priv fn table_at(tables: List<|Table|>$@, i: Sz): Table$@
+    return tables[i]@
+fn main()
+    defer arena: = Arena(4096)
+    $tables: = List<|Table|>.new_with_cap(1, arena)
+    tables.push(Table::{ .rows = 5 })
+    t: = table_at(tables@, 0)
+    tables.push(Table::{ .rows = 0 })
+    io.out().s("the stale table has \{t.rows\} rows\n")
+"""
+
+const VIEW: Hole[_] = ::{ //< the stale views std makes visible, with their verdicts
+    Hole::{ .name = "v01_node_across_rewind",
+        .what = "an arena's node kept across a restore, then the bytes handed out again",
+        .source = V01_NODE_ACROSS_REWIND, .verdict = .reported, .says = "use-after-poison",
+        .spec = "" },
+
+    Hole::{ .name = "v05_source_cleared",
+        .what = "a view of a `Str` kept across `clear`, then the text written again",
+        .source = V05_SOURCE_CLEARED, .verdict = .reported, .says = "heap-use-after-free",
+        .spec = "" },
+
+    Hole::{ .name = "v10_element_across_growth",
+        .what = "a pointer to an element of a list in an arena kept across a push that grows it",
+        .source = V10_ELEMENT_ACROSS_GROWTH, .verdict = .reported, .says = "use-after-poison",
+        .spec = "" },
+}

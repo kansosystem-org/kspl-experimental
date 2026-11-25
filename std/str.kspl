@@ -93,6 +93,12 @@ impl Str
     #ends_views
     pub fn clear(r: Self$@): Self$@ //< empties it, keeping the memory already allocated
         r.len = 0
+        return r.moved()
+    priv fn moved(r: Self$@): Self$@ //< after a change in place: the views are stale
+        //< **Under the address sanitizer the buffer moves to a new block**, and the old one is
+        //< freed, so such a view faults where it is read (`mem.moved`).
+        if r.cap > 0
+            r.ptr = U8$@::mem.moved(Void$@::r.ptr, r.cap)
         return r
     #ends_views
     pub fn drop_prefix( //< drops the leading bytes and moves the rest to the start
@@ -106,11 +112,11 @@ impl Str
             return r
         if count >= r.len
             r.len = 0
-            return r
+            return r.moved()
         rest: = r.len - count
         mem.move(Void$@::r.ptr, Void$@::(r.ptr + count), rest) // the two ranges overlap
         r.len = rest
-        return r
+        return r.moved()
     #ends_views
     pub fn reserve( //< makes room in advance, so a long write does not grow step by step
         r: Self$@,
@@ -158,9 +164,8 @@ impl Str: Writer //< so it can be used anywhere a `Writer` is expected
     pub fn s(r: Self$@, text: U8[]): Self$@ //< writes a string, growing if needed
         //< `text` can be a view of this builder's own bytes (`b.s(b.slice())`).
         if text.len > 0
-            // Caution: **Read `text` before the old buffer is freed, and with `move`.** It can be a
-            // view of this buffer: growing frees it, and a view taken before `clear()` can overlap
-            // where the bytes land.
+            // Caution: **Read `text` before the old buffer is freed.** It can be a view of this
+            // buffer, and growing frees it.
             old: = r.grow(r.len + text.len)
             mem.move(Void$@::(r.ptr + r.len), Void$@::text.ptr, text.len)
             if block: = old
@@ -452,14 +457,14 @@ impl Arena_str: Writer //< so it can be used anywhere a `Writer` is expected
             old: = r.grow(r.len + val.len)
             mem.move(Void$@::(r.ptr + r.len), Void$@::val.ptr, val.len)
             if block: = old
-                dealloc(Void$@::block)
+                r.arena.retire(Void$@::block.ptr, block.len)
             r.len += val.len
         return r
 
     pub fn c(r: Self$@, val: U8): Self$@ //< writes one byte and returns the builder
         if r.len >= r.cap
             if block: = r.grow(r.len + 1)
-                dealloc(Void$@::block)
+                r.arena.retire(Void$@::block.ptr, block.len)
         dest: U8$@ = r.ptr + r.len
         dest$ = val
         r.len += 1
@@ -469,11 +474,11 @@ impl Arena_str: Writer //< so it can be used anywhere a `Writer` is expected
         return r
 
 impl Arena_str
-    priv fn grow(r: Self$@, need: Sz): U8$@? //<
-        //< Makes room for `need` bytes, and returns a heap block for the caller to free
+    priv fn grow(r: Self$@, need: Sz): U8$[]? //<
+        //< Makes room for `need` bytes, and returns the block it left, for the caller to retire
         //< **Where the text is the arena's newest block, it grows there**, with nothing copied.
-        //< Otherwise it moves to a new block twice as large, and the old one stays in the arena.
-        //< Only on the heap is the old block returned, since nothing else frees it.
+        //< Otherwise it moves to a new block twice as large. The caller gives the old one back
+        //< with `Arena.retire`, after reading what it needs from it.
         if r.cap >= need
             return .none
         $cap: Sz = 16 if r.cap == 0 else r.cap
@@ -496,7 +501,8 @@ impl Arena_str
         new_ptr: = U8$@::block
         if r.len > 0
             mem.copy(Void$@::new_ptr, Void$@::r.ptr, r.len)
-        old: U8$@? = .some(r.ptr) if r.arena == null && r.cap > 0 else .none
+        old: U8$[]? =
+            .some(U8$[]::{ .ptr = r.ptr, .len = r.cap }) if r.cap > 0 else .none
         r.ptr = new_ptr
         r.cap = cap
         return old
@@ -506,7 +512,7 @@ impl Arena_str
         //< On the heap, the text is the caller's to free with `dealloc(Void$@::t.ptr)`. In an
         //< arena, the room left past the NUL goes back to it where nothing came after.
         if block: = r.grow(r.len + 1)
-            dealloc(Void$@::block)
+            r.arena.retire(Void$@::block.ptr, block.len)
         (r.ptr + r.len)$ = 0U8
         out: = U8[]::{ .ptr = r.ptr, .len = r.len }
         // On the heap the builder is a block of its own, which nothing else frees.

@@ -4,7 +4,7 @@
 //< **`ds` never imports `std/io`** (the reason is at `grow_cap`).
 import "std/chars" as _chars // reaches the single-character tests and slicing
 import "std/libc" // `memcmp`, for comparing two strings
-import "std/mem" + { Arena, dealloc }
+import "std/mem" + { Arena }
 
 priv fn grow_cap(cap: Sz, initial: Sz): Sz //<
     //< The next capacity: initial for an empty container, otherwise twice cap
@@ -37,18 +37,18 @@ priv fn alloc_zeroed(bytes: Sz, arena: Arena$@): Void$@ //<
 
 priv fn grow_slot( //<
     //< Allocates and copies when a List grows to hold `need` elements, and returns the old block
-    //< Caution: **Free the returned block only after reading what you need from it.** A slice
-    //< being appended can be a view of it (`List.push_all`). The result is none where nothing is
-    //< to be freed: no old block, or one in an arena. **Leave the `need > cap` check to the
-    //< caller**, so a push with room to spare makes no call. Only the unused tail is zeroed (the
-    //< reason is at `alloc_zeroed`); the copy fills the front.
+    //< Caution: **Give the returned block back (`Arena.retire`) only after reading what you need
+    //< from it.** A slice being appended can be a view of it (`List.push_all`). The result is
+    //< none where there was no old block. **Leave the `need > cap` check to the caller**, so a
+    //< push with room to spare makes no call. Only the unused tail is zeroed (the reason is at
+    //< `alloc_zeroed`); the copy fills the front.
     slot: Void$@$@, //< the list's `ptr`
     cap: Sz$@, //< the list's `cap`
     len: Sz, //< how many elements are live, and are copied over
     need: Sz, //< how many elements must fit afterwards
     arena: Arena$@, //< where the block goes; null means the global heap
     elem_size: Sz, //< the size of one element
-): Void$@?
+): U8$[]?
     // An initial capacity of 2: most lists hold zero to two items (an AST node's children). A
     // large list doubles, so the small start costs little.
     $new_cap: Sz = grow_cap(cap$, 2)
@@ -56,11 +56,10 @@ priv fn grow_slot( //<
         new_cap = grow_cap(new_cap, 2)
     new_ptr: = arena.alloc(checked_cap_bytes(new_cap, elem_size))
     used_bytes: = len * elem_size if cap$ > 0 else 0
-    $old: Void$@? = .none
+    $old: U8$[]? = .none
     if cap$ > 0
         mem.copy(new_ptr, slot$, used_bytes)
-        if arena == null
-            old = .some(slot$)
+        old = .some(U8$[]::{ .ptr = U8$@::slot$, .len = cap$ * elem_size })
     mem.zero(Void$@::((U8$@::new_ptr) + used_bytes), new_cap * elem_size - used_bytes)
     slot$ = new_ptr
     cap$ = new_cap
@@ -169,12 +168,19 @@ impl<|T|> List<|T|>
         ptr: = T$@::alloc_zeroed(bytes, arena)
         return List<|T|>::{ .ptr = ptr, .len = 0, .cap = initial_cap, .arena = arena }
 
+    priv fn moved(r: Self$@) //< after a change in place: the views into the block are stale
+        //< **Under the address sanitizer, a list on the heap moves to a new block**, and the old
+        //< one is freed, so such a view faults where it is read. A list in an arena stays: its
+        //< old block could not be freed, and a loop of `remove_at` would fill the arena.
+        if r.arena == null && r.cap > 0
+            r.ptr = T$@::mem.moved(Void$@::r.ptr, r.cap * sizeof(T))
+
     priv fn ensure_cap(r: Self$@)
         if r.len >= r.cap
             old: =
                 grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, r.len + 1, r.arena, sizeof(T))
             if block: = old
-                dealloc(block)
+                r.arena.retire(Void$@::block.ptr, block.len)
 
     #ends_views
     #inline
@@ -192,7 +198,7 @@ impl<|T|> List<|T|>
         //< would, so the rule keeping hand-written loops in `std` and `ksplc` does not reach it.
         if items.len <= 0
             return
-        $old: Void$@? = .none
+        $old: U8$[]? = .none
         if r.len + items.len > r.cap
             old =
                 grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, r.len + items.len, r.arena, sizeof(T))
@@ -200,7 +206,7 @@ impl<|T|> List<|T|>
             mem.init_at(r.ptr + r.len, x)
             r.len += 1
         if block: = old
-            dealloc(block)
+            r.arena.retire(Void$@::block.ptr, block.len)
 
     #ends_views
     pub fn pop(r: Self$@): T? //< removes and returns the last element, or none if empty
@@ -226,6 +232,7 @@ impl<|T|> List<|T|>
             (r.len - index) * sizeof(T))
         mem.init_at(r.ptr + index, item)
         r.len += 1
+        r.moved()
 
     #ends_views
     pub fn remove_at( //< removes one element, shifting the following elements back
@@ -242,6 +249,7 @@ impl<|T|> List<|T|>
             (r.len - index - 1) * sizeof(T))
         mem.zero(Void$@::(r.ptr + r.len - 1), sizeof(T))
         r.len -= 1
+        r.moved()
 
     #ends_views
     pub fn clear(r: Self$@) //< releases every element, keeping the capacity for reuse; O(n)
@@ -249,6 +257,7 @@ impl<|T|> List<|T|>
         for $i: = r.len; i > 0; i -= 1
             mem.drop_at(r.ptr + i - 1)
         r.len = 0
+        r.moved()
 
     #ends_views
     pub fn truncate( //<
@@ -263,6 +272,8 @@ impl<|T|> List<|T|>
     )
         if count < 0
             bounds_panic("List.truncate", count, r.len, file, line)
+        // It does not move the elements left, as `pop` does not: a view of them stays good, and
+        // a heap's pop by `truncate(len - 1)` on every step would copy the whole list each time.
         for r.len > count
             r.len -= 1
             mem.drop_at(r.ptr + r.len)
@@ -474,8 +485,8 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
                 value: = mem.take_at(old_e.value@)
                 r.set_with_hash(key, value, old_e.hash)
 
-        if old_cap > 0 && r.arena == null
-            dealloc(Void$@::old_entries)
+        if old_cap > 0
+            r.arena.retire(Void$@::old_entries, old_cap * sizeof(Map_entry<|K, V|>))
 
     priv fn drop_tombstones(r: Self$@) //<
         //< Rehashes the pairs within the slots they are in, leaving no tombstone
@@ -586,8 +597,8 @@ impl<|T|> List<|T|>: Manual_free //< explicit cleanup
         //< **The list itself stays**: a second `free()` frees nothing, and the block `create(null)`
         //< put it in is the caller's to give back with `mem.dealloc`.
         r.clear()
-        if r.cap > 0 && r.arena == null
-            dealloc(Void$@::r.ptr)
+        if r.cap > 0
+            r.arena.retire(Void$@::r.ptr, r.cap * sizeof(T))
         r.cap = 0
 impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Manual_free //< explicit cleanup
     pub fn free(r: Self$@) //< frees the pairs and the memory
@@ -596,7 +607,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Manual_free //< explicit cleanup
             e: = r.entries + i
             if e.is_active
                 e.drop_pair()
-        if r.cap > 0 && r.arena == null
-            dealloc(Void$@::r.entries)
+        if r.cap > 0
+            r.arena.retire(Void$@::r.entries, r.cap * sizeof(Map_entry<|K, V|>))
         r.len = 0
         r.cap = 0

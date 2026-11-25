@@ -381,10 +381,37 @@ fn check_noise(exe: U8[], arena: Arena$@) //<
     verdict.check("the worker's standard error reaches the supervisor's log",
         told(c@, NOISE_END, arena), why)
 
+// ==========================================
+// A hover in a file stopped before its types are checked answers nothing, and the worker stays
+// **A mistake found while the source is rewritten stops the work before the types**, here a format
+// spec half typed. The hover read the missing analysis and crashed the worker on every name.
+// ==========================================
+priv const EARLY_SRC: U8[] =
+    "import \"std/io\"\n\nfn main()\n  y: = 3\n  io.out().s(\"\\{y:q\\}\")\n"
+priv const EARLY_URI: U8[] = "file:///early_stop.kspl"
+
+fn check_hover_before_types(exe: U8[], arena: Arena$@) //<
+    //< That a hover where no types were checked gives no answer and keeps the worker
+    name: = "a hover in a file stopped before its types are checked answers nothing"
+    defer $c: =
+        lsp_client.start_ready(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
+            verdict.check(name, false, "the client cannot be started")
+            return
+    lsp_client.open(c@, EARLY_URI, EARLY_SRC, arena)
+    got: =
+        lsp_client.hover_at(c@, EARLY_URI, EARLY_SRC,
+        Spot::{ .line = "  y: = 3", .needle = "y" }, lsp_client.READ_MS, arena) catch e
+            verdict.check(name, false, end_text(e))
+            return
+    verdict.check(name,
+        lsp_client.hover_text(got).len == 0 && !told(c@, "Restarting the worker", arena),
+        lsp_client.why(c@, lsp_client.dump(got, arena), arena))
+
 fn run_restart(exe: U8[], arena: Arena$@)
     check_first_answer(exe, arena)
     check_quarantine(exe, arena)
     check_noise(exe, arena)
+    check_hover_before_types(exe, arena)
 
 // ==========================================
 // A package that names itself, edited in an editor opened on its own folder

@@ -126,6 +126,11 @@ priv fn hex_fmt_spec(val: U64, width: Sz, zero: Bool, upper: Bool): Hex_fmt //<
     //< straight to `U64::` sign-extends, and `I32`'s -1 becomes 16 digits (C's `%x` gives 8).
     return Hex_fmt::{ .val = val, .digits = width, .prefix = false, .upper = upper,
         .pad_zero = zero }
+fn size_bits(value: Sz, size: Sz): U64 //< an `Sz`'s bits as unsigned, `size` bytes of them
+    //< **`Sz` is signed and as wide as a pointer**, 4 bytes on a 32-bit board. Widened to U64 as it
+    //< is, a negative one (an address from 0x80000000 up) gains 32 bits of sign. Callers pass
+    //< `sizeof(Sz)`; a test passes 4 to check a 32-bit target's answer on any host.
+    return U64::value & ((~0U64) >> U64::(64 - size * 8))
 priv fn float_fmt_spec(val: F64, width: Sz, zero: Bool, comma: Bool, precision: I32, is_f32: Bool):
     Float_fmt
     return Float_fmt::{ .val = val, .precision = precision, .width = width,
@@ -201,7 +206,7 @@ impl Sz
         return int_fmt_spec(r, width, zero, comma)
     pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt //<
         //< what `:x` and `:X` in an interpolation desugar to
-        return hex_fmt_spec(U64::r, width, zero, upper)
+        return hex_fmt_spec(size_bits(r, sizeof(Sz)), width, zero, upper)
 impl F32
     pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Float_fmt //<
         //< what a width, a zero pad or a comma in an interpolation desugars to
@@ -701,6 +706,4 @@ pub fn write_ptr( //< writes an address as `0x` plus lowercase hex, whatever the
 ): Writer //< the same writer, for chaining
     // **An address is unsigned, and `Sz` is signed.** On a 32-bit board an address from 0x80000000
     // up (RP2040's SIO and PPB) is negative as an `Sz`. Widening it to U64 copies the sign.
-    // The mask keeps the address's own width: all 64 bits on a 64-bit target, the low 32 on one.
-    bits: = U64::Sz::val & ((~0U64) >> U64::(64 - sizeof(Sz) * 8))
-    return hex(bits, 1).fmt(out)
+    return hex(size_bits(Sz::val, sizeof(Sz)), 1).fmt(out)

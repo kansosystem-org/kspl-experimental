@@ -7,6 +7,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as _base_ast_place // `is_member_access`
+import "ksplc/base/ast_spell" as _base_ast_spell // `get_full_path_str`
 import "ksplc/base/core" as _base_core // the operator classes (`is_shift_op` ...)
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/decl/access" as _sema_decl_access // `check_field_visibility`
@@ -72,14 +73,12 @@ impl Sema_ctx
 
     fn fold_quietly(r: Self$@, node: Ast_node$@, narrow: Bool): I64!Sema_error //<
         //< Folds a constant expression, discarding its diagnostics, narrowed to I32 where `narrow`
-        //< **Every quiet fold goes through here.** The suppression flag and the error count are put
-        //< back on every way out, so a fold that fails leaves no trace.
-        old_err: = r.diags.counts.errors
+        //< **Every quiet fold goes through here.** The suppression flag is put back on every way
+        //< out. Caution: **Leave the error count alone.** A suppressed report counts nothing, and
+        //< one printed from inside (an enum filled for the fold) must stop the build.
         old_sup: = r.suppress_errors
         r.suppress_errors = true
-        defer
-            r.diags.counts.errors = old_err
-            r.suppress_errors = old_sup
+        defer r.suppress_errors = old_sup
         if narrow
             return I64::node.eval_constexpr(r)!
         return node.eval_constexpr_wide(r)!
@@ -649,7 +648,9 @@ impl Ast_node
                 if recv != null
                     v: = recv.eval_constexpr_internal(ctx, depth + 1)!
                     return r.fold_cast(ctx, v, depth)
-        named: = r.resolve_ref_symbol(ctx)
+        $named: = r.resolve_ref_symbol(ctx)
+        if named.is_none()
+            named = r.read_variant_of_later_enum(ctx)!
         if sym_ptr: = named
             switch sym_ptr.kind
             case .enum_variant(tag_value)
@@ -683,14 +684,54 @@ impl Ast_node
                 ctx.keep_const_fold(decl_key, v, ctx.statics.deepest - (depth + 1))
                 ctx.statics.deepest = math.max(outer_deepest, ctx.statics.deepest)
                 return v
-        // **Name what was written and what would fold**: "path" is the compiler's word for a
-        // dotted name, not the writer's.
+        // **Name what was written and what would fold**: "path" and "postfix" are the compiler's
+        // words for a dotted name and an index, not the writer's.
         if !ctx.suppress_errors
             ctx.clear_scratch()
-                .s("'\{r.text\}' is not a compile-time constant (only a `const`, an enum variant or \
-                    a literal is)")
+            if path: = sema_decl_name.name_path_of(r)
+                ctx.scratch.s("'\{path.get_full_path_str()\}'")
+            else
+                ctx.scratch.s("this")
+            ctx.scratch
+                .s(" is not a compile-time constant (only a `const`, an enum variant or a literal \
+                    is)")
             ctx.err(r, ctx.scratch.slice())
         throw .not_constant
+
+    priv fn read_variant_of_later_enum(r: Self$@, ctx: Sema_ctx$@): Sema_symbol$@?!Sema_error //<
+        //< The variant `E.v` names once its enum is filled in, or none where it names no variant
+        //< Pass 3 fills the enums in file order, so a fold can name an enum it has not reached. A
+        //< variant below the tag being folded in the same ring of enums has no tag yet: reported.
+        path: = sema_decl_name.name_path_of(r) catch
+            return .none
+        written: = ctx.read_written_type(path)
+        if written.member == null || written.args != null
+            return .none
+        sym: = ctx.written_type_symbol(written) catch
+            return .none
+        switch sym.kind
+        case .enum_def, .alias_def {}
+        default
+            return .none
+        if ctx.fill_enum_for_fold(ctx.env.get_clean_real_type(sym.type_id), r)!
+            return r.resolve_ref_symbol(ctx)
+        if !sym.node.declares_variant(written.member.text)
+            return .none
+        if !ctx.suppress_errors
+            ctx.clear_scratch()
+                .s("'\{written.spelled\}' has no tag yet where this tag is folded. A tag names a \
+                    variant above it in its own enum, or one of an enum whose tags do not lead back \
+                    here")
+            ctx.err(r, ctx.scratch.slice())
+        throw .not_constant
+
+    priv fn declares_variant(r: Self@, name: U8[]): Bool //< whether enum declaration r has it
+        for v_node in r.children
+            if v_node.kind_id == .k_enum_variant
+                id_node: = v_node.find_child(.k_identifier)
+                if id_node != null && id_node.text.equals(name)
+                    return true
+        return false
 
     priv fn fold_cast(r: Self$@, ctx: Sema_ctx$@, value: I64, depth: I32): I64 //<
         //< The value `T::x` gives for x's folded value `value`, as the generated code converts it

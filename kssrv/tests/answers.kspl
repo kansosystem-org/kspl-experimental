@@ -23,9 +23,10 @@ priv const TYPED_AS: U8[][10] = ::{ "application/pdf", "video/mp4", "video/webm"
 
 priv const TYPED_KINDS: Sz = 10 //< how many kinds are named above
 
-// A folder asked for without its `/`, and the name it is sent to, the query and `%XX` kept.
-priv const FOLDER_ASKED: U8[][3] = ::{ "/sub", "/sub?x=1&y", "/%73ub" }
-priv const FOLDER_SENT: U8[][3] = ::{ "/sub/", "/sub/?x=1&y", "/%73ub/" }
+// A folder asked for without its `/`, and the name it is sent to, the query and `%XX` kept; one
+// leading `/`, since a browser reads `//sub/` as the host `sub`.
+priv const FOLDER_ASKED: U8[][4] = ::{ "/sub", "/sub?x=1&y", "/%73ub", "//sub" }
+priv const FOLDER_SENT: U8[][4] = ::{ "/sub/", "/sub/?x=1&y", "/%73ub/", "/sub/" }
 
 priv const PARTS_REL: U8[] = "parts.bin" //< the file asked for in parts
 priv const PARTS_BYTES: Sz = 1024 * 1024 + 13 //< past many of the server's 16 KiB chunks
@@ -77,7 +78,7 @@ priv fn folder_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< A folder named without its `/` is sent to the name with one, the query kept
     //< **Served as it is, the page's relative links resolve against the folder above**, and every
     //< image and script in it fails to load.
-    for i in Range.asc(3)
+    for i in Range.asc(FOLDER_ASKED.len)
         r: = client.get(port, FOLDER_ASKED[i], "", arena)!
         to: = client.header(r.head, "location")
         nm: = arena.text().s("a folder asked for as ").s(FOLDER_ASKED[i]).s(" is sent to ")

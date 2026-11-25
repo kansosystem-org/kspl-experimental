@@ -31,6 +31,7 @@ fn run()
     sorting_ranges()
     sorting_row_totals()
     sorting_as_copies()
+    sorting_keeps_a_row_in_place()
     looks()
     across()
     auto_entry()
@@ -516,6 +517,20 @@ priv fn sorting_as_copies() //<
         value(ed@, 0, 0, 3, arena) == 0.0 && value(ed@, 0, 2, 3, arena) == 2.0, "")
     verdict.check("and the column total in another table still adds every row",
         value(ed@, 1, 0, 0, arena) == 6.0, "")
+
+priv fn sorting_keeps_a_row_in_place() //<
+    //< A formula on a row the sort leaves in place keeps the places it named
+    //< **The rows' names move with them**, so a reference left unwritten would name other places:
+    //< a total under the rows added only two of the three.
+    defer arena: = Arena(64 * 1024)
+    head: = "%ksmd 2\n\n:::table name=\"t\"\n| \"k\" | \"v\" | \"f\" |\n"
+    total: = "| \"Total\" | | =sum(B1:B3) |\n:::\n"
+    before: = join3(head, "| 3 | 30 | |\n| 1 | 10 | |\n| 2 | 20 | |\n", total, arena)
+    after: = join3(head, "| 1 | 10 | |\n| 2 | 20 | |\n| 3 | 30 | |\n", total, arena)
+    $ed: = opened(before, arena)
+    sorted(ed@, 1, false)
+    saves("the total's formula is written as it was", ed@, arena, after)
+    verdict.check("and it still adds every row", value(ed@, 0, 3, 2, arena) == 60.0, "")
 
 priv fn looks()
     defer arena: = Arena(64 * 1024)

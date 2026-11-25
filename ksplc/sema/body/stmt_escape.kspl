@@ -226,8 +226,16 @@ priv fn find_frame_escape(ctx: Sema_ctx$@, expr_node: Ast_node$@, with_address: 
         if !held || storage_depth(ctx, inner) <= deeper_than
             return .none
         return .upcast(inner)
-    // Caution: Do not check a call's result (`b.slice()` / `arena.alloc()`). Where it points is
-    // unknown, and rejecting it would forbid legitimately returning memory it allocated.
+    // **A method whose every `return` gives back its receiver hands back the address it was called
+    // on** (`s.s("a")`, a builder's chain), so the call is checked as that address is.
+    if recv: = handed_back_receiver(ctx, target)
+        if ctx.env.is_pointer(recv.type_id)
+            return find_frame_escape(ctx, recv, with_address, deeper_than)
+        if with_address && is_frame_storage(ctx, recv) && storage_depth(ctx, recv) > deeper_than
+            return .address(target)
+        return .none
+    // Caution: Do not check any other call's result (`b.slice()` / `arena.alloc()`). Where it
+    // points is unknown, and rejecting it would forbid legitimately returning memory it allocated.
     if !target.is_explicit_cast() ||
         !(ctx.env.is_slice(target.type_id) || ctx.env.is_pointer(target.type_id))
         return .none
@@ -241,6 +249,48 @@ priv fn find_frame_escape(ctx: Sema_ctx$@, expr_node: Ast_node$@, with_address: 
     if !is_frame_storage(ctx, src) || storage_depth(ctx, src) <= deeper_than
         return .none
     return .slice(src)
+
+priv fn handed_back_receiver(ctx: Sema_ctx$@, call: Ast_node$@): Ast_node$@? //<
+    //< The `x` of a call `x.m(…)` whose result is surely `x`'s own address, or `x` itself
+    //< That is a method returning a pointer whose body, as written, returns only its receiver.
+    if call.kind_id != .k_expr_postfix || !call.postfix_op_text().equals("(") ||
+        !ctx.env.is_pointer(call.type_id)
+        return .none
+    callee: = call.get_postfix_receiver()
+    if callee == null || callee.kind_id != .k_method_access || !callee.def_node.is_fn_decl()
+        return .none
+    recv: = callee.get_postfix_receiver()
+    block: = callee.def_node.find_child(.k_stmt_block)
+    if recv == null || block == null
+        return .none
+    for param in base_ast_ext.Param_cursor(callee.def_node.get_fn_params(), false)
+        // A `$` receiver can be given another value before the `return`.
+        $returns: Sz = 0
+        if !param.has_mut_binding_marker() &&
+            returns_only(block, null, param.find_text(.k_identifier), returns@) && returns > 0
+            return .some(recv)
+        break
+    return .none
+
+priv fn returns_only(node: Ast_node$@, parent: Ast_node$@, name: U8[], returns: Sz$@): Bool //<
+    //< Whether each `return` under node gives back the bare name, which nothing under node hides
+    //< **Unknown counts as no**, since a refusal rests on the answer. The name is allowed only as
+    //< a path read (`k_expr_path`); anywhere else it can be a new binding of that name (a
+    //< declaration, a `case` binding, a `catch`'s error). A closure's returns are its own.
+    if node == null || node.kind_id == .k_expr_fn_lit || node.kind_id == .k_decl_fn
+        return true
+    if node.kind_id == .k_identifier && node.text.equals(name)
+        return parent != null && parent.kind_id == .k_expr_path
+    if node.kind_id == .k_stmt_return
+        value: = node.get_return_expr()
+        if value == null || value.kind_id != .k_expr_path ||
+            !value.get_path_name().equals(name)
+            return false
+        returns$ += 1
+    for child in node.children
+        if !returns_only(child, node, name, returns)
+            return false
+    return true
 
 priv fn find_in_fallbacks(ctx: Sema_ctx$@, node: Ast_node$@, with_address: Bool, deeper_than: I32):
     Frame_escape //<
@@ -794,6 +844,9 @@ priv fn report_frame_escape(ctx: Sema_ctx$@, found: Frame_escape, verb: U8[], fa
             else
                 root = root.get_postfix_receiver()
         ctx.clear_scratch().s("cannot \{verb\} the address of local storage: ")
+        // A call here is one that hands back its receiver (handed_back_receiver).
+        if at.postfix_op_text().equals("(")
+            ctx.scratch.s("this call returns the address it was called on, and ")
         if root != null && root.is_path_or_ident()
             ctx.scratch.s("'\{root.get_path_or_ident_name()\}'")
         else

@@ -524,11 +524,25 @@ pub extern fn memchr( //< C's `memchr`, written here so freestanding needs no li
 // ==========================================
 
 // The address sanitizer's marks on the bytes an arena holds but has not handed out ("The
-// sanitizer sees a stale slice into an arena" in `std/docs/DESIGN-core.md`). Without the
-// sanitizer they do nothing (`ksplc/gen/runtime/hosted.c`).
+// sanitizer sees a stale view" in `std/docs/DESIGN-core.md`). Without the sanitizer they do
+// nothing (`ksplc/gen/runtime/hosted.c`).
 extern fn kspl_mem_poison(ptr: Void$@, len: Sz)
 extern fn kspl_mem_unpoison(ptr: Void$@, len: Sz)
 extern fn kspl_mem_poisons(): Bool //< whether the address sanitizer reads the marks
+
+fn moved( //< under the address sanitizer, the same bytes in a new heap block; else `ptr` itself
+    //< For a container that changes its elements in place (`List.clear`, `Str.drop_prefix`). The
+    //< old block is freed, so a view kept into it faults where it is read ("The sanitizer sees
+    //< a stale view" in `std/docs/DESIGN-core.md`).
+    ptr: Void$@, //< a block that `alloc` returned
+    size: Sz, //< the size it was allocated with
+): Void$@
+    if size <= 0 || !kspl_mem_poisons()
+        return ptr
+    fresh: = alloc(size)
+    copy(fresh, ptr, size)
+    dealloc(ptr)
+    return fresh
 
 priv struct Arena_chunk
     next: Arena_chunk$@
@@ -760,7 +774,14 @@ impl Arena
         _freed: = free_chunks(r.head, state.chunk)
         r.head = state.chunk
         if r.head != null
+            gave_back: = state.used < r.head.used
             release_tail(r.head, state.used)
+            // Caution: **Under the address sanitizer, a growing arena hands no rewound byte out
+            // again.** The chunk ends at the mark, so the next allocation takes a new chunk and
+            // the bytes given back stay marked. Handed out again, they would be unmarked, and a
+            // view kept across the rewind would read the new value with nothing reported.
+            if gave_back && r.default_chunk_size != 0 && kspl_mem_poisons()
+                r.head.cap = state.used
         // A mark after this one can no longer be restored, so this one is the highest that is left.
         r.marked = state.chunk
         r.marked_used = state.used
@@ -798,6 +819,19 @@ impl Arena
         one.next = null
         kspl_mem_poison(chunk_data(one, 0), need)
         r.head = one
+
+    fn retire( //< takes back a block that `alloc` handed out, which its holder has left
+        //< **The heap frees it, and an arena marks it for the address sanitizer.** A view kept
+        //< into it then faults where it is read. An arena hands the bytes out again only after
+        //< a rewind. For a container whose elements moved to a new block.
+        r: Self@, //< the arena the block came from, or null for the global heap
+        ptr: Void$@, //< the block, as `alloc` returned it
+        size: Sz, //< the size it was allocated with
+    )
+        if r == null
+            dealloc(ptr)
+        else
+            kspl_mem_poison(ptr, ((size + MAX_ALIGN - 1) / MAX_ALIGN) * MAX_ALIGN)
 
     #gives_view
     pub fn dup_str( //< a copy of the text in this arena, NUL-terminated for C

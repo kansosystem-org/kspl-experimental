@@ -150,7 +150,7 @@ Note: The server's output and the browser's are written beside the opener, under
 
 **ksmd's opener is a program of its own, `tools/ksmd.kspl`, built as `out/ksmd.exe`.** ksmd is a library and a page, with no program to add an `open` command to. Only a leaf may know both kssrv and ksmd's page.
 
-ksmd needs a workspace that holds the document's includes, and one port for it on every run ("Opening a document from the desktop" in [`ksmd/docs/DESIGN-ksmd.md`](../../ksmd/docs/DESIGN-ksmd.md)). The rules are in [`../opener_aim.kspl`](../opener_aim.kspl), each checked alone by [`../tests/ksmd_aim_test.kspl`](../tests/ksmd_aim_test.kspl).
+ksmd needs a workspace that holds the document's includes, and one port for it on every run ("Opening a document from the desktop" in [`ksmd/docs/DESIGN-ksmd.md`](../../ksmd/docs/DESIGN-ksmd.md)). The rules are in [`../opener_aim.kspl`](../opener_aim.kspl), each checked alone. Those a table can hold are rows of [`SPEC-opener-aim.ksmd`](SPEC-opener-aim.ksmd), which [`../tests/aim_rows_test.kspl`](../tests/aim_rows_test.kspl) checks. [`../tests/ksmd_aim_test.kspl`](../tests/ksmd_aim_test.kspl) checks the rest.
 
 **Which folder is the workspace:**
 
@@ -170,7 +170,7 @@ ksmd needs a workspace that holds the document's includes, and one port for it o
 | **The port is 20000 plus the FNV-1a hash of the workspace's absolute path, modulo 10000** (`home_port`) | The browser keeps drafts per address, the port included. A port that changed between runs would hide every draft held before |
 | **The port is worked out, never remembered** | A record can be lost with `out/` or another clone |
 | **Ports 20000 to 29999** | The OS hands out outgoing ports from 32768 on Linux and 49152 on Windows and macOS. Development servers mostly take ports below 10000 |
-| **Do not change the formula** | Every workspace would move, with its drafts. The test pins a few values, so a change fails it |
+| **Do not change the formula** | Every workspace would move, with its drafts. The table `home_port` in [`SPEC-opener-aim.ksmd`](SPEC-opener-aim.ksmd) pins a few values, so a change fails its test |
 | **A running server for the workspace is reused, whatever its port** | A server that started on another port keeps its drafts there until it stops |
 | **A taken port is skipped, and the run says so.** The next free port of the 16 after it is used | The page cannot see another port's drafts, so the line says why they seem gone. Once the port is free again, the next run returns to it |
 
@@ -182,7 +182,7 @@ ksmd needs a workspace that holds the document's includes, and one port for it o
 
 ### Checking a `.ksmd` document without a browser
 
-**`--check` is a mode of ksmd's opener, and it opens nothing.** It finds the document and its workspace as an opening does (`document_at` in [`../ksmd.kspl`](../ksmd.kspl)). It hands both to ksmd's own check, `ksmd/port/check.kspl`, and prints what that writes. What it prints is "Checking a file" in [`ksmd/docs/SPEC-file-format.md`](../../ksmd/docs/SPEC-file-format.md#checking-a-file).
+**`--check` is a mode of ksmd's opener, and it opens nothing.** It finds the document and its workspace as an opening does (`document_at` in [`../ksmd.kspl`](../ksmd.kspl)). It hands both to ksmd's own check, `ksmd/port/check.kspl`, and prints what that writes. What it prints is "Checking a file" in [`ksmd/docs/SPEC-commands.md`](../../ksmd/docs/SPEC-commands.md#checking-a-file).
 
 | Decision | Why |
 | :-- | :-- |

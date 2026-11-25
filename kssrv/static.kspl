@@ -238,8 +238,12 @@ fn queue_for_request( //< builds the response to one request
             target_path = path
         case .folder
             // **The raw path, not the decoded one**: it is sent back as the client wrote it, and
-            // the query goes with it.
-            to: = connection.arena.text().s(t.path).c('/')
+            // the query goes with it. **One leading `/`**: the folder is found past any number, and
+            // a browser reads `//docs/` as the host `docs`, so it would leave this server.
+            $rest: = t.path
+            for rest.len > 0 && rest[0] == '/'
+                rest = rest.sub_from(1)
+            to: = connection.arena.text().c('/').s(rest).c('/')
             if t.query.len > 0
                 to.c('?').s(t.query)
             conn.queue_redirect(connection, to.take(), keep_alive)

@@ -607,6 +607,8 @@ function ksmdRange(ks) {
   // Rows of cells from text copied out of a spreadsheet: a tab between cells, a line break
   // between rows, and quotes around a cell holding either, a quote doubled inside them. Null for
   // text that is one value alone.
+  // **A spreadsheet quotes only a cell that holds a tab or a line break**, so a quote that starts a
+  // cell, but closes nowhere or before more of the cell's text, is that text, as in `"Best" offer`.
   function grid(text) {
     const body = text.replace(/\r?\n$/, "");
     if (!/[\t\n]/.test(body)) return null;
@@ -616,19 +618,10 @@ function ksmdRange(ks) {
     let start = true;
     for (let i = 0; i < body.length; i++) {
       const c = body[i];
-      if (start && c === '"') {
-        let j = i + 1;
-        let quoted = "";
-        for (; j < body.length; j++) {
-          if (body[j] === '"') {
-            if (body[j + 1] === '"') {
-              quoted += '"';
-              j++;
-            } else break;
-          } else quoted += body[j];
-        }
-        field = quoted;
-        i = j;
+      const quoted = start && c === '"' ? quotedField(body, i) : null;
+      if (quoted) {
+        field = quoted.text;
+        i = quoted.end;
         start = false;
       } else if (c === "\t") {
         row.push(field);
@@ -649,6 +642,18 @@ function ksmdRange(ks) {
     row.push(field);
     rows.push(row);
     return rows;
+  }
+
+  // The quoted cell that starts at `from` in copied rows: its text and the place of its closing
+  // quote. Null where that quote is missing, or where the cell's text goes on after it.
+  function quotedField(body, from) {
+    let text = "";
+    for (let j = from + 1; j < body.length; j++) {
+      if (body[j] !== '"') text += body[j];
+      else if (body[j + 1] === '"') text += body[++j];
+      else return [undefined, "\t", "\n", "\r"].includes(body[j + 1]) ? { text, end: j } : null;
+    }
+    return null;
   }
 
   // Pastes copied text at the range: a grid fills cells from its corner, and with `single`, one

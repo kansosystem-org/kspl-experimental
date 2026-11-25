@@ -73,12 +73,13 @@ flowchart LR
 
 **The word "round trip" is kept out of this design.** Under a tool that synchronizes both ways, the model and the code drift apart, and the diagram stops being trusted (Principle 6). Do not mix the document and the source into one file either: line numbers shift, diffs become unreadable, and debuggers and `grep` stop working.
 
-**There are only two ways of linking.**
+**There are only three ways of linking.**
 
 | Way of linking | What it holds | Who is canonical |
 | :-- | :-- | :-- |
 | **A link** | Which symbol in which file, by name | The source |
 | **Generation from a table** | The table holds the values, and the notation is generated | The table |
+| **A table a test reads** | Rows of what the code must answer, run against it by the package's test ("A specification's rows can stand in a ksmd document" below) | The table, held to the code by the test |
 
 **A document does not show the source's text.** Copied in, it goes stale unseen; the editor and the language server already show the source. Generation is kept to where a table is canonical, such as the list of diagnostic codes. Always place a check on the generated artifact's freshness beside it, or a hand edit silently vanishes at the next generation.
 
@@ -121,13 +122,34 @@ flowchart LR
 
 **What is given up**: the check reads literal text, so a pointer worded another way escapes it, and is still a violation (Principle 8). The editor's single document can also call stale a method added by a file it does not import. The pointer naming its file answers that.
 
+#### A specification's rows can stand in a ksmd document
+
+**A specification can be a `.ksmd` file whose tables are its rows, and the module's own test checks each row against the code.** The first is [`../tools/docs/SPEC-opener-aim.ksmd`](../tools/docs/SPEC-opener-aim.ksmd), checked by [`../tools/tests/aim_rows_test.kspl`](../tools/tests/aim_rows_test.kspl). A person opens it in ksmd and reads it as a page.
+
+| Decision | Why |
+| :-- | :-- |
+| **The test reads the file through ksmd's own reader**, `shown_tables` in [`../ksmd/port/rows.kspl`](../ksmd/port/rows.kspl) | A second table parser would drift from the page. A cell reads as the page shows it, so a formula's result can be a row's answer |
+| **One table per function, named after it, with the answers in the last columns** | The reader finds the function from the table. The test needs no other mark to bind a row |
+| **The test binds each table in plain code**: the table's name and header choose one call | A step matched by a pattern is a second language to keep. A plain call stops the build when the function changes |
+| **A table the test does not bind fails, and so does a bound table that is gone** | Otherwise a row looks checked while nothing reads it |
+| **A failure names the row as `<file>:<line>`, then the table, the input and both answers** | The reader goes from the message to the row in one step |
+| **The test changes each table's first answer, and expects that row to fail** | A binding that compares nothing would pass every row |
+| **An answer that differs on Windows gets a column per OS**, where the function takes the OS | Both answers are then checked on every run. A function that asks the OS itself keeps its case in the test |
+| **The cases that rows hold are removed from the test** | One rule stands in one place |
+
+**What is given up**:
+
+* **A row holds text alone.** A rule that needs files on disk, such as the nearest marked folder, stays a case in the test.
+* **Only a leaf may read a `.ksmd` file.** A package may not import ksmd unless the reference directions allow it. So the test that reads the rows of `std` or `ksplc` stands in `tests/` or `tools/`.
+* **GitHub shows the file as plain text**, not as the page ksmd shows.
+
 ### The reader can be a model
 
 **An agent works on this repository, and a model writes KSPL for whoever asked it to; both read what is written here.** What a model lacks decides what they need.
 
 | What a model lacks | What that requires |
 | :-- | :-- |
-| **It cannot ask.** | What it needs is written down, or can be had from a command, never held in someone's head. A model that wrote a `.ksmd` file runs `ksmd --check` to see what the page would show ("Checking a file" in [`../ksmd/docs/SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md#checking-a-file)) |
+| **It cannot ask.** | What it needs is written down, or can be had from a command, never held in someone's head. A model that wrote a `.ksmd` file runs `ksmd --check` to see what the page would show ("Checking a file" in [`../ksmd/docs/SPEC-commands.md`](../ksmd/docs/SPEC-commands.md#checking-a-file)) |
 | **KSPL is in no model's training.** | A model falls back on the habits of Rust, Swift and C. So what KSPL leaves out, and what to write instead, has to stand where a model reads it |
 | **Its context is short, and costs.** | One precise piece on request beats a document read whole. `ksplc explain <code>` prints one diagnostic's section ("Explanations come from the specification, and only codes have one" in [`../ksplc/docs/DESIGN-diagnostics.md`](../ksplc/docs/DESIGN-diagnostics.md)). An instruction file carries only what cannot be read from the code |
 | **It believes what it reads.** | A stale pointer or a copied fact misleads it with confidence. So what it reads is generated from the canonical source and held by a check (Principle 4) |

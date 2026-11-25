@@ -286,12 +286,13 @@ priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, paragraph: Bool, le
         //< In a paragraph, a text that starts a line is kept from reading as a block marker
         //< `lead` starts each line after a hard break: a quote's `> `.
         //< What the format cannot hold at a line's edge is left out: spaces and tabs at either end
-        //< of a line, and hard breaks at a paragraph's end. An editor's model can hold them while
-        //< text is typed, and the reader would drop or refuse them.
+        //< of a line, and hard breaks at a paragraph's start or end. An editor's model can hold
+        //< them while text is typed, and the reader would drop or refuse them: a `\` alone on the
+        //< first line reads as a blank line.
     for count > 0 && is_blank_end(doc.inlines.get(first + count - 1))
         count -= 1
     $line_start: = true
-    for i in Range.asc(count)
+    for i in Range(blank_start(doc, first, count), count, 1)
         node: = doc.inlines.get(first + i)
         switch node.kind
         case .text
@@ -322,6 +323,14 @@ priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, paragraph: Bool, le
                 l.color = opened.color
                 write_braces(l, "", "", out)
         line_start = node.kind == .hard_break
+
+fn blank_start(doc: Document@, first: Sz, count: Sz): Sz //<
+    //< How many of a run's first inline nodes are hard breaks and spaces, which a line's start
+    //< drops, here and in Markdown
+    $n: Sz = 0
+    for n < count && is_blank_end(doc.inlines.get(first + n))
+        n += 1
+    return n
 
 fn is_blank_end(node: Inline): Bool //<
     //< A hard break, or text of spaces alone: what a line's end drops, here and in Markdown

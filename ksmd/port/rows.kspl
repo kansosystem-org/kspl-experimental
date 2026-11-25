@@ -1,0 +1,182 @@
+//< A file's tables as the page shows them, row by row, for a test that checks code by its rows
+//< Another package's test reads its specification here, and calls its own code for each row ("A
+//< specification's rows can stand in a ksmd document" in `docs/DESIGN-repository.md`). A cell
+//< gives the text the page shows (`write_shown`), so a formula's result can be a row's answer.
+//< **Only the file's own tables are read**: its includes are not followed, and its own functions
+//< are not run.
+import "ksmd/base/source" { Source }
+import "ksmd/calc/calc"
+import "ksmd/calc/value" { write_shown }
+import "ksmd/syntax/reader"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str }
+
+// **A test outside this package calls `shown_tables`, so [I0402] is off here.**
+##lint(I0402 = off)
+
+pub struct Shown_row //< one data row of a table
+    pub line: Sz //< the line of the file it stands on, counting from 1
+    pub cells: List<|U8[]|> //< each cell's text as the page shows it, from the left
+
+pub struct Shown_table //< one table of a file
+    pub name: U8[]
+    pub names: List<|U8[]|> //< the header's names, from the left
+    pub rows: List<|Shown_row|> //< the data rows, from the top
+
+pub struct Shown_tables //< a file's tables, or why the reader refused the file
+    pub refused: U8[] //< `line:column: message` where the reader refused it; empty where it read
+    pub tables: List<|Shown_table|> //< in the order they stand; none where it was refused
+
+pub fn shown_tables( //< every table of a file, each cell as the page shows it
+    bytes: U8[], //< the file's text
+    today: U8[], //< the date `today()` gives, written `2026-10-23`
+    arena: Arena$@,
+): Shown_tables
+    $out: = Shown_tables::{ .refused = "", .tables = List<|Shown_table|>(arena) }
+    src: = Source("", bytes) catch e
+        out.refused = refusal(e.line, e.column, e.message, arena)
+        return out
+    doc: = reader.read(src@, arena) catch e
+        out.refused = refusal(e.line, e.column, e.message, arena)
+        return out
+    results: = calc.calculate(doc@, today, arena)
+    $lines: = Line_count::{ .bytes = bytes, .at = 0, .line = 1 }
+    for t in Range.asc(doc.tables.len)
+        table: = doc.tables[t]@
+        $one: = Shown_table::{ .name = table.name, .names = List<|U8[]|>(arena),
+            .rows = List<|Shown_row|>(arena) }
+        for column in Range.asc(table.columns.len)
+            one.names.push(table.cells[column].text)
+        for row in Range.asc(table.rows.len)
+            $shown: = Shown_row::{ .line = lines
+                .at_offset(table.cells[table.at(row, 0)].offset),
+                .cells = List<|U8[]|>(arena) }
+            for column in Range.asc(table.columns.len)
+                defer $text: = Str()
+                write_shown(results.at(t, row, column), table.format_at(row, column), text@)
+                shown.cells.push(arena.dup_str(text.slice()))
+            one.rows.push(shown)
+        out.tables.push(one)
+    return out
+
+pub struct Bound_table //< a table a test checks against its code
+    pub name: U8[] //< the table's name, which is the function's
+    pub header: U8[] //< the header's names, `|` between them
+
+pub typedef Row_answers =
+    fn(table: Shown_table@, row: Shown_row@, arena: Arena$@): List<|U8[]|> //<
+        //< What the code gives for a row of a bound table: one text per answer column, the last ones
+
+pub struct Row_faults //< what `row_faults` found
+    pub rows: Sz //< how many rows it compared
+    pub faults: List<|U8[]|> //< one for each, `file:line: …` where a row stands
+
+pub fn row_faults( //< each way a file's rows fail to match its code
+    //< **The rules are the pattern's, so each test that binds rows keeps them alike**: a table the
+    //< test does not bind fails, a bound table that is gone or holds no row fails, and so does a
+    //< row whose answer is not the code's. Then it changes each table's first answer and expects
+    //< that row to fail, naming its line; a binding that compares nothing would pass every row.
+    file: U8[], //< the file's path, put in front of each line
+    read: Shown_tables@, //< the file's tables, from `shown_tables`
+    bound: Bound_table[], //< the tables the test checks
+    answers: Row_answers, //< the test's call for each row
+    arena: Arena$@,
+): Row_faults
+    $out: = Row_faults::{ .rows = 0, .faults = List<|U8[]|>(arena) }
+    if read.refused.len > 0
+        out.faults.push(arena.text().s(file).c(':').s(read.refused).take())
+        return out
+    for one in bound
+        if !holds_table(read.tables@, one.name)
+            out.faults
+                .push(arena.text().s(file).s(": there is no table \"").s(one.name).s("\"").take())
+    for table in read.tables
+        header: = header_of(table@, arena)
+        $known: = false
+        for one in bound
+            known =
+                known ||
+                (one.name.equals(table.name) && one.header.equals(header))
+        if !known
+            out.faults
+                .push(arena.text().s(file).s(": the table \"").s(table.name)
+                .s("\" is not one this test checks, or its columns are not the bound ones: ")
+                .s(header).take())
+            continue
+        if table.rows.len == 0
+            out.faults
+                .push(arena.text().s(file).s(": the table \"").s(table.name).s("\" holds no row")
+                .take())
+            continue
+        for row in table.rows
+            out.rows += 1
+            broke: = judged(file, table@, row@, answers, arena)
+            if broke.len > 0
+                out.faults.push(broke)
+        $wrong: = table.rows[0]
+        $cells: = List<|U8[]|>(arena)
+        for cell in wrong.cells
+            cells.push(cell)
+        last: = cells.len - 1
+        cells[last] = arena.text().s(cells[last]).c('x').take()
+        wrong.cells = cells
+        at: = arena.text().s(file).c(':').s("\{wrong.line\}: ").take()
+        if !judged(file, table@, wrong@, answers, arena).starts_with(at)
+            out.faults
+                .push(arena.text().s(at).s("a wrong answer planted in the table \"").s(table.name)
+                .s("\" passes, so its binding compares nothing").take())
+    return out
+
+priv fn holds_table(tables: List<|Shown_table|>@, name: U8[]): Bool //< whether a table has the name
+    for table in tables
+        if table.name.equals(name)
+            return true
+    return false
+
+priv fn header_of(table: Shown_table@, arena: Arena$@): U8[] //< its header's names, `|` between
+    header: = arena.text()
+    for i in Range.asc(table.names.len)
+        if i > 0
+            header.c('|')
+        header.s(table.names[i])
+    return header.take()
+
+priv fn judged( //< empty where the row's answers are the code's, else `file:line: what differs`
+    file: U8[],
+    table: Shown_table@,
+    row: Shown_row@,
+    answers: Row_answers,
+    arena: Arena$@,
+): U8[]
+    got: = answers(table, row, arena)
+    if got.len == 0 || got.len >= row.cells.len
+        return arena.text().s(file).c(':')
+            .s("\{row.line\}: the test gives no answer for the table \"").s(table.name).s("\"")
+            .take()
+    first: = row.cells.len - got.len
+    for i in Range.asc(got.len)
+        want: = row.cells[first + i]
+        if !got[i].equals(want)
+            return arena.text().s(file).c(':').s("\{row.line\}: ").s(table.name).s(" of \"")
+                .s(row.cells[0]).s("\" gives \"").s(got[i]).s("\", but the row's ")
+                .s(table.names[first + i]).s(" says \"").s(want).s("\"").take()
+    return ""
+
+priv fn refusal(line: Sz, column: Sz, message: U8[], arena: Arena$@): U8[] //<
+    //< `line:column: message`
+    return arena.text().s("\{line\}:\{column\}: ").s(message).take()
+
+priv struct Line_count //< counts lines forward through a file, as the offsets asked rise
+    bytes: U8[]
+    at: Sz //< the offset counted up to
+    line: Sz //< the line `at` stands on, counting from 1
+
+impl Line_count
+    fn at_offset(r: Self$@, offset: Sz): Sz //< the line of `offset`, at or after the last asked
+        for r.at < offset && r.at < r.bytes.len
+            if r.bytes[r.at] == '\n'
+                r.line += 1
+            r.at += 1
+        return r.line

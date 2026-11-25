@@ -178,7 +178,7 @@ priv fn with_mark($marks: Marks, which: Mark, on: Bool, link: U8[]): Marks
 fn normalized(segs: List<|Seg|>@, arena: Arena$@): List<|Seg|> //<
     //< The segments as the writer saves them and the reader reads them back
     //< Neighbours with the same marks join, and empty text goes. Spaces at a line's edge go where
-    //< no mark stands before or after them, and so do hard breaks at the end.
+    //< no mark stands before or after them, and so do hard breaks at the start and the end.
     $out: = List<|Seg|>(arena)
     for s in segs
         if s.text.len == 0
@@ -195,11 +195,16 @@ fn normalized(segs: List<|Seg|>@, arena: Arena$@): List<|Seg|> //<
         is_plain(out[out.len - 1].marks) &&
         out[out.len - 1].text.trim_spaces().len == 0)
         _dropped: = out.pop()
+    $start: Sz = 0
+    for start < out.len &&
+        (out[start].hard ||
+        is_plain(out[start].marks) && out[start].text.trim_spaces().len == 0)
+        start += 1
     $trimmed: = List<|Seg|>(arena)
-    for i in Range.asc(out.len)
+    for i in Range(start, out.len, 1)
         $s: = out[i]
         if !s.hard && is_plain(s.marks)
-            if i == 0 || out[i - 1].hard
+            if i == start || out[i - 1].hard
                 s.text = s.text.trim_start()
             if i + 1 == out.len || out[i + 1].hard
                 s.text = s.text.trim_end()

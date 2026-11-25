@@ -2,7 +2,8 @@
 //< A mistake here breaks nothing visible at once. A port that moves between runs hides the drafts
 //< held before; a workspace chosen too narrow refuses an include that climbs with `../`. So each
 //< rule is checked alone (`tools/opener_aim.kspl`); `tools/tests/ksmd_launch.kspl` runs the
-//< launcher.
+//< launcher. The rules a table can hold are rows of `tools/docs/SPEC-opener-aim.ksmd`, which
+//< `tools/tests/aim_rows_test.kspl` checks; this file holds the rest.
 import "std/ds"
 import "std/fs"
 import "std/mem" { Arena }
@@ -12,45 +13,15 @@ import "tools/opener_aim" as aim
 
 priv const SCRATCH: U8[] = "out/tmp/kspl_test_ksmd_aim" //< where the checks that write files work
 
-fn test_a_workspace_keeps_its_port() //< the same folder gets the same port, run after run
-    verdict.start("[tools/opener_aim] a workspace's own port test...")
-    // **The values are pinned**: a changed formula moves every workspace, and its drafts with it.
-    assert(aim.home_port("/home/me/notes") == 26466, "a folder's port is the one pinned")
-    assert(aim.home_port("/home/me/notes2") == 21056, "a neighbouring name gets another")
-    assert(aim.home_port("C:\\Users\\me\\notes") == 24355, "a Windows path is hashed alike")
-    assert(aim.home_port("/") == 25758 && aim.home_port("") == 26037,
-        "the root and an empty name have ports too")
-    for root in U8[][]::{ "/", "/a", "/home/me/notes", "D:\\work" }
-        at: = aim.home_port(root)
-        assert(at >= aim.PORT_BASE && at < aim.PORT_BASE + aim.PORT_SPAN,
-            "every port lies in the workspaces' range")
-    verdict.pass("a folder's port is pinned, and every port lies between 20000 and 29999.")
-
-fn test_only_a_ksmd_file_opens() //< the name must end in `.ksmd`, in any case
-    verdict.start("[tools/opener_aim] which files open test...")
-    assert(aim.is_ksmd("notes.ksmd") && aim.is_ksmd("/a/b/Notes.KSMD"),
-        "a .ksmd file opens, whatever its case")
-    assert(!aim.is_ksmd("notes.md") && !aim.is_ksmd("notes.ksmd.txt") && !aim.is_ksmd("ksmd") &&
-        !aim.is_ksmd(""), "any other name is refused")
-    verdict.pass("only a name ending in .ksmd opens.")
-
-fn test_one_folder_has_one_spelling(arena: Arena$@) //< `.` and doubled separators drop
-    verdict.start("[tools/opener_aim] one spelling of a path test...")
-    assert(aim.plain("/a/./b//c.ksmd", arena).equals("/a/b/c.ksmd"), "`.` and `//` drop")
-    assert(aim.plain("/a/b/", arena).equals("/a/b"), "a separator at the end drops")
-    assert(aim.plain("/", arena).equals("/"), "the root stays the root")
-    assert(aim.plain("/a\\.\\b.ksmd", arena).equals("/a\\b.ksmd"),
-        "a `\\` stays as written between the names kept")
-    // Caution: **A `..` is refused, not folded** (the reason is at `aim.plain`).
-    assert(aim.plain("/a/../b.ksmd", arena).len == 0 && aim.plain("/a/b/..", arena).len == 0,
-        "a `..` anywhere is refused")
-    assert(aim.plain("/a/..b/c", arena).equals("/a/..b/c"), "a name starting `..` is a name")
+fn test_a_drive_letter_is_upper_cased(arena: Arena$@) //< on Windows alone; elsewhere `c:` is a name
+    //< The other rules of `aim.plain` are rows of `tools/docs/SPEC-opener-aim.ksmd`. This one
+    //< answers by the OS the test runs on, which a row cannot name.
+    verdict.start("[tools/opener_aim] a drive letter's case test...")
     // **Windows ignores a drive letter's case**, so `c:\notes` and `C:\notes` would start two
     // servers. Elsewhere `c:` is an ordinary name, kept as written.
     want: = "C:\\notes" if sys.is_windows() else "c:\\notes"
     assert(aim.plain("c:\\notes\\", arena).equals(want), "a drive letter is upper-cased on Windows")
-    assert(aim.plain("C:/notes", arena).equals("C:/notes"), "an upper-case drive stays")
-    verdict.pass("`.` and doubled separators drop, and a path holding `..` is refused.")
+    verdict.pass("a drive letter is upper-cased on Windows, and kept as written elsewhere.")
 
 fn test_the_nearest_marked_folder_is_the_workspace(arena: Arena$@) //<
     //< A marked folder above wins over the document's own; with none, its own folder is chosen
@@ -76,13 +47,3 @@ fn test_the_nearest_marked_folder_is_the_workspace(arena: Arena$@) //<
     for one in U8[][]::{ inner, deep, fs.join(top, "notes", arena), top }
         fs.remove_path(one) catch {}
     verdict.pass("the nearest folder holding .ksmd-workspace is chosen, else the document's own.")
-
-fn test_a_document_is_named_with_slashes(arena: Arena$@) //<
-    //< `--check` names the document as the page does, `/` between folders, on both systems
-    verdict.start("[tools/opener_aim] the document's path from the root test...")
-    assert(aim.slashed("parts\\notes.ksmd", true, arena).equals("parts/notes.ksmd"),
-        "on Windows each \\ becomes /")
-    assert(aim.slashed("parts\\notes.ksmd", false, arena).equals("parts\\notes.ksmd"),
-        "elsewhere \\ stays a byte of the name")
-    assert(aim.slashed("parts/notes.ksmd", true, arena).equals("parts/notes.ksmd"), "a / stays")
-    verdict.pass("on Windows each \\ becomes /, and elsewhere it stays part of the name.")

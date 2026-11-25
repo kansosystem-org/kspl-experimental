@@ -388,6 +388,32 @@ impl Sema_ctx
         r.err(place, r.scratch.slice())
         return true
 
+    priv fn refuse_copied_receiver_write(r: Self$@, recv: Ast_node$@, method: Ast_node$@): Bool //<
+        //< Reports a `Self$@` call on the receiver of a trait's default body, if it is one
+        //< **That receiver is a copy** ("5.1 Traits (`trait`)" in
+        //< docs/SPEC-programming-language.md), so the write would reach only the copy. The
+        //< report stands at the call in the trait, not at the impl that got the body.
+        decl: = r.fn_ctx.decl
+        if decl == null || r.diags.default_origin.get(Sz::decl).is_none()
+            return false
+        sym: = r.root_binding_of(recv).unwrap_or(null)
+        params: = decl.get_fn_params()
+        if sym == null || params == null
+            return false
+        $cur: = base_ast_ext.Param_cursor(params, false)
+        receiver: = cur.next().unwrap_or(null)
+        if receiver == null || !receiver.find_text(.k_identifier).equals(sym.name)
+            return false
+        callee: = method.get_decl_id_text()
+        r.clear_scratch()
+            .s("a trait's default body gets its receiver '\{sym.name\}' as a copy, so it cannot \
+                call '\{callee\}', which changes its receiver: \
+                '\{r.env.display(r.env.strip_ptr(recv.type_id))\}' implements '\{callee\}' with \
+                'Self$@'. The change would reach only the copy. Write '\{decl.get_decl_id_text()\}' \
+                in that type's impl block, where its receiver can be 'Self$@'")
+        r.err_in_trait(recv, r.scratch.slice())
+        return true
+
     fn refuse_writing_receiver(r: Self$@, recv: Ast_node$@, method: Ast_node$@, op: U8[]) //<
         //< Refuses a `Self$@` method on a receiver it may not write
         //< A call (`x.m()`, op empty) and an operator (`x + y`, op `+`) take the receiver's address
@@ -419,7 +445,8 @@ impl Sema_ctx
             return
         // **The same permission as an assignment**, or `v.n = 9` is refused while `v.bump()` or
         // `v + w` writes (on `const` data, a write to ROM).
-        if !r.place_is_readonly(recv) || r.refuse_made_binding_write(recv)
+        if !r.place_is_readonly(recv) || r.refuse_made_binding_write(recv) ||
+            r.refuse_copied_receiver_write(recv, method)
             return
         r.clear_scratch()
         if op.len == 0

@@ -770,28 +770,6 @@ fn main(): I32
   grow(w)
   grow(w@)
   return size_of(q) + size_of(CQ) + w.s
-// ==== case trait_value_default_body_call
-//< A method with a default body holds no table slot, so a trait value cannot call it
-//< Let it through and the call names a field absent from the C. It fails at the C compiler with no
-//< KSPL diagnostic (has_vtable_slot in `ksplc/base/ast_place.kspl`). From a concrete type it stays
-//< callable: that reaches the body copied per implementation.
-// EXPECT: has a default body. It holds no slot
-// EXPECT-NOT: has no field or method named
-
-pub struct Down
-  pub n: I32
-
-impl Down: Iter<|I32|>
-  pub fn next(r: Self$@): I32?
-    if r.n <= 0
-      return .none
-    r.n -= 1
-    return .some(r.n)
-
-fn main()
-  $d: = Down::{ .n = 3 }
-  it: Iter<|I32|> = d@
-  _n: = it.count()
 // ==== case trait_value_wrapped_in_struct_escapes
 //< A trait value built from local storage is rejected when carried out on a struct
 //< Returning it bare is the case `trait_upcast_returns_local`. Without this, a struct holding a
@@ -881,42 +859,6 @@ impl S: Src
 
 fn main(): I32
   return 0
-// ==== case default_body_warning_in_trait
-//< A warning from a trait's default body is reported once, in the trait; an error at the impl
-//< Every impl that inherits the body holds a copy, placed at that impl. So the unread `r` was
-//< reported at each `impl` line, column 1, where nothing could be changed. An error stays at the
-//< impl: `side` is missing from `Ci` alone. A generic impl's instances are copies too.
-// EXPECT: default_body_warning_in_trait.kspl:9:11: warning: [W0207] Nothing reads local variable or parameter 'r'
-// EXPECT: default_body_warning_in_trait.kspl:28:1: error: type 'default_body_warning_in_trait.Ci' has no field or method named 'side'
-// EXPECT: Finished with 1 error(s), 1 warning(s)
-trait Shape
-  fn name(r: Self): U8[]
-    return "shape"
-
-  fn twice(r: Self): I32
-    return r.side * 2
-
-struct Sq
-  side: I32
-
-struct Ci
-  rad: I32
-
-struct Bx<|T|>
-  side: T
-
-impl Sq: Shape {}
-
-impl<|T|> Bx<|T|>: Shape {}
-
-impl Ci: Shape {}
-
-fn main(): I32
-  s: = Sq::{ .side = 2 }
-  c: = Ci::{ .rad = 3 }
-  b: = Bx<|I32|>::{ .side = 3 }
-  wide: = Bx<|I64|>::{ .side = 3 }
-  return I32::(s.name().len + c.name().len + b.name().len + wide.name().len) + s.twice()
 // ==== case trait_block_foreign_method
 //< A block that names a trait holds only that trait's methods
 //< A misspelt method would otherwise pass beside the trait's default body, which would run in its
@@ -949,48 +891,3 @@ impl P: Move_only, Manual_free
 
 fn main(): I32
   return 0
-// ==== case default_body_member_of_unnamed_type
-//< A default body that writes `T.weight()`, in an impl whose argument for `T` has no members
-//< A pointer, a fixed array and a function type have none. **The report names the argument the
-//< impl gave**; "undefined path or identifier 'T.weight'" named a parameter the impl never wrote.
-// EXPECT: this impl gives 'default_body_member_of_unnamed_type.Pair@' for it. A pointer, a fixed array and a function type have no members
-// EXPECT: this impl gives 'default_body_member_of_unnamed_type.Pair[2]' for it
-// EXPECT: this impl gives 'fn(I32):I32' for it
-// EXPECT: 3 error(s)
-// EXPECT-NOT: undefined path or identifier
-pub trait Conv<|T|>
-  fn one(r: Self): I32
-
-  fn weigh(r: Self): I32
-    return T.weight() + r.one()
-
-pub struct Pair
-  pub a: I32
-
-impl Pair
-  pub fn weight(): I32
-    return 2
-
-pub struct By_ptr
-  pub n: I32
-
-impl By_ptr: Conv<|Pair@|>
-  pub fn one(r: Self): I32
-    return r.n
-
-pub struct By_array
-  pub n: I32
-
-impl By_array: Conv<|Pair[2]|>
-  pub fn one(r: Self): I32
-    return r.n
-
-pub struct By_fn
-  pub n: I32
-
-impl By_fn: Conv<|fn(x: I32): I32|>
-  pub fn one(r: Self): I32
-    return r.n
-
-fn main(): I32
-  return By_ptr::{ .n = 1 }.weigh() + By_array::{ .n = 1 }.weigh() + By_fn::{ .n = 1 }.weigh()

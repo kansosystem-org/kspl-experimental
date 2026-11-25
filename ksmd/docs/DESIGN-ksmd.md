@@ -39,7 +39,7 @@ Static figures are images with captions. Images keep their aspect ratio. Each fi
 
 * **A block starts at column one**, since two spaces mark a nested list item.
 * **The writer numbers every ordered item `1.`**, so inserting or moving an item changes only its own lines.
-* **The writer leaves out spaces and tabs at a line's ends, and hard breaks at a paragraph's end.** An editor's model holds them while text is typed.
+* **The writer leaves out spaces and tabs at a line's ends, and hard breaks at a paragraph's start or end.** An editor's model holds them while text is typed.
 
 ## Prose notation
 
@@ -672,7 +672,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 ### Checking a file without the page
 
-**`ksmd --check` reads, assembles and calculates a file with the page's own code**, `report` in `ksmd/port/check.kspl`. Whoever wrote the file, often a model with no browser, sees what the page would show. The rules are "Checking a file" in [`SPEC-file-format.md`](SPEC-file-format.md#checking-a-file).
+**`ksmd --check` reads, assembles and calculates a file with the page's own code**, `report` in `ksmd/port/check.kspl`. Whoever wrote the file, often a model with no browser, sees what the page would show. The rules are "Checking a file" in [`SPEC-commands.md`](SPEC-commands.md#checking-a-file).
 
 | Decision | Why |
 | :-- | :-- |

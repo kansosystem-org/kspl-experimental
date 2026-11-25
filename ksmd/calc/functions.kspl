@@ -10,6 +10,7 @@
 import "ksmd/base/dates" { day_of, write_date, write_date_with, ymd_of }
 import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/bases" { Base, Base_error, read, whole, width_ok, write }
+import "ksmd/calc/formula" { as_decimal }
 import "ksmd/calc/value" { MAX_TEXT, Calc_error, Value, date_value }
 import "ksmd/calc/value" as calculated // `number`, which a parameter here takes as its name
 import "ksmd/model/format" { SHOWN_DIGITS, format_of, round_at_digits_of, round_digits, round_places,
@@ -128,6 +129,19 @@ pub fn mod( //<
     q: = number / divisor
     if q >= 9007199254740992.0 || q <= -9007199254740992.0
         throw .not_finite
+    // **Whole numbers have an exact remainder**, so nothing is cut: cut at 15 digits, the
+    // quotient of `mod(999999999999999, 2)` showed as a whole number, and the remainder as 0.
+    if is_whole(number) && is_whole(divisor)
+        $times_whole: = F64::(I64::q)
+        if times_whole > q
+            times_whole -= 1.0
+        $rest: = number - divisor * times_whole
+        // The F64 quotient can be one off, which leaves the remainder one divisor out.
+        if rest != 0.0 && (rest < 0.0) != (divisor < 0.0)
+            rest += divisor
+        if divisor > 0.0 && rest >= divisor || divisor < 0.0 && rest <= divisor
+            rest -= divisor
+        return rest
     // The quotient is cut at the 15 digits a person reads, as `cut` cuts, so `mod(3.3, 1.1)` is 0:
     // its F64 quotient lies just below 3. A quotient that shows as a whole number leaves nothing.
     near: = round_digits(q, SHOWN_DIGITS) catch
@@ -145,6 +159,10 @@ pub fn mod( //<
     left: = number - divisor * times
     larger: = math.max(math.abs(number), math.abs(divisor))
     return round_at_digits_of(left, larger, SHOWN_DIGITS).unwrap_or(left)
+
+priv fn is_whole(number: F64): Bool //< whether it is a whole number that an F64 holds exactly
+    return number < 9007199254740992.0 && number > -9007199254740992.0 &&
+        F64::(I64::number) == number
 
 pub fn power( //<
     //< `number` to the power `power`
@@ -287,7 +305,8 @@ priv fn one_matches(character: U8[], pattern: U8[], at: Sz): Bool //<
 
 pub fn value( //<
     //< the number a text writes in decimal, such as `"12.5"` or `" -3 "`; a number stays as it is
-    //< **The one way from text to a number**, since arithmetic never reads text. Any other text,
+    //< **The one way from text to a number**, since arithmetic never reads text. A point with
+    //< digits on one side only reads as a typed number does: `".5"` is 0.5. Any other text,
     //< `true`/`false` or a date is `#VALUE!`; an empty cell is 0.
     //< For example, `value(" -3 ")` is `-3`.
     text: Value, //< the text, or a cell that holds it
@@ -298,7 +317,8 @@ pub fn value( //<
     case .empty
         return 0.0
     case .text
-        return text.text.to_f64() catch
+        defer $plain: = Str()
+        return as_decimal(text.text.trim_spaces(), plain@).to_f64() catch
             throw .wrong_kind
     default
         throw .wrong_kind

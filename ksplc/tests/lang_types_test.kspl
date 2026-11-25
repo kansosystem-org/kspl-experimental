@@ -225,6 +225,27 @@ fn test_alias_as_generic_argument()
     assert(boxes[0].val == 7, "a read-only slice keeps the qualifier around the resolved alias")
     verdict.pass("aliases share result and nested-generic instances with their targets.")
 
+priv fn picked<|T|>(xs: T[], wanted: T): T //< the first element equal to `wanted`, or `wanted`
+    for x in xs
+        if x == wanted
+            return x
+    return wanted
+
+fn test_a_bare_number_takes_a_generic_parameter_s_type()
+    verdict.start("[Generic] a bare number takes the type the other arguments bind...")
+    // **The number came first and bound `T` to `I32`**, so the `U64` beside it was refused.
+    wide: U64 = 70
+    small: U8 = 7
+    narrow: F32 = 0.5
+    assert(picked(U64[]::{ wide }, 70) == wide, "an element type binds before the number")
+    assert(picked(U8[]::{ small }, 200) == U8::200, "a U8 takes 200")
+    assert(picked(F32[]::{ narrow }, 1.5) == 1.5F32, "an F32 takes a bare 1.5")
+    // **A computed number was read at `I32` first**, and refused there before `T` was bound.
+    assert(picked(U64[]::{ wide }, 1 << 40) == 1U64 << 40, "a shift past 32 bits takes U64")
+    assert(picked(U64[]::{ wide }, 4294967296 + 1) == 4294967297U64,
+        "a sum of a number past I32 takes U64")
+    verdict.pass("a bare number takes the type the other arguments bind.")
+
 fn test_alias_element_acts_as_its_base() //<
     //< It checks an alias read out of an immutable slice acts as its base type
     //< Caution: **Read the alias out of an immutable slice.** The element is the alias under an

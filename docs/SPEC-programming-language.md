@@ -1086,6 +1086,8 @@ trait Drawable
 
 **A warning about a default body is reported once, at its place in the trait.** An error is reported at the `impl` that got the copy, since the body can fail for that type alone.
 
+**A default body gets its receiver as a copy** (`r: Self`), so it cannot call a method that changes the receiver. Where an `impl` writes the called method with `Self$@`, the call is a compile error. It stands at the call in the trait, not at the `impl`, and names that type: the change would reach only the copy. Write the default method in that type's `impl` block instead, where its receiver can be `Self$@`.
+
 In the copy, `Self` and the `impl`'s own type parameters mean what they mean in the rest of that `impl` block. The trait's type parameters are replaced by the type arguments the `impl` wrote: if `impl<|X, Y|> Pair<|X, Y|>: Seqish<|Y|>` implements `trait Seqish<|E|>`, the `E` inside the body is `Y`.
 
 **A method with a default body holds no slot in a trait value's table**, so calling it through a trait value is a compile error. Call it on a concrete type, or through a type parameter bound by the trait (`<|T: Seqish<|E|>|>`).
@@ -1104,6 +1106,8 @@ trait Seqish<|E|>
 **A copied body does not become wider than the type that implemented it.** A `priv` type can inherit a `pub` default body, which then reaches only as far as the type does ("Visibility" in [3.3](#33-structs-struct)).
 
 **A method including `Self` as a type argument in its return cannot be implemented** (`fn chain(r: Self): Wrap<|Self|>`; the error stands at each `impl`). Without a body, its table slot's type would differ per implementation. With a default body, the body could not be copied into a generic implementation, where `Self` is not yet known. Write such a chaining method separately on each type. A method that returns `Self` itself is another case (§5.3).
+
+**A default body cannot return `Self`** (a compile error at the trait). An implementation returns `Self` as a pointer (`Self$@`, §5.3), and the copied body returns a value, so no `impl` could use it.
 
 **A trait's method takes no type parameters of its own** (`fn conv<|U|>(r: Self, …)` is a compile error at the trait), with a default body or without. A call through a trait value picks one implementation from its table, and a generic method has no single implementation to put there. Put the type parameter on the trait (`trait Conv<|U|>`), or write the method in the type's plain `impl` block, where a method can take its own ([3.3](#33-structs-struct)).
 
@@ -2371,9 +2375,12 @@ The record uses a free field in the header, so **an allocation takes no extra by
 
 The compiler notices when a local variable is used after it was freed. It recognizes a free by the variable's type conforming to `Manual_free`, or by a call to `dealloc`.
 
-**Touching memory whose lifetime has ended is undefined** ([14.2](#142-undefined---no-answer-is-fixed)). KSPL has no borrow check, so it refuses only what one function's code shows:
+**Touching memory whose lifetime has ended is undefined** ([14.2](#142-undefined---no-answer-is-fixed)). KSPL has no borrow check, so it refuses only what one function's code shows. The one exception is a method that returns only its receiver (below).
 
 * **A pointer into the function's frame cannot leave by `return` or `throw`.** The frame holds its local variables and by-value parameters. The rule covers a written address (`x@`, `a[0]@`, `s.f@` of a local `s`, `v@` of a parameter `v`). It also covers one the compiler makes: a slice over a local array or a run ([6.6.1](#661-compound-literal-forms)), or a trait value such as a closure ([8.1.3](#813-closures)). It is refused anywhere inside the value (`.some(x@)`, a struct's field, a pointer stepped by `+`). It is refused through a local set from one (`p: = x@; return p`), or whose field or element is set from one later (`h.s = U8[]::a; return h`). **A part read out of such a local carries its pointer too**: `return h.s`, `return s.ptr` and `return s[1]@` are refused. **So does a value read through a pointer to such a local**: `return pp$` after `pp: = p@` is refused. So are `hp.p` after `hp: = h@`, `s[0]` of a slice over a local array, and `(s.ptr + 0)$`. **A name bound out of such a local carries its pointer too**: a `case .some(v)` or `if v: = o` binding, and a `for p in ps` item. **The value a `catch` gives stands for the value it replaces**: `catch x@` and `fallback x@` are refused as `x@` is. A field that no frame pointer set, and a number, pass.
+  * **A method that returns only its receiver hands back the address it was called on.** A builder's `s` ends in `return r`. So `return b.s("a")` on a local `b` is refused as `return b@` is, with no `@` written.
+  * It is refused through a chain (`b.s("a").c('b')`) and through a local set from the call. A `throw` is refused the same way.
+  * The compiler reads the method's body for this. Each `return` in it must give back the receiver by its own name. The receiver must not be declared `$`, and nothing in the body may bind its name again. Any other body passes.
 * **A store of a written address into a global or behind a pointer is allowed** (`g = x@`), for a place cleared before the function returns. One the compiler makes is refused there as well.
 * **A local's storage ends with its block**, and so does a temporary's, such as a closure or a run of elements. So a pointer the compiler makes cannot be stored into a local of an outer block: in `inner:`, `c = fn(x: I32; n: I32): I32 { … }` is refused where `c` is declared outside `inner`. A written address stored so is the writer's, as above, and reading through it after the block ends is a dangling pointer.
 
@@ -2382,7 +2389,7 @@ The compiler notices when a local variable is used after it was freed. It recogn
   * A container behind a pointer, in a global or in a local of an outer block is a warning, not a refusal (`ksplc explain W0110`). The method's signature does not say whether it keeps the value.
   * Keep the value as long as the container: make it in the container's arena (`arena.create(…)`), or let the container hold the concrete type (`List<|Sq|>`).
 
-A pointer parameter's target (`p$@`, `p.f@`), a global's address and a call's result are not the frame's and pass. Beyond these, the writer is responsible for not touching such memory. A pointer handed to any other call that keeps it or returns it is not followed.
+A pointer parameter's target (`p$@`, `p.f@`), a global's address and any other call's result are not the frame's and pass. Beyond these, the writer is responsible for not touching such memory. A pointer handed to any other call that keeps it or returns it is not followed.
 
 **Whether something was freed is tracked through the type's contract.** KSPL recognizes `x.free()` on a local whose type conforms to `Manual_free`, and the free function `dealloc(x)`, as freeing the local's resource. A path reaching that variable after the free is refused as `variable 'x' may already be freed here (use-after-free or double free)`. A free registered with `defer` counts at the point of leaving the scope.
 
@@ -2426,6 +2433,8 @@ Caution: **No row of this table stops a program at run time.** Keeping each view
 | The pointer that `Mutex.lock` returns | `Mutex.unlock` | The memory stays, but another thread can now write it: a data race ([8.6](#86-what-orders-memory-between-threads)) |
 
 **A lint catches the plain cases.** `ksplc explain W0111` reports a view held in a local and used after a call on its owner, a local too, that ends it. It follows branches and loops. It does not follow a view through a field, another function or a container of views. `ksplc explain W0105` reports a use after `unlock()`.
+
+**A view that leaves the function is checked against its `defer` statements.** W0111 reports a `return` or `throw` of a view whose owner a `defer` of the same function ends: `defer $xs: = List<|I32|>(null); return xs.slice()`. A view inside `.some(…)` or a struct literal is not followed there. A method that returns its receiver, such as `Str.s`, gives no view: `return b.s("a")` on a local `b` is the frame rule's refusal ([8.4.5](#845-tracking-a-free-with-manual_free)).
 
 **std's methods say which rows they are.** A method marked `#gives_view` returns a view into its receiver, and one marked `#ends_views` ends every view into it ([10](#10-compiler-directives-and-attributes)). The lint reads these marks, so a type of your own can use them too. Two rows need no mark. A `free()` that `Manual_free` names ends the views. So does a new value given to a local `Rc<|T|>`, as the compiler releases the old one. `make test-spec-claims` holds this table and std's marks to each other.
 

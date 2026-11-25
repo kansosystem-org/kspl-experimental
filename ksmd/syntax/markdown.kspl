@@ -7,7 +7,7 @@ import "ksmd/base/marker" { leading, run_of_digits }
 import "ksmd/calc/calc" { Results }
 import "ksmd/calc/value" { write_shown }
 import "ksmd/model/model" { Block, Document, Inline_kind, MAX_NESTING }
-import "ksmd/syntax/writer" { is_blank_end, write_code }
+import "ksmd/syntax/writer" { blank_start, is_blank_end, write_code }
 import "std/chars"
 import "std/str" { Str }
 
@@ -169,15 +169,16 @@ priv fn write_table(doc: Document@, at: Sz, values: Results@, out: Str$@) //<
 priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, lead: U8[], heading: Bool,
     out: Str$@) //<
         //< A run of inline nodes, then the line's end; `lead` starts each line after a hard break
-        //< Spaces at a line's edges and a hard break at the end are left out, as the writer leaves
-        //< them out. Spaces at a mark's inner edge stand outside it, where Markdown can open it.
+        //< Spaces at a line's edges and hard breaks at the start or the end are left out, as the
+        //< writer leaves them out. Spaces at a mark's inner edge stand outside it, where Markdown
+        //< can open it.
     for count > 0 && is_blank_end(doc.inlines.get(first + count - 1))
         count -= 1
     $bare: = true //< nothing is written on this line yet
     $moved: Sz = 0 //< the leading spaces of the next text, already written before its marks
     $after: U8[] = "" //< the trailing spaces of the text before, written after its marks close
     $link: U8[] = "" //< the destination of the brackets open now; empty for coloured text
-    for i in Range.asc(count)
+    for i in Range(blank_start(doc, first, count), count, 1)
         node: = doc.inlines.get(first + i)
         next: = doc.inlines.get(first + i + 1) if i + 1 < count else node
         last: = i + 1 == count || next.kind == .hard_break

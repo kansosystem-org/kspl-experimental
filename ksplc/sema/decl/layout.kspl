@@ -148,6 +148,22 @@ impl Sema_ctx
             r.ensure_type_registry_walk(base_id, seen, err_node)!
         default {}
 
+    fn fill_enum_for_fold(r: Self$@, type_id: I32, err_node: base_ast.Ast_node$@): Bool!Sema_error //<
+        //< Fills in an enum's variants for a fold before Pass 3; false while they are being filled
+        //< A tag, a `const` or an array length can name a variant of an enum declared later.
+        //< Caution: **Do not suppress the enum's own errors.** The fill runs once, so a fold
+        //< that suppresses its own reports would lose them for good.
+        switch r.env.get_info(type_id)
+        case .enum_type(def)
+            if def.pending_decl == null
+                return !r.registry_is_filling(type_id)
+            prev_sup: = r.suppress_errors
+            r.suppress_errors = false
+            defer r.suppress_errors = prev_sup
+            r.fill_registry(type_id, def.pending_decl, err_node)!
+        default {}
+        return true
+
     priv fn fill_registry(r: Self$@, type_id: I32, decl: base_ast.Ast_node$@,
         err_node: base_ast.Ast_node$@): Void!Sema_error //<
             //< Fills in one declaration, recording a cycle where filling it needs its own size

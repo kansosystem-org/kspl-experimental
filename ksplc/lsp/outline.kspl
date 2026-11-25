@@ -107,11 +107,20 @@ priv fn symbol(ctx: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Val
     $sel_off: Sz = node.loc.offset
     $sel_len: Sz = 0
     if node.kind_id == .k_decl_impl
+        // **An `impl` not written at its place is the compiler's**: a closure's, standing where
+        // its `fn(` is.
+        if node.loc.offset >= ctx.src.len ||
+            !ctx.src.sub_from(node.loc.offset).starts_with("impl")
+            return .none
         name = impl_name(ctx, node)
         sel_len = name.len
     else
         id: = name_node(node)
-        if id == null || id.text.len <= 0 || !id.loc.file().equals(ctx.file)
+        // **A name not written at its own place is the compiler's**: a trait's default method
+        // copied into an `impl`, or a closure's environment. Not every such copy is marked
+        // `made_by_compiler`, and its name reaches past its range, which the editor refuses.
+        if id == null || id.text.len <= 0 || !id.loc.file().equals(ctx.file) ||
+            !lsp_position.is_source_text(id, ctx.src)
             return .none
         name = id.text
         sel_off = id.loc.offset

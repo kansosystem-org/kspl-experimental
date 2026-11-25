@@ -61,10 +61,11 @@ priv fn sum_of( //< the record: the digest in hex and a newline
 priv fn untracked(paths: U8[][], arena: Arena$@): List<|U8[]|>!U8[] //<
     //< The files of `paths` that git neither tracks nor ignores; throws where git cannot say
     //< Git is absent from a source tarball, and a folder that is no checkout has no list; there the
-    //< files on disk are all the source there is.
+    //< files on disk are all the source there is. **Git's list is not limited to one folder**: the
+    //< record counts `lib/kspeg/` as well as `ksplc/` (`SEED_SUM_SRCS` in the `Makefile`).
     listed: =
-        subproc.run(U8[][]::{ "git", "ls-files", "-z", "--others", "--exclude-standard", "--",
-        "ksplc" }, "", GIT_TIMEOUT_MS, GIT_LIST_CAP, arena) catch
+        subproc.run(U8[][]::{ "git", "ls-files", "-z", "--others", "--exclude-standard" }, "",
+        GIT_TIMEOUT_MS, GIT_LIST_CAP, arena) catch
             throw "git cannot list the files here"
     $out: = List<|U8[]|>(arena)
     for name in listed.split(0U8, arena)
@@ -125,11 +126,11 @@ fn main(): I32
     if found.len > 0
         io.err()
             .s("FAIL: \{record\} names other compiler source than the tree holds, and the tree \
-                holds files under ksplc/ that git does not:\n")
+                holds compiler source that git does not:\n")
         write_untracked(found@)
         return 1
     io.err()
         .s("FAIL: \{record\} names other compiler source than the tree holds: something under \
-            ksplc/ changed after the last `make commit-seed`. Run `make self-host`, then `make \
-            commit-seed`, and commit both files.\n")
+            ksplc/ or lib/kspeg/ changed after the last `make commit-seed`. Run `make self-host`, \
+            then `make commit-seed`, and commit both files.\n")
     return 1

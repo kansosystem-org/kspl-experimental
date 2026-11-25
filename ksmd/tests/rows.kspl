@@ -1,0 +1,76 @@
+//< A file's tables read as the page shows them, row by row, for another package's test
+//< (`ksmd/port/rows.kspl`): each cell's text, each row's line, and the reader's refusal
+import "ksmd/port/rows" { Bound_table, Shown_row, Shown_table, row_faults, shown_tables }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const TWO: U8[] =
+    "%ksmd 2\n\n# Two tables\n\n:::table name=\"a\"\n| \"x\" | \"twice\" |\n| 2 | =A1*2 |\n| \
+        \"Pens\" | =len(A2) |\n:::\n\n:::table name=\"b\"\n| \"when\" |\n| =today() |\n:::\n" //<
+            //< two tables; the second's row stands on line 13
+
+priv const BOUND: Bound_table[_] = ::{ Bound_table::{ .name = "twice", .header = "x|twice" },
+    Bound_table::{ .name = "gone", .header = "x|y" } } //<
+        //< a table the file holds, and one it does not
+priv const RULED: U8[] =
+    "%ksmd 2\n\n:::table name=\"twice\"\n| \"x\" | \"twice\" |\n| 2 | 4 |\n| 3 | 7 \
+        |\n:::\n\n:::table name=\"other\"\n| \"x\" |\n| 1 |\n:::\n" //<
+            //< a bound table whose second row, on line 6, is wrong, and a table no test binds
+
+priv fn doubled(table: Shown_table@, row: Shown_row@, arena: Arena$@): List<|U8[]|> //<
+    //< the answer of the table `twice`: 2 and 3 doubled
+    $got: = List<|U8[]|>(arena)
+    if table.name.equals("twice")
+        got.push("4" if row.cells[0].equals("2") else "6")
+    return got
+
+priv fn echoed(_table: Shown_table@, row: Shown_row@, arena: Arena$@): List<|U8[]|> //<
+    //< a binding that compares nothing: it gives each row's own answer back
+    $got: = List<|U8[]|>(arena)
+    got.push(row.cells[row.cells.len - 1])
+    return got
+
+fn run()
+    defer arena: = Arena(64 * 1024)
+    read: = shown_tables(TWO, "2026-10-23", arena)
+    verdict.check("a file that reads has no refusal", read.refused.len == 0, read.refused)
+    if read.tables.len != 2
+        verdict.check("both tables are read, in order", false, "")
+        return
+    a: = read.tables[0]
+    b: = read.tables[1]
+    verdict.check("a table gives its name and its header's names",
+        a.name.equals("a") && a.names.len == 2 && a.names[0].equals("x") &&
+        a.names[1].equals("twice") && b.name.equals("b"), "")
+    verdict.check("a cell gives the text the page shows: a number, text, a formula's result",
+        a.rows.len == 2 && a.rows[0].cells[0].equals("2") &&
+        a.rows[0].cells[1].equals("4") && a.rows[1].cells[0].equals("Pens") &&
+        a.rows[1].cells[1].equals("4"), "")
+    verdict.check("today() gives the date it is told",
+        b.rows[0].cells[0].equals("2026-10-23"), "")
+    verdict.check("each row names the line it stands on, counting from 1",
+        a.rows[0].line == 7 && a.rows[1].line == 8 && b.rows[0].line == 13,
+        arena.text().s("\{a.rows[0].line\} \{a.rows[1].line\} \{b.rows[0].line\}").take())
+    bad: =
+        shown_tables("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| Pens |\n:::\n", "2026-10-23",
+        arena)
+    verdict.check("a refused file gives the place and the reason, and no table",
+        bad.refused.starts_with("5:3: ") && bad.tables.len == 0, bad.refused)
+    ruled: = shown_tables(RULED, "2026-10-23", arena)
+    found: = row_faults("r.ksmd", ruled@, Bound_table[]::BOUND, doubled, arena)
+    wrong: = "r.ksmd:6: twice of \"3\" gives \"6\", but the row's twice says \"7\""
+    verdict.check("a wrong row, a missing table and an unbound one each fail, the row by its line",
+        found.rows == 2 && found.faults.len == 3 &&
+        found.faults[0].equals("r.ksmd: there is no table \"gone\"") &&
+        found.faults[1].equals(wrong) &&
+        found.faults[2].starts_with("r.ksmd: the table \"other\" is not one this test checks"),
+        arena.text().s("\{found.rows\} rows, \{found.faults.len\} faults").take())
+    echo: = row_faults("r.ksmd", ruled@, Bound_table[]::BOUND, echoed, arena)
+    planted: =
+        "r.ksmd:5: a wrong answer planted in the table \"twice\" passes, so its binding compares \
+            nothing"
+    verdict.check("a binding that compares nothing fails at the first row of its table",
+        echo.faults.len == 3 && echo.faults[1].equals(planted), "")

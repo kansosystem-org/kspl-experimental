@@ -15,11 +15,13 @@ import "ksplc/sema/body/call_defaults" as sema_body_call_defaults
 import "ksplc/sema/body/coerce" as sema_body_coerce
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
+import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/type/def" { Fn_sig }
 import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as _sema_type_query // `is_integer`, `is_float`
 import "std/ds"
 
 fn check_args_against_instance(ctx: Sema_ctx$@, args_node: Ast_node@, inst_node: Ast_node$@,
@@ -42,7 +44,17 @@ fn check_args_against_instance(ctx: Sema_ctx$@, args_node: Ast_node@, inst_node:
         if p_id == 0 || sema_type_env.is_unknown(p_id)
             continue
         a_id: = arg_node.type_id
-        if a_id == 0 || sema_type_env.is_unknown(a_id) || a_id == p_id
+        if a_id == 0 || sema_type_env.is_unknown(a_id)
+            continue
+        // **A bare number takes the parameter's type**, as in any call (`inferred_type_args` in
+        // `generic_infer.kspl` bound the type from the other arguments first), and its range is
+        // checked against that type. Its first reading was quiet (`infer_call_args`), so it is
+        // read again even where the type is the same.
+        if sema_body_literal.is_untyped_numeric_expr(arg_node) &&
+            (ctx.env.is_integer(p_id) || ctx.env.is_float(p_id))
+            arg_node.type_id = arg_node.infer_expr(ctx, p_id) catch a_id
+            continue
+        if a_id == p_id
             continue
         // A function's name got the type `generic_fn_value_type_id`, **a marker with no
         // signature**. A generic call passes no expected type (value_of_fn in
@@ -82,6 +94,21 @@ fn infer_value_call_args(ctx: Sema_ctx$@, call_node: Ast_node$@, args_node: Ast_
         sema_body_lint_stmt.lint_type_given(ctx, arg_node, expected_id,
             "The parameter's type already gives it.")
         pos += 1
+
+priv fn infer_arg(ctx: Sema_ctx$@, arg_node: Ast_node$@, expected_id: I32, quiet: Bool):
+    I32!Sema_error //<
+        //< An argument's type, read quietly where `quiet` (a generic call's bare number)
+        //< **The bare number is read again once its parameter's type is known**
+        //< (check_args_against_instance). Read aloud at its default `I32` now, `1 << 40` beside a
+        //< `U64` would be refused before the `U64` binds `T`. A quiet reading that fails is read
+        //< aloud, so its error is reported.
+    if !quiet
+        return arg_node.infer_expr(ctx, expected_id)!
+    prev_sup: = ctx.suppress_errors
+    ctx.suppress_errors = true
+    quiet_id: = arg_node.infer_expr(ctx, expected_id)
+    ctx.suppress_errors = prev_sup
+    return quiet_id catch arg_node.infer_expr(ctx, expected_id)!
 
 fn infer_call_args(ctx: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
     is_method_access: Bool, op_text: U8[], is_generic_call: Bool): Void!Sema_error
@@ -150,7 +177,9 @@ fn infer_call_args(ctx: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
         else
             in_tail = is_variadic
 
-        eval_id: = arg_node.infer_expr(ctx, expected_arg_id)!
+        eval_id: =
+            infer_arg(ctx, arg_node, expected_arg_id,
+            is_generic_call && sema_body_literal.is_untyped_numeric_expr(arg_node))!
         if in_tail
             // C reads a `...` value as the type its format names, so 11.1 holds here too.
             ctx.check_variadic_arg(eval_id, arg_node)

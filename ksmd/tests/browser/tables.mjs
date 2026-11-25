@@ -513,6 +513,14 @@ export function tables({ page, media, js, settle, press, type, select, click, me
       await menu("paste");
       await saves("where it reads the clipboard, Paste fills the cells as Ctrl+V does",
         start.replace("| 2 | |", '| "x" | "y" |'));
+      // A spreadsheet quotes a cell only where it holds a tab or a line break, so a quote that
+      // closes no such field is the cell's own text.
+      await load(start);
+      await clipboard('"Best" offer\t"open\n7\t8');
+      await click(cellAt(1, 0));
+      await menu("paste");
+      await saves("a quote that starts a cell but closes no field stays in the cell's text",
+        start.replace("| 2 | |\n| 3 | |", '| "\\"Best\\" offer" | "\\"open" |\n| 7 | 8 |'));
       await load(start);
       await clipboard(null);
       await click(cellAt(1, 0));

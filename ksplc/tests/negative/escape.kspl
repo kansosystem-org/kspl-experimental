@@ -559,3 +559,106 @@ fn main(): I32
   _f: = catch_fallback()
   _g: = catch_substitute()
   return ok_number_payload() + ok_number_item()
+// ==== case frame_address_handed_back
+//< A method that returns only its receiver hands back the address it was called on
+//< A builder's `s` ends in `return r`, so `b.s("a")` on a local `b` is `b@`, with no `@` written.
+//< It is refused as written, through a chain, through a local, for a `defer` declaration and for a
+//< type of the program's own declared below the call. **What cannot be read as "only the
+//< receiver" passes**: a receiver that is a pointer to memory elsewhere, a method with another
+//< `return`, one that hides its receiver's name, and one whose receiver is `$`.
+// EXPECT: frame_address_handed_back.kspl:19:10: error: cannot return the address of local storage: this call returns the address it was called on, and 'b' lives in this function's frame. This function's frame dies here
+// EXPECT: frame_address_handed_back.kspl:23:10: error: cannot return the address of local storage: this call returns the address it was called on, and 'b' lives
+// EXPECT: frame_address_handed_back.kspl:28:10: error: cannot return 'kept': it was set from the address of local storage
+// EXPECT: frame_address_handed_back.kspl:32:10: error: cannot return the address of local storage: this call returns the address it was called on, and 'b' lives
+// EXPECT: frame_address_handed_back.kspl:36:10: error: cannot return the address of local storage: this call returns the address it was called on, and 'own' lives
+// EXPECT: frame_address_handed_back.kspl:40:9: error: cannot throw the address of local storage: this call returns the address it was called on, and 'own' lives
+// EXPECT: Finished with 6 error(s)
+import "std/mem" { Arena }
+import "std/str" { Str }
+
+priv fn as_written(): Str$@
+  $b: = Str()
+  return b.s("a")
+
+priv fn through_chain(): Str$@
+  $b: = Str()
+  return b.s("a").c('b').s("c")
+
+priv fn through_local(): Str$@
+  $b: = Str()
+  kept: = b.s("a")
+  return kept
+
+priv fn defer_declared(): Str$@
+  defer $b: = Str()
+  return b.s("a")
+
+priv fn own_type(): Own$@
+  $own: = Own::{ .n = 1 }
+  return own.add(2)
+
+priv fn thrown(): I32!Own$@
+  $own: = Own::{ .n = 1 }
+  throw own.add(2)
+
+priv struct Own
+  n: I32
+
+impl Own
+  fn add(r: Self$@, more: I32): Self$@ //< a builder's shape: it returns only its receiver
+    r.n += more
+    return r
+
+  fn or_other(r: Self$@, other: Self$@): Self$@ //< another `return`, so not read as the receiver
+    if other.n > r.n
+      return other
+    return r
+
+  fn hidden(r: Self$@, other: Self$@): Self$@ //< the name `r` is bound again
+    if other.n > 0
+      r: = other
+      return r
+    return r
+
+  fn rebound($r: Self$@, other: Self$@): Self$@ //< a `$` receiver, given another value
+    r = other
+    return r
+
+priv fn ok_param(out: Str$@): Str$@ //< the builder is the caller's
+  return out.s("a")
+
+priv fn ok_arena(arena: Arena$@): U8[] //< the builder lies in the arena
+  return arena.text().s("a").take()
+
+priv fn ok_used(): Sz //< a chain used, and a number returned
+  defer $b: = Str()
+  return b.s("a").c('b').len
+
+priv fn ok_other(other: Own$@): Own$@
+  $own: = Own::{ .n = 1 }
+  return own.or_other(other)
+
+priv fn ok_hidden(other: Own$@): Own$@
+  $own: = Own::{ .n = 1 }
+  return own.hidden(other)
+
+priv fn ok_rebound(other: Own$@): Own$@
+  $own: = Own::{ .n = 1 }
+  return own.rebound(other)
+
+fn main(): I32
+  defer arena: = Arena(4096)
+  defer $out: = Str()
+  $o: = Own::{ .n = 0 }
+  _a: = as_written()
+  _b: = through_chain()
+  _c: = through_local()
+  _d: = defer_declared()
+  _e: = own_type()
+  _f: = thrown() catch 0
+  _g: = ok_param(out@)
+  _h: = ok_arena(arena)
+  _i: = ok_other(o@)
+  _j: = ok_hidden(o@)
+  _k: = ok_rebound(o@)
+  return I32::ok_used()

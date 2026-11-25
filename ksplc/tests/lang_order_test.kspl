@@ -98,6 +98,35 @@ fn test_declarations_may_reference_later_constants()
     verdict.pass("neither sema's fold nor genc's output order is bound to the declarations' order.")
 
 // ==========================================
+// A tag, a constant and an array length can name a variant of an enum declared behind them.
+// Caution: **Name it through a constant too.** The constant folds at its own use, so only the
+// tag's own fold fills the later enum.
+// ==========================================
+priv enum Ord_op
+    load = I32::Ord_base.first + 1
+    store = ORD_FROM_ENUM + 2
+
+priv const ORD_FROM_ENUM: I32 = I32::Ord_base.second
+
+priv struct Ord_frame
+    slots: U8[Sz::Ord_base.second]
+
+priv enum Ord_base
+    first = 10
+    second = 20
+
+fn test_declarations_may_reference_later_enum_variants()
+    verdict.start("[order] a variant of an enum declared behind can be named test...")
+
+    assert(I32::Ord_op.load == 11, "a tag names a variant of an enum declared later")
+    assert(I32::Ord_op.store == 22, "a tag reaches one through a constant")
+    $fr: Ord_frame = ::{}
+    fr.slots[19] = 3
+    assert(fr.slots.len == 20 && fr.slots[19] == 3, "a field's array length names one too")
+
+    verdict.pass("an enum's tags are filled in when something folds them first.")
+
+// ==========================================
 // Checks that a generic type's `impl` may be written before the type's declaration or its use.
 // Caution: **Test the trait conformance too.** Even with the methods in place, an upcast does not
 // pass unless `impl<|T|> C<|T|>: Trait` attaches.

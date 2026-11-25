@@ -311,14 +311,29 @@ So `restore` first looks for the mark's chunk among its own. The mark also carri
 
 **What remains unchecked keeps the arena whole.** A mark that an earlier `restore()` rewound past, whose chunk now holds as much again, rewinds without a stop. Every chunk it keeps is this arena's, and every byte handed out afterwards is past it, so nothing overlaps. Testing for it would need a record of every mark ever saved, as marks are handed out by value.
 
-### The sanitizer sees a stale slice into an arena
+### The sanitizer sees a stale view
 
 After `reset()` or `restore()`, an old slice reads what the next allocation wrote. The heap never saw those bytes freed, so the address sanitizer alone says nothing. Under the sanitizer, the arena marks every byte of its chunks that it has not handed out, and `alloc` unmarks what it hands out. A read through an old slice into marked bytes is reported as `use-after-poison`.
 
-* **A slice over bytes handed out again is still not seen**: the new allocation unmarked them. That is the usual case in a loop that refills the arena each round.
-* **So under the sanitizer, `reset()` of a growing arena moves to a new chunk** of the same size. It gives the old one back to the heap. The sanitizer holds a freed block back from reuse for a while, so the old slice's read is reported as a use after free. Without the sanitizer, `reset()` keeps the chunk.
+**A slice over bytes handed out again would still not be seen**: the new allocation unmarked them. That is the usual case in a loop that refills the arena each round. So under the sanitizer, std hands no such byte out again:
+
+* **`reset()` of a growing arena moves to a new chunk** of the same size. It gives the old one back to the heap. The sanitizer holds a freed block back from reuse for a while, so the old slice's read is reported as a use after free.
+* **`restore()` of a growing arena ends its chunk at the mark.** The next allocation takes a new chunk, and the bytes given back stay marked.
 * **A buffer the caller owns (`from_buffer`) cannot move**, so only the marks catch a read there. `free()` unmarks the whole buffer, as the caller may use it again by hand.
-* **Without the sanitizer, and on bare metal, the marks cost a call that does nothing.** The runtime answers whether the sanitizer is there.
+
+Without the sanitizer, `reset()` and `restore()` keep the chunk, and the bytes are handed out again.
+
+**A container that grows gives its old block back with `Arena.retire`.** That is a `List`, a `Map`, and the builder of `arena.text()`. The heap frees the block; an arena marks it. A view kept into the old block is then reported where it is read.
+
+**A change in place moves a list or a builder on the heap (`mem.moved`).** `List.clear`, `insert` and `remove_at` move the list. `Str.clear` and `drop_prefix` move the builder. Under the sanitizer, the bytes go to a new block, and the old one is freed. So a view kept across the change is reported as a use after free. Without the sanitizer, `mem.moved` returns the same block.
+
+* **A list in an arena does not move.** The arena cannot free its old block, so a loop of `remove_at` would fill the arena.
+* **`pop` and `truncate` do not move either.** A view of the elements that are left stays valid. A move would copy the whole list at each step. A heap that pops with `truncate(len - 1)` then takes time in proportion to the square of its size. A tokenizer's tests ran out of time that way, over a word of 256 KiB.
+* **So a view of a popped slot is not seen.** The room past `len` is not marked either, since `std/regex.kspl` sets a list's `len` by hand.
+
+**A copy of a list in an arena, read after the original grows, is reported.** The copy still points into the block the original left, and that block is marked. This is a stale view: the copy no longer shows the original's elements.
+
+**Without the sanitizer, and on bare metal, the marks cost a call that does nothing.** The runtime answers whether the sanitizer is there. A release build therefore keeps every block where it was. A test that expects the same block after a change checks `mem.kspl_mem_poisons()` first.
 
 ## Containers and iteration
 

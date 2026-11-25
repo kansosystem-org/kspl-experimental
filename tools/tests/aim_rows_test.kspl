@@ -1,0 +1,60 @@
+//< The rows of `tools/docs/SPEC-opener-aim.ksmd`, each checked against `tools/opener_aim.kspl`
+//< The document is read with ksmd's own reader (`ksmd/port/rows.kspl`), so a row reads here as
+//< the page shows it. Each table is bound to its function in `answers`, and `row_faults` holds the
+//< rows to them. A failure names the row's line, as `tools/docs/SPEC-opener-aim.ksmd:42`. The
+//< pattern is "A specification's rows can stand in a ksmd document" in
+//< `docs/DESIGN-repository.md`.
+import "ksmd/port/rows" { Bound_table, Shown_row, Shown_table, row_faults, shown_tables }
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tools/opener_aim" as aim
+
+priv const DOC: U8[] = "tools/docs/SPEC-opener-aim.ksmd" //<
+    //< the document, from the repository's root
+priv const TODAY: U8[] = "2026-10-23" //< the date `today()` gives; no row depends on it
+
+priv const BOUND: Bound_table[_] = ::{ Bound_table::{ .name = "home_port",
+    .header = "Folder|Port" }, Bound_table::{ .name = "is_ksmd", .header = "File|Opens" },
+    Bound_table::{ .name = "plain", .header = "Path|Plain" },
+    Bound_table::{ .name = "slashed", .header = "Path|On Windows|Elsewhere" },
+    Bound_table::{ .name = "port_num", .header = "Printed|Port" } } //<
+        //< The tables this test checks, each with its header
+        //< **Each must stand in the document**, or its rules go unchecked.
+
+fn test_the_document_rows_hold(arena: Arena$@) //< each row's answer is the code's
+    verdict.start("[tools/opener_aim] the rows of its document test...")
+    bytes: = io.read_file(DOC, arena) catch
+        panic("cannot read tools/docs/SPEC-opener-aim.ksmd")
+    read: = shown_tables(bytes, TODAY, arena)
+    found: = row_faults(DOC, read@, Bound_table[]::BOUND, answers, arena)
+    verdict.check_list("every row of tools/docs/SPEC-opener-aim.ksmd holds", found.rows, "rows",
+        found.faults@, "Fix the code or the row; a row is a promise.")
+    // **A worked port lies in the workspaces' range**: a rule over every row, not one row's.
+    for table in read.tables
+        if table.name.equals("home_port")
+            for row in table.rows
+                port: = aim.home_port(row.cells[0])
+                assert(port >= aim.PORT_BASE && port < aim.PORT_BASE + aim.PORT_SPAN,
+                    "every port lies in the workspaces' range")
+    verdict.pass("each row of the opener's document gives the code's answer.")
+
+priv fn answers(table: Shown_table@, row: Shown_row@, arena: Arena$@): List<|U8[]|> //<
+    //< What the code gives for a row of a bound table, one text per answer column
+    $got: = List<|U8[]|>(arena)
+    given: = row.cells[0]
+    if table.name.equals("home_port")
+        got.push(arena.text().s("\{aim.home_port(given)\}").take())
+    else if table.name.equals("is_ksmd")
+        got.push("yes" if aim.is_ksmd(given) else "no")
+    else if table.name.equals("plain")
+        plain: = aim.plain(given, arena)
+        got.push("refused" if plain.len == 0 else plain)
+    else if table.name.equals("slashed")
+        got.push(aim.slashed(given, true, arena))
+        got.push(aim.slashed(given, false, arena))
+    else if table.name.equals("port_num")
+        got.push(arena.text().s("\{aim.port_num(given)\}").take())
+    return got

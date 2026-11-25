@@ -896,6 +896,22 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 
 **What is given up**: a call's text does not show how many arguments it passes.
 
+### No properties: a call keeps its parentheses
+
+**KSPL has no property, a member read like a field that runs code.** `io.out()` stays a call, and is not written `io.out` with a getter behind it. So `x.y` always reads data, and `x.y()` always runs code.
+
+**Where properties exist, the common complaint is what they hide.** C#, Swift, Kotlin and Python's `@property` read like a field, but may allocate, lock, block, fail or change state. C#'s own guidelines have to ask authors to keep them cheap, since a reader assumes so. Rust, Go and Java have none, and write `len()` or `getX()`.
+
+* **A cost stays on the page.** Cleanup is written out ("Every cleanup stands in the source" below), and `!` marks a call that can fail. A property would be the one place where code runs unseen.
+* **A model reads only the line.** KSPL is in no model's training, so `x.y` must not mean a field in one file and a call in another.
+* **A failing getter would need a spelling of its own**, and a getter that cannot fail would cover only the easy cases.
+
+**What is given up**: two parentheses at each use, such as the 800 calls of `io.out()` in the repository. The parser, the type checker, both backends, the formatter and the language server stay without a second kind of member.
+
+### No `elif`: `else if` is the one spelling
+
+**KSPL writes `else if`, as C, C++, Java, Swift and Rust do, and has no `elif`.** An `elif` beside `else if` would be two spellings of one thing, and only Python among the languages KSPL is matched against writes it. A Python programmer who writes `elif` is told to write `else if`.
+
 ## Ownership and lifetime
 
 **KSPL does not prove at compile time that every pointer stays valid, so what the language protects has to be chosen.** It protects what local data flow alone can follow: what happens to a value inside one function. The rest is the writer's responsibility (Principle 8).
@@ -1012,7 +1028,7 @@ Caution: **Should freezing at registration ever be needed, do not spell it `defe
 
 ### Which pointers into a frame are stopped from leaving it
 
-A pointer *dangles* when what it points at is gone, such as a local after its function returns. Two ways out are checked: `return` / `throw`, and a store into a place that outlives the frame. A pointer is refused only where one function's code shows the danger, so the refusal is always right.
+A pointer *dangles* when what it points at is gone, such as a local after its function returns. Two ways out are checked: `return` / `throw`, and a store into a place that outlives the frame. A pointer is refused only where the code shows the danger, so the refusal is always right. That code is one function's, with one exception: a method that returns only its receiver (below).
 
 | How the pointer leaves | A pointer the compiler makes unseen: a trait value, a slice over a local array | An address written with `@`: `x@`, `a[0]@`, `s.f@` |
 | :-- | :-- | :-- |
@@ -1034,6 +1050,13 @@ It lowers to `return (Shape){ .obj = (void*)&s, … };`, with no `@` written. **
 
 **A store of a written `@` stays the writer's.** Keeping a local's address in a longer-lived place is right when the place is cleared before the function returns. A compiler pass points a shared context at its own local cache. A kernel links a waiting function's queue entry into a shared wait queue. Whether the place is cleared is control flow, which a check following names cannot see. The `@` on the page shows the danger, and the one who wrote it clears the place. An invisible pointer is refused at a store all the same: nobody wrote it there, so nobody knows to clear it.
 
+**A method that returns only its receiver hands back the address it was called on.** A builder's `s` ends in `return r`, so `$b: = Str(); return b.s("a")` returns `b@` with no `@` written. Every builder chain has this shape, and it compiled into garbage read from a dead frame.
+
+* **The callee's body is read, which no other part of the rule does.** The signature `fn s(r: Self$@, …): Self$@` cannot tell the receiver from other memory the method returns, such as a pointer parameter's target.
+* **Only a body that surely returns its receiver counts.** Each `return` gives back the receiver by its own name, the receiver is not `$`, and nothing binds that name again. Any other body passes, so the refusal stays always right.
+* **What it costs:** a caller's refusal depends on a body it does not show. A change to that body changes the answer only between "surely the receiver" and "unknown". So a refusal it adds is always right, and one it removes only goes back to the writer.
+* **The call counts as a written `@`, so only `return` and `throw` refuse it.** The receiver's name stands on the page, as the local stands before an `@`. A store of the call (`ctx.out = b.s("a")`) is the writer's, for the same reason as a store of `b@`.
+
 | Returned or thrown | Stopped? | Why |
 | :-- | :-- | :-- |
 | `s`, a local value, as a trait (`Shape`) | Yes | The compiler would write `&s` unseen |
@@ -1042,10 +1065,11 @@ It lowers to `return (Shape){ .obj = (void*)&s, … };`, with no `@` written. **
 | `U8[]::{ .ptr = a[0]@, .len = 4 }`, `.some(x@)`, `a[0]@ + 1`, `U8@::x@` | Yes | The value carries such an address inside it |
 | A local set from any of those forms | Yes | The mark follows the name (below) |
 | `pp$`, `hp.p` or `s[0]`, read through a pointer or a slice to such a local | Yes | The value read is that local's, so it carries the local's mark |
-| `builder.slice()`, `arena.alloc()` | No | The compiler does not know where a call's result points |
+| `b.s("a")` of a local `b`, where `s` returns only its receiver | Yes | The call gives back `b@` (above) |
+| `builder.slice()`, `arena.alloc()` | No | The compiler does not know where any other call's result points |
 | A global or its address, an upcast pointer, `p$@`, `p.f@` through a pointer `p` | No | None of them points into the frame |
 
-Caution: **Do not reject a call's result, and do not widen the check to "do not return a slice" or "do not return a pointer".** Returning allocated memory, or what a pointer parameter points at, is legitimate.
+Caution: **Do not reject other calls' results, or widen the check to "do not return a slice" or "do not return a pointer".** Returning allocated memory, or what a pointer parameter points at, is legitimate.
 
 **The forms are found anywhere inside the value** (`g = .some(c)`, `return .some(x@)`):
 

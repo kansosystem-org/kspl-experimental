@@ -6,13 +6,15 @@
 import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { decl_line, end_text, is_missing }
+import "std/chars" // `starts_with`
 import "std/ds" { List }
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
 import "std/verdict"
 
 // **A local inside a body and a constant's own value are no part of the outline**; `inner` and
-// `helper` are there to be left out.
+// `helper` are there to be left out. So are the copy of `half` that `impl Pair: Shape` gets and
+// the closure's environment, which the compiler writes.
 priv const OUTLINE_SRC: U8[] =
     """priv const LIMIT: Sz = 4
 
@@ -30,6 +32,13 @@ enum Side
 
 trait Shape
   fn area(r: Self): I32
+  fn half(r: Self): I32
+    return r.area() / 2
+
+
+impl Pair: Shape
+  fn area(r: Self): I32
+    return r.left * r.right
 
 
 impl Pair
@@ -41,7 +50,10 @@ impl Pair
 
 fn main(): I32
   helper: = 2
-  return helper
+  add: = fn(v: I32; helper: I32): I32 {
+    return v + helper;
+  }
+  return add(helper)
 
 """
 priv const OUTLINE_URI: U8[] = "file:///o.kspl"
@@ -114,9 +126,13 @@ fn run_outline(client: jsonrpc_client.Client$@, caps: json.Value, arena: Arena$@
         found(seen@, "sum", 6I32, 1) && found(seen@, "area", 6I32, 1), d)
     $stray: = false
     $outside: = false
+    $halves: Sz = 0
     for s in seen.slice()
-        if s.name.equals("inner") || s.name.equals("helper")
+        if s.name.equals("inner") || s.name.equals("helper") || s.name.starts_with("_") ||
+            s.name.starts_with("fn(")
             stray = true
+        if s.name.equals("half")
+            halves += 1
         if !s.inside
             outside = true
     // **A field's node is not as long as its name for it** (`struct_field`): `x: I8` is shorter,
@@ -130,6 +146,7 @@ fn run_outline(client: jsonrpc_client.Client$@, caps: json.Value, arena: Arena$@
         last_end = s.to
     verdict.check("no declaration's range reaches into the next declaration", !overlap, d)
     verdict.check("nothing inside a body comes out", !stray, d)
+    verdict.check("a trait's default method comes out once, in the trait", halves == 1, d)
     verdict.check("each name's place lies inside its declaration's range", !outside, d)
 
     // **A document that fails to parse gets what parsed around the error.**

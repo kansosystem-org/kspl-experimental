@@ -86,11 +86,12 @@ struct Server
 
 fn wind_back(mark: mem.Arena_state) //<
     //< It rewinds base_core.arena to `mark` and discards everything on it
-    //< Caution: **Do not call `base_core.arena.restore` from anywhere else.** What the compiler
-    //< keeps in module-level variables lives on that arena: the text as written
-    //< (base/as_written.kspl), the indentation notes (parse/load.kspl), the diagnostics
-    //< (base/diag.kspl), the ranges a `#cfg()` dropped (base/cfg_inactive.kspl). So a bare
-    //< rewind leaves those pointers dangling.
+    //< Caution: **Do not call `base_core.arena.restore` from anywhere else.** Module-level
+    //< variables point into that arena: the text as written (base/as_written.kspl), the
+    //< indentation notes (parse/load.kspl), the diagnostics (base/diag.kspl), the ranges a `#cfg()`
+    //< dropped (base/cfg_inactive.kspl). A bare rewind leaves them dangling. **The statistics map
+    //< (`prof` in parse/load.kspl) is not cleared**: only `--stats` writes it, and the command
+    //< line refuses that outside `compile` and `fmt`. Clear it here if that changes.
     base_as_written.forget_as_written()
     parse_load.forget_layout_notes()
     base_diag.lsp_diags.clear()

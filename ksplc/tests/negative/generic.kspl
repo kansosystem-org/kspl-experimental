@@ -755,3 +755,24 @@ fn main(): I32
   $cells: = List<|Cell|>(arena)
   cells.push(Cell::{ .v = 1 })
   return 0 if cells.contains(Cell::{ .v = 1 }) else 1
+// ==== case generic_bare_number_out_of_range
+//< A bare number given beside a `U8` is checked against `U8`, not against the `I32` it reads as
+// EXPECT: generic_bare_number_out_of_range.kspl:9:5: error: literal '300' is out of range for type 'U8'
+fn pick<|T|>(a: T, b: T): T
+  return a if a > b else b
+
+fn main(): I32
+  small: U8 = 7
+  _p: = pick(small,
+    300)
+  return 0
+// ==== case generic_bare_numbers_alone_out_of_range
+//< Bare numbers alone bind `I32`, and a computed one past it is still refused
+//< **The first reading of a bare number is quiet**, so the check after the binding reports it.
+// EXPECT: generic_bare_numbers_alone_out_of_range.kspl:8:14: error: literal '4294967296' is out of range for type 'I32'
+fn pick<|T|>(a: T, b: T): T
+  return a if a > b else b
+
+fn main(): I32
+  _p: = pick(4294967296 + 1, 2)
+  return 0

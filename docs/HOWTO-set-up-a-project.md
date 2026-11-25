@@ -150,7 +150,7 @@ ie4uinit.exe -show
 
 **This section makes a `.ksmd` document open in ksmd, the document editor ([ksmd](../ksmd/README.md)), in your browser on a double-click.** It needs a clone that builds from source ([`HOWTO-build.md`](HOWTO-build.md)). `make ksmd` builds the launcher `out/ksmd.exe`, the server and the page.
 
-**The launcher starts the local server on the document's workspace, or reuses the one running there.** It passes the document's address to the browser, and exits ("Opening a `.ksmd` document" in [`tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md)).
+**The launcher starts the local server on the document's workspace, or reuses the one running there.** It passes the document's address to the browser, and exits ("Opening a `.ksmd` document" in [`tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md)). Each of its commands and options is in [`ksmd/docs/SPEC-commands.md`](../ksmd/docs/SPEC-commands.md).
 
 ### Choose the workspace
 
@@ -165,8 +165,6 @@ ie4uinit.exe -show
 
   On Windows, run `New-Item $HOME\notes\.ksmd-workspace` in PowerShell.
 * **From a terminal, `--workspace=<folder>` names the workspace for one run**: `out/ksmd.exe --workspace=$HOME/notes $HOME/notes/a/b.ksmd`. Use it for a folder you cannot write the file into.
-
-**Each workspace keeps its own port, from 20000 to 29999, worked out from its path**, so the browser's unsaved drafts come back. If another program holds it, the launcher takes the next free port and says so.
 
 ### Linux (a desktop environment)
 
@@ -213,15 +211,7 @@ ie4uinit.exe -show
 
 ### Listing and stopping the servers
 
-**A server stays up for the next document**, and stops by itself five minutes after its last ksmd tab closes.
-
-| Command | What it does |
-| :-- | :-- |
-| `out/ksmd.exe --list` | Shows the servers running, with the workspace each serves |
-| `out/ksmd.exe --stop=<folder>` | Stops the server of that workspace |
-| `out/ksmd.exe --stop-all` | Stops every one |
-
-**Each launcher tends only the servers it started.** The one `make install` put in (`ksmd --list`) and `out/ksmd.exe` each keep their own record, beside their own server.
+**A server stays up for the next document**, and stops by itself five minutes after its last ksmd tab closes. To stop one sooner, see the servers that run with `out/ksmd.exe --list`. Then stop one with `--stop=<folder>`, or every one with `--stop-all`. What each prints is "Listing and stopping the servers" in [`ksmd/docs/SPEC-commands.md`](../ksmd/docs/SPEC-commands.md#listing-and-stopping-the-servers).
 
 ### Resetting the `.ksmd` association
 
@@ -257,7 +247,8 @@ update-desktop-database ~/.local/share/applications
 | Look at | What it tells you |
 | :-- | :-- |
 | **A run from a terminal** | `out/ksmd.exe <document>` prints why it refuses a document, such as a name not ending in `.ksmd` |
-| **`out/ksmd.exe --check <document>`** | It starts nothing, and prints whether ksmd refuses the document and what each formula gives. `--today=<date>` sets the date `today()` gives. "Checking a file" in [`ksmd/docs/SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md#checking-a-file) sets what it prints |
-| **`out/ksmd.exe --markdown <document>`** | It starts nothing, and prints the document as Markdown, as File ▸ Copy as Markdown copies it. "Copying as Markdown" in [`ksmd/docs/SPEC-file-format.md`](../ksmd/docs/SPEC-file-format.md#copying-as-markdown) sets what it prints |
+| **`out/ksmd.exe --check <document>`** | It starts nothing, and prints whether ksmd refuses the document and what each formula gives |
 | **`out/tmp/ksmd.browser.log`** | What the browser printed when the launcher started it |
-| **`out/ksmd.exe --show <document>`** | It prints the whole URL, with the token after `#`; paste it into a browser. If the document opens, only the hand-over to the browser failed. Without `--show` no token is printed, since a double-click's output can reach others |
+| **`out/ksmd.exe --show <document>`** | It prints the whole URL; paste it into a browser. If the document opens, only the hand-over to the browser failed |
+
+**What each command prints is in [`ksmd/docs/SPEC-commands.md`](../ksmd/docs/SPEC-commands.md).**

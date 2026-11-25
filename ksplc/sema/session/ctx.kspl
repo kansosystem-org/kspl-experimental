@@ -444,17 +444,30 @@ impl Sema_ctx
 
     fn report_diagnostic(r: Self$@, node: Ast_node$@, sev: base_diag.Diagnostic_severity,
         msg: U8[])
-        info: = written_span(node)
         // **A warning from a trait's default body is reported in the trait, once.** The body is
         // copied into each impl and stands there, so every copy would repeat it at its impl's
         // line. An error stays at the impl: it can hold for that implementing type alone.
-        if sev != base_diag.Diagnostic_severity.error
-            if origin: = r.diags.default_origin.get(Sz::node)
-                r.report_core(origin.file(), r.source_for_file(origin.file()), origin.offset,
-                    info.span, true, sev, msg)
-                return
+        if sev != base_diag.Diagnostic_severity.error && r.report_in_trait(node, sev, msg)
+            return
+        info: = written_span(node)
         r.report_core(r.file_for_node(node), r.source_for_node(node), info.offset, info.span,
             node != null, sev, msg)
+
+    fn err_in_trait(r: Self$@, node: Ast_node$@, msg: U8[]) //<
+        //< Reports an error at the place in the trait where a copied default body writes node
+        //< **Only for an error that the body's own text causes**, such as a call its copied
+        //< receiver cannot make. Any other node is reported where it stands.
+        if !r.report_in_trait(node, .error, msg)
+            r.err(node, msg)
+
+    priv fn report_in_trait(r: Self$@, node: Ast_node$@, sev: base_diag.Diagnostic_severity,
+        msg: U8[]): Bool //<
+            //< Reports at node's place in the trait, if node is in a copied default body
+        origin: = r.diags.default_origin.get(Sz::node) catch
+            return false
+        r.report_core(origin.file(), r.source_for_file(origin.file()), origin.offset,
+            written_span(node).span, true, sev, msg)
+        return true
 
     fn names_file(r: Self@, node: Ast_node@): U8[] //<
         //< The file in which the names node writes are looked up: the file its text stands in
