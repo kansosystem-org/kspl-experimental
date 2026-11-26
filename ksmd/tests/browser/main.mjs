@@ -789,11 +789,11 @@ Object.assign(sections, sizes({ page, media, js, settle, until, press, type, cli
 Object.assign(sections, documents({ page, js, press, type, click, menu, load, saves, source }));
 Object.assign(sections, diagrams({ page, js, settle, press, type, click, menu, load, saves, source }));
 Object.assign(sections, formulaHelp({ page, js, settle, until, press, type, click, menu, load, saves }));
-Object.assign(sections, pasting({ page, js, settle, press, type, click, menu, load, saves }));
+Object.assign(sections, pasting({ page, js, press, type, click, menu, load, saves }));
 Object.assign(sections, keyboard({ js, until, press, type, click, menu, load, saves, openCell, rightClick }));
 Object.assign(sections, formulaBar({ js, settle, until, press, type, click, menu, load, saves }));
 Object.assign(sections, hostile({ page, browser, js, settle, load }));
-Object.assign(sections, statusBar({ page, media, js, settle, until, press, type, select, click, menu, load, saves,
+Object.assign(sections, statusBar({ page, media, js, until, press, type, select, click, menu, load, saves,
   rightClick, openCell, drag, resize }));
 
 try {

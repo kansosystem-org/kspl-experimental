@@ -22,7 +22,6 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
   async function start(r, c, text) {
     await click(cellAt(r, c));
     await type(text);
-    await settle();
   }
 
   return {
@@ -33,13 +32,11 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
         "letters typed after = open the list of the functions they fit", await offered());
       await press("Escape");
       await press(" ", CTRL);
-      await settle();
       check(await offered() === "hex_to_bin,hex_to_dec" && await box() === "=hex_",
         "Ctrl+Space opens it again after Esc, and keeps the cell open", await offered());
       check((await js("document.querySelector('.fx-chosen').textContent")) ===
         "hex_to_bin(number, [width])", "the chosen entry shows how it is written");
       await type("to_d");
-      await settle();
       check(await offered() === "hex_to_dec", "typing narrows the list", await offered());
       for (let i = 0; i < 4; i += 1) await press("Backspace");
       await settle();
@@ -47,7 +44,6 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await press("ArrowDown");
       check(await chosen() === "hex_to_dec", "Down chooses the next entry", await chosen());
       await press("Tab");
-      await settle();
       check(await box() === "=hex_to_dec(" && !(await listShown()),
         "Tab writes the chosen name and its bracket in place of what was typed, and shuts the list",
         await box());
@@ -55,18 +51,15 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       check(!!t && t[0] === "hex_to_dec(number, [width])" && t[1] === "number",
         "inside the brackets a tip shows the arguments, the one being typed in bold", JSON.stringify(t));
       await type("\"FF\", ");
-      await settle();
       const t2 = await tip();
       check(!!t2 && t2[1] === "[width]", "after a comma the next argument is the bold one",
         JSON.stringify(t2));
       await type("d");
-      await settle();
       const found = (await offered()).split(",");
       check(found[0] === "date" && found.includes("hex_to_dec") &&
         found.indexOf("dec_to_hex") < found.indexOf("hex_to_dec"),
       "a name that starts with what is typed comes before one with a part that does", found.join());
       await press("Escape");
-      await settle();
       check(!(await listShown()) && await box() === "=hex_to_dec(\"FF\", d",
         "Esc shuts the list alone; the cell stays open with its text", await box());
       await press("Backspace");
@@ -80,16 +73,12 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await load(TABLE);
       await start(0, 2, "=sum");
       await press("Enter");
-      await settle();
       check(await box() === "=sum(", "Enter while the list is open writes the chosen name",
         await box());
       await type("A1:B1)");
       await press("Tab");
-      await settle();
       await type("=rou");
-      await settle();
       await click(".fx-list .fx-option:nth-child(3)");
-      await settle();
       check(await box() === "=round_up(", "a press on an entry writes it", await box());
       await press("Escape");
       await press("Escape");
@@ -119,25 +108,20 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await load(TABLE);
       await start(0, 2, "=sum(");
       await click(cellAt(1, 0));
-      await settle();
       check(await box() === "=sum(A2", "a press after =sum( points at the cell, not at a function", await box());
       await press(" ", CTRL);
-      await settle();
       check(!(await listShown()), "after a reference Ctrl+Space finds no place for a name");
       await type(",");
       await press(" ", CTRL);
-      await settle();
       check(await listShown(), "after a comma Ctrl+Space opens the list with no letter typed");
       await press("Escape");
       await type("1)&");
       await click(cellAt(1, 1));
-      await settle();
       check(await box() === "=sum(A2,1)&B2", "a press after & points too, as & is an operator", await box());
       await press("Escape");
       await press("Escape");
       await start(1, 2, "=");
       await press("Enter");
-      await settle();
       check((await js("document.getElementById('status').textContent")).startsWith("This formula is empty."),
         "an = alone says the formula is empty", await js("document.getElementById('status').textContent"));
       await press("Escape");
@@ -167,7 +151,6 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await press("Enter");
       await saves("Enter adds the quote a formula leaves open", TABLE.replace("| 3 |", '| ="C:\\" |'));
       await press("z", CTRL);
-      await settle();
       check(await box() === '="C:\\', "Ctrl+Z right after opens the cell with the formula as typed", await box());
       await press("Escape");
       check(await box() === null, "Esc closes the cell", await box());
@@ -229,7 +212,6 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await start(0, 2, "=round(sum(A1");
       check(await marked() === "", "a caret beside no bracket marks none", await marked());
       await type(")");
-      await settle();
       check(await marked() === "()" && await before() === "=round(sum",
         "the ) typed and the ( it closes are marked", `${await marked()} after ${await before()}`);
       await caretAt(7);
@@ -248,26 +230,22 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await load(TABLE);
       await click(cellAt(1, 2));
       await press("F3", SHIFT);
-      await settle();
       check(await js("document.querySelector('.fx-dialog').open && " +
         "document.activeElement === document.querySelector('.fx-search')"),
       "Shift+F3 opens Insert function, its search box taking the keys");
       await type("hexadecimal");
-      await settle();
       const names = await js("Array.from(document.querySelectorAll('.fx-names option')).map((o) => o.value).join()");
       check(names.split(",").includes("hex_to_dec") && names.split(",").includes("dec_to_hex"),
         "the search finds functions by what their descriptions say", names);
       await js("(() => { const s = document.querySelector('.fx-search'); s.value = ''; " +
         "s.dispatchEvent(new Event('input')); })()");
       await type("hex_to_d");
-      await settle();
       const about = await js("document.querySelector('.fx-about').textContent");
       check(about.includes("hex_to_dec(number, [width])") && about.includes("the hexadecimal digits") &&
         about.includes("=hex_to_dec(\"100000\") shows 1048576") && about.includes("=0x100000"),
       "the chosen function shows how it is written, its arguments, an example and the literal it does not read",
       about);
       await press("Enter");
-      await settle();
       check(await box() === "=hex_to_dec(" && await js("!document.querySelector('.fx-dialog').open && " +
         "document.activeElement === document.querySelector('#doc .cell-input')"),
       "Insert puts the function in the chosen cell, open to type its arguments", await box());
@@ -277,16 +255,13 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       // A cell being edited stays open, and the name goes at its caret.
       await start(0, 2, "=1+");
       await menu("insert-function");
-      await settle();
       await type("len");
       await press("Enter");
-      await settle();
       check(await box() === "=1+len(", "Insert puts the name at the caret of the cell being edited",
         await box());
       await press("F3", SHIFT);
       await type("su");
       await press("Escape");
-      await settle();
       check(await js("!document.querySelector('.fx-dialog').open && " +
         "document.activeElement === document.querySelector('#doc .cell-input')") &&
         await box() === "=1+len(",
@@ -329,18 +304,15 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       check(looks[3] && looks[4], "the frames sit on the cells named", JSON.stringify(looks));
       check(looks[5] === "rgba(0, 0, 0, 0)", "the box's own text is transparent over the coloured copy", looks[5]);
       await type("+A2*sum(B1:B3)");
-      await settle();
       check(await parts() === "A2=1,A4=2,A2=1,B1:B3=3", "cells named again keep their colour, and a new reference takes the next",
         await parts());
       check(await frames() === "1:0 1 0 1 0,2:0 3 0 3 0,3:0 0 1 2 1", "a range is framed whole, once for each cells named",
         await frames());
       await type("+u.A1+Z9");
-      await settle();
       check(await parts() === "A2=1,A4=2,A2=1,B1:B3=3,u.A1=4",
         "a reference to another table is coloured; one that names no cell is not", await parts());
       check((await frames()).endsWith(",4:1 0 0 0 0"), "and the other table's cell is framed too", await frames());
       await press("Escape");
-      await settle();
       check(await frames() === "" && await js("!document.querySelector('#doc .cell-copy')"),
         "Esc closes the cell, and every colour and frame goes");
       await start(0, 2, '="日本"&A1&"B2"');
@@ -348,7 +320,6 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
         await parts());
       await press("Enter", ALT);
       await type("&A2");
-      await settle();
       const lines = await js(`(() => { const i = document.querySelector('#doc .cell-input');
         const c = document.querySelector('#doc .cell-copy'); return [c.textContent.includes("\\n"),
         Math.abs(c.offsetHeight - i.offsetHeight) <= 1, i.offsetHeight > 30]; })()`);
@@ -393,7 +364,6 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       check(await listShown(), "the list of functions opens over a coloured formula");
       await press("Tab");
       await type("B1:B2)");
-      await settle();
       check(await box() === "=A1+sum(B1:B2)" && await js("Array.from(document.querySelectorAll('#doc .ref-text'))" +
         ".map((e) => e.textContent).join()") === "A1,B1:B2", "and the name it writes leaves the references coloured",
       await box());
@@ -547,7 +517,6 @@ export function formulaHelp({ page, js, settle, until, press, type, click, menu,
       await click(cellAt(0, 1));
       await until("document.querySelector('.status-why').textContent === '#SYNTAX!: A1 shows #SYNTAX!'");
       await press("ArrowDown");
-      await settle();
       check(await bar() === "", "a cell with no error shows no reason", await bar());
     },
 

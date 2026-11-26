@@ -126,23 +126,20 @@ extern fn ksmd_web_paste_cells(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
 extern fn ksmd_web_paste_copied(block: Sz, row: Sz, column: Sz, bottom: Sz, right: Sz, from_row: Sz,
     from_column: Sz, len: Sz): Sz //<
         //< Pastes cells copied in ksmd into the range from `row`, `column` to `bottom`, `right`
-        //< They are written in as `{"cells":…,"rows":[…]}`: `cells` a grid as
+        //< They are written in as `{"cells":…,"rows":[…],"formats":…}`: `cells` a grid as
         //< `ksmd_web_paste_cells` takes one, and `rows` the row each line was copied from, or
-        //< empty (`Copied_at.rows`). `from_row` and `from_column` name the cell they were copied
-        //< from, and the formulas shift by the distance; `from_column` -1 pastes the texts
-        //< unshifted, as Paste values does.
+        //< empty (`Copied_at.rows`). `formats`, where it stands, is a grid of the number formats
+        //< the cells showed, which the paste gives them. `from_row` and `from_column` name the
+        //< cell they were copied from, and the formulas shift by the distance; `from_column` -1
+        //< pastes the texts unshifted, as Paste values does.
     if !begin()
         return full()
     defer scratch: = Arena(64 * 1024)
-    $grid: = List<|List<|U8[]|>|>(scratch)
     $rows: = List<|Sz|>(scratch)
     doc: = json.parse(text_in(len), scratch) catch
         return refused(.table(.outside))
-    for line in doc.val.get("cells").arr_list(scratch)
-        $cells: = List<|U8[]|>(scratch)
-        for cell in line.arr_list(scratch)
-            cells.push(cell.as_str().unwrap_or(""))
-        grid.push(cells)
+    $grid: = texts_of(doc.val.get("cells"), scratch)
+    $formats: = texts_of(doc.val.get("formats"), scratch)
     for at in doc.val.get("rows").arr_list(scratch)
         n: = number(at)
         if n < -1
@@ -152,7 +149,7 @@ extern fn ksmd_web_paste_copied(block: Sz, row: Sz, column: Sz, bottom: Sz, righ
     if from_column >= 0
         from =
             .some(Copied_at::{ .row = from_row, .column = from_column, .rows = rows.slice() })
-    return done(ed.paste_copied(block, row, column, bottom, right, grid@, from))
+    return done(ed.paste_copied(block, row, column, bottom, right, grid@, from, formats@))
 
 extern fn ksmd_web_copied_cells(block: Sz, top: Sz, left: Sz, bottom: Sz, right: Sz, len: Sz): Sz //<
     //< What a copy of a rectangle of cells carries for a paste in ksmd, written to the output
@@ -255,10 +252,14 @@ extern fn ksmd_web_block_source(block: Sz): Sz //<
 
 priv fn grid_in(len: Sz, scratch: Arena$@): List<|List<|U8[]|>|> //<
     //< The grid the script wrote in; text that is not one reads as an empty grid
-    $grid: = List<|List<|U8[]|>|>(scratch)
     doc: = json.parse(text_in(len), scratch) catch
-        return grid
-    for line in doc.val.arr_list(scratch)
+        return List<|List<|U8[]|>|>(scratch)
+    return texts_of(doc.val, scratch)
+
+priv fn texts_of(rows: json.Value, scratch: Arena$@): List<|List<|U8[]|>|> //<
+    //< A JSON array of rows of strings as a grid; a value that is no array is an empty grid
+    $grid: = List<|List<|U8[]|>|>(scratch)
+    for line in rows.arr_list(scratch)
         $cells: = List<|U8[]|>(scratch)
         for cell in line.arr_list(scratch)
             cells.push(cell.as_str().unwrap_or(""))

@@ -290,7 +290,10 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
   * **A number goes in as it shows without a format, and a date as `2026-10-23`.**
   * **Other values go in as quoted text, so `"12"` stays text.** `true`, `false` and an error go in as the text they show.
 * **A paste is one step of undo, and the pasted cells stay chosen.** A range that holds the copy a whole number of times takes it in each place, each copy moved from its own place. Any other range takes it once, from its corner.
-* **After a paste of copied cells, the Paste options button stands below their right corner, as Excel's does.** Its menu holds Keep formulas and Values only, the one in use ticked. The other undoes the paste and pastes again that way, so one undo still takes the whole paste away.
+* **A paste brings the number format each copied cell showed, as Excel's Ctrl+V does.** A person sees the format, not whether it is the cell's own or its column's, so the copy carries the one shown.
+  * **The pasted cell takes it as its own only where its column shows another.** In a column of that format it keeps none, so the file holds no needless format. A cell that showed none, pasted in a formatted column, takes `general`.
+  * **Paste values brings no format**, as Excel's Values does. Only the number format travels; colours, size and alignment stay with the target cell.
+* **After a paste of copied cells, the Paste options button stands below their right corner, as Excel's does.** Its menu holds Formulas and formats, Formulas only, Values only, and Values and formats, the one in use ticked. Another undoes the paste and pastes again that way, so one undo still takes the whole paste away.
   * **Its keys are Excel's** ("Copying, moving and filling" in [`SPEC-editing-page.md`](SPEC-editing-page.md)). The arrow keys, Enter and Esc work as in any menu.
   * **The next key, press or change takes the button away**, so it never offers to change a paste that is no longer the last.
 * **Text from another program pastes as before**: its values fill the cells, and no button shows. Only the clipboard's own type tells a copy made in ksmd.

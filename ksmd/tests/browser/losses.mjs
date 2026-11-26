@@ -134,7 +134,6 @@ export function losses({ withTab, idle, said, noticed, choose, typeAtEnd, openIn
         await d.js(`(() => { const i = ${open}; i.value = ${JSON.stringify(LONG)}; ` +
           "i.dispatchEvent(new Event('input', { bubbles: true })); })()");
         await d.press("Enter");
-        await d.settle();
         check(await d.js(`!!${open} && ${open}.value.length`) === LONG.length,
           "a formula longer than a cell holds stays in its open cell", await said(d));
         await held(d);
@@ -175,12 +174,10 @@ export function losses({ withTab, idle, said, noticed, choose, typeAtEnd, openIn
           "File, Save in the menu leaves the text in its cell as well", await said(d));
         // A press on another cell leaves the cell open and owned: Esc there still drops the text.
         await d.click('#doc td[data-r="0"][data-c="1"]');
-        await d.settle();
         check(await d.js(`!!${open} && ${open}.value`) === LONG &&
           await d.js(`document.activeElement === ${open}`),
         "a press on another cell leaves the text in its open cell, with the focus", await said(d));
         await d.press("Escape");
-        await d.settle();
         check(await d.js(`!${open}`), "and Esc in it drops the text", await said(d));
         await d.openCell('#doc td[data-r="0"][data-c="0"]');
         await d.js(`(() => { const i = ${open}; i.value = ${JSON.stringify(LONG)}; ` +

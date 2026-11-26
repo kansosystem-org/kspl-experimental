@@ -334,9 +334,14 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     const state = (k, cmd) => until(`document.querySelector('.quick [data-quick="kind-list"]').value === '${k}' && ` +
       `document.querySelector('.quick [data-cmd="${cmd}"]').getAttribute('aria-pressed') === 'true'`);
     await select(0, 0, 3);
+    // **A failure says where the page held the caret and the place**: it failed once on GitHub's
+    // Windows runner, showing what the heading's start shows, and not here even slowed 20 times.
+    const held = () => js(`(() => { const s = getSelection(); return JSON.stringify({
+      model: ksmd.selection(), focus: document.activeElement?.id || document.activeElement?.className,
+      page: [s.anchorNode?.textContent, s.anchorOffset, s.focusNode?.textContent, s.focusOffset] }); })()`);
     check(await state("h1", "emphasis") && !await pressed("strong"),
       "in an italic word of a heading, the kind list shows Heading 1 and Emphasis is pressed in",
-      `${await kind()} ${await pressed("emphasis")}`);
+      `${await kind()} ${await pressed("emphasis")} ${await held()}`);
     await select(1, 0, 4);
     check(await state("p", "strong") && !await pressed("emphasis"), "in a strong word of a paragraph, Strong is");
     await select(1, 0, 1, 7);

@@ -1,6 +1,6 @@
-// Cells copied in ksmd and pasted again, as in Excel: Ctrl+V with the formulas shifted, Ctrl+Shift+V
-// and Paste values with the values alone, the Paste Options button that switches a paste, and F4
-// turning `$` in an open cell. Text from another program pastes as before, and a copy's text is
+// Cells copied in ksmd and pasted again, as in Excel: Ctrl+V with the formulas shifted and the
+// number formats, Ctrl+Shift+V and Paste values with the values alone, the Paste Options button
+// that switches a paste, and F4 turning `$` in an open cell. Text from another program pastes as before, and a copy's text is
 // still the shown values. A range over rows a filter hides copies, clears and fills the rows in
 // sight alone. Each is checked by the saved source and its undo.
 // A copy and a paste are synthetic `copy` and `paste` events, since a headless browser has no
@@ -13,7 +13,7 @@ const rows = (second, third) => `${H}:::table name="t"\n| "a" | "b" | "c" | "d" 
   `| "x" | "1F" | =hex_to_dec(B1) | =$B$1 |\n| "y" | "2E" | ${second}\n| "z" | "3D" | ${third}\n:::\n`;
 const START = rows("| |", "| |");
 
-export function pasting({ page, js, settle, press, type, click, menu, load, saves }) {
+export function pasting({ page, js, press, type, click, menu, load, saves }) {
   // A copy of the chosen cells, kept as the page put it on the clipboard.
   const copy = () => js(`(() => {
     const data = new DataTransfer();
@@ -96,12 +96,10 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
         "paste,paste-values", "Edit holds Paste values below Paste");
       await click(cellAt(1, 2));
       await menu("paste-values");
-      await settle();
       await saves("the right-click menu's Paste values pastes the values alone", rows("31 | \"1F\" |", "| |"));
       await press("z", CTRL);
       await click(cellAt(1, 2));
       await menu("paste");
-      await settle();
       await saves("and Paste the formulas", rows("=hex_to_dec(B2) | =$B$1 |", "| |"));
       await press("z", CTRL);
       // Text another program copied pastes as before: its values fill the cells, and no button shows.
@@ -136,9 +134,10 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       await click(cellAt(1, 2));
       await paste();
       await click(".paste-options");
-      check(await checked() === "Keep formulas" && await js("document.activeElement.closest('.paste-menu') !== null"),
-        "the button opens its menu, Keep formulas ticked and in focus", await checked());
-      await click('.paste-menu [data-values="1"]');
+      check(await checked() === "Formulas and formats" &&
+        await js("document.activeElement.closest('.paste-menu') !== null"),
+        "the button opens its menu, Formulas and formats ticked and in focus", await checked());
+      await click('.paste-menu [data-values="1"][data-formats="0"]');
       await saves("Values only puts the values in place of the formulas", rows("31 | \"1F\" |", "| |"));
       check(await offered() && await ranged() === "12,13", "the button stays, and the cells stay chosen");
       await press("z", CTRL);
@@ -146,13 +145,13 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       await click(cellAt(1, 2));
       await paste();
       await ctrl();
-      check(await checked() === "Keep formulas" && await js("!!document.querySelector('.paste-menu')"),
+      check(await checked() === "Formulas and formats" && await js("!!document.querySelector('.paste-menu')"),
         "Ctrl pressed alone opens the menu, as in Excel");
       const at = () => js("document.activeElement.dataset.values");
       await press("End");
       const end = await at();
       await press("Home");
-      check(end === "1" && await at() === "0", "End goes to Values only, and Home back to Keep formulas",
+      check(end === "1" && await at() === "0", "End goes to Values and formats, and Home back to Formulas and formats",
         `${end} ${await at()}`);
       await press("v");
       await saves("and V there chooses Values only", rows("31 | \"1F\" |", "| |"));
@@ -162,6 +161,35 @@ export function pasting({ page, js, settle, press, type, click, menu, load, save
       await press("Escape");
       await press("ArrowDown");
       check(!await offered(), "the next key takes the button away");
+    },
+
+    // The user's case: a cell that shows Thousands, its column's format, pasted in a column with
+    // none keeps showing it. The Paste options button takes the format away, and back.
+    async pasteFormats() {
+      const head = `${H}:::table name="n" formats=",grouped:0"\n| "a" | "b" |\n`;
+      const start = `${head}| 1234.5 | 1234.5 |\n| | |\n:::\n`;
+      await load(start);
+      await click(cellAt(0, 1));
+      await copy();
+      await click(cellAt(1, 0));
+      await paste();
+      const formatted = `${head}| 1234.5 | 1234.5 |\n| 1234.5 {format="grouped:0"} | |\n:::\n`;
+      await saves("Ctrl+V brings the number format the cell showed, its column's", formatted);
+      check(await js(`document.querySelector('${cellAt(1, 0)}').textContent`) === "1,235",
+        "so the pasted cell shows 1,235 as the copied one does",
+        await js(`document.querySelector('${cellAt(1, 0)}').textContent`));
+      await ctrl();
+      await press("o");
+      const bare = `${head}| 1234.5 | 1234.5 |\n| 1234.5 | |\n:::\n`;
+      await saves("Formulas only, O in Paste options, leaves the format out", bare);
+      await ctrl();
+      await press("a");
+      await saves("Values and formats, A there, brings it back", formatted);
+      await press("z", CTRL);
+      await saves("one undo takes that paste back", start);
+      await click(cellAt(1, 0));
+      await paste(true);
+      await saves("Ctrl+Shift+V puts the value alone, with no format", bare);
     },
 
     async turnDollar() {

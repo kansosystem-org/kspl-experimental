@@ -207,7 +207,6 @@ async function typeAtEnd(d, block, text) {
     .filter((e) => !e.classList.contains('gap'))[${block}].textContent.length`);
   await d.select(block, 0, len);
   await d.type(text);
-  await d.settle();
 }
 
 const SECTIONS = {
@@ -520,7 +519,6 @@ const SECTIONS = {
         check(await d.until("document.getElementById('browse').open", 5000),
           "and Save as is the way out");
         await d.click('#browse [data-browse="cancel"]');
-        await d.settle();
       });
     } finally {
       fs.rmSync(file, { force: true, recursive: true });
@@ -719,7 +717,6 @@ const SECTIONS = {
         "the folder pressed last shows, whichever listing arrives last",
         await d.js("document.querySelector('#browse .browse-where').textContent"));
       await d.click('#browse [data-browse="cancel"]');
-      await d.settle();
       await openInDialog(d, ["..", "top.ksmd"]);
       check(await d.js("document.querySelector('.menubar .doc-name').textContent") === "top.ksmd" &&
         await d.js("ksmd.source()") === top, "Open shows the same dialog; a double press opens",

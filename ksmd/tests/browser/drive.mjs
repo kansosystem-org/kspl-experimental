@@ -2,11 +2,14 @@
 // key and mouse events. `driver(page)` takes a tab from `cdp.mjs`.
 // Caution: **Wait for what the page does, never for a time.** A step can end after the call that
 // started it returns: a resize event, a scroll, a request to the server, a file written. A check
-// that waits a fixed time passes here and fails on a slower machine. Wait with `until` for a state
-// the page shows, `waitFor` for one Node sees (a file on disk, a server gone), `frames` for a step
-// the page takes on the next frame, or the page's own event (`resize`). A fixed time is right only
-// where a check proves that something does not happen, or holds back a step on purpose to make a
-// race; say which beside it.
+// that waits a fixed time passes here and fails on a slower machine.
+// **Each action of `driver` (a key, a press, a selection) returns only once the page is quiet**:
+// the events of the next frames have come, and the work the page put off to a frame or to a zero
+// timer has run (`quiet`). So a check after an action needs no wait of its own for those. A longer
+// step still needs one: `until` for a state the page shows, `waitFor` for one Node sees (a file on
+// disk, a server gone), or the page's own event (`resize`). A fixed time is right only where a
+// check proves that something does not happen, or holds back a step on purpose to make a race; say
+// which beside it.
 
 // The one place that builds a verdict's line: marker, section, then what was confirmed or skipped.
 export const verdict = {
@@ -90,6 +93,14 @@ export function driver(page) {
   const frames = (n = 2) => js(`new Promise((r) => { let left = ${n}; ` +
     "const next = () => (--left === 0 ? r(true) : requestAnimationFrame(next)); requestAnimationFrame(next); })");
 
+  // Waits until the page has run what an action queued, and what that queued in turn: the events
+  // the browser fires with a frame (scroll, resize, selectionchange), then work put off to a frame
+  // or to a zero timer, twice over. Each action below ends with it.
+  // A page between two documents answers at once. One that draws no frames, such as a tab out of
+  // sight, answers after 1 s.
+  const quiet = () => js("new Promise((done) => { setTimeout(done, 1000); " +
+    "requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 0))); })").catch(() => undefined);
+
   // The window's size before the first change, which `resize()` gives back.
   let own = null;
 
@@ -140,7 +151,8 @@ export function driver(page) {
     return until(`!window.left && ${ready}`, ms);
   }
 
-  async function press(key, modifiers = 0) {
+  // One key, down and up, with no wait after: `press` and `type` add it.
+  async function key(key, modifiers = 0) {
     let vk;
     let text;
     let code;
@@ -164,9 +176,15 @@ export function driver(page) {
     await page("Input.dispatchKeyEvent", { ...event, type: "keyUp" });
   }
 
-  // Types ASCII text one key at a time, as a keyboard does.
+  async function press(name, modifiers = 0) {
+    await key(name, modifiers);
+    await quiet();
+  }
+
+  // Types ASCII text one key at a time, as a keyboard does, and waits once at the end.
   async function type(text) {
-    for (const ch of text) await press(ch === "\n" ? "Enter" : ch);
+    for (const ch of text) await key(ch === "\n" ? "Enter" : ch);
+    await quiet();
   }
 
   // Puts the selection on text by UTF-16 offsets into a block's text (an item's in a list), as a
@@ -190,13 +208,14 @@ export function driver(page) {
       const [a, ao] = at(${from});
       const [f, fo] = at(${to});
       window.getSelection().setBaseAndExtent(a, ao, f, fo);
-    })()`);
+    })()`).then(quiet);
   }
 
   async function clickAt(x, y, modifiers = 0) {
     for (const type of ["mousePressed", "mouseReleased"]) {
       await page("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1, modifiers });
     }
+    await quiet();
   }
 
   // A press at an element's middle. An element of the document that stands out of sight, or
@@ -251,6 +270,7 @@ export function driver(page) {
   async function point(selector) {
     const [x, y] = await middle(selector);
     await page("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await quiet();
   }
 
   // Two presses at one place, as a double-click sends them.
@@ -260,6 +280,7 @@ export function driver(page) {
         await page("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount });
       }
     }
+    await quiet();
   }
 
   // A press of the right button at an element's middle, which opens a context menu. The element is
@@ -269,6 +290,7 @@ export function driver(page) {
     for (const type of ["mousePressed", "mouseReleased"]) {
       await page("Input.dispatchMouseEvent", { type, x, y, button: "right", clickCount: 1 });
     }
+    await quiet();
   }
 
   // Presses a command as a person does. While a cell is chosen, a table's command goes through a
@@ -305,6 +327,7 @@ export function driver(page) {
     }
     await page("Input.dispatchMouseEvent",
       { type: "mouseReleased", x: x + dx, y, button: "left", clickCount: 1 });
+    await quiet();
   }
 
   // A press at one element's middle, a move to another's in steps, and a release there.
@@ -317,6 +340,7 @@ export function driver(page) {
         y: y0 + (y1 - y0) * part, button: "left", buttons: 1 });
     }
     await page("Input.dispatchMouseEvent", { type: "mouseReleased", x: x1, y: y1, button: "left", clickCount: 1 });
+    await quiet();
   }
 
   // A press in the document below its last block.
@@ -338,6 +362,6 @@ export function driver(page) {
     await frames(3);
   }
 
-  return { page, js, settle, frames, media, resize, until, reload, press, type, select, click, clickBelow, drag, menu, point,
+  return { page, js, settle, frames, quiet, media, resize, until, reload, press, type, select, click, clickBelow, drag, menu, point,
     doubleClickAt, rightClick, dragTo, openCell };
 }

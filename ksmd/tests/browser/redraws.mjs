@@ -139,7 +139,6 @@ export function redraws({ withTab }) {
         const drawn = await d.until(`window.__drawn > ${before}`, 10000);
         const box = await d.js("(document.querySelector('#doc .cell-input') || { value: null }).value");
         await d.press("Enter");
-        await d.settle();
         check(!during && drawn && box === "漢素" && (await rows(d)).includes('| \\"漢素\\" |'),
           "a composition in an open cell goes in once, and the tables are shown again after it ends",
           `shown during ${during}; after ${drawn}; box ${JSON.stringify(box)}; rows ${await rows(d)}`);
@@ -167,7 +166,6 @@ export function redraws({ withTab }) {
         await d.until("!!document.querySelector('#doc .figure')", 10000);
         await d.type("3");
         await d.press("Enter");
-        await d.settle();
         const lines = (await d.js("ksmd.source()")).split("\n");
         const at = (start) => lines.findIndex((l) => l.startsWith(start));
         check((await rows(d)).includes("| 123 |"), "a cell typed in while a pasted image is saved keeps what is typed",
@@ -192,7 +190,6 @@ export function redraws({ withTab }) {
         const kept = await d.js(`[document.activeElement === document.querySelector('${bar}'), ` +
           "document.activeElement.value, (document.querySelector('#doc .cell-mirror') || { value: null }).value]");
         await d.press("Enter");
-        await d.settle();
         check(drawn && kept[0] && kept[1] === "123" && kept[2] === "123" && (await rows(d)).includes("| 123 | =A1*2 |"),
           "an edit in the formula bar keeps its text, its caret and the focus while the tables are shown again",
           `drawn ${drawn}; kept ${JSON.stringify(kept)}; rows ${await rows(d)}`);
@@ -225,7 +222,6 @@ export function redraws({ withTab }) {
         }
         await d.type("5");
         await d.press("Enter");
-        await d.settle();
         check(gapped && left && held && t1 === t0 && (await rows(d)).includes("| 5 | =A1*2 |"),
           "a press made as Insert Function closes chooses the cell aimed at, the table standing still",
           `gap ${gapped}; left ${left}; held ${held}; top ${t0} then ${t1}; rows ${await rows(d)}`);

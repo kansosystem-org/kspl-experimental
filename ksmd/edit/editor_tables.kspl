@@ -18,7 +18,8 @@ import "ksmd/edit/sort" { Sort_key, key_of, sort_rows }
 import "ksmd/edit/typed" { Reading, is_web_address, value_of, write_text }
 import "ksmd/model/choice" { entry_of }
 import "ksmd/model/filter" { is_filter_entry }
-import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, show_plain, shows_numbers }
+import "ksmd/model/format" { MAX_PLACES, Number_format, format_of, no_format, same_format,
+    show_plain, shows_numbers, write_format }
 import "ksmd/model/look" { Look_part, plain_look, with_part }
 import "ksmd/model/model" { Block, Cell, Cell_kind, Column_filter, Document, MAX_NAME, Piece,
     Table }
@@ -399,14 +400,15 @@ impl Editor
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn paste_copied(ed: Self$@, block: Sz, row: Sz, column: Sz, bottom: Sz, right: Sz,
-        grid: List<|List<|U8[]|>|>@, from: Copied_at?): Void!Refused //<
+        grid: List<|List<|U8[]|>|>@, from: Copied_at?, formats: List<|List<|U8[]|>|>@):
+        Void!Refused //<
             //< Puts cells copied in ksmd into a table from one cell, as one step
             //< Each text reads as typed text does (`value_of`), with no thousands separators taken
             //< out. With `from`, each formula's references shift by the distance from the line's
             //< own place there (`shift_formula`), as a fill shifts them. A range from `row`,
             //< `column` to `bottom`, `right` that holds the grid a whole number of times takes it
-            //< that many times, each copy shifted from its own place. The table grows where the
-            //< grid reaches past it. A refusal changes nothing.
+            //< that many times, each copy shifted from its own place, and the table grows to hold
+            //< it. Non-empty `formats` gives each cell its number format (`put_formats`).
         table: = ed.table_of(block)!
         if row < -1 || column < 0 || grid.len == 0
             throw .table(.outside)
@@ -430,7 +432,43 @@ impl Editor
                 ed.fill(table, row + i * height, column + j * width, grid, true, from) catch why
                     ed.put_tables_back(before@)
                     throw .table(why)
+                if formats.len > 0
+                    ed.put_formats(table, row + i * height, column + j * width, formats) catch why
+                        ed.put_tables_back(before@)
+                        throw .table(why)
         ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    priv fn put_formats(ed: Self$@, table: Sz, row: Sz, column: Sz,
+        formats: List<|List<|U8[]|>|>@): Void!Edit_error //<
+            //< Gives each cell from a cell the number format a copied cell showed, as `formats`
+            //< names it, or empty for none (`Editor.copied_cells`)
+            //< A cell whose column shows that format keeps none of its own. Where the copied cell
+            //< showed none and the column has one, the cell's own is `general`, so it shows as the
+            //< copied one did. The names row takes none.
+        t: = ed.doc.tables[table]@
+        for r in Range.asc(formats.len)
+            at_row: = row + r
+            if at_row < 0
+                continue
+            line: = formats[r]
+            for c in Range.asc(line.len)
+                at_column: = column + c
+                $f: = format_of(line[c]) catch
+                    throw .not_a_format
+                if f.kind == .general
+                    f = no_format()
+                column_format: =
+                    t.formats[at_column] if t.formats.len > 0 else no_format()
+                $own: = no_format()
+                if !same_format(f, column_format)
+                    own = f
+                    if f.kind == .none
+                        own.kind = .general
+                own.code = ed.arena.dup_str(own.code)
+                at: = t.at(at_row, at_column)
+                if !same_format(t.cells[at].look.format, own)
+                    t.cells[at].look.format = own
+                    edit.drop_filters(t, at_column, at_column)
 
     priv fn fill(ed: Self$@, table: Sz, row: Sz, column: Sz, grid: List<|List<|U8[]|>|>@,
         typed: Bool, from: Copied_at?): Void!Edit_error //<
@@ -772,11 +810,12 @@ impl Editor
     fn copied_cells(ed: Self@, block: Sz, top: Sz, left: Sz, bottom: Sz, right: Sz,
         left_out: Sz[], out: Str$@): Void!Refused //<
             //< Writes what a copy of a rectangle of cells carries for a paste in ksmd:
-            //< `{"cells":[[…]],"values":[[…]],"rows":[…]}`, row -1 the names
+            //< `{"cells":[[…]],"values":[[…]],"formats":[[…]],"rows":[…]}`, row -1 the names
             //< `cells` holds each cell's text as a person edits it, a formula with its `=`.
             //< `values` holds each value as calculated, written as typed text that `value_of`
-            //< reads back as that value: what Paste values puts. The rows `left_out` are left
-            //< out, and `rows` holds the row each line was copied from (`Copied_at.rows`).
+            //< reads back as that value: what Paste values puts. `formats` holds each cell's shown
+            //< number format (`format_at`). The rows `left_out` are left out, and `rows` holds the
+            //< row each line was copied from (`Copied_at.rows`).
         table: = ed.table_of(block)!
         t: = ed.doc.tables[table]@
         if top < -1 || left < 0 || bottom >= t.rows.len || right >= t.columns.len || top > bottom ||
@@ -792,8 +831,10 @@ impl Editor
             throw .table(.outside)
         at: = Positions(ed.doc@, scratch)
         values: = calculate(ed.doc@, ed.today, scratch, ed.own)
-        for part in Range.asc(2)
-            out.s("{\"cells\":[" if part == 0 else "],\"values\":[")
+        for part in Range.asc(3)
+            out
+                .s("{\"cells\":[" if part == 0 else "],\"values\":[" if part == 1
+                else "],\"formats\":[")
             for row in rows
                 out.s("[" if row == rows[0] else ",[")
                 for column in Range(left, right + 1, 1)
@@ -801,7 +842,10 @@ impl Editor
                         out.c(',')
                     defer cell: = Arena(1024)
                     defer $typed: = Str()
-                    if part == 0 || row < 0
+                    if part == 2
+                        if row >= 0
+                            write_format(t.format_at(row, column), typed@)
+                    else if part == 0 || row < 0
                         typed.s(ed.cell_text_at(table, row, column, at@, cell))
                     else
                         write_typed(values.at(table, row, column), typed@)

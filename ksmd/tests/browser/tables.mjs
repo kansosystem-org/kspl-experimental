@@ -82,7 +82,6 @@ export function tables({ page, media, js, settle, press, type, select, click, me
       await click("#doc > p");
       await select(0, 0, 2);
       await menu("paste");
-      await settle();
       await saves("Edit, Paste puts the same table too, though it reads only the text", pasted);
       await js("delete navigator.clipboard");
       await menu("undo");
@@ -303,7 +302,6 @@ export function tables({ page, media, js, settle, press, type, select, click, me
       await js("document.querySelectorAll('.filter-values input').forEach((b) => { b.checked = false; b.dispatchEvent(new Event('change', { bubbles: true })); })");
       const okOff = () => js("document.querySelector('.filter-panel .filter-ok').disabled");
       await click(".filter-panel summary");
-      await settle();
       check(await okOff(), "with no value ticked, opening the condition with no value leaves OK off");
       await click(".filter-panel details input");
       await type("x");
@@ -315,7 +313,6 @@ export function tables({ page, media, js, settle, press, type, select, click, me
       await js("(() => { const s = document.querySelector('.filter-panel select'); s.value = 'empty'; s.dispatchEvent(new Event('change')); })()");
       check(!await okOff(), "is empty needs no value, so OK can be pressed");
       await click(".filter-panel summary");
-      await settle();
       check(await okOff(), "and folding the condition away turns OK off again");
       await press("Escape");
       await saves("nothing was saved", table(' filter="in:1.5,"'));
@@ -673,7 +670,6 @@ export function tables({ page, media, js, settle, press, type, select, click, me
         await click(cell);
         const before = await scrolled();
         await press(key);
-        await settle();
         check(await sel() === at, `${what}: the caret goes to the text beside the table`, await sel());
         if (at.startsWith("[0")) check(await js("!document.querySelector('#doc .gap')"), `${what}: and no gap stands there`);
         check(await caretInSight(), `${what}: the caret stands in sight`, String(await scrolled()));
@@ -700,7 +696,6 @@ export function tables({ page, media, js, settle, press, type, select, click, me
       await click('#doc td[data-r="40"][data-c="0"]');
       const before = await scrolled();
       await press("Escape");
-      await settle();
       check(await js("document.activeElement === document.getElementById('doc')") && await scrolled() === before,
         "Esc on a chosen cell leaves the table, and the window stays where it was", `${before} to ${await scrolled()}`);
       await leaves("Down from the last row of a table that ends the document", `${H}${filler}\n\n${long}`,
@@ -953,7 +948,6 @@ export function tables({ page, media, js, settle, press, type, select, click, me
       check(drawn === "0,0 0,1", "only the two cells whose value changed are drawn again", drawn);
       await js(`window.__kept.cells = [...document.querySelectorAll("#doc tbody td")]; true`);
       await press("ArrowLeft", ALT);
-      await settle();
       const widths = await js("ksmd.source()");
       check(widths.includes("char_widths="), "Alt+Left in a cell sets its column's width", widths);
       check(await replaced() === "", "and the table keeps every cell", await replaced());

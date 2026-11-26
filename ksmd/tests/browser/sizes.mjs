@@ -63,7 +63,6 @@ export function sizes({ page, media, js, settle, until, press, type, click, drag
     await resized(() => menu("redo"));
     check((await widths()).join() === dragged.join(), "and redo the dragged ones again");
     await drag('#doc .col-edge[data-edge="0"]', 0);
-    await settle();
     check((await widths()).join() === dragged.join(),
       "a press on the edge that does not move changes nothing");
     const window = await js("window.innerWidth");

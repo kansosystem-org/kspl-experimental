@@ -8,7 +8,7 @@ import { ALT, CTRL, H, SHIFT, check } from "./drive.mjs";
 
 const FENCE = "```";
 
-export function statusBar({ page, media, js, settle, until, press, type, select, click, menu, load, saves,
+export function statusBar({ page, media, js, until, press, type, select, click, menu, load, saves,
   rightClick, openCell, drag, resize }) {
   const text = (part) => js(`(() => { const el = document.querySelector(".status-bar ${part}"); ` +
     "return el && !el.hidden && getComputedStyle(el).display !== 'none' ? el.textContent : null; })()");
@@ -190,7 +190,6 @@ export function statusBar({ page, media, js, settle, until, press, type, select,
         '| 1 | "x" |\n| 2 | "y" |\n| 3 | "x" |\n| 4 | "z" |\n:::\n';
       await load(table(""));
       await click(cell(0, 0));
-      await settle();
       check(await text(".status-filter") === null, "a table no filter narrows shows no count");
       await load(table(' filter=",in:x"'));
       await click(cell(0, 0));

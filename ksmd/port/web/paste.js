@@ -1,12 +1,13 @@
 // ksmd page: cells copied in ksmd and pasted again, with their formulas or as values, as in Excel.
 // A copy of cells puts, beside their shown values, what ksmd needs to paste them as they were: each
-// cell's text as typed, a formula with its `=`, each value as calculated, and the place they were
-// copied from (`KSMD_CELLS_TYPE`). Another program reads only the shown values.
-// Ctrl+V pastes the formulas, each reference without `$` shifted by the distance from the copied
-// cells to the paste (`paste_copied` in `ksmd/edit/editor_tables.kspl`). Ctrl+Shift+V, and Edit,
-// Paste values, put the values alone. After either, the Paste Options button by the pasted cells
-// switches that paste to the other kind, as one step; Ctrl alone opens it. It goes at the next
-// action. Text from another program pastes as before (`range.js`).
+// cell's text as typed, a formula with its `=`, each value as calculated, the number format each
+// cell shows, and the place they were copied from (`KSMD_CELLS_TYPE`). Another program reads only
+// the shown values.
+// Ctrl+V pastes the formulas and the number formats, each reference without `$` shifted by the
+// distance from the copied cells to the paste (`paste_copied` in `ksmd/edit/editor_tables.kspl`).
+// Ctrl+Shift+V, and Edit, Paste values, put the values alone. After either, the Paste Options
+// button by the pasted cells switches that paste to another kind, as one step; Ctrl alone opens
+// it. It goes at the next action. Text from another program pastes as before (`range.js`).
 "use strict";
 
 function ksmdPaste(ks) {
@@ -15,8 +16,8 @@ function ksmdPaste(ks) {
   let copied = null;
   // Whether the paste under way puts the values alone: Ctrl+Shift+V, or Paste values, sets it.
   let values = false;
-  // The paste the button can switch: { block, r1, c1, r2, c2, copy, values }, the range as it
-  // was chosen before the paste, and what was pasted; or null.
+  // The paste the button can switch: { block, r1, c1, r2, c2, copy, values, formats }, the range
+  // as it was chosen before the paste, and what was pasted; or null.
   let offer = null;
 
   const button = document.createElement("button");
@@ -32,13 +33,16 @@ function ksmdPaste(ks) {
   // The menu the button opens (`ks.popup`). The letter of a choice chooses it, as in Excel.
   const menu = ks.el("div", "menu paste-menu");
   menu.setAttribute("aria-label", "Paste options");
-  // Each choice: whether it puts values, its name, its key there, and the key that pastes so.
-  const CHOICES = [[false, "Keep formulas", "F", "Ctrl+V"], [true, "Values only", "V", "Ctrl+Shift+V"]];
-  for (const [kind, label, letter, key] of CHOICES) {
-    const b = ks.button("", null, null, () => choose(kind));
+  // Each choice: whether it puts values, whether it puts the number formats, its name, its key
+  // there, and the key that pastes so.
+  const CHOICES = [[false, true, "Formulas and formats", "F", "Ctrl+V"], [false, false, "Formulas only", "O", ""],
+    [true, false, "Values only", "V", "Ctrl+Shift+V"], [true, true, "Values and formats", "A", ""]];
+  for (const [kind, formats, label, letter, key] of CHOICES) {
+    const b = ks.button("", null, null, () => choose(kind, formats));
     b.setAttribute("role", "menuitemradio");
     b.setAttribute("aria-keyshortcuts", letter);
     b.dataset.values = kind ? "1" : "0";
+    b.dataset.formats = formats ? "1" : "0";
     b.appendChild(ksmdIcon(kind ? "paste-values" : "paste"));
     // The letter that chooses it is underlined, as in Excel's menus.
     const at = label.toLowerCase().indexOf(letter.toLowerCase());
@@ -47,9 +51,11 @@ function ksmdPaste(ks) {
     u.textContent = label[at];
     name.append(label.slice(0, at), u, label.slice(at + 1));
     b.appendChild(name);
-    const kbd = document.createElement("kbd");
-    kbd.textContent = key;
-    b.appendChild(kbd);
+    if (key) {
+      const kbd = document.createElement("kbd");
+      kbd.textContent = key;
+      b.appendChild(kbd);
+    }
     menu.appendChild(b);
   }
   document.body.append(button);
@@ -62,7 +68,8 @@ function ksmdPaste(ks) {
       ks.put(ks.range.hiddenRows(r.block, r.r1, r.r2).join(","))));
     if (!own) return "";
     const got = JSON.parse(own);
-    return JSON.stringify({ row: r.r1, column: r.c1, cells: got.cells, values: got.values, rows: got.rows });
+    return JSON.stringify({ row: r.r1, column: r.c1, cells: got.cells, values: got.values, formats: got.formats,
+      rows: got.rows });
   }
 
   // Puts the copy of the range `r` on the clipboard beside its shown values, `text`.
@@ -107,21 +114,25 @@ function ksmdPaste(ks) {
       // A copy without `rows` holds lines that stood one after another.
       const rows = c.rows === undefined || (Array.isArray(c.rows) && c.rows.length === c.cells.length &&
         c.rows.every((n) => Number.isInteger(n) && n >= -1));
+      // A copy without `formats`, from an older page, pastes with none.
+      const formats = c.formats === undefined || (grid(c.formats) && c.formats.length === c.cells.length);
       if (!Number.isInteger(c.row) || !Number.isInteger(c.column) || !grid(c.cells) ||
-        !grid(c.values) || c.values.length !== c.cells.length || !rows) return null;
+        !grid(c.values) || c.values.length !== c.cells.length || !rows || !formats) return null;
       return c;
     } catch (_) {
       return null;
     }
   }
 
-  // Pastes copied cells at the chosen range, with their formulas or as values, as one step, and
-  // chooses the cells pasted. A range that holds the copy a whole number of times takes it that
-  // many times, as `paste_copied` does. False where the editor refused.
-  function put(c, block, r1, c1, r2, c2, asValues) {
+  // Pastes copied cells at the chosen range, with their formulas or as values, and with their
+  // number formats or not, as one step, and chooses the cells pasted. A range that holds the copy
+  // a whole number of times takes it that many times, as `paste_copied` does. False where the
+  // editor refused.
+  function put(c, block, r1, c1, r2, c2, asValues, withFormats) {
     ks.table.take();
     const r = ks.act("ksmd_web_paste_copied", block, r1, c1, r2, c2, c.row, asValues ? -1 : c.column,
-      ks.put(JSON.stringify({ cells: asValues ? c.values : c.cells, rows: c.rows || [] })));
+      ks.put(JSON.stringify({ cells: asValues ? c.values : c.cells, rows: c.rows || [],
+        formats: withFormats && c.formats ? c.formats : [] })));
     if (!r || !r.ok) return false;
     const height = c.cells.length;
     const width = c.cells[0].length;
@@ -130,7 +141,7 @@ function ksmdPaste(ks) {
     const right = whole ? c2 : c1 + width - 1;
     ks.range.set(block, r1, c1, { row: bottom, column: right });
     ks.range.focus();
-    offer = { block, r1, c1, r2, c2, copy: c, values: asValues };
+    offer = { block, r1, c1, r2, c2, copy: c, values: asValues, formats: withFormats };
     show(bottom, right);
     return true;
   }
@@ -144,7 +155,8 @@ function ksmdPaste(ks) {
     const c = held(data, text);
     if (!c) return false;
     const r = ks.range.rect();
-    put(c, r.block, r.r1, r.c1, r.r2, r.c2, asValues);
+    // Paste values puts the values alone, as Excel's does; Ctrl+V brings the formats too.
+    put(c, r.block, r.r1, r.c1, r.r2, r.c2, asValues, !asValues);
     return true;
   }
 
@@ -169,35 +181,38 @@ function ksmdPaste(ks) {
   // back to the pasted cells.
   function open() {
     if (!offer) return;
-    for (const b of menu.children) b.setAttribute("aria-checked", String((b.dataset.values === "1") === offer.values));
+    for (const b of menu.children) {
+      b.setAttribute("aria-checked", String((b.dataset.values === "1") === offer.values &&
+        (b.dataset.formats === "1") === offer.formats));
+    }
     ks.popup(menu, "menu", { at: button, from: button, back: () => ks.range.focus() });
   }
 
   const shut = () => ks.popup.close(menu);
 
-  // Switches the paste the button stands for to the other kind: an undo, then that paste, so the
+  // Switches the paste the button stands for to another kind: an undo, then that paste, so the
   // result is one step again.
-  function choose(asValues) {
+  function choose(asValues, withFormats) {
     const o = offer;
     shut();
     if (!o) return;
-    if (o.values === asValues) {
+    if (o.values === asValues && o.formats === withFormats) {
       ks.range.focus();
       return;
     }
     const undone = ks.act("ksmd_web_undo");
     if (!undone || !undone.ok) return hide();
     ks.range.set(o.block, o.r1, o.c1, { row: o.r2, column: o.c2 });
-    if (!put(o.copy, o.block, o.r1, o.c1, o.r2, o.c2, asValues)) hide();
+    if (!put(o.copy, o.block, o.r1, o.c1, o.r2, o.c2, asValues, withFormats)) hide();
   }
 
   button.addEventListener("click", open);
   menu.addEventListener("keydown", (e) => {
-    const letter = CHOICES.findIndex(([, , l]) => l.toLowerCase() === e.key.toLowerCase());
+    const letter = CHOICES.findIndex(([, , , l]) => l.toLowerCase() === e.key.toLowerCase());
     if (letter < 0) return;
     e.preventDefault();
     e.stopPropagation();
-    choose(CHOICES[letter][0]);
+    choose(CHOICES[letter][0], CHOICES[letter][1]);
   });
 
   // Any change to the document takes the button away, as does a press or a key elsewhere: a

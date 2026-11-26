@@ -68,7 +68,6 @@ export function formulaBar({ js, settle, until, press, type, click, menu, load, 
       await intoBar();
       await press("End");
       await type("+1");
-      await settle();
       let b = await bar();
       check(b.focused && b.editing && b.text === "3+1" && b.mirror === "3+1" && b.label === "Formula bar, Cell C1",
         "a press in the bar opens the chosen cell there, and the cell shows what is typed", JSON.stringify(b));
@@ -106,13 +105,11 @@ export function formulaBar({ js, settle, until, press, type, click, menu, load, 
       await intoBar();
       await js(`document.querySelector('${BOX}').select()`);
       await type("=hex_to_d");
-      await settle();
       const offered = await js("Array.from(document.querySelectorAll('.fx-list:not([hidden]) .fx-name'))" +
         ".map((e) => e.textContent).join()");
       check(offered === "hex_to_dec", "letters typed in the bar open the list of functions", offered);
       await press("Tab");
       await type("A2");
-      await settle();
       const marked = () => js("Array.from(document.querySelectorAll('.formula-field .cell-copy:not([hidden]) " +
         ".ref-text, .formula-field .cell-copy:not([hidden]) .bracket-pair')).map((e) => e.textContent).join()");
       check((await bar()).text === "=hex_to_dec(A2" && await marked() === "A2",
@@ -173,7 +170,6 @@ export function formulaBar({ js, settle, until, press, type, click, menu, load, 
       await click(cellAt(0, 1));
       await showing("B1");
       await click(BOX);
-      await settle();
       await type("9");
       const b = await bar();
       check(b.readOnly && !b.editing && b.mirror === null && b.text === "=hex_to_dec(A1)",

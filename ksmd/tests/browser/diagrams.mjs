@@ -68,7 +68,6 @@ export function diagrams({ page, js, settle, press, type, click, menu, load, sav
       await press("Enter");
       await type("1.SET");
       await press("Enter", CTRL);
-      await settle();
       check((await parts()).includes('box id="s1" at="40,40" size="160,80" text="MENU\\n1.SET"'),
         "its words take the lines typed", await parts());
       await click('#doc .diagram [data-act="mono"]');
