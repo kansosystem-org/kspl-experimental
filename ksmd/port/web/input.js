@@ -47,6 +47,9 @@ function ksmdInput(ks) {
     return ks.view.spotAt(el, 0);
   }
 
+  // A field inside the document, as a settings block holds, keeps its own keys and its copy.
+  const field = (el) => !!(el && el.matches && el.matches("input, textarea, select"));
+
   function collapsed() {
     const s = window.getSelection();
     return s.rangeCount === 0 || s.isCollapsed;
@@ -149,6 +152,23 @@ function ksmdInput(ks) {
       if (toEdge(e.key === "End")) e.preventDefault();
       return;
     }
+    // Caution: **Ctrl+A selects the model's whole document, and Delete or Backspace on a selection
+    // erase through the model.** The browser's own Select All cannot reach past a table, an image,
+    // a chart or a divider at either end. With one at the end, it left the caret at the start, and
+    // Delete took the first character. Over such a block, the browser sends no `beforeinput`.
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "a" && !field(e.target)) {
+      e.preventDefault();
+      selectAll();
+      return;
+    }
+    // Shift+Delete is a cut on Windows; the cut's own handler takes it.
+    const erases = e.key === "Backspace" || (e.key === "Delete" && !e.shiftKey);
+    if (erases && !e.altKey && !collapsed() && !field(e.target)) {
+      e.preventDefault();
+      ks.sync();
+      ks.act("ksmd_web_erase", e.key === "Backspace" ? 1 : 0);
+      return;
+    }
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     let name = null;
     if (mod && !e.altKey) {
@@ -199,6 +219,24 @@ function ksmdInput(ks) {
     return true;
   }
 
+  // Selects the whole document: from its first text, or the gap before a first block that holds
+  // none, to its last text, or the gap after such a last block.
+  function selectAll() {
+    const all = ks.view.blocks();
+    if (all.length === 0) return;
+    const text = (el) => el.classList.contains("u") || el.classList.contains("list");
+    const first = all[0];
+    const last = all[all.length - 1];
+    const a = text(first) ? [ks.SPOT.TEXT, 0, 0, 0] : [ks.SPOT.BLOCK_GAP, 0, 0, 0];
+    let f = [ks.SPOT.BLOCK_GAP, all.length, 0, 0];
+    if (text(last)) {
+      const units = last.classList.contains("list") ? ks.view.items(last) : [last];
+      const unit = units[units.length - 1];
+      f = [ks.SPOT.TEXT, all.length - 1, units.length - 1, ks.view.u8len(ks.view.unitText(unit))];
+    }
+    ks.place(a, f);
+  }
+
   function inList() {
     const s = window.getSelection();
     return s.rangeCount > 0 && !!ks.view.closest(s.focusNode, ".li");
@@ -235,8 +273,11 @@ function ksmdInput(ks) {
     // text they make a new table, whose first row gives the names.
     if (ks.where === "cell" && ks.cell &&
       (ks.pasting.paste(data, text) || ks.range.pasteGrid(text, false))) return;
+    // Text makes a table only where each line that holds text holds a tab. Text copied across a
+    // table, with lines before and after it, so pastes as paragraphs, not as rows.
     const g = ks.range.grid(text);
-    if (g && text.includes("\t")) {
+    const empty = (row) => row.length === 1 && row[0] === "";
+    if (g && g.some((row) => row.length > 1) && g.every((row) => row.length > 1 || empty(row))) {
       ks.sync();
       ks.act("ksmd_web_paste_table", ks.put(JSON.stringify(g)));
       return;
@@ -247,6 +288,80 @@ function ksmdInput(ks) {
       ks.say("Pasted as plain text. Formatting from the clipboard is not kept.");
     }
   });
+
+  // Caution: **A copy or a cut of text writes the document's plain text, not the page's.** Over a
+  // table or an image, the browser's own copy took the page's buttons and labels, as
+  // "Rectangle, Arrow", and a paste made each a paragraph. A cut erases through the model.
+  // A copy of chosen cells is the table's own (`range.js`).
+  for (const type of ["copy", "cut"]) {
+    root.addEventListener(type, (e) => {
+      if (ks.where === "cell" || ks.table.owns(e.target) || field(e.target) || collapsed() || !e.clipboardData) return;
+      flush();
+      const text = selectedText();
+      if (text === null) return;
+      e.preventDefault();
+      e.clipboardData.setData("text/plain", text);
+      if (type !== "cut") return;
+      ks.sync();
+      ks.act("ksmd_web_erase", 1);
+    });
+  }
+
+  // The selection's text: each text unit's selected part, a table's cells in tab-separated rows
+  // as a copy of all its cells gives them, and an image's alt text and caption. A line break
+  // stands between units. A chart, a diagram, a divider or an included file gives nothing.
+  // Null where the selection is not in the document.
+  function selectedText() {
+    const s = window.getSelection();
+    let a = ks.view.spotAt(s.anchorNode, s.anchorOffset);
+    let f = ks.view.spotAt(s.focusNode, s.focusOffset);
+    if (!a || !f) return null;
+    if (later(a, f)) [a, f] = [f, a];
+    const all = ks.view.blocks();
+    const parts = [];
+    const last = Math.min(f[0] === ks.SPOT.BLOCK_GAP ? f[1] - 1 : f[1], all.length - 1);
+    for (let b = a[1]; b <= last; b++) {
+      const el = all[b];
+      if (el.classList.contains("u") || el.classList.contains("list")) {
+        const units = el.classList.contains("list") ? ks.view.items(el) : [el];
+        units.forEach((u, i) => {
+          const text = ks.view.unitText(u);
+          const len = ks.view.u8len(text);
+          if (later(a, [ks.SPOT.TEXT, b, i, len]) || later([ks.SPOT.TEXT, b, i, 0], f)) return;
+          const here = (p) => p[0] === ks.SPOT.TEXT && p[1] === b && p[2] === i;
+          const from = here(a) ? a[3] : 0;
+          const to = here(f) ? f[3] : len;
+          parts.push(text.slice(ks.view.u16At(text, from), ks.view.u16At(text, to)));
+        });
+      } else if (!later(a, [ks.SPOT.BLOCK_GAP, b, 0, 0]) && !later([ks.SPOT.BLOCK_GAP, b + 1, 0, 0], f)) {
+        const text = blockText(el, b);
+        if (text) parts.push(text);
+      }
+    }
+    return parts.join("\n");
+  }
+
+  function blockText(el, block) {
+    if (el.classList.contains("table") && el.rowIds) {
+      return ks.range.tableText(block).replace(/\r\n/g, "\n").replace(/\n$/, "");
+    }
+    if (el.classList.contains("figure")) {
+      const caption = el.querySelector("figcaption");
+      return [el.dataset.alt, caption ? caption.textContent : ""].filter((t) => t).join("\n");
+    }
+    return "";
+  }
+
+  // Whether spot `p` stands after spot `q`: by block, then the gap before a block, then each list
+  // item's gap before its text, then the offset in the text.
+  function later(p, q) {
+    const key = (x) => [x[1], x[0] === ks.SPOT.BLOCK_GAP ? -1 : 2 * x[2] + (x[0] === ks.SPOT.TEXT ? 1 : 0),
+      x[0] === ks.SPOT.TEXT ? x[3] : 0];
+    const kp = key(p);
+    const kq = key(q);
+    for (let i = 0; i < 3; i++) if (kp[i] !== kq[i]) return kp[i] > kq[i];
+    return false;
+  }
 
   // Pastes the table a ksmd copy left on the clipboard, after the caret's paragraph, or into the gap
   // before block `at` where it is 0 or more. False where the clipboard holds no such table.
@@ -304,7 +419,8 @@ function ksmdInput(ks) {
         break;
       }
     }
-    root.focus();
+    // Caution: **Focus the document without a scroll.** From a chosen cell, it jumped to its top.
+    root.focus({ preventScroll: true });
     ks.place([ks.SPOT.BLOCK_GAP, b, 0, 0]);
   });
 

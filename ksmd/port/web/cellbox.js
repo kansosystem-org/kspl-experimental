@@ -419,7 +419,7 @@ function ksmdCellBox(ks, table) {
       if (take("focus")) tab(block, row, column, e.shiftKey);
       return;
     }
-    if (e.key === "Enter") to = [table.stepRow(block, row, e.shiftKey ? -1 : 1), column];
+    if (e.key === "Enter") to = [table.enterRow(block, row, e.shiftKey), column];
     else if (e.key === "ArrowUp") to = [table.stepRow(block, row, -1), column];
     else if (e.key === "ArrowDown") to = [table.stepRow(block, row, 1), column];
     else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey && !e.ctrlKey &&

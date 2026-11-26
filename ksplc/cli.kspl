@@ -32,7 +32,6 @@ enum Face //< a subcommand
     //< `emit-runtime`). So the parser, the usage and every message use one spelling.
     compile
     run
-    build
     fmt
     lint
     lsp
@@ -58,12 +57,10 @@ priv struct Face_row //< a subcommand, and all ksplc says about it
         //< Whether it lays values out, and so needs a machine ksplc has widths for
         //< `fmt` and `doc` parse alone and read no type, so they run on a machine the table lacks.
 
-priv const FACES: Face_row[12] = ::{ Face_row::{ .face = .compile, .declared = .default_face,
-    .help = "", .form = "[options...] <input.kspl> <output.c>", .lays_out = true },
+priv const FACES: Face_row[11] = ::{ Face_row::{ .face = .compile, .declared = .default_face,
+    .help = "", .form = "[options...] <input.kspl> <output>", .lays_out = true },
     Face_row::{ .face = .run, .declared = .trailing, .help = "build a script and run it",
     .form = "[options...] <script.kspl> | - | --eval=<source> [args...]", .lays_out = true },
-    Face_row::{ .face = .build, .declared = .named, .help = "build an executable from a program",
-    .form = "[options...] <input.kspl> <output.exe>", .lays_out = true },
     Face_row::{ .face = .fmt, .declared = .named, .help = "format the source",
     .form = "[options...] <input.kspl>...", .lays_out = false },
     Face_row::{ .face = .lint, .declared = .named, .help = "do the static analysis alone",
@@ -114,8 +111,9 @@ impl Face
         if found: = base_target.find(llvm_name)
             if found.llvm_triple.len == 0
                 refusal: = base_core.arena.text()
-                    .s("--to=llvm: the LLVM backend lays out only machines with 8-byte pointers. \
-                        '\{llvm_name\}' is not one. Write C for it (--to=c, the default)\n").take()
+                    .s("LLVM IR: the LLVM backend lays out only machines with 8-byte pointers. \
+                        '\{llvm_name\}' is not one. Write C for it (an output ending in .c)\n")
+                    .take()
                 usage.error_exit(refusal)
 
     priv fn refuse_operands(r: Self, takes: U8[], in_files: List<|U8[]|>@): Void //<
@@ -157,7 +155,7 @@ enum Mode //< what the tool was asked to do
         //< A script of `-` is read from standard input.
     run_source(source: U8[], script_args: List<|U8[]|>$@) //<
         //< It builds the program `--eval=` gave and runs it, as `run` does a script
-    build(in_path: U8[], out_path: U8[], cflags: U8[]) //<
+    executable(in_path: U8[], out_path: U8[], cflags: U8[]) //<
         //< It builds one executable, with cflags after ksplc's own flags (ksplc/tools/run.kspl)
     info(topic: usage.Info_topic) //<
         //< a query (`ksplc info <subject>`). It prints the answer and exits
@@ -218,7 +216,7 @@ priv fn declare_options(parser: argparse.Parser$@, cli: Cli$@) //<
     parser.positional("<input.kspl>... [output]")
     parser.str_list_opt("--define", base_core.config.defines,
         "define a flag for #cfg() (it can be repeated)")
-    parser.only_for("--define", "compile run build lint")
+    parser.only_for("--define", "compile run lint")
     parser.str_opt("--emit-deps", cli.deps_path@, "where to write the list of every source read")
     parser.only_for("--emit-deps", "compile")
     parser.str_opt("--emit-libs", cli.libs_path@,
@@ -233,14 +231,15 @@ priv fn declare_options(parser: argparse.Parser$@, cli: Cli$@) //<
     parser.only_for("--surface-scope", "doc")
     parser.str_opt("--machine", base_core.config.machine@,
         "the machine the output is for, as a triple (the default is the one ksplc runs on)")
-    // Not `run` / `build`: they compile for the machine ksplc runs on and start or link the result
-    // there. Lint, since a folded size decides a static `if` and an `##error`.
+    // Not `run`, nor a compile to an executable (`NOT_FOR_EXECUTABLE`): they compile for the
+    // machine ksplc runs on and start or link the result there. Lint, since a folded size decides a
+    // static `if` and an `##error`.
     parser.only_for("--machine", "compile lint")
     parser.str_opt("--std-dir", cli.std_dir@, "where to look for the standard library")
-    parser.only_for("--std-dir", "compile run build lint info doc")
+    parser.only_for("--std-dir", "compile run lint info doc")
     parser.str_opt("--pkg-src-dir", cli.pkg_src_dir@,
         "where to look for the source of a package other than std")
-    parser.only_for("--pkg-src-dir", "compile run build lint doc")
+    parser.only_for("--pkg-src-dir", "compile run lint doc")
     parser.str_opt("--split", cli.split_units@,
         "the number of translation units to split the generated C into (the default is 1)")
     parser.only_for("--split", "compile")
@@ -250,19 +249,23 @@ priv fn declare_options(parser: argparse.Parser$@, cli: Cli$@) //<
     // none (standard input, `-`, is the compile's way in).
     parser.only_for("--eval", "run")
     parser.str_opt("--cflags", cli.cflags@,
-        "flags for the C compiler, added after ksplc's own so the last one wins (\"-O0 -g\")")
-    parser.only_for("--cflags", "build")
+        "flags for the C compiler where the output is an executable, added after ksplc's own so the \
+            last one wins (\"-O0 -g\")")
+    // A compile whose output names C or LLVM IR refuses it (`refuse_for_kind`).
+    parser.only_for("--cflags", "compile")
     parser.str_opt("--sanitize", cli.sanitize@,
         "the sanitizers the program is built with, separated by commas: address, thread, memory, \
-            and build's undefined (the C compiler's -fsanitize= names)")
+            and for an executable undefined (the C compiler's -fsanitize= names)")
     // Not `run`: it caches one program a script, which a sanitized one would have to be kept apart
-    // from; `build` makes one. Not `emit-runtime`: the runtime is C, which the C compiler marks.
-    parser.only_for("--sanitize", "compile build")
+    // from; a compile to an executable makes one. Not `emit-runtime`: the runtime is C, which the C
+    // compiler marks.
+    parser.only_for("--sanitize", "compile")
     parser.str_opt("--style", cli.style@,
         "the formatting settings (\"IndentWidth: 4, ColumnLimit: 100\")")
     parser.only_for("--style", "fmt")
     parser.str_opt("--to", cli.to_name@,
-        "what a compile's output is written in: c (the default) or llvm")
+        "what a compile's output is written in, c or llvm, where the output's name does not say it \
+            (a device); elsewhere it must agree with the name")
     // Not `info`: `link-libs` / `exe-flags` follow the C compiler's target triple (`target_kind` in
     // ksplc/tools/run.kspl), which the language written does not change.
     parser.only_for("--to", "compile")
@@ -281,7 +284,8 @@ priv fn declare_options(parser: argparse.Parser$@, cli: Cli$@) //<
     // browser entry point) misses the `#cfg(freestanding)` declarations and cannot be linted.
     parser.only_for("--freestanding", "compile emit-runtime lint")
     parser.flag("--program", base_core.config.is_program@,
-        "require main() because the output is a program (run and build set this option)")
+        "require main() because the output is a program (run, and a compile to an executable, set \
+            this option)")
     parser.only_for("--program", "compile")
     parser.str_list_opt("--library", base_core.config.interface_paths,
         "build a library and write its interface: .h for C, .kspl for KSPL. Repeat this option for \
@@ -320,8 +324,9 @@ priv fn refuse_command_line(error: argparse.Argument_error) //<
         io.err().s("Error: \{error\}\n")
         usage.usage_exit()
 
-priv fn apply_options(cli: Cli$@, face: Face) //<
+priv fn apply_options(cli: Cli$@, face: Face, kind: Output_kind) //<
     //< It checks the options every mode shares and puts them into the configuration
+    //< `kind` is what a compile makes (`compile_kind`); `.c` for any other subcommand.
     // **An unknown name is rejected rather than replaced by the default.** Otherwise a mistyped
     // scope would write only the published API and look as though it had worked.
     if cli.surface_scope.equals("all")
@@ -341,11 +346,8 @@ priv fn apply_options(cli: Cli$@, face: Face) //<
         usage
             .error_exit("--stats cannot be combined with --diagnostic-format=json. Its report is \
                 text on standard error, where json writes only JSON objects\n")
-    // `--to` names what the output is written in; a compile's languages are c and llvm.
-    if face == Face.compile && cli.to_name.equals("llvm")
+    if kind == Output_kind.llvm
         base_core.config.target = .llvm
-    else if face == Face.compile && cli.to_name.len > 0 && !cli.to_name.equals("c")
-        usage.error_exit("--to: a compile writes 'c' or 'llvm'\n")
     face.check_machine()
     if cli.split_units.len > 0
         n: = cli.split_units.to_i64() catch 0
@@ -364,13 +366,13 @@ priv fn apply_options(cli: Cli$@, face: Face) //<
         // It ties is_freestanding to cfg(freestanding), so this flag alone enables std/sys's
         // freestanding panic and the like, with no --define=freestanding to remember.
         base_core.config.defines.push("freestanding")
-    check_sanitize(cli, face)
+    check_sanitize(cli, kind)
     // **The IR calls the hosted runtime's helpers** (`kspl_bounds_check` and the like), which no
     // bare-metal build has; written anyway, every program's IR would name undefined functions.
     if face == Face.compile && base_core.config.is_freestanding && base_core.is_llvm_target()
         usage
-            .error_exit("--freestanding: --to=llvm cannot be combined. The LLVM backend has no \
-                freestanding runtime yet. Use the C backend (--to=c)\n")
+            .error_exit("--freestanding: LLVM IR cannot be combined. The LLVM backend has no \
+                freestanding runtime yet. Use the C backend (an output ending in .c)\n")
     base_core.config.sanitize = cli.sanitize
     if cli.style.len > 0
         // fmt_printer holds the name used in the diagnostic. Kept apart from the list of
@@ -450,8 +452,113 @@ priv fn is_device(path: U8[]): Bool //< whether a path names a device or a FIFO 
         return false
     return info.kind == fs.File_kind.other
 
-priv fn read_mode(parser: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, cli: Cli$@): Mode //<
-    //< The mode the subcommand names, with its inputs checked
+enum Output_kind //< what a compile makes, chosen by the output's name
+    c //< C99, for a name ending in `.c`
+    llvm //< LLVM IR, for a name ending in `.ll`
+    executable //< any other name: the C, compiled and linked by the C compiler
+
+impl Output_kind
+    priv fn said(r: Self): U8[] //< the kind as a message names it
+        switch r
+        case .c
+            return "C"
+        case .llvm
+            return "LLVM IR"
+        case .executable
+            return "an executable"
+
+priv struct Unmade_output //< an ending that names a file ksplc does not make
+    ending: U8[] //< in lower case, with its dot
+    what: U8[] //< what such a file is
+    instead: U8[] //< what to write instead
+
+priv const LIBRARY_INSTEAD: U8[] =
+    "Write C with --library=<name>.h and an output ending in .c, then build the library with the C \
+        compiler (2.10.3 in ksplc/docs/SPEC-tools.md)" //<
+            //< What a name ending as a static or shared library is told
+
+priv const UNMADE_OUTPUTS: Unmade_output[13] = ::{ Unmade_output::{ .ending = ".h",
+    .what = "a C header",
+    .instead = "A library's header is written by --library=<name>.h, beside an output ending in .c" },
+    Unmade_output::{ .ending = ".o", .what = "an object file",
+    .instead = "Write C (.c), and compile it with the C compiler's -c" },
+    Unmade_output::{ .ending = ".obj", .what = "an object file",
+    .instead = "Write C (.c), and compile it with the C compiler's -c" },
+    Unmade_output::{ .ending = ".s", .what = "assembly",
+    .instead = "Write C (.c) or LLVM IR (.ll), and give it to the C compiler with -S" },
+    Unmade_output::{ .ending = ".asm", .what = "assembly",
+    .instead = "Write C (.c) or LLVM IR (.ll), and give it to the C compiler with -S" },
+    Unmade_output::{ .ending = ".a", .what = "a library", .instead = LIBRARY_INSTEAD },
+    Unmade_output::{ .ending = ".lib", .what = "a library", .instead = LIBRARY_INSTEAD },
+    Unmade_output::{ .ending = ".so", .what = "a library", .instead = LIBRARY_INSTEAD },
+    Unmade_output::{ .ending = ".dylib", .what = "a library", .instead = LIBRARY_INSTEAD },
+    Unmade_output::{ .ending = ".dll", .what = "a library", .instead = LIBRARY_INSTEAD },
+    Unmade_output::{ .ending = ".libs", .what = "the list of libraries a program names",
+    .instead = "--emit-libs=<file> writes it, beside an output ending in .c" },
+    Unmade_output::{ .ending = ".kspl", .what = "a KSPL source",
+    .instead = "Name the output after what it holds: .c, .ll, or an executable" },
+    Unmade_output::{ .ending = ".ksplb", .what = "a KSPL source",
+    .instead = "Name the output after what it holds: .c, .ll, or an executable" } } //<
+        //< The endings refused as an output, each with what to write instead
+        //< **A name that suggests another kind of file is refused, not built as an executable**: a
+        //< program named `x.o` or `x.so` would be found where an object or a library was expected.
+
+priv const NOT_FOR_EXECUTABLE: U8[][11] = ::{ "--emit-deps", "--emit-libs", "--machine", "--split",
+    "--lint", "--diagnostic-format", "--stats", "--freestanding", "--program", "--library",
+    "--closed" } //<
+        //< A compile's options that an executable output refuses (Principle 5)
+        //< The executable is built for the machine ksplc runs on, as one unit, with `main`
+        //< required. Its compile takes only `--define`, `--std-dir` and `--pkg-src-dir`
+        //< (`append_child_ksplc` in `tools/run.kspl`), so each of these would change nothing there.
+
+priv fn kind_by_name(path: U8[]): Output_kind //<
+    //< What an output's name asks for; a name ksplc makes nothing for exits with what to write
+    //< **The ending is compared ignoring letter case**: Windows and macOS read `OUT.C` as `out.c`.
+    //< Read as an executable, its C would be written to `OUT.c`, the same file there.
+    //< **A name ending in a separator names a folder**: it has no file name to build beside.
+    if sys.get_file_name(path).len == 0
+        usage
+            .error_exit(base_core.arena.text()
+            .s("ksplc: the output '\{path\}' names a folder. Name the file to write in it\n").take())
+    ending: = sys.last_ext(path)
+    if ending.equals_ignore_case(".c")
+        return .c
+    if ending.equals_ignore_case(".ll")
+        return .llvm
+    for row in UNMADE_OUTPUTS
+        if ending.equals_ignore_case(row.ending)
+            refusal: = base_core.arena.text()
+                .s("ksplc: the output '\{path\}' names \{row.what\}, which ksplc does not make. \
+                    \{row.instead\}\n").take()
+            usage.error_exit(refusal)
+    return .executable
+
+priv fn output_kind(path: U8[], to_name: U8[]): Output_kind //<
+    //< What a compile writes to `path`; `to_name` is `--to`'s value, empty where none is given
+    //< **`--to` and the name must agree**: one silently winning would hide a typo in either.
+    //< **A device has no name to read** (`/dev/null`), so it takes `--to`'s kind, or C.
+    $asked: Output_kind? = .none
+    if to_name.equals("c")
+        asked = .some(.c)
+    else if to_name.equals("llvm")
+        asked = .some(.llvm)
+    else if to_name.len > 0
+        usage.error_exit("--to: a compile writes 'c' or 'llvm'\n")
+    if is_device(path)
+        return asked.unwrap_or(.c)
+    kind: = kind_by_name(path)
+    if wanted: = asked
+        if wanted != kind
+            refusal: = base_core.arena.text()
+                .s("ksplc: --to=\{to_name\} writes \{wanted.said()\}, but the output '\{path\}' \
+                    names \{kind.said()\}. Leave --to out, or name an output that agrees with it\n")
+                .take()
+            usage.error_exit(refusal)
+    return kind
+
+priv fn read_mode(parser: argparse.Parser$@, face: Face, kind: Output_kind,
+    in_files: List<|U8[]|>$@, cli: Cli$@): Mode //<
+        //< The mode the subcommand names, with its inputs checked
     switch face
     case .fmt
         if in_files.len == 0
@@ -516,28 +623,11 @@ priv fn read_mode(parser: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$
         // `--to=llvm` / `--freestanding` / `--library` are not valid for run, and argparse has
         // already refused them (`only_for` in `declare_options`).
         return .run(source_input(in_files.get(0)), cli.script_args)
-    case .build
-        if in_files.len != 2
-            face.refuse_operands("an input and an output", in_files)
-        refuse_output_on_input(face.face_name(), in_files.get(0),
-            U8[][]::{ in_files.get(1) })
-        return .build(source_input(in_files.get(0)), in_files.get(1), cli.cflags)
     case .compile
-        refuse_missed_subcommand(in_files)
-        if in_files.len != 2
-            // It rejects "too many" as well as "too few". Suppose it silently used the first two.
-            // Then a path cut by the shell's word splitting (one containing a space) would compile
-            // an unrelated file for no clear reason.
-            if in_files.len > 2
-                io.err().s("Error: too many input files (expected <input.kspl> <output.c>):\n")
-                for f in in_files
-                    io.err().s("  ").s(f).c('\n')
-            else
-                why: =
-                    operand_refusal("ksplc: a compile takes an input and an output ('ksplc \
-                        <input.kspl> <output.c>')", in_files)
-                io.err().s(why)
-            usage.usage_exit()
+        if kind == Output_kind.executable
+            refuse_output_on_input(face.face_name(), in_files.get(0),
+                U8[][]::{ in_files.get(1) })
+            return .executable(source_input(in_files.get(0)), in_files.get(1), cli.cflags)
         // **Every file the compile writes**, an interface `--library=` names included: a
         // `--library=a.kspl` beside the input `a.kspl` replaced the source with its interface.
         outputs: = List<|U8[]|>.create(base_core.arena)
@@ -550,19 +640,65 @@ priv fn read_mode(parser: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$
         return .compile(source_input(in_files.get(0)), in_files.get(1), cli.deps_path,
             cli.libs_path)
 
+priv fn compile_kind(parser: argparse.Parser$@, in_files: List<|U8[]|>@, cli: Cli@): Output_kind //<
+    //< What a compile makes, once its operands and the options its kind refuses are checked
+    refuse_missed_subcommand(in_files)
+    if in_files.len != 2
+        // It rejects "too many" as well as "too few". Suppose it silently used the first two.
+        // Then a path cut by the shell's word splitting (one containing a space) would compile an
+        // unrelated file for no clear reason.
+        if in_files.len > 2
+            io.err().s("Error: too many input files (expected <input.kspl> <output>):\n")
+            for f in in_files
+                io.err().s("  ").s(f).c('\n')
+        else
+            why: =
+                operand_refusal("ksplc: a compile takes an input and an output ('ksplc <input.kspl> \
+                    <output>')", in_files)
+            io.err().s(why)
+        usage.usage_exit()
+    out: = in_files.get(1)
+    kind: = output_kind(out, cli.to_name)
+    if kind == Output_kind.executable
+        // The C compiler reads the C from a file beside the executable, which a program on standard
+        // input has none of a name for.
+        if in_files.get(0).equals(base_core.STDIN_NAME)
+            usage
+                .error_exit("ksplc: an executable is built from a source file. Standard input ('-') \
+                    is read where the output is C (.c) or LLVM IR (.ll)\n")
+        for name in NOT_FOR_EXECUTABLE
+            if parser.saw(name)
+                refusal: = base_core.arena.text()
+                    .s("ksplc: '\{name\}' does not take effect where the output is an executable \
+                        ('\{out\}'). It takes effect where the output is C (.c) or LLVM IR (.ll)\n")
+                    .take()
+                usage.error_exit(refusal)
+    else if parser.saw("--cflags")
+        refusal: = base_core.arena.text()
+            .s("ksplc: '--cflags' takes effect only where the output is an executable, which the C \
+                compiler builds. '\{out\}' names \{kind.said()\}\n").take()
+        usage.error_exit(refusal)
+    return kind
+
 priv fn refuse_missed_subcommand(in_files: List<|U8[]|>@) //<
     //< Exits with one line where a compile's inputs show a subcommand left out or misspelled
-    //< **`ksplc hello.kspl` meant `run`, and `ksplc bulid a.kspl a.exe` meant `build`**, which
-    //< otherwise read as a compile's inputs, whatever their count. The whole usage after the
-    //< error would bury its one line, so the line names the likely command and points at `--help`.
+    //< **`ksplc hello.kspl` meant `run`, and `ksplc lnt a.kspl` meant `lint`**, which otherwise
+    //< read as a compile's inputs, whatever their count. The whole usage after the error would bury
+    //< its one line, so the line names the likely command and points at `--help`.
     if in_files.len == 0
         return
     first: = in_files.get(0)
     $said: U8[] = ""
+    // **No subcommand builds an executable**: the output's name asks for one. Read as a compile,
+    // `ksplc build a.kspl a` would refuse three operands without saying why.
+    if first.equals("build")
+        usage
+            .error_exit("ksplc: 'build' is not a subcommand. 'ksplc <input.kspl> <output>' builds \
+                an executable where the output's name ends in neither .c nor .ll\n")
     if first.ends_with(".kspl") && in_files.len == 1
         said = base_core.arena.text()
-            .s("ksplc: a compile takes an input and an output ('ksplc <input.kspl> <output.c>'). \
-                Did you mean 'ksplc run \{first\}'?").take()
+            .s("ksplc: a compile takes an input and an output ('ksplc <input.kspl> <output>'). Did \
+                you mean 'ksplc run \{first\}'?").take()
     else if near: = nearest_face(first)
         said = base_core.arena.text()
             .s("ksplc: '\{first\}' is not a subcommand. Did you mean 'ksplc \{near\}'?").take()
@@ -618,8 +754,11 @@ impl Mode
                 io.err().s("Error: unknown option: -\n")
                 usage.usage_exit()
         usage.refuse_empty_values(p)
-        apply_options(o@, face)
-        return read_mode(p, face, in_files, o@)
+        $kind: = Output_kind.c
+        if face == Face.compile
+            kind = compile_kind(p, in_files, o@)
+        apply_options(o@, face, kind)
+        return read_mode(p, face, kind, in_files, o@)
 
 fn machine_refusal_to(face: U8[], named: U8[], host: U8[], out: Str$@) //<
     //< Why the subcommand cannot lay values out for the machine, onto `out`; nothing where it can
@@ -656,8 +795,9 @@ priv fn refuse_with_library() //<
                 functions, which a library makes static. Build a library as one unit\n")
     if base_core.is_llvm_target()
         usage
-            .error_exit("--library: --to=llvm cannot be combined. The IR links its runtime from \
-                another file, but a library needs its own runtime. Build a library with --to=c\n")
+            .error_exit("--library: LLVM IR cannot be combined. The IR links its runtime from \
+                another file, but a library needs its own runtime. Build a library as C (an output \
+                ending in .c)\n")
     if base_core.config.is_freestanding
         usage
             .error_exit("--library: --freestanding cannot be combined. The C compiler calls \
@@ -669,12 +809,13 @@ priv const SANITIZER_NAMES: U8[][4] = ::{ "address", "thread", "memory", "undefi
     //< The first three are LLVM's function attributes too (`sanitize_<name>`). `undefined` is not:
     //< its checks are written by clang's front end, so only C takes it.
 
-priv fn check_sanitize(cli: Cli@, face: Face) //<
-    //< It refuses `--sanitize` where it cannot take effect, and `-fsanitize=` in build's `--cflags`
-    //< **One way to ask** (Principle 6): `build` hands its C compiler `-fsanitize=` from
-    //< `--sanitize`, so the same word in `--cflags` would be a second. Which machine has which
-    //< sanitizer is the C compiler's to say: it refuses `-fsanitize=thread` for Windows itself.
-    if face == Face.build
+priv fn check_sanitize(cli: Cli@, kind: Output_kind) //<
+    //< It refuses `--sanitize` where it cannot take effect, and `-fsanitize=` in `--cflags`
+    //< **One way to ask** (Principle 6): a compile to an executable hands its C compiler
+    //< `-fsanitize=` from `--sanitize`, so the same word in `--cflags` would be a second. Which
+    //< machine has which sanitizer is the C compiler's to say: it refuses `-fsanitize=thread` for
+    //< Windows itself.
+    if kind == Output_kind.executable
         for w in cli.cflags.split(' ', base_core.arena)
             if w.starts_with("-fsanitize=")
                 usage
@@ -687,11 +828,12 @@ priv fn check_sanitize(cli: Cli@, face: Face) //<
             .error_exit("--sanitize: --freestanding cannot be combined. A sanitizer's runtime uses \
                 the OS to map shadow memory and write reports. No sanitizer runtime is built for \
                 bare metal\n")
-    if face == Face.compile && !base_core.is_llvm_target()
+    if kind == Output_kind.c
         usage
             .error_exit("--sanitize: the C compiler instruments generated C. Give that compiler \
-                -fsanitize=<names>. When compiling to LLVM, --sanitize marks the IR because it does \
-                not pass through a front end\n")
+                -fsanitize=<names>, or name an executable as the output, and ksplc hands it \
+                -fsanitize=. When compiling to LLVM, --sanitize marks the IR because it does not \
+                pass through a front end\n")
     for name in cli.sanitize.split(',', base_core.arena)
         if !(U8[][]::SANITIZER_NAMES).contains(name)
             said: = base_core.arena.text().s("--sanitize: '").s(name)
@@ -704,7 +846,8 @@ priv fn check_sanitize(cli: Cli@, face: Face) //<
                 .error_exit("--sanitize=undefined: its checks are written into C by clang's front \
                     end, which LLVM IR does not pass through. KSPL's own checks stop an index, a \
                     shift, a divisor or an enum's tag out of range in either backend. For the \
-                    remaining checks, build through C (ksplc build --sanitize=undefined)\n")
+                    remaining checks, build an executable through C (ksplc --sanitize=undefined \
+                    <input.kspl> <output>)\n")
 
 priv fn check_interface_paths() //<
     //< It refuses a `--library=` interface that cannot be written

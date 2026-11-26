@@ -12,8 +12,6 @@ KSPLC_EXE = $(shell command -v "$(KSPLC)")
 FUZZ_ARGS ?=
 # 1 fails a reader built without the address sanitizer (Linux CI holds its runtime); else a SKIP.
 KANSO_REQUIRE_ASAN ?=
-# -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
-ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
 
 # An example is a folder under `examples/` that holds a `main.kspl`. So `make test` builds a new
 # example without a list to edit; what it checks in a run is in `tests/examples_main.kspl`.
@@ -22,10 +20,10 @@ EXAMPLES := $(sort $(patsubst examples/%/main.kspl,%,$(wildcard examples/*/main.
 examples: $(EXAMPLES)
 
 # Caution: **Quote every path** — a folder whose name holds a space splits an unquoted one.
-# `ksplc build` compiles and links each, optimised by default as the examples ship: both do a
+# ksplc compiles and links each, optimised by default as the examples ship: both do a
 # model's arithmetic element by element.
 $(EXAMPLES):
-	"$(KSPLC)" build $(BLAS_FLAGS) examples/$@/main.kspl "$(OUT)/$@.exe"
+	"$(KSPLC)" $(BLAS_FLAGS) examples/$@/main.kspl "$(OUT)/$@.exe"
 
 # The unit tests alone. **They reach all that `BLAS=1` changes** (the `#cfg(blas)` blocks of
 # `tensor.kspl`), so the root's `make test-blas` runs this, not the examples' builds.
@@ -41,14 +39,8 @@ test: examples test-unit
 		"$(OUT)/code_complete.exe" "$(OUT)/car_pilot.exe" "$(OUT)/chat_server.exe" "$(KSPLC_EXE)" \
 		"$(OUT)/examples_test"
 
-fuzz_build = "$(KSPLC)" build $(1) tests/read_prog.kspl "$(OUT)/fuzz/read_prog.exe"
-# Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.
 test-fuzz:
-	@mkdir -p "$(OUT)/fuzz"
 	rm -rf "$(OUT)/fuzz/work"
-	@if $(call fuzz_build,$(ASAN_BUILD)) > "$(OUT)/fuzz/asan.log" 2>&1; then asan=--asan; \
-		echo "# the reader: with the address sanitizer"; \
-	else asan=; echo "# the reader: without the address sanitizer ($(OUT)/fuzz/asan.log says why)"; \
-		$(call fuzz_build,--cflags=-O0) || exit 1; fi; \
-	"$(KSPLC)" run tests/fuzz_main.kspl "$(OUT)/fuzz/read_prog.exe" "$(OUT)/fuzz/work" $$asan \
+	@"$(KSPLC)" run tests/fuzz_main.kspl "$(OUT)/fuzz/read_prog.exe" "$(OUT)/fuzz/work" \
+		--ksplc="$(KSPLC)" --build=tests/read_prog.kspl \
 		$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan) $(FUZZ_ARGS)

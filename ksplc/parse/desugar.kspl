@@ -26,9 +26,11 @@ const CLOSURE_EMPTY_FIELD: U8[] = "_empty" //<
     //< The field name of the padding in an environment with zero captures (C99 has no empty struct)
 
 struct Gen_param //< one type parameter of an enclosing declaration
-    name: U8[] //< `T`, or `N` for `const N: Sz`; the argument that passes it on
+    name: U8[] //< `T`, or `N` for `const N: Sz`; the synthesized declarations pass it on by this
     written: U8[] //< as a declaration writes it: `T`, or `const N: Sz`
     is_const: Bool //< a `const` one, whose name a body can read as a value
+    arg: U8[] //<
+        //< What the closure's place passes for it: the name, or `Self` for the stand-in of `Self`
 
 struct Desugar_ctx //<
     //< What the walk carries from node to node
@@ -344,10 +346,12 @@ impl Ast_node
         // implicitly, and the receiver can be a value (`$b: = Str()`): a `put` at the
         // head would write into a copy of `b`.
         $has_parts: = false
+        $head: Ast_node$@ = null // the chain's first `.s(…)` call
         first_part: = string_node.get_child(0) if string_node.children.len > 0 else null
         if first_part != null && first_part.kind_id == .k_string_expr
             empty_node: = Ast_node(.k_string, "\"\"", loc)
             current_recv = Ast_node.build_method_call(current_recv, "s", empty_node, 0, loc)
+            head = current_recv
             has_parts = true
         for part in string_node.children
             if part.kind_id == .k_string_content
@@ -358,6 +362,7 @@ impl Ast_node
                 str_text.free()
 
                 current_recv = Ast_node.build_method_call(current_recv, "s", str_node, 0, part.loc)
+                head = current_recv if head == null else head
                 has_parts = true
             else if part.kind_id == .k_string_expr
                 if expr_node: = part.first_expr()
@@ -385,6 +390,11 @@ impl Ast_node
         if !has_parts
             str_node: = Ast_node(.k_string, "\"\"", loc)
             current_recv = Ast_node.build_method_call(current_recv, "s", str_node, 0, loc)
+            head = current_recv
+        // **The chain's first `s` stands where the written `s` does**, so a hover or a jump on it
+        // finds `s`. Every node above sits at the call or at the string's parts.
+        if head != null
+            head.get_postfix_receiver().get_postfix_member().loc = m_access.get_postfix_member().loc
         // It overwrites the original call node with the transformed AST chain.
         r.morph(current_recv.kind_id, current_recv.text)
         r.children = current_recv.children

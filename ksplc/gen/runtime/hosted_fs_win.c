@@ -358,6 +358,12 @@ KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
     return _wmkdir(path);
 }
 
+/* The POSIX side's meanings. Who can open the directory is the ACL it takes from its folder, which
+ * this does not set, as at kspl_create_owned. So it is made as kspl_mkdir makes one. */
+KSPL_LINK I32 kspl_mkdir_owned(const U8 *path_ptr, Sz path_len) {
+    return kspl_mkdir(path_ptr, path_len);
+}
+
 /* The POSIX side's meanings. **CREATE_NEW decides that it is new.** Who can read it is the ACL it
  * takes from its folder, which this does not set (the reason is at write_unique in
  * std/fs.kspl). No security attributes, so the handle is not inheritable (hosted.c's "Nothing the
@@ -555,7 +561,12 @@ KSPL_LINK I32 kspl_rename_cstr(const U8 *old_cstr, const U8 *new_cstr) {
  * reader holding the file would make a rename or a removal over it fail (`fs.replace_file`). No
  * security attributes, so the handle is not inheritable (hosted.c's "Nothing the runtime opens
  * passes to a child unasked"); the CRT's `fopen` hands it to every child.
- * Caution: **Do not call `fopen` directly from the KSPL side** (the same reason). */
+ * Caution: **Do not call `fopen` directly from the KSPL side** (the same reason).
+ * Caution: **Open an append mode with FILE_APPEND_DATA and without FILE_WRITE_DATA**, as
+ * O_APPEND is on POSIX. Windows then puts each write at the end in one step. With GENERIC_WRITE,
+ * the CRT's `_O_APPEND` seeks to the end and then writes. Two processes that append to one log can
+ * then write over each other's lines. `_O_APPEND` stays, so the CRT still reports the position
+ * as the end; where the write lands is no longer its choice. */
 KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
     wchar_t path[KSPL_WPATH_CAP];
     const char *mode = (const char *)mode_cstr;
@@ -570,8 +581,9 @@ KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
         return NULL;
     }
     plus = (plan & KSPL_OPEN_READ) != 0 && (plan & KSPL_OPEN_WRITE) != 0; /* only from a `+` */
-    access = ((plan & KSPL_OPEN_READ) != 0 ? GENERIC_READ : 0) |
-        ((plan & KSPL_OPEN_WRITE) != 0 ? GENERIC_WRITE : 0);
+    access = (plan & KSPL_OPEN_READ) != 0 ? GENERIC_READ : 0;
+    if ((plan & KSPL_OPEN_APPEND) != 0) access |= FILE_GENERIC_WRITE & ~(DWORD)FILE_WRITE_DATA;
+    else if ((plan & KSPL_OPEN_WRITE) != 0) access |= GENERIC_WRITE;
     if ((plan & KSPL_OPEN_NEW) != 0) creation = CREATE_NEW;
     else if ((plan & KSPL_OPEN_TRUNCATE) != 0) creation = CREATE_ALWAYS;
     else if ((plan & KSPL_OPEN_CREATE) != 0) creation = OPEN_ALWAYS;

@@ -93,6 +93,12 @@ impl Ast_node
         //< `is_const_binding`: a KSPL `const` whose C `const` goes inside the declarator (decided
         //< by Genc_ctx.const_goes_in_declarator). The caller writes a `const` before the type name
         //< itself.
+        r.emit_c_declarator(cg, name, is_const_binding, false)
+
+    priv fn emit_c_declarator(r: Self$@, cg: Genc_ctx$@, name: U8[], is_const_binding: Bool,
+        is_private: Bool) //<
+            //< emit_c_decl's declarator, its name the private C name where `is_private` says so
+            //< That is a C variable `binds_by_asm_label` answers yes for.
         if r.is_type_fn_ptr()
             fn_sig: = r.get_type_fn_sig().unwrap_or(null)
             ret_node: = fn_sig.find_child(.k_type_expr) if fn_sig != null else null
@@ -104,13 +110,22 @@ impl Ast_node
             cg.s(" (*")
             if is_const_binding
                 cg.s("const ")
-            cg.nm(name).s(")(")
+            r.emit_declarator_name(cg, name, is_private)
+            cg.s(")(")
             if fn_sig != null
                 fn_sig.emit_param_list(cg)
             cg.s(")")
         else
             r.emit_resolved_type(cg, false)
-            cg.s(" ").nm(name)
+            cg.s(" ")
+            r.emit_declarator_name(cg, name, is_private)
+
+    priv fn emit_declarator_name(_r: Self$@, cg: Genc_ctx$@, name: U8[], is_private: Bool) //<
+        //< A declarator's name: the private C name, or the name as `nm` writes it
+        if is_private
+            cg.extern_c_name(name)
+        else
+            cg.nm(name)
 
     fn emit_param_list(r: Self$@, cg: Genc_ctx$@) //<
         //< It emits a function's parameter list in C, `void` where it takes none
@@ -212,12 +227,17 @@ impl Ast_node
         case .k_decl_var
             id: = r.get_decl_id_text()
             type_node: = r.get_decl_type_node()
+            is_private: = gen_c_ctx.binds_by_asm_label(r)
             cg.s(extern_word(r))
             r.emit_attributes(cg)
             if type_node != null
-                type_node.emit_c_decl(cg, id, false)
+                type_node.emit_c_declarator(cg, id, false, is_private)
             else
-                cg.s("int32_t \{id\}")
+                cg.s("int32_t ")
+                r.emit_declarator_name(cg, id, is_private)
+            // The same label as a function's (emit_fn_head).
+            if is_private
+                cg.s(" KSPL_SYMBOL(\"").s(id).s("\")")
             cg.s(";\n")
         case .k_decl_extern_struct
             id: = r.find_text(.k_identifier)
@@ -497,8 +517,15 @@ impl Ast_node
 
     priv fn emit_fn_head(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< A function's name and parameters, as both its definition and its prototype write them
-        //< The caller has written the return type. The name is the C one `lower/abi.kspl` gave.
-        cg.s(" ").s(r.get_decl_id_text()).s("(")
+        //< The caller has written the return type. The name is the C one `lower/abi.kspl` gave, or
+        //< a private one bound to it where `binds_by_asm_label` says so.
+        name: = r.get_decl_id_text()
+        if gen_c_ctx.binds_by_asm_label(r)
+            cg.s(" ").extern_c_name(name).s("(")
+            r.emit_param_list(cg)
+            cg.s(") KSPL_SYMBOL(\"").s(name).s("\")")
+            return
+        cg.s(" ").s(name).s("(")
         r.emit_param_list(cg)
         cg.s(")")
 

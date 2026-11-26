@@ -10,6 +10,7 @@ import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { Map }
 import "std/math"
 import "std/str" { Str }
@@ -72,6 +73,21 @@ fn unit_for(file_path: U8[], unit_count: Sz): Sz //<
     if file_path.len == 0
         return 0
     return Sz::(file_path.hash() % U32::unit_count)
+
+fn binds_by_asm_label(decl: Ast_node$@): Bool //<
+    //< Whether genc declares this C function or variable under a private C name
+    //< The name is bound to the symbol. It is one a file outside std brings in with `extern`. **A
+    //< header the generated C includes can declare it with other types**, and C refuses two that
+    //< disagree. std's own keep their names, and so does a symbol a file of the program publishes.
+    //< The private name is `EXTERN_C_PREFIX`, the label `KSPL_SYMBOL`. Why: "A C symbol brought in
+    //< takes a private C name" in `../../docs/DESIGN-backends.md`.
+    if decl == null || decl.sym_ptr == null
+        return false
+    if decl.kind_id != .k_decl_fn_proto && decl.kind_id != .k_decl_var
+        return false
+    flags: = (Sema_symbol$@::decl.sym_ptr).flags
+    return flags.is_ext && !flags.is_published_by_program &&
+        !base_locate.is_std_file(decl.loc.file())
 
 struct Genc_ctx
     priv out: Writer
@@ -388,6 +404,10 @@ impl Genc_ctx
         if val.needs_c_escape()
             return r.s(val).s(base_c_name.C_NAME_SUFFIX)
         return r.s(val)
+
+    fn extern_c_name(r: Self$@, name: U8[]): Self$@ //<
+        //< it emits the private C name of a symbol `binds_by_asm_label` answers yes for
+        return r.s(base_c_name.EXTERN_C_PREFIX).s(name)
 
     priv fn pass_pending(r: Self$@) //< it passes what `pending` holds to `out`, and empties it
         if r.pending.len > 0

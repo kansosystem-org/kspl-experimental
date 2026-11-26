@@ -80,7 +80,7 @@ Note: After changing one package, `make debug-<name>` answers sooner. **It does 
 
 ### Putting `ksplc` on the PATH (`make install`, optional)
 
-**`make install` copies the compiler, its standard library and the libraries under `lib/` to where your shell finds them, so `ksplc` works from any folder.** The development scripts (`tools/repo_stat.kspl` and others) then run directly, through their `#!/usr/bin/env -S ksplc run` line. In Windows's native shell, that *shebang* does nothing ("Running a program" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md)).
+**`make install` copies the compiler, its standard library and the libraries under `lib/` to where your shell finds them, so `ksplc` works from any folder.** The development scripts (`tools/seed_sum.kspl` and others) then run directly, through their `#!/usr/bin/env -S ksplc run` line. In Windows's native shell, that *shebang* does nothing ("Running a program" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md)).
 
 ```sh
 make install                       # puts Stage2 into ~/.local/bin/ksplc, std/ and lib/ into ~/.local/lib/kspl/
@@ -124,7 +124,7 @@ It ends with `# installed ->` lines, then says **which `ksplc` your PATH starts*
 
 **`echo $MSYSTEM` must display `UCRT64`**, the one environment supported. **On Windows, the Makefile refuses to run outside that shell**, through the PATH from PowerShell or cmd included. Why is "The Windows executable is built on UCRT64" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
-Note: **`ksplc`'s own output does not depend on the terminal's setting.** It sets the console's code pages to UTF-8 at start-up, and restores them on exit and after a panic (`kspl_io_init_console` in `ksplc/gen/runtime/hosted.c`). An access violation leaves them set.
+Note: **`ksplc`'s own output does not depend on the terminal's setting.** It sets the console's code pages to UTF-8 at start-up (`kspl_io_init_console` in `ksplc/gen/runtime/hosted.c`). It restores them on exit, after a panic or a crash, and on Ctrl+C or a closed window. Only a process killed from outside (`TerminateProcess`, as `taskkill /F` does) leaves them set.
 
 **In VS Code, the integrated terminal is already UCRT64** (`.vscode/settings.json`), and PowerShell stays in its dropdown. Where MSYS2 is not in `C:\msys64`, set the profile's `path`.
 

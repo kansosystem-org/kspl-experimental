@@ -134,6 +134,8 @@ Caution: **Match on the definition, not the spelling**: the same spelling appear
 
 Caution: **The capture's argument and its rebinding stand at the capture's name**, not at the closure's `fn(` (`build_capture_args`, `place_capture_rebindings` in `ksplc/parse/desugar_closure.kspl`). At `fn(`, an edit would overwrite the `fn(x:`, and every rebinding and parameter would share one place.
 
+**A name sema did not link is matched by its scope.** Sema links no local name in a generic's template, nor any use of a type parameter. The walk then takes the nearest declaration around the name that binds it, as a jump does (`resolve_fallback_parent_def` in `ksplc/lsp/nav.kspl`). Those are a type parameter, a parameter, a local, a `for`'s variable, a `catch`'s error and a `switch` arm's payload. Skipped, renaming a generic's parameter changed only its declaration.
+
 **The list is ordered by file name, then line, then column.** It is gathered in a `Map`, whose hash order would shuffle the same answer on screen.
 
 Caution: **Do not ask the client for the narrowing's clue.** The server holds the position and the source, so receiving them from the client counts the same thing in two places. Only the call hierarchy's requests carry no position; there the clue is the `item.data` the server returned earlier.
@@ -158,6 +160,8 @@ Caution: **`Sema_symbol.name` is the bare name**; the FQN exists only as a key o
 
 A method's `sym.name` already holds its owner's path, and the owner need not stand in the method's file (`impl pipeline.Compile_error` in `main.kspl`). So an already-qualified name gets no prefix (`write_full_name` in `lsp/nav.kspl`).
 
+**A generic function is one item: its template and every instance share the template's key** (`fn_templates` in `sema/type/env.kspl`). Sema files an instance under `Base<|args|>` and under its C name, and no file spells either. Named by an instance, a call of another instance is no call of it, and the item shows the C name. So the item is built from the template's declaration. Its calls are searched in the instances' bodies, the ones sema analysed.
+
 ## The call hierarchy counts a function passed as a pointer
 
 **The call hierarchy lists the place that hands a function over as a pointer as an edge, marked as a hand-over.** Passing a function pointer is not a call, but much code is reachable only that way. An OS's task entry functions, handed to its scheduler, are one example. Without the edge they show "no callers" and are mistaken for removable.
@@ -171,6 +175,10 @@ Two exclusions are indispensable:
 
 **`make test-lsp-tree` holds both down.** Everything needed is in `def_node`, as for the renaming walk.
 
+**A closure written in a function is not one of its calls.** The compiler lifts the closure into functions of its own, and the place it stands calls or names them (`_anon_env_new_1`, `_anon_fn_2`). The person wrote no call there, and no file spells those names. So the outgoing calls leave them out (`is_closure_lift` in `lsp/call_hier.kspl`). The calls in the closure's body are not counted as the enclosing function's either: the lifted function holds them.
+
+**A call's range is read in the caller's file**, in both directions. The item at the other end can stand in another file, and its lines put the range on unrelated text.
+
 ## Completion re-analyses the text as if one name were missing
 
 **To suggest completions while you type, the server analyses the text with the half-typed word replaced by one synthesized name.** Half-written text does not parse ("Only the editor's parse recovers from a syntax error"), so `latest_state` holds neither a tree nor a symbol table.
@@ -179,13 +187,16 @@ This is **a restatement of the question**: a completion request asks "which name
 
 Caution: **Do not reuse `latest_state`**, which is built from the half-typed text. Completion builds a state of its own and always discards it by winding back, or it would grow the arena on every keystroke.
 
-**One entry point handles all three kinds of head**; what stands before the half-typed word decides the path.
+**One entry point handles all four kinds of head**; what stands before the half-typed word decides the path.
 
 | Head | Example | Where it looks |
 | :-- | :-- | :-- |
 | a receiver expression | `cup.` | the postfix node → the receiver's type → its fields and methods |
 | a namespace alias or a type name | `io.` / `Cup.` | the path node → for an import's alias, the names in that namespace; otherwise, the type |
 | none (a bare name) | `twi` | earlier declarations in the enclosing scope, the file's top level, the imports' aliases |
+| a lone `.` (a variant without its type) | `return .` / `case .` | the type the analysis expects there → that enum's variants; nothing where no type is expected |
+
+**After a lone `.`, offer only the variants, and nothing where the expected type is unknown.** Only a variant can stand there, so a name of the scope is an error once chosen. The analysis already gives the `.variant` node the expected type, also for the synthesized name; a `case` takes its switch subject's type.
 
 Caution: **A namespace alias or a type name is not a postfix node** (normalization folds `io.out` into one path node). Handling only one of the two silently empties the other.
 
@@ -193,7 +204,7 @@ Caution: **A namespace alias or a type name is not a postfix node** (normalizati
 
 **A candidate carries what its declaration says of itself.** Each item's `documentation` is the declaration's description, read by the hover's own reader (`lsp/nav.linked_doc` → `base/ast_doc.kspl`) and sent as Markdown. The list is where a caller looks first; a description shown only on hover arrives after the choice. Every path in the table carries the declaration it came from.
 
-**`detail` carries the shape: a function's signature, a field's type**, which a caller needs before choosing. What a signature holds (its parameters, a variadic's `...`, each default, the return) is decided once, in `write_sig` in `base/ast_spell.kspl`. The list and the hover both write through it. A default shows as written (`step: I32 = 1`); dropped, a reader takes the parameter for one every call must pass.
+**`detail` carries the shape: a function's signature, a field's type**, which a caller needs before choosing. What a signature holds (its type parameters with their bounds, its parameters, a variadic's `...`, each default, the return) is decided once, in `write_sig` in `base/ast_spell.kspl`. The list and the hover both write through it. A default shows as written (`step: I32 = 1`); dropped, a reader takes the parameter for one every call must pass.
 
 **A method's receiver is shown as the declaration writes it** (`fn s(r: Self$@, …)`), as the hover and the published record show it. A reader counting arguments must know the first is the receiver, which the call site does not write.
 
@@ -497,6 +508,24 @@ sequenceDiagram
 * **Its deps file has no line for it** (`deps_text`): there is no file to take a digest of, and the key already holds the text. The lines for what it imports still decide whether the build is fresh.
 
 **The C compiler's target is asked once per process**, and kept as an optional `Target_kind` in `tools/run.kspl`. A present answer can have every flag false, as on Linux, so the answer itself cannot double as the mark that it is known. The link libraries and target-specific executable flags read the same answer.
+
+## The output's name chooses what a compile makes
+
+`ksplc <input> <output>` writes C for `.c`, LLVM IR for `.ll`, and an executable for any other name (§2.1 of [`SPEC-tools.md`](SPEC-tools.md)). `kind_by_name` in `cli.kspl` is the one place that reads the name.
+
+**Why the name, and not a flag or a subcommand:**
+
+* **The name is said anyway**, and it is what the next tool reads: a Makefile's rule, the C compiler, the linker. A flag beside it says the same thing twice, and the two can disagree in silence. Where a flag chooses the kind, a forgotten `-c` builds an executable called `x.o`. The mistake shows only at the link that reads it.
+* **It was already the form for C** (`ksplc a.kspl a.c`), so a program is now one step further on the same command.
+* **One way to ask** (Principle 6): `ksplc build`, a second way to reach the same compile, was removed. Its words answer in one line with the new form.
+
+**A name that suggests a kind ksplc does not make is refused**, not built as an executable. Such names end in `.o`, `.s`, `.h`, a library's endings, `.libs` or `.kspl`. A program found where an object or a library was expected fails far from its cause. Each refusal names what to write instead.
+
+**`--to` stays only for a device** (`/dev/null`), which has no name to read. Elsewhere it must agree with the name; letting one win would hide a typo in the other.
+
+**An option the kind cannot use is refused** (Principle 5). `--cflags` is refused where no C compiler of ksplc's runs. An executable refuses a compile's other options: it takes only what `append_child_ksplc` in `tools/run.kspl` passes on.
+
+**Not taken: support for any C99 compiler** (a vendor's compiler for a microcontroller, say). Each has its own options, and ksplc would grow a table of them. Such a compiler takes the `.c` output.
 
 ## The design of the tool settings
 

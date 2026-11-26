@@ -5,7 +5,6 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
-import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
 import "ksplc/sema/flow/field" as sema_flow_field
@@ -723,31 +722,12 @@ impl Ast_node
     fn mark_call_freed_args(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Marks a bare local argument released where the callee always releases that parameter
         //< The call is `foo(x)`, `obj.m(x)` or `T.m(x)`.
-        //< **A method call shifts the parameters by one** (the receiver), or `a` is checked as
-        //< self.
-        callee: = r.get_postfix_receiver()
-        fn_node: = callee.def_node if callee != null else null
-        if fn_node == null || fn_node.kind_id != .k_decl_fn
-            return
-        args_node: = r.find_child(.k_expr_args)
-        if args_node == null
-            return
-        param_list: = fn_node.get_fn_params()
-        if param_list == null
-            return
-        is_method: = callee.kind_id == .k_method_access
-        $param_idx: Sz = 0
-        for p in base_ast_ext.Param_cursor(param_list, false)
-            $arg: Ast_node$@ = null
-            if given: = sema_flow_release.call_arg_for_param(callee, args_node, param_idx, is_method)
-                arg = given
-            else
-                break
-            if fn_node.body_frees_param_directly(p.get_decl_id_text(), df.sema, arg.type_id)
-                if def: = arg.get_addressed_local_def()
+        for pa in sema_flow_release.Passed_arg_cursor(r)
+            fn_node: = pa.callee_fn
+            if fn_node.body_frees_param_directly(pa.param_name, df.sema, pa.arg.type_id)
+                if def: = pa.arg.get_addressed_local_def()
                     if def.is_tracked_local(df)
                         state.add_freed(def)
-            param_idx += 1
 
     fn df_method_access(r: Self$@, df: Df_ctx$@, state: Df_state$@) //<
         //< Walks a field access's or method call's receiver without counting it as a use as a value

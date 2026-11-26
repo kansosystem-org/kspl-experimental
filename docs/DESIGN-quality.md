@@ -37,7 +37,7 @@
 
 | Property | Main mechanisms | Strength today |
 | :-- | :-- | :-- |
-| Functional suitability | self-host, `test-equiv`, `test-property`, `test-random-equiv`, `test-spec-claims`, `test-server-claims`, the claims runs of ksmd, ksagent and ksos, `test-negative`, `test-extract`, the package tests | Strong: every specification's rows are checked against its code. Partial where no row can show a claim |
+| Functional suitability | self-host, `test-equiv`, `test-property`, `test-spec-claims`, `test-server-claims`, the claims runs of ksmd, ksagent and ksos, `test-negative`, `test-extract`, the package tests; `test-random-equiv` by hand | Strong: every specification's rows are checked against its code. Partial where no row can show a claim |
 | Performance efficiency | `perf-log`, `test-simd` | Partial |
 | Compatibility | `test-llvm-abi`, `test-emit-runtime`, `test-ship`, `test-lsp`, `test-layout-targets` | Strong; partial off Linux |
 | Interaction capability | `ksplc explain`, `ksplc doc`, `test-ksmd-browser` and `test-ksagent-chat` with axe-core, the CLI comparison in `test-conventions` | Strong for ksplc and for the two pages' markup, partial elsewhere |
@@ -59,7 +59,7 @@
 
 ### Functional suitability
 
-**The compiler is checked against itself, against a second backend and against its specification.** The self-host builds ksplc with itself on the C and the LLVM backends, and stage1 and stage2 must agree. `test-equiv`, `test-property` and `test-random-equiv` check that C, LLVM, clang and gcc give programs that run alike. `test-generic-matrix`, `test-notation`, `test-split` and `test-ast-cache` each check that one way of building gives the same result as another.
+**The compiler is checked against itself, against a second backend and against its specification.** The self-host builds ksplc with itself on the C and the LLVM backends, and stage1 and stage2 must agree. `test-equiv` and `test-property` check that C, LLVM, clang and gcc give programs that run alike. `make test-random-equiv` checks the same on generated programs, run by hand. It found three compiler faults when it came, and none since. A shape that only generated code reaches stays out of the compiler, so no gate runs it. `test-generic-matrix`, `test-notation`, `test-split` and `test-ast-cache` each check that one way of building gives the same result as another.
 
 **The specification's claims are compiled.** `test-spec-claims` compiles code that [`SPEC-programming-language.md`](SPEC-programming-language.md) calls refused or allowed, in pairs. `test-negative` checks that wrong programs are refused, and `test-conventions` checks that each diagnostic code has an input that shows it.
 
@@ -71,7 +71,7 @@
 * **ksagent's commands** ([`SPEC-commands.md`](../ksagent/docs/SPEC-commands.md)): the built program runs each row with a stand-in model server. Its exit code and output must match.
 * **ksos's board** ([`SPEC-board.md`](../lib/ksos/docs/SPEC-board.md)): each pin, limit and constant is compared with the board code on the host.
 
-**Every package's tests run from a copy of its folder alone** (`test-extract`), on both backends (`debug`, `test-llvm-pkgs`). `test-surface` holds each published API to its record. `test-ksmd-browser` and `test-ksagent-chat` drive the two pages in a browser.
+**Every package's tests run from a copy of its folder alone** (`test-extract`). `test-sanitize` also builds each package's tests through both backends. `test-surface` holds each published API to its record. `test-ksmd-browser` and `test-ksagent-chat` drive the two pages in a browser.
 
 **What is not covered**: every specification has a claims check, but only for what a row can show. The rest is compared with the code by review. That covers ksmd's rules that only the page draws, such as charts, diagrams and which rows a filter shows. So are the two servers' rules that no row or checked sentence shows. Examples are the hold on `/api/here`, the build, HTTPS and the caps on connections and time.
 

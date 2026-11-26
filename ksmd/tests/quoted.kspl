@@ -1,12 +1,12 @@
 //< Text in a formula's quotes: each byte stands for itself, `\` too, and `""` is one '"'
 //< The rules are "Text in a formula" in `ksmd/docs/SPEC-file-format.md`. Also a file's formula
-//< longer than an edit writes.
+//< over its cap.
 import "ksmd/base/source" { Source }
 import "ksmd/calc/calc"
 import "ksmd/calc/formula" { Token_kind, shift_formula, token_at, unquoted }
 import "ksmd/syntax/reader"
 import "ksmd/tests/calculation" { cases_with }
-import "ksmd/tests/support" { changed, opened, read, written }
+import "ksmd/tests/support" { opened, read, written }
 import "std/chars"
 import "std/ds"
 import "std/mem" { Arena }
@@ -46,24 +46,20 @@ priv fn values() //< what quoted text calculates to, and `char` for what text ca
         "len(\"a\" & char(10) & \"b\") -> 3", "char(65) -> \"A\"", "char(12354) -> \"あ\"",
         "char(0) -> #NUM!", "char(55296) -> #NUM!", "char(1114112) -> #NUM!" }, "")
 
-// A file may hold a formula over 4,096 bytes, as an older ksmd's conversion of a `%ksmd 1` file
-// wrote. Such a document still takes an edit.
+// A file holds a formula of at most 4,096 bytes, as an edit writes. A longer one is refused at
+// its cell, so the reader names where it stands.
 priv fn longer()
     defer arena: = Arena(256 * 1024)
-    long: = arena.text().s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| =")
-        .s(long_sum(5001, arena)).s(" |\n:::\n").take()
-    $ed: = opened(long, arena)
+    ed: = opened(in_table(long_sum(4095, arena), arena), arena)
     values: = calc.calculate(ed.doc@, "2026-10-23", arena)
-    verdict.check("a formula longer than 4,096 bytes in a file opens",
-        values.at(0, 0, 0).number == 2501.0, "")
-    changed(ed@, 0, .insert_row, 0)
-    saved: = written(ed.doc@, arena)
-    again: = read(saved, arena)
-    verdict.check("and the document takes an edit, and saves a file that opens again",
-        again.tables[0].rows.len == 2 && saved.len > 4096 + 40, "")
-    refused_file("a formula over 32,768 bytes is refused",
-        arena.text().s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| =")
-        .s(long_sum(32769, arena)).s(" |\n:::\n").take(), arena)
+    verdict.check("a formula of 4,095 bytes in a file opens",
+        values.at(0, 0, 0).number == 2048.0, "")
+    refused_file("a formula over 4,096 bytes is refused at its cell",
+        in_table(long_sum(4097, arena), arena), "a formula holds at most 4,096 bytes", 5, 3, arena)
+
+priv fn in_table(formula: U8[], arena: Arena$@): U8[] //< a file whose one cell is `=formula`
+    return arena.text().s("%ksmd 2\n\n:::table name=\"t\"\n| \"a\" |\n| =").s(formula)
+        .s(" |\n:::\n").take()
 
 priv fn long_sum(bytes: Sz, arena: Arena$@): U8[] //< a formula `1+1+…` of `bytes` bytes, odd
     out: = arena.text().s("1")
@@ -71,12 +67,15 @@ priv fn long_sum(bytes: Sz, arena: Arena$@): U8[] //< a formula `1+1+…` of `by
         out.s("+1")
     return out.take()
 
-priv fn refused_file(what: U8[], bytes: U8[], arena: Arena$@) //< the reader refuses `bytes`
+priv fn refused_file(what: U8[], bytes: U8[], message: U8[], line: Sz, column: Sz, arena: Arena$@) //<
+    //< The reader refuses `bytes` with this message at this place
     src: = Source("t.ksmd", bytes) catch
         verdict.check(what, false, "the source was refused before reading")
         return
-    _doc: = reader.read(src@, arena) catch
-        verdict.check(what, true, "")
+    _doc: = reader.read(src@, arena) catch e
+        verdict.check(what,
+            e.message.equals(message) && e.line == line && e.column == column,
+            arena.text().s(e.message).s(" at \{e.line\}:\{e.column\}").take())
         return
     verdict.check(what, false, "the source read")
 

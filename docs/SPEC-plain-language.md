@@ -183,7 +183,7 @@ Use "fire" for a check and "raise" for an interrupt. Keep another product's voca
 
 The first line of a `//<` comment is its one-line summary, and the detail starts on the next line with no empty `//<` between them ("2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Write a short sentence or phrase without a final full stop (`make lint` reports one, `[H0809]`). **Keep each comment to at most six lines, or ten lines for a file's opening header.** Every comment line before the next code line counts. A blank line does not start a new comment. A section divider opening with `---` or `===` starts a new subject and a new comment. A `//<` run's summary and a line a gate reads (`// EXPECT:`) do not count. An empty `//<` parts two paragraphs of a detail, and the count starts again after it. `ksplc explain H0806` gives the whole count.
 
-**Comments occupy at most 30% of the hand-written source.** This is the repository-wide share, shown as `cmt%` on `tools/repo_stat.kspl`'s `total (hand-written)` line. Individual files may exceed it.
+**Comments occupy at most 30% of the hand-written source.** This is the repository-wide share, counted without blank lines, and `make test-conventions` checks it. Individual files may exceed it.
 
 ### Document tense and reports
 
@@ -191,4 +191,4 @@ Documents state the present behavior and its reasons. Reports of completed work 
 
 ### Checking the rules
 
-`make test-conventions` checks published sentence and heading lengths, and `make lint` a comment's length and a summary's final full stop ([`SPEC-gates.md`](SPEC-gates.md)). Review checks meaning, terminology, instructions and the remaining limits.
+`make test-conventions` checks published sentence and heading lengths and the comment share, and `make lint` a comment's length and a summary's final full stop ([`SPEC-gates.md`](SPEC-gates.md)). Review checks meaning, terminology, instructions and the remaining limits.

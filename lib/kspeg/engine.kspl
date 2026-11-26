@@ -47,6 +47,16 @@ priv struct Memo_val //< what a rule answered at a position, as the memo keeps i
     is_success: Bool //< whether it matched
     end_pos: Sz //< where the input stood after it
     node: Node$@ //< the node it built, if it built one
+    deep: Sz //< how far a try inside a lexical token got during it (`Fail_track.deepest_try`)
+        //< An answer merges it in, as the parse did. The outer token's error position depends on
+        //< it.
+    replay_at: Sz //< the furthest failure position, where a failure recorded a label there
+        //< Else `NO_REPLAY`. **While that position is still the furthest, the memo does not
+        //< answer.** The labels' marks are not kept, so the rule is parsed again. Once the parse
+        //< got further, its labels would be dropped anyway.
+
+const NO_REPLAY: Sz = -1 //< `replay_at` where the answer recorded nothing at the furthest position
+    //< Caution: **It must match no position**, as `max_fail_pos` can be 0.
 
 const MEMO_TRIAL_WRITES: I64 = 1024 //<
     //< How many writes a rule gets to show the memo pays off before the memo is turned off for it
@@ -568,7 +578,10 @@ impl Rule
         start_sup: = ctx.is_suppressed
         // The memo is skipped for a lexical token (re-parsing beats hashing) and for a rule it has
         // never answered (the reason is at `memo_writes` in `rule.kspl`). The memo only buys
-        // speed, so a wrong decision costs time, never a wrong answer.
+        // speed, so a wrong decision costs time, never a wrong answer. **A failure's answer also
+        // leaves the same error message**: it replays how far the parse got, or the rule is parsed
+        // again. Caution: A success's answer does not replay its labels' marks. Parsing again there
+        // would cost most of the memo's answers.
         skip_memo: =
             is_upper ||
             (!rule_entry.memo_answered && rule_entry.memo_writes >= MEMO_TRIAL_WRITES)
@@ -578,22 +591,33 @@ impl Rule
             prof.memo_off = true
         if !skip_memo
             if cached: = ctx.memo.get(key)
-                rule_entry.memo_answered = true
-                if prof != null
-                    prof.memo_hits += 1
-                if cached.is_success
-                    ctx.pos = cached.end_pos
-                    if parent != null && cached.node != null
-                        parent.add_child(cached.node)
-                    return true
-                throw .mismatch
+                // Caution: **Do not answer a failure that recorded at the furthest position.**
+                // Parsed again, it marks its labels as what stopped the parse (`push_expected`). A
+                // copy of the rule under another name is parsed again, and the message must not
+                // change with the name.
+                if cached.is_success || cached.replay_at != ctx.fail.max_fail_pos
+                    rule_entry.memo_answered = true
+                    if prof != null
+                        prof.memo_hits += 1
+                    if cached.deep > ctx.fail.deepest_try
+                        ctx.fail.deepest_try = cached.deep
+                    if cached.is_success
+                        ctx.pos = cached.end_pos
+                        if parent != null && cached.node != null
+                            parent.add_child(cached.node)
+                        return true
+                    throw .mismatch
 
         ctx.is_syntax_mode = rule_entry.skips_space
         ctx.is_suppressed = is_void || is_upper
-        // How far this token gets is counted separately from the outer token.
+        // How far this token gets is counted separately from the outer token. So is how far this
+        // rule gets, for the memo to replay; both are merged back below.
         prev_deep: = ctx.fail.deepest_try
         if is_upper
             ctx.fail.deepest_try = start_pos
+        else if !skip_memo
+            ctx.fail.deepest_try = 0
+        prev_records: = ctx.fail.records_at_max
 
         result_node: Node$@ =
             Node.create(name, name, start_pos, ctx.arena) if !is_void else null
@@ -617,10 +641,20 @@ impl Rule
                     if prev_deep > ctx.fail.deepest_try
                         ctx.fail.deepest_try = prev_deep
             if !skip_memo
+                deep: = ctx.fail.deepest_try
+                if prev_deep > deep
+                    ctx.fail.deepest_try = prev_deep
                 rule_entry.memo_writes += 1
                 ctx.memo
                     .set(key,
-                    Memo_val::{ .is_success = false, .end_pos = ctx.pos, .node = null })
+                    Memo_val::{
+                    .is_success = false,
+                    .end_pos = ctx.pos,
+                    .deep = deep,
+                    .replay_at =
+                        ctx.fail.max_fail_pos if ctx.fail.records_at_max != prev_records
+                        else NO_REPLAY,
+                })
             throw e
 
         ctx.is_syntax_mode = start_mode
@@ -630,7 +664,8 @@ impl Rule
         // to the opening quote.
         // Inlined rather than called: a token reference succeeds millions of times in one parse, so
         // even the call costs at -O0.
-        if is_upper && prev_deep > ctx.fail.deepest_try
+        deep: = ctx.fail.deepest_try
+        if prev_deep > deep
             ctx.fail.deepest_try = prev_deep
         if prof != null
             prof.parsed_ok += 1
@@ -644,7 +679,13 @@ impl Rule
             rule_entry.memo_writes += 1
             ctx.memo
                 .set(key,
-                Memo_val::{ .is_success = true, .end_pos = ctx.pos, .node = result_node })
+                Memo_val::{
+                .is_success = true,
+                .end_pos = ctx.pos,
+                .node = result_node,
+                .deep = deep,
+                .replay_at = NO_REPLAY,
+            })
         return true
     priv fn parse_impl(r: Self$@, ctx: Target$@, parent: Node$@): Bool!Kspeg_signal
         $start_pos: = ctx.pos

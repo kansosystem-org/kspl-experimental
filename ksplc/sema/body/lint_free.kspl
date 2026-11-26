@@ -12,7 +12,6 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
-import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/flow/release" as sema_flow_release
 import "ksplc/sema/session/ctx" { Sema_ctx }
@@ -246,24 +245,10 @@ impl Ast_node
         //< Whether the call hands the local to a function that always frees that parameter
         //< One level, as the use-after-free check reads it (`body_frees_param_directly`): a
         //< helper that checks a file's close and frees it ends the file.
-        callee: = r.get_postfix_receiver()
-        fn_node: = callee.def_node if callee != null else null
-        args_node: = r.find_child(.k_expr_args)
-        if fn_node == null || fn_node.kind_id != .k_decl_fn || args_node == null
-            return false
-        params: = fn_node.get_fn_params()
-        if params == null
-            return false
-        is_method: = callee.kind_id == .k_method_access
-        $idx: Sz = 0
-        for p in base_ast_ext.Param_cursor(params, false)
-            if arg: = sema_flow_release.call_arg_for_param(callee, args_node, idx, is_method)
-                if arg.names_decl(decl) &&
-                    fn_node.body_frees_param_directly(p.get_decl_id_text(), ctx, arg.type_id)
-                    return true
-            else
-                break
-            idx += 1
+        for pa in sema_flow_release.Passed_arg_cursor(r)
+            if pa.arg.names_decl(decl) &&
+                pa.callee_fn.body_frees_param_directly(pa.param_name, ctx, pa.arg.type_id)
+                return true
         return false
 
     priv fn names_decl(r: Self$@, decl: Ast_node@): Bool //<

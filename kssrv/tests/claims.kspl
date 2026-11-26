@@ -335,14 +335,13 @@ priv fn fresh_heads(row: Row@, port: I32, arena: Arena$@): List<|U8[]|> //<
         return row.heads
     got: = client.get(port, row.target, "", arena) catch
         return row.heads
-    head: = got.head
     $out: = List<|U8[]|>(arena)
     for h in row.heads
         $line: = h
         if at: = line.find_str(FRESH)
             rest: = line.sub_from(at + FRESH.len)
             if end: = rest.find_char('>')
-                value: = client.header(head, rest.sub(0, end))
+                value: = client.header(got, rest.sub(0, end))
                 line = arena.text().s(line.sub(0, at)).s(value).s(rest.sub_from(end + 1)).take()
         out.push(line)
     return out
@@ -387,13 +386,13 @@ priv fn judged(row: Row@, resp: client.Resp, token: U8[], guards: List<|Guard|>@
         colon: = line.find_char(':').unwrap_or(0)
         name: = line.sub(0, colon)
         value: = line.sub_from(colon + 1).trim_spaces()
-        if !client.header(resp.head, name).equals(value)
+        if !client.header(resp, name).equals(value)
             b.s("it lacks `").s(name).s(": ").s(value).s("`; ")
     for name in row.lacked
-        if client.header(resp.head, name).len > 0
+        if client.header(resp, name).len > 0
             b.s("it carries `").s(name).s("`; ")
     for g in guards
-        if !client.header(resp.head, g.name).equals(g.value)
+        if !client.header(resp, g.name).equals(g.value)
             b.s("it lacks `").s(g.name).s(": ").s(g.value).s("`; ")
     if token.len > 0 &&
         (resp.head.find_str(token).is_some() || resp.body.find_str(token).is_some())

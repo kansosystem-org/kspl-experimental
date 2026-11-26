@@ -35,6 +35,61 @@ export function documents({ page, js, press, type, click, menu, load, saves, sou
       await menu("divider");
       await saves("Ctrl+Home before a first table puts the caret before it", `${H}---\n\n${chart}\nText\n`);
     },
+    // Ctrl+A in the text selects the whole document, past a table at either end, which the
+    // browser's own Select All cannot reach. Delete or Backspace then empties it, and a key typed
+    // takes its place.
+    async selectAll() {
+      const table = ':::table name="t"\n| "n" |\n| 1 |\n:::\n';
+      for (const [where, doc] of [["first", `${table}\nOne\n\nTwo\n`], ["last", `One\n\nTwo\n\n${table}`]]) {
+        for (const key of ["Delete", "Backspace"]) {
+          await load(`${H}${doc}`);
+          await click("#doc p");
+          await press("a", CTRL);
+          await press(key);
+          await saves(`Ctrl+A, then ${key}, with a table ${where}, empties the document`, "%ksmd 2\n");
+        }
+        await load(`${H}${doc}`);
+        await click("#doc p");
+        await press("a", CTRL);
+        await type("Q");
+        await saves(`and with a table ${where}, a key typed takes the whole document's place`, `${H}Q\n`);
+        await menu("undo");
+        await saves("which one undo brings back", `${H}${doc}`);
+      }
+    },
+    // A copy or a cut of text across a table, an image or a list puts the document's plain text
+    // on the clipboard, never the page's buttons and labels; a cut takes out what it copied.
+    async copyAcross() {
+      const clip = (kind) => js(`(() => {
+        const data = new DataTransfer();
+        document.activeElement.dispatchEvent(new ClipboardEvent("${kind}", { clipboardData: data, bubbles: true, cancelable: true }));
+        return data.getData("text/plain");
+      })()`);
+      // From "Be|fore" to "Aft|er", the paragraphs on either side of the block between.
+      const across = () => js(`(() => {
+        const ps = document.querySelectorAll("#doc > p");
+        getSelection().setBaseAndExtent(ps[0].firstChild, 2, ps[ps.length - 1].firstChild, 3);
+      })()`);
+      for (const [what, mid, want] of [
+        ["a table", ':::table name="t"\n| "n" | "x" |\n| "a" | 1 |\n:::\n', "fore\nn\tx\na\t1\nAft"],
+        ["an image", ':::image src="a.png" alt="A"\n:::\n', "fore\nA\nAft"],
+        ["a list", "- one\n- two\n", "fore\none\ntwo\nAft"],
+      ]) {
+        const doc = `${H}Before\n\n${mid}\nAfter\n`;
+        await load(doc);
+        await click("#doc > p");
+        await across();
+        const copied = await clip("copy");
+        check(copied === want, `a copy across ${what} takes the document's text`, JSON.stringify(copied));
+        await saves("and changes nothing", doc);
+        await across();
+        const cut = await clip("cut");
+        check(cut === want, `a cut across ${what} takes the same text`, JSON.stringify(cut));
+        await saves("and takes it out of the document", `${H}Beer\n`);
+        await menu("undo");
+        await saves("which one undo brings back", doc);
+      }
+    },
     // Blank lines: Enter after a paragraph, then Enter again, keeps a blank line, written as a
     // line holding only `\`. It stays when the caret leaves, and Backspace after it takes it away.
     async blankLines() {
@@ -145,6 +200,11 @@ export function documents({ page, js, press, type, click, menu, load, saves, sou
       await load(doc(""));
       check(await numbers() === JSON.stringify(["", "", "", ""]) && await refs() === JSON.stringify(["Two", "Modes"]),
         "without settings nothing is numbered, and a reference shows the name", await refs());
+      // A `%` that starts no escape is the place's own character, as in a heading's `5%`.
+      const opened = await js(`JSON.stringify(ksmd.load(${JSON.stringify(`${H}## Rise 5%\n\n` +
+        "See [#](#Rise%205%) and [#](#Rise%205%25).\n")}).ok)`).catch((e) => e.message);
+      check(opened === "true" && await refs() === JSON.stringify(["Rise 5%", "Rise 5%"]),
+        "a reference whose place holds a % opens, and names the heading", `${opened} ${await refs()}`);
     },
 
     // File, Page setup... sets the paper, the header and footer, and the numbers, as one step.

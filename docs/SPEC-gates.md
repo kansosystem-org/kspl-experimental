@@ -105,11 +105,12 @@ The workflow only calls the targets, so **to change which gates run, fix the tab
 
 **`make ci` needs no Docker anywhere.** The Linux-only section's tools (the sanitizers, QEMU and the rest) are in the dev container's image, with a browser. Off Linux, `make ci` uses the ones the machine has. macOS also needs GNU make 4 (`brew install make`); the runner selects `gmake` when available.
 
-**`make ci` checks as much as one machine can.** CI runs a check that cannot differ by platform on Linux alone; `make ci` runs it on your Windows or macOS machine too. It leaves out three gates where they cannot give a true answer (`Gate.not_on` in `tools/ci_gates.kspl`):
+**`make ci` checks as much as one machine can.** CI runs a check that cannot differ by platform on Linux alone; `make ci` runs it on your Windows or macOS machine too. It leaves out three gates where they cannot give a true answer, and one whose answer another gate gives (`Gate.not_on` in `tools/ci_gates.kspl`):
 
 * `test-ksos-posix` on Windows: the POSIX port switches tasks with ucontext, which Windows does not have.
 * `test-ksmd-desktop` on Windows and macOS: a `.desktop` entry is what Linux desktops read.
 * `perf-log` on Windows and macOS: its baselines were measured on Linux CI's hardware (note 16).
+* `LLVM=1 debug` on Linux: `test-sanitize` builds the same tests through LLVM there (note 28).
 
 It also leaves out macOS's stand-ins for the copied packages (`debug`, `run` and the rest), since `test-extract` tests the same packages from their copies.
 
@@ -196,9 +197,8 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-split (split compilation builds the same thing as a single TU) | ✅ | ➖(note 2) | ✅(note 11) |
 | test-layout-targets (every size ksplc folds is the target machine's, for each machine it knows) | ✅(note 24) | ➖(note 2) | ✅(note 24) |
 | test-ast-cache (the parse cache does not change the result) | ✅ | ➖(note 2) | ✅(note 12) |
-| test-property (a random expression matches on both backends) | ✅ | ➖(note 2) | ✅ |
+| test-property (a random expression matches on both backends). `make test-random-equiv` checks whole generated programs by hand (note 35) | ✅ | ➖(note 2) | ✅ |
 | test-generic-matrix (each shape of a generic builds on both backends or is refused at the user's line, never with a C or LLVM error) | ✅ | ➖(note 2) | ✅ |
-| test-random-equiv (generated programs build with no warning, and run alike, under clang, gcc and LLVM; a local `make ci` runs it only for a change under `ksplc/`) | ✅(note 35) | ➖(note 35) | ➖(note 35) |
 | Fuzzing: each package's own `test-fuzz`, a shallow run on a fixed seed, on its copy by `test-extract`. No run on corrupted input can die, and what std writes back must read the same. `make fuzz-long` goes deep by hand, with a fresh seed | ✅ | ➖(note 2) | ✅(note 21) |
 | test-notation (indentation-written source gives the same C, squiggles, hovers and jump targets) | ✅ | ➖(note 2) | ✅ |
 | test-fmt-tree (every tracked source is already formatted, and formatted at other widths it reads back; outside GitHub, the other widths only for a change under `ksplc/`) | ✅ | ➖(note 2) | ➖(note 26) |
@@ -209,8 +209,7 @@ The last catches a demo whose checks were never reached, such as a kernel bug th
 | test-server-claims (kssrv answers each request in the tables of `docs/SPEC-local-server.md` and of kssrv's own specification as its row says, and keeps those specifications' checked sentences) | ✅(note 36) | ➖(note 2) | ✅(note 36) |
 | The other suites (c-warnings / own-machine / cli / config / std-dir / thin-use / lint / fmt / link-rules / ext-import / doc / runtime / limits / decl-macros / spawn / place / visibility) | ✅(note 22) | ➖(note 2) | ✅(note 22) |
 | self-host (the LLVM backend) | ✅ | ✅ | ✅ |
-| debug tests (the LLVM backend) | ✅ | ✅ | ✅ |
-| test-llvm-pkgs (kssrv's, kstls's and ksagent's tests on code the LLVM backend built) | ✅ | ➖(note 28) | ➖(note 28) |
+| debug tests (the LLVM backend) | ➖(note 28) | ✅ | ✅ |
 | test-blas (ksai's unit tests with `BLAS=1`) | ✅ | ➖(note 15) | ➖(note 15) |
 | kstls's own tests (the OpenSSL binding, from a copy by `test-extract`) | ✅ | ➖(note 2) | ✅(note 18) |
 | perf-log (peak memory, the tree types' sizes, and counted instructions of the compiler, a program, kssrv and the language server, judged by `perf_guard`) | ✅ | ➖(note 16) | ➖(note 16) |
@@ -302,8 +301,8 @@ The suite a note names says what it checks in its opening comment; a note adds w
 * **note 26**: these read the tree's text, or the C it translates to, so the answer cannot differ by platform, and a Windows minute costs double. So they run on Linux alone: in `ci-shard-linux` (`Shard.linux` in `tools/ci_gates.kspl`), or in job b's Linux run (`Gate.linux_only`). The suites among them are `SUITES_TEXT` in `mk/test.mk`. Windows keeps building, linking and running, `lsp-tree` and `c-warnings`.
   * **`lint` and `test-seed-sum` leave macOS too.** The tree holds no `#cfg` branch for an operating system, and `.gitattributes` keeps every text file's line ends LF.
 * **note 27**: `make debug` runs the tests of every package but kssrv, kstls and ksagent in one program. Those three link OpenSSL, so they run only as their package's own `make test`. Linux and Windows run every package's own `make test` from a copy (`test-extract`), which also proves it stands alone. So there `make debug-tools` runs only `tools/`, which has no `Makefile`. macOS runs `make debug` instead, leaving kssrv's, kstls's and ksagent's tests unrun.
-  * **Windows leaves `debug-tools` out**: `make LLVM=1 debug` runs the same tests of `tools/` there, against the same Windows calls. Only the backend differs, and the C backend is checked on Windows on every package's copy. Linux still runs both.
-* **note 28**: `make LLVM=1 debug` holds none of kssrv, kstls and ksagent (note 27), so `test-llvm-pkgs` builds and runs them through LLVM. CI runs it in `ci-shard-linux` alone. The windows-ucrt64 job installs OpenSSL too (note 18) but does not run it; `make ci` does.
+  * **Windows leaves `debug-tools` out**: `make LLVM=1 debug` runs the same tests of `tools/` there, against the same Windows calls. Only the backend differs, and the C backend is checked on Windows on every package's copy. Linux runs `debug-tools` alone (note 28).
+* **note 28**: **Linux leaves `make LLVM=1 debug` out.** There `test-sanitize` builds every package's tests through LLVM, kssrv's, kstls's and ksagent's included (note 29). Only `tools/` is left, whose tests `debug-tools` runs on the C backend. `make ci` on Linux leaves it out too.
 * **note 29**: `test-sanitize` builds the tests of ksplc, std, ksmd, ksagent, kssrv, ksai, ksdb, ksos, kspeg and kstls with clang's address, leak and undefined-behaviour sanitizers (`tests/suite/sanitize_test.kspl`). kssrv's tests start a server built the same way. In this build, std frees or marks the memory that a container or an arena leaves. A test that reads through a stale view is then reported. ucrt64's clang holds no address sanitizer. macOS's runtime has no leak sanitizer on Apple silicon, and refuses to start when asked for one. So the suite says `SKIP` on both.
 * **note 31**: `test-ksmd-browser` drives ksmd's editing page in a headless Chromium (`ksmd/tests/browser/main.mjs`), then serves it with `kssrv --local` (`ksmd/tests/browser/served.mjs`).
   * **axe-core, an automated accessibility checker, runs inside the page** in a few states (`ksmd/tests/browser/axe.mjs`). Any violation fails the gate, naming the rule and the element.
@@ -313,13 +312,11 @@ The suite a note names says what it checks in its opening comment; a note adds w
   * **The macOS job does not run it**, as its minute costs ten times Linux's.
 * **note 32**: `test-ksmd-open` runs the cases its driver's header lists (`tools/tests/ksmd_launch.kspl`), with `--show`, so no browser starts. The launcher's lock is `flock` on Linux and macOS, and `LockFileEx` on Windows (`open_or_start` in `tools/opener.kspl`). **Only Linux runs the gate**, so launching and that lock are unchecked on Windows and macOS. The file association is checked on no platform.
 * **note 34**: `test-holes` checks that each known way to break memory or threads keeps its verdict today (`tests/suite/holes_test.kspl`). It needs the same sanitizers as `test-sanitize` and `test-race`, so only Linux runs it.
-* **note 35**: `test-random-equiv` builds programs written from fixed seeds with clang, gcc and LLVM, and checks that every build runs alike (`ksplc/tests/suite/random_equiv_test.kspl`).
-  * **CI runs it in the Linux job alone**, apart from ksplc's other suites.
-  * **A local `make ci` runs it only when the change reaches `ksplc/`.** Why it runs only there, and only then, is the comment at `random_equiv` in `tools/ci_gates.kspl`. The change is what the branch holds beyond `origin/main`, with what is not committed and new files. Where git cannot say, it runs.
-    * **Left out, it is named last**, on a `# left out here:` line with the reason, so the green round does not hide it. It prints no `SKIP` line, so no row of `EXPECTED_SKIPS` is needed.
-    * GitHub's Linux job always runs it, and `make test-random-equiv` runs it by hand.
-  * **The default seeds take a little over a minute on four cores.**
-  * **The windows-ucrt64 runner has clang alone**, so there gcc's builds give a `SKIP` line, as in `test-equiv`.
+* **note 35**: `make test-random-equiv` builds programs written from fixed seeds with clang, gcc and LLVM, and checks that every build runs alike (`ksplc/tests/suite/random_equiv_test.kspl`).
+  * **No CI job runs it, and neither does `make ci`: it is run by hand**, as `make fuzz-long` is.
+    * Why: it found three compiler faults when it came, and none since. A shape that only generated code reaches stays out of the compiler, so a fault it finds now seldom reaches a person.
+  * **The default seeds take a little over a minute on four cores.** `RANDOM_EQUIV_ARGS="--n=400 --seed=7"` writes more programs, from another start.
+  * **Where gcc is missing**, as in an ucrt64 setup with clang alone, gcc's builds give a `SKIP` line, as in `test-equiv`.
 * **note 33**: `test-ksagent-chat` checks the launcher's model server with no browser (`tools/tests/chat_launch.mjs`), then drives ksagent's chat page in a headless Chromium (`tools/tests/chat_page.mjs`). Without a browser, only the second half is skipped. **Linux and Windows run the gate**, in the browser of note 31; macOS does not.
   * axe-core runs on the chat page as on ksmd's (note 31): with its planted failure first, then empty, then with a checked answer and its source.
   * **On Windows, the launcher's cases that start a model server say `SKIP`**: their stand-in is a shell script, which Windows does not start as a program. A real `llama-server` checks them by hand.

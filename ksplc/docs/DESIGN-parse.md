@@ -162,7 +162,7 @@ A *closure* is a function value that keeps the local variables it uses (its *cap
 
 **The synthesized declarations are written as KSPL source and parsed** through `parse_synth_decls` in `parse/load.kspl`, the one entry point for every synthesis. A hand-built AST hides its mistakes until the generated C, and must follow every change to a declaration's shape. A string keeps the grammar (`ksplc/kspl.kspeg`) the one source. Only the body is transplanted from the original AST.
 
-**The enclosing type arguments that the signature touches are copied across** to the synthesized declarations. Those sit at the top level, outside the enclosure's scope (`forwarded_gen_params` in `parse/desugar_closure.kspl`, which says why no more are copied).
+**The enclosing type arguments that the signature touches are copied across** to the synthesized declarations. Those sit at the top level, outside the enclosure's scope (`forwarded_gen_params` in `parse/desugar_closure.kspl`, which says why no more are copied). **The enclosing `Self` is carried the same way**, as a type parameter of another name. Inside the synthesized `impl`, `Self` names the environment, so the closure's types and body spell it as that name. The closure's place passes `Self`, which each copy of a trait's default body reads as its own type (`SELF_STAND_IN`).
 
 * Match each as one whole identifier, since as a substring `T` matches `Total`.
 * Put them on the constructor call as `type_args` children. Otherwise `replace_type_vars` in `sema/decl/subst.kspl` cannot reach them, and the environment fails to conform to `Callable1<|I32, …|>`.

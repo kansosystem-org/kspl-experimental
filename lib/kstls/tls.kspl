@@ -356,6 +356,14 @@ impl Tls_stream
         // would wait for the peer's next record, or for good.
         if buf.len == 0
             return 0
+        n: = r.read_before(buf, 0) catch
+            throw .io_failed
+        return n
+
+    priv fn read_before(r: Self$@, buf: U8$[], deadline: I64): Sz!net.Net_error //<
+        //< Receives as `read` does, before an absolute mono_us deadline
+        //< With a deadline the socket must be non-blocking. A deadline of 0 waits with none, as
+        //< `read` does on its blocking socket.
         // `SSL_get_error` reads this thread's error queue, so a failure left there before would be
         // taken for this call's.
         for
@@ -367,19 +375,6 @@ impl Tls_stream
             // Caution: **Only the peer's close_notify is an end.** A TCP connection dropped without
             // one ends `take_more` too; read as an end, whoever can drop it could cut a reply
             // short unnoticed.
-            if SSL_get_error(r.ssl, n) == SSL_ERROR_ZERO_RETURN
-                return 0
-            if !go_on(r.tcp, r.ssl, n)
-                throw .io_failed
-
-    priv fn read_before(r: Self$@, buf: U8$[], deadline: I64): Sz!net.Net_error //<
-        //< `read` with a deadline; the socket must be non-blocking
-        for
-            ERR_clear_error()
-            n: =
-                SSL_read(r.ssl, Void$@::buf.ptr, I32::math.min(buf.len, IO_CHUNK))
-            if n > 0
-                return Sz::n
             if SSL_get_error(r.ssl, n) == SSL_ERROR_ZERO_RETURN
                 return 0
             if !go_on(r.tcp, r.ssl, n, deadline)
@@ -401,7 +396,8 @@ impl Tls_stream
 
 priv fn past_or_failed(deadline: I64): net.Net_error //<
     //< Why a move with a deadline ended: `timed_out` once the deadline has passed
-    return .timed_out if sys.mono_us() >= deadline else .io_failed
+    //< A deadline of 0 is none, so it never passes.
+    return .timed_out if deadline != 0 && sys.mono_us() >= deadline else .io_failed
 
 impl Tls_stream: net.Byte_stream //< so `std/http` and `std/http_body` speak HTTP over it
     //< **The socket is non-blocking for the length of a call**, as in the handshake, so each wait

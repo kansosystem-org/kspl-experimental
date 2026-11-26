@@ -132,7 +132,9 @@ fn show(raw: U8[], format: Format, date1904: Bool, arena: Arena$@): U8[] //<
     default {}
     serial: = raw.to_f64() catch
         return raw
-    days_f: = serial + (1462.0 if date1904 else 0.0)
+    // **An elapsed time is the stored number itself**: the 1904 system moves calendar dates only.
+    // With the move, `[h]:mm` showed 35,064 hours too many.
+    days_f: = serial + (1462.0 if date1904 && format.shown != .hours else 0.0)
     if days_f < 0.0 || days_f >= LAST_SERIAL + 1.0
         return digits(raw, 0, arena)
     $days: = I64::days_f
@@ -160,6 +162,11 @@ priv fn write_date(out: str.Arena_str$@, serial: I64) //< a day's serial number 
     //< that never was. It is shown as Excel shows it; the days before it are one off from after.
     if serial == 60I64
         out.s("1900-02-29")
+        return
+    // Day 0, which a zero or a time alone holds, is shown as Excel shows it, a day before the
+    // first.
+    if serial == 0I64
+        out.s("1900-01-00")
         return
     // Days from 1970-01-01: Excel's day 25569, or 25568 before the false leap day.
     unix: = serial - (25569I64 if serial > 60I64 else 25568I64)

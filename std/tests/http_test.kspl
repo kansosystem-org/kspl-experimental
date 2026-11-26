@@ -524,9 +524,34 @@ fn test_http_response_length()
         catch panic("a 304 naming its representation's length must parse")
     assert(not_mod.body.len == 0 && not_mod.consumed == 48,
         "a 304's Content-Length names the representation, not a body that follows")
+
+    // **The answer to a HEAD ends at its head**, whatever it names (RFC 9110 §9.3.2). Read as any
+    // answer, it waits for a body that never comes.
+    named: = "HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\nHTTP/1.1 200 OK\r\n"
+    assert(response_error(named, arena).equals("incomplete"),
+        "parse_response waits for the body the length names")
+    to_head: = http.parse_response_to_head(named, arena)
+        catch panic("the answer to a HEAD naming a length must parse")
+    assert(to_head.status == 200 && to_head.body.len == 0 && to_head.consumed == 39 &&
+        to_head.headers.find("Content-Length").unwrap_or("").equals("50"),
+        "the answer to a HEAD keeps its length and ends at its head")
+    chunks: = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nHTTP/1.1 200 OK\r\n"
+    by_chunks: = http.parse_response_to_head(chunks, arena)
+        catch panic("the answer to a HEAD naming chunks must parse")
+    assert(by_chunks.body.len == 0 && by_chunks.consumed == 47,
+        "the answer to a HEAD naming chunks ends at its head")
+    huge: = "HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\n\r\n"
+    big: = http.parse_response_to_head(huge, arena)
+        catch panic("the answer to a HEAD naming a length past the body limit must parse")
+    assert(big.consumed == huge.len, "the answer to a HEAD meets no body limit")
+    $cut_ok: = true
+    _cut: =
+        http.parse_response_to_head("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n", arena) catch
+            cut_ok = false
+    assert(!cut_ok, "the answer to a HEAD is incomplete until its empty line")
     verdict
-        .pass("A response with no length that may have a body is refused, and 204 and 304 end at \
-            their head.")
+        .pass("A response with no length that may have a body is refused; 204, 304 and the answer \
+            to a HEAD end at their head.")
 
 priv fn response_error(src: U8[], arena: Arena$@): U8[] //<
     //< How `parse_response` refuses src: the error's name, or `accepted`

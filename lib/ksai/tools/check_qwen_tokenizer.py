@@ -184,7 +184,7 @@ def main():
     write_hex(os.path.join(WORK, "texts.txt"), [t.encode() for _, t in texts])
 
     exe = os.path.join(WORK, "tokenize_lists.exe")
-    subprocess.run([args.ksplc, "build", PROGRAM, exe], check=True)
+    subprocess.run([args.ksplc, PROGRAM, exe], check=True)
     got = subprocess.run([exe, pre] + [os.path.join(WORK, n) for n in
                                        ("tokens.txt", "types.txt", "merges.txt", "texts.txt")],
                          capture_output=True, text=True, check=True).stdout.split("\n")

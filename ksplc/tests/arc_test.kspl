@@ -893,6 +893,64 @@ fn test_arc_unbound_value_released()
     assert(mem.heap_used_bytes() == b1, "and is released with its new owner")
     verdict.pass("each value nobody bound was released once, and a field taken off one kept alive.")
 
+// ==========================================
+// A `switch` subject is counted the same whichever way it was reached. An `Index.get` subscript
+// (a Map's lookup too), a `catch` and a ternary each lower into a temporary of their own. The
+// `switch` must release that temporary, as it releases a call's (`lower_stmt_switch` in
+// `ksplc/lower/root.kspl`).
+// ==========================================
+priv struct Arc_counter_shelf
+    held: Arc_counter
+
+impl Arc_counter_shelf: Index<|Sz, Arc_counter?|>
+    fn get(r: Self@, _i: Sz): Arc_counter?
+        return .some(r.held)
+
+priv fn arc_counter_maybe(counter: Arc_counter, keep: Bool): Arc_counter?!Arc_err
+    if !keep
+        throw .failed
+    return .some(counter)
+
+priv fn arc_switch_subject_body(): Bool
+    c: = Arc_counter(4)
+    shelf: = Arc_counter_shelf::{ .held = c }
+    $m: = Map<|I32, Arc_counter|>(null)
+    m.set(1, c)
+    $sum: I32 = 0
+    for _i in Range.asc(10)
+        switch shelf[0]
+        case .some(v)
+            if v.refcount() > 3
+                sum += 1
+        default {}
+        if v: = m[1]
+            if v.refcount() > 3
+                sum += 1
+        switch arc_counter_maybe(c, true) catch .none
+        case .some(v)
+            if v.refcount() > 3
+                sum += 1
+        default {}
+        switch arc_counter_if(c, true) if sum > 0 else arc_counter_if(c, false)
+        case .some(v)
+            if v.refcount() > 3
+                sum += 1
+        default {}
+    balanced: = sum == 40 && c.refcount() == 3
+    m.free()
+    return balanced
+
+fn test_arc_switch_subject_released()
+    verdict.start("[ARC] a switch's subject that lowering holds in a temporary is released test...")
+    b0: = mem.heap_used_bytes()
+    assert(arc_switch_subject_body(),
+        "a subscript, a Map lookup, a catch and a ternary as a switch's subject must each give back \
+            its count")
+    assert(mem.heap_used_bytes() == b0, "and the value is freed once its owners go")
+    verdict
+        .pass("a switch and an if-let on a subscript, a Map lookup, a catch and a ternary each \
+            released the count they took.")
+
 // An `Arc` may stand in a global, where an `Rc` is refused (the case
 // global_refuses_one_thread_count in ksplc/tests/negative/thread.kspl).
 priv $arc_global: Arc<|I32|>

@@ -772,6 +772,10 @@ export function tables({ page, media, js, settle, press, type, select, click, me
       await js("window.prompt = () => ''");
       await menu("link");
       await saves("and an empty answer takes it away", table('"Results"'));
+      await js("window.prompt = () => 'https://example.com/c'");
+      await press("k", CTRL);
+      await saves("Ctrl+K on a chosen cell sets its link, as Insert, Link does",
+        table('"Results" {link="https://example.com/c"}'));
       await js("window.prompt = window.__prompt");
     },
 

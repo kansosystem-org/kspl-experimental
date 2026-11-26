@@ -311,6 +311,29 @@ export function keyboard({ js, until, press, type, click, menu, load, saves, ope
       await saves("one undo takes the row away", table.replace('| "plum" | 5 | 6 |\n', '| "plum" | 5 | 9 |\n'));
     },
 
+    // Enter on the last row keeps the choice there, and Shift+Enter on the names row does, as in
+    // Excel. Enter that left the table made the next keys type a paragraph after it.
+    async enterStays() {
+      await load(table);
+      await click(cellAt(3, 1));
+      await type("8");
+      await press("Enter");
+      check(await focus() === "3:1", "Enter in a cell typed into on the last row takes it and stays there", await focus());
+      await saves("and the value went in", table.replace('| "plum" | 5 | 6 |', '| "plum" | 8 | 6 |'));
+      await press("Enter");
+      check(await focus() === "3:1", "Enter on a chosen cell of the last row stays there too", await focus());
+      await type("9");
+      await press("Enter");
+      await saves("so the next keys go into the cell, not into a paragraph after the table",
+        table.replace('| "plum" | 5 | 6 |', '| "plum" | 9 | 6 |'));
+      await click('#doc th.name[data-c="1"]');
+      await press("Enter", SHIFT);
+      check(await focus() === "-1:1", "Shift+Enter on the names row stays there", await focus());
+      await press("F2");
+      await press("Enter", SHIFT);
+      check(await focus() === "-1:1", "and so does Shift+Enter in an open name", await focus());
+    },
+
     // An image with no alt text only decorates, and is not read as its file's name.
     async altText() {
       await load(`${H}:::image src="a.png" alt=""\n:::\n\n:::image src="b.png" alt="A chart"\n:::\n`);

@@ -35,7 +35,7 @@ The `lib/ksai/examples/llama_engine/mini_llama.safetensors` and `lib/ksos/demo/c
 This check shows that ksai runs the user's models as llama.cpp runs the same GGUF file. It needs `gguf`, `llama-cpp-python` and `numpy`, and the files that [`data/README.md`](../../../data/README.md) names. What it compares, and what each line it prints means, is in the docstring of `qwen_gguf_check.py`.
 
 ```sh
-out/ksplc_stage1.exe build "--cflags=-O3 -march=native" lib/ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
+out/ksplc_stage1.exe "--cflags=-O3 -march=native" lib/ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
 python3 lib/ksai/tools/qwen_gguf_check.py --model data/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 python3 lib/ksai/tools/qwen_gguf_check.py --model data/Qwen3.5-9B-Q3_K_M.gguf
 ```

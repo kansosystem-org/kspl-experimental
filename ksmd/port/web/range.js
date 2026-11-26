@@ -96,10 +96,16 @@ function ksmdRange(ks) {
         // The chosen cell's row or column went, as Remove row takes the last row. **The cell that
         // stands nearest takes the choice**: with none chosen the focus fell on the page, and no
         // key reached the table, Ctrl+Z among them. A table left with no data row keeps its names.
+        // **The cell is in a row in sight**: a row a filter or a closed group hides takes no focus.
+        // The row below comes first, then the row above, then the names.
         if (wrap) {
           const s = size(block);
-          ks.table.chooseCell({ block, row: Math.min(c.row, s.rows - 1),
-            column: Math.min(c.column, s.columns - 1) });
+          let row = Math.min(c.row, s.rows - 1);
+          if (row >= 0 && hiddenRows(block, row, row).length > 0) {
+            const below = ks.table.step(block, row, 1);
+            row = below < s.rows ? below : ks.table.step(block, row, -1);
+          }
+          ks.table.chooseCell({ block, row, column: Math.min(c.column, s.columns - 1) });
         }
       }
       // A table that went, as an undo of its insert takes it, holds no chosen cell.
@@ -497,7 +503,7 @@ function ksmdRange(ks) {
       // past the last cell adds a row (`tab` in `cellbox.js`).
       e.preventDefault();
       collapse();
-      if (e.key === "Enter") ks.table.choose(c.block, ks.table.step(c.block, c.row, e.shiftKey ? -1 : 1), c.column);
+      if (e.key === "Enter") ks.table.choose(c.block, ks.table.enterRow(c.block, c.row, e.shiftKey), c.column);
       else ks.table.tab(c.block, c.row, c.column, e.shiftKey);
     } else if (mod && !e.altKey && (e.key === ";" || e.key === ":")) {
       // Today's date or the time, typed into the cell as an open one takes it; Enter keeps it.
@@ -505,6 +511,11 @@ function ksmdRange(ks) {
       collapse();
       const now = ks.now(e.key === ":");
       ks.table.openWith(c.block, c.row, c.column, now, now.length, now.length);
+    } else if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+      // Ctrl+K links the cell's text, as Insert, Link does. Left to the browser, it would go to
+      // the browser's own search.
+      e.preventDefault();
+      ks.command("link");
     } else if (e.altKey && !mod && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
       // Alt+Right and Alt+Left resize the column, as in an open cell. Left to the browser, they
       // go back or forward a page, out of the editor.
@@ -673,9 +684,8 @@ function ksmdRange(ks) {
   }
 
   // The range's shown values as tab-separated rows, as a spreadsheet takes them from the clipboard.
-  // A hidden row is left out.
-  function copied() {
-    const r = rect();
+  // A hidden row is left out. Without `r`, the range is the chosen one.
+  function copied(r = rect()) {
     const wrap = wrapOf(r.block);
     const hidden = new Set(hiddenRows(r.block, r.r1, r.r2));
     const field = (t) => (/[\t\n"]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t);
@@ -799,5 +809,10 @@ function ksmdRange(ks) {
     focus: focusChosen,
     // Whether a range of more than one cell is chosen.
     any: () => !!end,
+    // A whole table as a copy of all its cells gives it, for a copy of text across it (`input.js`).
+    tableText: (block) => {
+      const s = size(block);
+      return copied({ block, r1: -1, c1: 0, r2: s.rows - 1, c2: s.columns - 1 });
+    },
     typed };
 }

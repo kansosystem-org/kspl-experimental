@@ -106,7 +106,7 @@ The OS, not a check of the language, stops a write through a null pointer or a r
 
 * **The exit code stays the fault's own.** POSIX puts the signal back to its default and raises it again, so a parent reads 139, and a core dump is written where enabled. Windows ends with the exception's code, read as 139 ("A child's end is one code on every OS" below).
 * **The prefix is `crash: `, not `panic: `.** A panic is the program's stop at a rule it checks ("Conditions that stop execution at run time" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). A crash is the OS's stop, at an address.
-* **No trace is printed.** A walk of the stack inside a fault handler is safe only with an unwinder, which the runtime does not carry on every OS. A debugger on a build with `-g`, as `ksplc build` makes, says where.
+* **No trace is printed.** A walk of the stack inside a fault handler is safe only with an unwinder, which the runtime does not carry on every OS. A debugger on a build with `-g`, as a compile to an executable makes, says where.
 * **The handler calls only what is safe there** (write, signal, raise). It does not flush standard output, since the fault can strike while the C library holds its locks.
 * **A handler already in place is kept** (a sanitizer's, a host program's). A library takes none, since its host owns the signals.
 * **An overflow handler needs stack room reserved before the stack runs out.** POSIX uses a separate 64 KiB stack. Windows reserves 64 KiB on the thread's own stack with `SetThreadStackGuarantee`. The runtime prepares the main thread and each `std/thread` thread. A thread started by C code is not prepared, so its overflow can end with 139 and no line.
@@ -149,7 +149,7 @@ Why a walk that walked nothing fails is at `check_list` in `std/verdict.kspl`. W
 
 **Why**: in another process, a crash is seen; inside the fuzzer's, it would take the tally down with it. With nothing built in, the same fuzzing runs on all three platforms with the C compiler as it is. `std/prng` is KSPL, so the same seed, seeds and count give the same rounds everywhere. A developer reproduces a gate's failure from the two numbers it prints.
 
-**The program under test is built with the address sanitizer where the C compiler holds its runtime** (`fuzz.Sanitized`). Built plain, a read past an allocation's end that stays inside a mapped page returns a stale byte, and the round ends well. With the sanitizer, the read stops at its line. **The driver tells the sanitizer to end with a code of its own** (`exitcode=86` in `ASAN_OPTIONS`). Its default, 1, is the program's own refusal, so a stop it made would count as an answer. `report_asan` prints a check where the sanitizer is in or required, and a skip where the toolchain holds no runtime.
+**The program under test is built with the address sanitizer where the C compiler holds its runtime** (`fuzz.Sanitized`). The driver builds it (`fuzz.build`), so this choice is written once, not in each package's `Makefile`. Built plain, a read past an allocation's end that stays inside a mapped page returns a stale byte, and the round ends well. With the sanitizer, the read stops at its line. **The driver tells the sanitizer to end with a code of its own** (`exitcode=86` in `ASAN_OPTIONS`). Its default, 1, is the program's own refusal, so a stop it made would count as an answer. `report_asan` prints a check where the sanitizer is in or required, and a skip where the toolchain holds no runtime.
 
 **A round past its wait runs again with five times the wait** before it counts as not ending. A crowded machine slows a finite round. `check_reach` keeps a run that tried nothing from passing. Without it, a mutation that broke every seed at the parser's entry would go green.
 
@@ -178,10 +178,12 @@ POSIX ends a process that writes to a pipe whose reader has closed (SIGPIPE's de
 | :-- | :-- |
 | A child's standard input (`Piped_child.write`) | Fails as `Write_end.closed` |
 | A socket (`std/net`'s send) | Returns a failure |
-| The program's own standard output | The program ends quietly, as `prog \| head` expects |
+| The program's own standard output | The program ends quietly, as `prog \| head` expects, unless it set its own SIGPIPE handler |
 | Anything, inside a child the program starts | SIGPIPE's default is back, so the child dies as usual |
 
 **Standard output is the exception**, since Unix promises that `prog | head` ends quietly. Once a write comes up short, `std/io` restores SIGPIPE's default and raises it on itself. A buffered `fwrite` reports that it wrote, so the flush passes the same check.
+
+**A SIGPIPE handler that the program sets stays in charge.** Its handler runs at every delivery ("A signal handler stays set"), and it ran at the failed write already. So `std/io` raises nothing and keeps the program running. Standard output then fails the exit, as any other refused write does.
 
 Caution: **Do not stop at only ignoring it.** The output is then silently discarded, and the program runs on with its destination lost.
 
@@ -534,6 +536,8 @@ Caution: **Nobody can notice it on POSIX.** What fails is the Windows job or a u
 
 Note: One difference remains. POSIX renames a directory over an empty one, while `MoveFileExW` fails if the destination exists; every caller replaces a file. **`make debug` pins the contract**, and the real Windows runner is what catches a break.
 
+**A file opened to append (`a`, `a+`) takes each write at its end in one step, on every OS.** Two processes can then append to one log without writing over each other. POSIX gives this with `O_APPEND`. On Windows, `kspl_fopen_cstr` in `ksplc/gen/runtime/hosted_fs_win.c` asks for append access without the right to write elsewhere. The CRT's own append flag would seek to the end and then write, in two steps.
+
 ### A long path goes to Windows in the extended form
 
 **On Windows, a path that resolves to 248 UTF-16 units or more goes to the OS with the `\\?\` prefix** (`\\?\C:\…`, or `\\?\UNC\server\…` on a share). The prefix lifts Windows's usual limit of 260, and KSPL code never sees it. A build cache inside a OneDrive folder easily passes that depth, and clang and lld write such files themselves.
@@ -670,6 +674,8 @@ Caution: **Do not substitute `stat`.** It follows a link, and answers "a directo
 ### Creating refuses a taken name, and trees are not removed
 
 **`std/fs` makes a new directory or file by an attempt to create it**, never by a check first. Another process could slip a link in between. `mkdir_unique` retries a taken name with another random tail, as Python's `mkdtemp` and Go's `os.MkdirTemp` do. `write_tree` refuses a name that climbs out before it writes anything, so names from outside cannot write beside the tree.
+
+**`mkdir_unique` gives a directory mode 0700 as it creates the directory**, as `mkdtemp` and `os.MkdirTemp` do. Others on the machine then cannot list it, nor read a file that a plain write puts there. `mkdir` and `mkdir_all` keep 0755, as the `mkdir` command does under the usual umask. On Windows, the directory takes its folder's ACL, for the reason `write_unique` gives.
 
 **`write_unique` gives a file its owner-only mode as it creates the file**, for what others on the machine must not read. A `chmod` after the creation leaves a moment in which another user can open the file and keep reading it. The creation also decides that the name is new, so a link planted there is not followed, as Python's `mkstemp` does. **On Windows, no ACL is set**: the file takes its folder's ACL, as `dir_trust` reads none there. Building a security descriptor for the current user is left until a caller needs it.
 
@@ -1005,6 +1011,7 @@ Caution: **Do not fold across that line.** It decides whether the caller fixes t
 * **A body comes by its length or in chunks, and in no other way.** A chunked body ends with a chunk of size 0, so one cut off early fails as `connection_closed`. A body that runs to the close cannot be told from one cut short, so it is refused.
 * **Chunks are read in a response only.** A server behind a proxy reads requests, and a chunked request is the usual way to smuggle a second one in. No client here sends one. **A lone `chunked` in a request is refused as `chunked_request`**, apart from the codings no reader takes (`unsupported_transfer_encoding`). A server can then ask for a length with a 411, where RFC 9112 §6.3 requires a 400 for the others.
 * **The buffer form, `parse_response`, reads a body by its length alone.** It serves a caller that cannot block, and none of those reads a stream. It refuses a chunked body by name, rather than read it as empty.
+* **The answer to a HEAD is read by `parse_response_to_head`**, which ends it at its head. It names the length or the chunks of a body it does not carry (RFC 9110 §9.3.2). A reader not told of the HEAD waits for that body. A separate reader mirrors `format_response_to_head`, so no other caller passes an input it does not use. No caller reads a HEAD's answer from a stream yet, so `std/http_body` has no such reader.
 * **A wait that brings nothing returns `waiting`**, so the caller can do other work between pieces, such as deciding to stop. The response's own time limit still holds over all the waits.
 * **Each piece is a view of the reader's buffer until the next call**, so a body is never copied twice. A caller that keeps a piece copies it.
 * **The connection is a `net.Byte_stream`, not a TCP socket by name.** `http.write_request` and both readers take any stream with a read and a whole send that each keep a wait. A `Tcp_stream` is one, and so is a stream with TLS on top from a library outside `std`. So `std` links no TLS library, and HTTPS still reads with the same code and the same limits.

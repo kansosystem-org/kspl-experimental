@@ -30,6 +30,7 @@ extern fn kspl_is_link(path_ptr: U8@, path_len: Sz): I32 //<
     //< Caution: **Do not make it a Bool.** Turning "cannot tell" into false lets an unreadable
     //< segment pass as "not a link" (has_link_on_path below).
 extern fn kspl_mkdir(path_ptr: U8@, path_len: Sz): I32
+extern fn kspl_mkdir_owned(path_ptr: U8@, path_len: Sz): I32 //< as `kspl_mkdir`, but mode 0700
 extern fn kspl_long_name(path_ptr: U8@, path_len: Sz, buf: U8$@, cap: Sz): I32 //<
     //< The kept name of the path's last segment, written into buf: its length, -1=none
 extern fn kspl_copy_file(from_ptr: U8@, from_len: Sz, to_ptr: U8@, to_len: Sz): I32 //<
@@ -420,13 +421,33 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
     path: U8[], //< the path; empty and `.` both mean the working directory
     arena: Arena$@, //< where the path goes; null means the heap, freed with `dealloc`
 ): U8[]!Fs_error //< the absolute path; fails if the working directory cannot be read
-    if sys.is_absolute(path)
+    windows: = sys.is_windows()
+    if sys.is_absolute(path) && !on_current_drive(path, windows)
         return arena.dup_str(path)
-    if sys.root_len(path) > 0
+    if sys.root_len(path) > 0 && !on_current_drive(path, windows)
         throw .invalid_path // a root that is not from the top: a drive with no separator
     $buf: U8[MAX_PATH_LEN + 1] = ::{}
     here: = sys.cwd(U8$[]::buf) catch
         throw .operation_failed
+    return absolute_from(path, here, windows, arena)
+
+priv fn on_current_drive(path: U8[], windows: Bool): Bool //<
+    //< Whether it starts from the root of the working directory's drive: one separator, on Windows
+    //< **`absolute` adds that drive** (`\w` in `C:\kspl` is `C:\w`), as Windows opens it. Left
+    //< without one, `lies_under("C:\w", "\w\x")` answered no.
+    return windows && sys.root_len_on(path, true) == 1
+
+fn absolute_from(path: U8[], here: U8[], windows: Bool, arena: Arena$@): U8[]!Fs_error //<
+    //< `absolute` once the working directory `here` is known, on Windows or on POSIX
+    //< It takes both, so a test checks the Windows answer on every OS.
+    if on_current_drive(path, windows)
+        top: = sys.root_len_on(here, windows)
+        if top == 0
+            throw .invalid_path
+        // `C:\` gives `C:`, and a share `\\srv\sh\` gives `\\srv\sh`; the path brings its own `\`.
+        drive: = here.sub(0, top - 1 if sys.is_path_sep(here[top - 1]) else top)
+        defer $whole: = Str()
+        return arena.dup_str(whole.s(drive).s(path).slice())
     if path.len == 0 || path.equals(".")
         return arena.dup_str(here)
     return join(here, path, arena)
@@ -714,10 +735,13 @@ priv fn random_name( //< a path under `dir` whose name holds 16 random hex digit
     return join(dir,
         arena.text().s(before).s("\{tail:016x\}").s(after).take(), arena)
 
-pub fn mkdir_unique( //< creates a directory with a name nobody has used, and returns its path
+pub fn mkdir_unique( //< creates a directory only its owner can open, under a new name
     //< **Creating it decides that it is new, not checking first**: `mkdir` fails on a path that
     //< exists, a link included. A used name is retried with another random suffix (Python's
     //< `mkdtemp`). **Nothing removes it.** Its creator removes it, or the directory that holds it.
+    //< **On POSIX its mode is 0700 from the start**, so others on the machine cannot list it or
+    //< read what is written into it. **On Windows the ACL it takes from its folder decides**, as
+    //< at `write_unique`.
     base: U8[], //< where it goes; missing parent levels are created
     prefix: U8[], //< the start of its name
     arena: Arena$@, //< where the path goes; null means the heap, freed with `dealloc`
@@ -727,7 +751,8 @@ pub fn mkdir_unique( //< creates a directory with a name nobody has used, and re
     defer $work: = mem.scratch(null)
     for _try in Range.asc(MAX_UNIQUE_TRIES)
         path: = random_name(base, prefix, "", work.arena)!
-        if made(path)
+        check_path(path)!
+        if kspl_mkdir_owned(path.ptr, path.len) == 0
             return arena.dup_str(path)
         // Caution: **Retry only if the name was taken.** If it failed for any other reason (no
         // permission, a file where `base` should be), every name would fail the same way.

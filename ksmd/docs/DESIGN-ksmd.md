@@ -25,12 +25,6 @@ Static figures are images with captions. Images keep their aspect ratio. Each fi
 
 **A new attribute stays in version 2, and a ksmd older than the attribute refuses the file.** Its reader refuses an unknown attribute, naming the line and column, so it never opens such a file and saves it without the attribute. A version step would add nothing to that refusal: the older reader refuses `%ksmd 3` as well. It would cost a second reader to keep, and every file written since would carry the new number. The format is not yet a published specification, so version 2 still grows. A version step comes with a change an older reader would read wrongly rather than refuse.
 
-### A formula longer than an edit writes
-
-**A file holds a formula of up to 32,768 bytes** (`MAX_READ_FORMULA` in `ksmd/model/model.kspl`). An older ksmd converted the formulas of a `%ksmd 1` file, and the conversion could make one longer than 4,096 bytes.
-
-* **A document that holds a formula over 4,096 bytes when read allows that formula's length to each edit** (`formula_cap`). So such a formula does not refuse every edit of the document. A formula typed into a cell, or made longer by an edit, keeps within that length.
-
 ## What the reader models
 
 **The reader models every structure of the file, and refuses a source it cannot read whole.** Saving a partial model would lose what it did not read. The rules it reads by are "How the reader reads" and the sections after it in [`SPEC-file-format.md`](SPEC-file-format.md#how-the-reader-reads).
@@ -719,7 +713,7 @@ A diagnostic names the source path, one-based line and Unicode-scalar column, pl
 
 A source the reader refuses cannot be edited or saved, so a partly parsed model never overwrites the file; its diagnostics are offered instead.
 
-An edit that would write a formula over 4,096 bytes is refused; a table's new name counts too, as a reference writes it. In a document read with a longer formula, that formula's length is the limit instead ("A formula longer than an edit writes"). A table edit past a table's limits is refused, and a refused edit changes nothing.
+An edit that would write a formula over 4,096 bytes is refused; a table's new name counts too, as a reference writes it. A table edit past a table's limits is refused, and a refused edit changes nothing.
 
 **A step that would leave the source over 8 MiB or 100,000 blocks is undone and refused**, since the saved file would not open again. The editor keeps the count of the source's bytes. A step that changes only blocks adds the bytes of those blocks. A step that changes a table measures the whole source, since a table changes how other tables and charts are written.
 

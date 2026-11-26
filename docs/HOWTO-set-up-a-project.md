@@ -49,14 +49,14 @@ ksplc info std-dir                          # names the std/ beside ksplc
 
 ## Building a standalone executable
 
-**To get the executable itself rather than `run` it, `build` it:**
+**To get the executable itself rather than `run` it, name it as the output:**
 
 ```sh
-./ksplc build hello.kspl hello     # hello.c and hello.libs are left beside it
+./ksplc hello.kspl hello     # hello.c and hello.libs are left beside it
 ./hello
 ```
 
-`build` writes the C, then compiles and links it with the libraries this platform needs and those the program names. A program names one with `##link("openblas")` ("11.5 Naming the libraries a file needs (`##link`)" in the [KSPL language specification](SPEC-programming-language.md)).
+ksplc writes the C, then compiles and links it with the libraries this platform needs and those the program names. A program names one with `##link("openblas")` ("11.5 Naming the libraries a file needs (`##link`)" in the [KSPL language specification](SPEC-programming-language.md)).
 
 | You want | Do this |
 | :-- | :-- |
@@ -86,7 +86,7 @@ Note: **A library can also be handed over without its KSPL source.** Build it wi
 
 ## VS Code (syntax highlighting, the Language Server, debugging)
 
-**VS Code builds and debugs in the unpacked folder without setup**, through its `.vscode/` (build tasks, LLDB settings) and `kspl_lldb.py`. That LLDB pretty printer makes slices, lists, maps, strings, `Option` and `Result` values readable in the debugger, and stops the program where it panics. An enum shows its case's name, which `ksplc build` keeps in the debug information; a program built another way may show the case's number instead. The Kanso extension adds `.kspl` syntax highlighting and the Language Server (jump to definition, hover, diagnostics).
+**VS Code builds and debugs in the unpacked folder without setup**, through its `.vscode/` (build tasks, LLDB settings) and `kspl_lldb.py`. That LLDB pretty printer makes slices, lists, maps, strings, `Option` and `Result` values readable in the debugger, and stops the program where it panics. An enum shows its case's name, which an executable ksplc builds keeps in its debug information. A program built another way may show the case's number instead. The Kanso extension adds `.kspl` syntax highlighting and the Language Server (jump to definition, hover, diagnostics).
 
 1. **Install the extension**
 

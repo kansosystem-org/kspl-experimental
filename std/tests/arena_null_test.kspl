@@ -234,6 +234,12 @@ fn test_null_arena_messages() //< a query, headers, a message and a parser free 
     resp.free()
     short_body: = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nab"
     _short: = http.parse_response(short_body, null) catch null
+    to_head: =
+        http.parse_response_to_head("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n", null) catch
+            panic("the answer to a HEAD parses")
+    assert(to_head.body.len == 0, "parse_response_to_head with a null arena")
+    to_head.free()
+    _cut: = http.parse_response_to_head("HTTP/1.1 200 OK\r\n", null) catch null
     back_to(before, "a message frees with free(), and a refused one leaves nothing")
     p: = argparse.Parser.create("probe", "a null arena", null)
     p.positional("[anything]")
@@ -345,9 +351,19 @@ fn test_null_arena_children(ksplc: U8[]) //< the functions that run a child
 fn test_null_arena_fuzz() //< the fuzz driver's steps: a record frees with `free()`
     verdict.start("[fuzz] null as the arena test...")
     before: = mem.heap_used_bytes()
-    line: = fuzz.again_with_asan(fuzz.Sanitized::{ .asan = true, .required = false }, "go", null)
-    assert(line.equals("go --asan"), "again_with_asan with a null arena")
+    $built: = fuzz.unsanitized()
+    built.source = "read.kspl"
+    line: = fuzz.again_with_asan(built, "go", null)
+    assert(line.equals("go --ksplc=\"ksplc\" --build=\"read.kspl\""),
+        "again_with_asan with a null arena")
     freed(line)
+    built.ksplc = "out/tmp/kspl_test_null_arena/no_compiler"
+    $unbuilt: U8[] = ""
+    fuzz.build(built@, "out/tmp/kspl_test_null_arena/read.exe", "the reader", null) catch why
+        unbuilt = why
+    assert(unbuilt.len > 0, "build fails where the compiler does not stand")
+    freed(unbuilt)
+    back_to(before, "a failed build's line frees with dealloc, and its work is gone")
     dir: = "out/tmp/kspl_test_null_arena/seeds"
     fs.mkdir_all(dir) catch panic("the seeds' folder can be made")
     io.write_file("out/tmp/kspl_test_null_arena/seeds/one.txt", "x")

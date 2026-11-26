@@ -1,6 +1,7 @@
-//< The implementation of `ksplc run <script.kspl> [args...]` and `ksplc build`
+//< The implementation of `ksplc run <script.kspl> [args...]`, and of a compile to an executable
 //< It runs a script in one command, calling ksplc itself as a child process to compile, with a
-//< cache in two tiers. `build` makes one executable the same way, with no cache. A program with no
+//< cache in two tiers. A compile whose output names an executable makes one the same way, with no
+//< cache. A program with no
 //< file (`ksplc run -`, `--eval=`) goes to that child on its standard input.
 
 // ==========================================
@@ -499,8 +500,9 @@ priv fn commit_path(from: U8[], to: U8[]): Bool //<
     return true
 
 priv fn sync_to_disk(path: U8[]): Bool //< whether the file the linker wrote is on the disk now
-    //< Opened to append, so nothing is changed: Windows flushes only a file opened for writing.
-    defer $file: = io.open(path, "ab") catch
+    //< Opened to read and write, so nothing is changed: Windows flushes only a file opened for
+    //< writing. **Not to append**: an append-only handle may not carry the right a flush needs.
+    defer $file: = io.open(path, "r+b") catch
         return false
     file.sync_to_disk() catch
         return false
@@ -556,16 +558,17 @@ fn run_script(script: U8[], script_args: List<|U8[]|>$@) //<
     if !fs.exists(script)
         io.err().s("ksplc run: no such file: \{script\}\n")
         sys.exit(1)
-    exit_if_refused("run", script)
+    exit_if_refused("ksplc run", script)
     run_program(script, .none, script_args)
 
-priv fn exit_if_refused(verb: U8[], script: U8[]) //<
+priv fn exit_if_refused(command: U8[], script: U8[]) //<
     //< It stops on a file in another folder named `std` (`refused_entry` in ../base/package.kspl)
+    //< `command` names the command in the message (`ksplc run`).
     //< Caution: **Refuse it here, not in the child.** The child is handed `--std-dir=`, so its
     //< message would name that as where std was taken, even where nobody wrote one.
     refused: = base_package.refused_entry(script)
     if refused.len > 0
-        io.err().s("ksplc \{verb\}: ").s(refused).c('\n')
+        io.err().s("\{command\}: ").s(refused).c('\n')
         sys.exit(1)
 
 fn run_source(source: U8[], script_args: List<|U8[]|>$@) //<
@@ -845,7 +848,7 @@ priv fn exe_is_recorded(slot: Run_slot@, arena: Arena$@): Bool //<
     return have.starts_with(want.slice())
 
 // ==========================================
-// Building one executable (`ksplc build <input> <output>`)
+// Building one executable (`ksplc <input.kspl> <output>`, an output ending in neither .c nor .ll)
 // **No cache**: the caller, a Makefile, decides when to build. The C and the libraries the program
 // names stay beside the executable (`<output's stem>.c` / `.libs`), the C as a failed compile's
 // only clue.
@@ -859,24 +862,21 @@ priv const BUILD_OPT_FLAGS: U8[][3] = ::{ "-O2", "-g", "-fno-eliminate-unused-de
 
 fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     //< It translates input to C beside output, then compiles and links output
-    //< **This function does not return**: it exits with 0, or with the failing step's code.
+    //< **This function does not return**: it exits with 0, or with the failing step's code. The
+    //< output's name was checked to name an executable (`kind_by_name` in `../cli.kspl`), so the C
+    //< beside it is never the output itself.
     defer arena: = Arena(64 * 1024)
     if !fs.exists(input)
-        io.err().s("ksplc build: no such file: \{input\}\n")
+        io.err().s("ksplc: no such file: \{input\}\n")
         sys.exit(1)
-    exit_if_refused("build", input)
+    exit_if_refused("ksplc", input)
     stem: = sys.strip_last_ext(output)
     c_path: = arena.text().s(stem).s(".c").take()
     libs_path: = arena.text().s(stem).s(".libs").take()
-    // Caution: **Refuse an output the C would land on**: the link would read the file it writes.
-    if c_path.equals(output) || libs_path.equals(output)
-        io.err()
-            .s("ksplc build: '\{output\}' would be overwritten by its own C. Name the executable\n")
-        sys.exit(1)
     dir: = sys.get_dir_name(output)
     if dir.len > 0
         fs.mkdir_all(dir) catch e
-            io.err().s("ksplc build: cannot make the folder \{dir\}: \{e\}\n")
+            io.err().s("ksplc: cannot make the folder \{dir\}: \{e\}\n")
             sys.exit(1)
     $gen: = List<|U8[]|>(arena)
     append_child_ksplc(gen@, arena)
@@ -888,7 +888,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
         sys.exit(code)
     $named_libs: = List<|U8[]|>(arena)
     if !tools_libs.append_named_libs(libs_path, named_libs@, arena)
-        io.err().s("ksplc build: the compile left no list of libraries (\{libs_path\})\n")
+        io.err().s("ksplc: the compile left no list of libraries (\{libs_path\})\n")
         sys.exit(1)
     // The order the link needs: the C first, the program's libraries before the common ones (they
     // can need `-lm`), as `ksplc run` links. GNU ld resolves from the left only.
@@ -912,5 +912,5 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     cc.push(output)
     cc_code: = tools_run_start.spawn_or_exit(cc@, cc_name(), "")
     if cc_code != 0
-        io.err().s("ksplc build: the C compiler failed on \{c_path\}\n")
+        io.err().s("ksplc: the C compiler failed on \{c_path\}\n")
     sys.exit(cc_code)

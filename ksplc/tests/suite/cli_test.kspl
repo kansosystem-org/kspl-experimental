@@ -5,7 +5,7 @@
 // ==========================================
 // The properties pinned down:
 //   * `ksplc info <subject>` answers one line, and rejects a wrong subject, naming the valid ones
-//   * `ksplc clean` answers with the directory it erased; `ksplc build`, a runnable program
+//   * `ksplc clean` answers with the directory it erased; each output kind (`support/cli_output`)
 //   * `ksplc explain` prints one code's section, or lists the codes, and rejects an unknown code
 //   * **an option that has no effect on that subcommand is an error** (Principle 5 in
 //     docs/DESIGN-principles.md). The error names the subcommands that accept it
@@ -19,6 +19,7 @@
 // lines say.
 import "ksplc/tests/support/cli_cache"
 import "ksplc/tests/support/cli_emit" + { cli, ok_case, ng_case, std_flag }
+import "ksplc/tests/support/cli_output"
 import "ksplc/tests/support/cli_sanitize"
 import "ksplc/tests/support/cli_streams"
 import "ksplc/tests/support/harness"
@@ -284,71 +285,6 @@ priv fn case_summary_codes(arena: Arena$@) //<
         r.out.find_str("does not explicitly implement trait").is_some() &&
         r.out.find_str("explained by `ksplc explain <code>`: I0401.").is_some(), r.out)
 
-priv fn case_build(arena: Arena$@) //<
-    //< `ksplc build` leaves a runnable executable, with its C and libraries beside it
-    //< **`--cflags` is shown to reach the C compiler by a flag it refuses**: one it accepts would
-    //< pass whether it reached it or not.
-    dir: = harness.sandbox("cli_build")
-    src: = fs.join(dir, "prog.kspl", arena)
-    io.write_file(src,
-        "import \"std/io\"\n\nfn main(): I32\n  io.out().s(\"built\\n\")\n  return 3\n") catch
-            verdict.check("build: the program can be written", false, "")
-            return
-    // The output's folder is not there yet: the build makes it.
-    exe: = fs.join(dir, "bin/prog.exe", arena)
-    ok_case("build: it builds", U8[][]::{ "build", std_flag(), src, exe }, "")
-    ran: = harness.run(U8[][]::{ exe })
-    verdict.check("build: the executable runs, with the program's exit code",
-        ran.exited_with(3) && ran.out.equals("built\n"), ran.out)
-    verdict.check("build: the C and the libraries stay beside it",
-        fs.exists(fs.join(dir, "bin/prog.c", arena)) &&
-        fs.exists(fs.join(dir, "bin/prog.libs", arena)), "")
-    ng_case("build: --cflags reaches the C compiler",
-        U8[][]::{ "build", std_flag(), "--cflags=-fkspl-no-such-flag", src, exe },
-        "ksplc build: the C compiler failed")
-    // A refused command line exits with 1, as every other refusal does.
-    as_c: = fs.join(dir, "prog.c", arena)
-    over: = cli(U8[][]::{ "build", std_flag(), src, as_c })
-    verdict.check("build: an output its own C would overwrite is refused with exit code 1",
-        over.exited_with(1) && over.out.find_str("overwritten").is_some(), over.out)
-    ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
-    ng_case("build: one operand alone is turned away, saying why", U8[][]::{ "build", src },
-        "ksplc build: it takes an input and an output. It was given:")
-    // **A missing input and an output folder that cannot be made are named**, and nothing is
-    // written: a build that went on would leave a C file with no program.
-    absent: = fs.join(dir, "absent.kspl", arena)
-    ng_case("build: a missing input is named",
-        U8[][]::{ "build", std_flag(), absent, fs.join(dir, "absent.exe", arena) },
-        "ksplc build: no such file: ")
-    blocked: = fs.join(dir, "prog.kspl/bin/prog.exe", arena)
-    ng_case("build: an output folder behind a file is named, not written",
-        U8[][]::{ "build", std_flag(), src, blocked }, "ksplc build: cannot make the folder ")
-    verdict.check("build: a missing input leaves no C behind",
-        !fs.exists(fs.join(dir, "absent.c", arena)), "")
-    // **[W0110] is printed by a build, not by `ksplc lint` alone** ("5.2 The diagnostics' four
-    // weights" in `../../docs/SPEC-tools.md`): what it warns of reads freed memory at run time.
-    io.write_file(src,
-        "import \"std/ds\" { List }\n\nfn fill(l: List<|Callable1<|I32, I32|>|>$@)\n  n: = 5\n  \
-            l.push(fn(x: I32; n: I32): I32 { return x + n; })\n\nfn main(): I32\n  defer $l: = \
-            List<|Callable1<|I32, I32|>|>(null)\n  fill(l@)\n  return 0\n") catch
-                verdict.check("build: the program that keeps a closure can be written", false, "")
-                return
-    ok_case("build: a container that keeps a local's closure is warned of",
-        U8[][]::{ "build", std_flag(), src, exe }, "[W0110]")
-    // **[W0101] is printed by every compile too**: the index panics at run time.
-    io.write_file(src, "fn main(): I32\n  a: = I32[3]::{ 1, 2, 3 }\n  return a[5]\n") catch
-        verdict.check("build: the program with a constant index past the end can be written", false,
-            "")
-        return
-    ok_case("build: a constant index past an array's end is warned of",
-        U8[][]::{ "build", std_flag(), src, exe }, "[W0101]")
-    c_out: = fs.join(dir, "index.c", arena)
-    ok_case("a translation to C warns of a constant index past an array's end",
-        U8[][]::{ std_flag(), src, c_out }, "[W0101]")
-    io.write_file(src, "fn helper(): I32\n  return 1\n") catch {}
-    ng_case("build: a program with no main() is refused by ksplc, not by the linker",
-        U8[][]::{ "build", std_flag(), src, exe }, "this program has no main()")
-
 priv fn case_main_failure_status(arena: Arena$@) //<
     //< A failing `main` exits non-zero whatever its error: a number in 1..255 as it is, else 1
     //< **256 and an enum's first variant are the cases that read as success** were the status the
@@ -363,7 +299,7 @@ priv fn case_main_failure_status(arena: Arena$@) //<
     for i in Range.asc(bodies.len)
         io.write_file(src, bodies[i]) catch {}
         name: = arena.text().s("a failing main exits with \{wants[i]\} (case \{i\})").take()
-        built: = cli(U8[][]::{ "build", std_flag(), src, exe })
+        built: = cli(U8[][]::{ std_flag(), src, exe })
         if !built.exited_with(0)
             verdict.check(name, false, built.out)
             continue
@@ -405,16 +341,15 @@ priv fn case_machine(arena: Arena$@) //<
         U8[][]::{ std_flag(), "--machine=aarch64-linux-gnu", src, out_c }, "")
     ng_case("an unknown machine is refused, with the known ones listed",
         U8[][]::{ std_flag(), "--machine=pdp11", src, out_c }, "thumbv7m-none-eabi")
-    ng_case("--to=llvm is refused for a machine with 4-byte pointers",
-        U8[][]::{ std_flag(), "--to=llvm", "--machine=thumbv7m-none-eabi", src, out_c },
-        "8-byte pointers")
+    ll: = fs.join(dir, "prog.ll", arena)
+    ng_case("LLVM IR is refused for a machine with 4-byte pointers",
+        U8[][]::{ std_flag(), "--machine=thumbv7m-none-eabi", src, ll }, "8-byte pointers")
     ng_case("--machine does not take effect on run", U8[][]::{ "run", "--machine=x", src },
         "compile lint")
     // **The IR would name the hosted runtime's helpers**, undefined on bare metal.
-    ng_case("--freestanding is refused beside --to=llvm, which has no freestanding runtime",
-        U8[][]::{ std_flag(), "--to=llvm", "--freestanding", src, out_c },
+    ng_case("--freestanding is refused beside LLVM IR, which has no freestanding runtime",
+        U8[][]::{ std_flag(), "--freestanding", src, ll },
         "The LLVM backend has no freestanding runtime yet. Use the C backend")
-    ll: = fs.join(dir, "prog.ll", arena)
     ok_case("--to=llvm takes a 64-bit machine",
         U8[][]::{ std_flag(), "--to=llvm", "--machine=aarch64-linux-gnu", src, ll }, "")
     text: = io.read_file(ll, null) catch ""
@@ -439,11 +374,11 @@ priv fn case_refusals()
     ng_case("--to does not take effect on fmt", U8[][]::{ "fmt", "--to=c", "a.kspl" },
         "It takes effect on: compile")
     ng_case("--std-dir does not take effect on clean", U8[][]::{ "clean", "--std-dir=std" },
-        "compile run build lint info")
-    ng_case("--cflags does not take effect on compile",
-        U8[][]::{ "--cflags=-O0", "a.kspl", "a.c" }, "build")
+        "compile run lint info")
+    ng_case("--cflags does not take effect on run",
+        U8[][]::{ "run", "--cflags=-O0", "a.kspl" }, "It takes effect on: compile")
     ng_case("--pkg-src-dir does not take effect on info",
-        U8[][]::{ "--pkg-src-dir=x", "info", "std-dir" }, "compile run build lint doc")
+        U8[][]::{ "--pkg-src-dir=x", "info", "std-dir" }, "compile run lint doc")
     // argparse rejects naming two subcommands.
     ng_case("two subcommands cannot be written", U8[][]::{ "fmt", "lint", "a.kspl" }, "")
     // An option given with nothing after its `=` is refused, never read as the default.
@@ -478,9 +413,8 @@ priv fn case_refusals()
     // whole usage, whose length would bury the error.
     ng_case("a lone .kspl input names ksplc run", U8[][]::{ "hello.kspl" },
         "Did you mean 'ksplc run hello.kspl'? 'ksplc --help' lists the subcommands and options.")
-    ng_case("a misspelled subcommand names the nearest one",
-        U8[][]::{ "bulid", "a.kspl", "a.exe" },
-        "'bulid' is not a subcommand. Did you mean 'ksplc build'?")
+    ng_case("a misspelled subcommand names the nearest one", U8[][]::{ "lnit", "a.kspl" },
+        "'lnit' is not a subcommand. Did you mean 'ksplc lint'?")
 
 priv fn case_bom(arena: Arena$@) //< checks that a leading BOM runs and survives formatting
     //< Caution: **Check that it survives formatting** — forget to put the mark back and `make fmt`
@@ -869,7 +803,8 @@ fn main(): I32
     case_info(arena)
     cli_cache.run(arena)
     case_emit_runtime(arena)
-    case_build(arena)
+    cli_output.case_executable(arena)
+    cli_output.case_output_kind(arena)
     case_main_failure_status(arena)
     case_explain(arena)
     case_summary_codes(arena)

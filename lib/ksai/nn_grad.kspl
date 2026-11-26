@@ -1,9 +1,9 @@
 //< The backward passes of the `ksai/nn` layers, and the step that moves their weights
 //< `backward_grads` writes the weights' gradients into a `*_grads` and returns the input's;
 //< `apply_grads` passes each weight and its gradient to an `optim.Updater` (SGD or Adam).
-//< `backward` is both steps with SGD. **The layers keep no state**: `backward` recomputes the
-//< forward pass for an intermediate value, which keeps the answer deterministic. Only a binary
-//< that imports this carries training code.
+//< **The layers keep no state**: `backward_grads` recomputes the forward pass for an intermediate
+//< value, which keeps the answer deterministic. Only a binary that imports this carries training
+//< code.
 import "ksai/grad" as _grad // adds the backward operations (grad_*) to Tensor
 import "ksai/lora"
 import "ksai/nn"
@@ -35,20 +35,6 @@ impl<|T|> Rms_norm_grads<|T|>
         r.dw.accumulate(other.dw)
 
 impl<|T|> nn.Linear<|T|>
-    pub fn backward( //< one SGD step on the weights; returns the input's gradient
-        //< **Only the weights are updated, never the bias.** The LLaMA family has no bias (`bias`
-        //< stays 0, and forward's `add_bias` does nothing), and updating it would break the round
-        //< trip through standard weights-only safetensors.
-        r: Self$@,
-        input: Tensor<|T|>, //< the input the forward pass was given
-        dy: Tensor<|T|>, //< the gradient of the output
-        lr: F64, //< the learning rate
-    ): Tensor<|T|>
-        $g: Linear_grads<|T|> = ::{}
-        dx: = r.backward_grads(input, dy, g@)
-        defer $u: = optim.Updater<|T|>.sgd(lr)
-        r.apply_grads(g@, u@)
-        return dx
     pub fn backward_grads( //<
         //< writes the weights' gradient into `grads`; returns the input's gradient
         r: Self$@,
@@ -59,6 +45,9 @@ impl<|T|> nn.Linear<|T|>
         grads.dw = input.grad_matmul_weight(dy)
         return dy.grad_matmul_input(r.weights)
     pub fn apply_grads( //< moves the weights by `grads`; the bias stays unchanged
+        //< **Only the weights are updated, never the bias.** The LLaMA family has no bias (`bias`
+        //< stays 0, and forward's `add_bias` does nothing), and updating it would break the round
+        //< trip through standard weights-only safetensors.
         r: Self$@,
         grads: Linear_grads<|T|>$@, //< the gradients `backward_grads` computed
         updater: optim.Updater<|T|>$@, //< the optimizer that moves them
@@ -66,17 +55,6 @@ impl<|T|> nn.Linear<|T|>
         updater.update(r.weights, grads.dw)
 
 impl<|T|> nn.Mlp<|T|>
-    pub fn backward( //< one SGD step on both layers; returns the input's gradient
-        r: Self$@,
-        input: Tensor<|T|>, //< the input the forward pass was given
-        dy: Tensor<|T|>, //< the gradient of the output
-        lr: F64, //< the learning rate
-    ): Tensor<|T|>
-        $g: Mlp_grads<|T|> = ::{}
-        dx: = r.backward_grads(input, dy, g@)
-        defer $u: = optim.Updater<|T|>.sgd(lr)
-        r.apply_grads(g@, u@)
-        return dx
     pub fn backward_grads( //<
         //< writes both layers' gradients into `grads`; returns the input's gradient
         r: Self$@,
@@ -132,12 +110,11 @@ impl<|T|> nn.Mlp<|T|>
         $g1: lora.Grads<|T|> = ::{}
         $g2: lora.Grads<|T|> = ::{}
         dx: = r.backward_lora_grads(input, dy, fc1_lora, g1@, fc2_lora, g2@)
+        defer $u: = optim.Updater<|T|>.sgd(lr)
         if fc2_lora != null
-            fc2_lora.a.sgd_step(g2.da, lr)
-            fc2_lora.b.sgd_step(g2.db, lr)
+            fc2_lora.apply_grads(g2@, u@)
         if fc1_lora != null
-            fc1_lora.a.sgd_step(g1.da, lr)
-            fc1_lora.b.sgd_step(g1.db, lr)
+            fc1_lora.apply_grads(g1@, u@)
         return dx
 
 impl<|T|> nn.Rms_norm<|T|>
@@ -145,17 +122,6 @@ impl<|T|> nn.Rms_norm<|T|>
     // F64). With  n_i = x_i * inv  (inv = 1/rms),
     //   dX_k = inv*(dy_k*w_k) - x_k * inv^3 * Σ_i(dy_i*w_i*x_i) / n
     //   dW_i = Σ_rows dy_i * (x_i * inv)
-    pub fn backward( //< one SGD step on the per-channel weights; returns the input's gradient
-        r: Self$@,
-        input: Tensor<|T|>, //< the input the forward pass was given
-        dy: Tensor<|T|>, //< the gradient of the output
-        lr: F64, //< the learning rate
-    ): Tensor<|T|>
-        $g: Rms_norm_grads<|T|> = ::{}
-        dx: = r.backward_grads(input, dy, g@)
-        defer $u: = optim.Updater<|T|>.sgd(lr)
-        r.apply_grads(g@, u@)
-        return dx
     pub fn backward_grads( //< writes the gain's gradient into `grads`; returns the input's gradient
         r: Self$@,
         input: Tensor<|T|>, //< the input the forward pass was given

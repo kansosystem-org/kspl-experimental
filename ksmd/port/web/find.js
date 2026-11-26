@@ -323,14 +323,16 @@ function ksmdFind(ks) {
   });
 
   // Ctrl+F and Ctrl+H open the bar wherever the focus is, in place of the browser's own find and
-  // history. F3 and Shift+F3 step through the matches while it is open.
+  // history. F3 and Shift+F3 step through the matches while it is open. **In Read-only, Ctrl+H
+  // opens the bar without its replace part**, as a viewer of a document does elsewhere: the
+  // person most often wants to find, and a refusal left them nothing.
   document.addEventListener("keydown", (e) => {
     const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (mod && (key === "f" || key === "h")) {
       e.preventDefault();
       e.stopPropagation();
-      ks.command(key === "h" ? "replace" : "find");
+      ks.command(key === "h" && !ks.readOnly ? "replace" : "find");
     } else if (e.key === "F3" && !bar.hidden) {
       e.preventDefault();
       step(e.shiftKey ? -1 : 1);

@@ -45,8 +45,8 @@ priv struct Qkv_grads<|T|> //<
     dk: Tensor<|T|> //< after RoPE's backward pass [S,d]
     dv: Tensor<|T|> //< [S,d]
 
-// Computes dcontext → the gradients of Q/K/V. Its **formulas are the same** in `backward`
-// (updating the weights) and `backward_lora` (base frozen), so it lives here once.
+// Computes dcontext → the gradients of Q/K/V. Its **formulas are the same** in `backward_grads`
+// (every weight's gradient) and `backward_lora` (base frozen), so it lives here once.
 // Caution: **With two copies, a fix to one makes the gradients quietly disagree. A broken
 // training run then still passes the tests.** The callers differ only in how they make dcontext and
 // use this return value.
@@ -121,17 +121,6 @@ impl<|T|> nn.Self_attention<|T|>
         input: Tensor<|T|>, //< every position's input together, [S,d]
     ): Attention_train<|T|>
         return r.train_forward_lora(input, null, null)
-    pub fn backward( //< one SGD step on all four weights; returns the input's gradient
-        r: Self$@,
-        kept: Attention_train<|T|>$@, //< what `train_forward` kept for this same input
-        dout: Tensor<|T|>, //< the gradient of the layer's output
-        lr: F64, //< the learning rate
-    ): Tensor<|T|>
-        $g: Attention_grads<|T|> = ::{}
-        dx: = r.backward_grads(kept, dout, g@)
-        defer $u: = optim.Updater<|T|>.sgd(lr)
-        r.apply_grads(g@, u@)
-        return dx
     pub fn backward_grads( //<
         //< writes the four weights' gradients to `grads`; returns the input gradient
         r: Self$@,
@@ -204,16 +193,21 @@ impl<|T|> nn.Self_attention<|T|>
     ): Tensor<|T|>
         // 1. out = context·Wo (frozen: dwo is not needed)
         dcontext: = dout.grad_matmul_input(r.wo.weights)
-        // 2-5. context→A→S→RoPE (shared with `backward`)
+        // 2-5. context→A→S→RoPE (shared with `backward_grads`)
         $g: = attn_backward_core(kept, dcontext)
         $dq: = g.dq
         $dv: = g.dv
         // 6. Q,K,V = X·Wq/Wk/Wv (frozen) + LoRA (only A/B updated). dX sums every path.
+        defer $u: = optim.Updater<|T|>.sgd(lr)
         $dx: = dq.grad_matmul_input(r.wq.weights) // the base route (frozen, not updated)
         if q_lora != null
-            dx = dx + q_lora.backward(kept.x, dq, lr)
+            $qg: lora.Grads<|T|> = ::{}
+            dx = dx + q_lora.backward_grads(kept.x, dq, qg@)
+            q_lora.apply_grads(qg@, u@)
         dx = dx + g.dk.grad_matmul_input(r.wk.weights) // K has no adapter; it is only frozen
         dx = dx + dv.grad_matmul_input(r.wv.weights) // the base route (frozen, not updated)
         if v_lora != null
-            dx = dx + v_lora.backward(kept.x, dv, lr)
+            $vg: lora.Grads<|T|> = ::{}
+            dx = dx + v_lora.backward_grads(kept.x, dv, vg@)
+            v_lora.apply_grads(vg@, u@)
         return dx

@@ -4,6 +4,7 @@
 //< and what the page shows of each function a formula calls.
 //< `extern` names a symbol, not an import, so each action is in the page's wasm wherever it
 //< stands.
+import "ksmd/base/dates" { date_of }
 import "ksmd/calc/formula" { Positions, attachable, cycle_fixed, partner }
 import "ksmd/calc/functions_table" as functions
 import "ksmd/calc/help" { FORMS, Help, write_json }
@@ -11,11 +12,13 @@ import "ksmd/calc/value"
 import "ksmd/edit/editor" { Refused }
 import "ksmd/edit/editor_charts" { Chart_settings }
 import "ksmd/edit/editor_tables" { Copied_at, Group_edit, Table_edit }
+import "ksmd/edit/sort" { Sort_key, compare_keys, key_of }
 import "ksmd/model/format" { currency_of, format_of, show_plain, shows_same, write_format }
 import "ksmd/model/look" { Look_part }
 import "ksmd/model/model" { MAX_ROWS }
 import "ksmd/port/web/bridge_session" { begin, done, ed, ensure, full, number, out, refused, result,
     text_in }
+import "ksmd/port/web/view" { CELL_BOOL, CELL_DATE, CELL_ERROR, CELL_NUMBER, CELL_TEXT }
 import "ksmd/syntax/chart" { kind_of }
 import "ksmd/syntax/clause" { parse_widths }
 import "ksmd/syntax/writer"
@@ -486,6 +489,37 @@ extern fn ksmd_web_compare_numbers(left: F64, right: F64): I32 //<
     if shows_same(left, right)
         return 0
     return -1 if left < right else 1
+
+extern fn ksmd_web_compare_values(left_kind: Sz, left_number: F64, left_len: Sz, right_kind: Sz,
+    right_number: F64, right_len: Sz): I32 //<
+        //< Below zero where the left cell's value sorts first, 0 where the two sort as one, else 1
+        //< Each cell is its kind, its number and its text, as the page's JSON gives them
+        //< (`cell` in `view.kspl`). The left text, then the right text, are written in.
+        //< **The page orders no values itself**: a filter's list then shows the order that Sort
+        //< gives (`compare_keys` in `ksmd/edit/sort.kspl`).
+    both: = text_in(left_len + right_len)
+    left: = key_of_cell(left_kind, left_number, both.sub(0, left_len))
+    right: = key_of_cell(right_kind, right_number, both.sub_from(left_len))
+    return compare_keys(left@, right@, false)
+
+priv fn key_of_cell(kind: Sz, amount: F64, text: U8[]): Sort_key //<
+    //< Where a cell of the page's JSON sorts: a date is its text `2026-10-23`, and true and false
+    //< are the text `"true"` and `"false"`
+    switch kind
+    case CELL_NUMBER
+        return key_of(.number, amount, "", 0)
+    case CELL_TEXT
+        return key_of(.text, 0.0, text, 0)
+    case CELL_ERROR
+        return key_of(.error, 0.0, text, 0)
+    case CELL_BOOL
+        return key_of(.boolean, 1.0 if text.equals("true") else 0.0, "", 0)
+    case CELL_DATE
+        day: = date_of(text) catch
+            panic("the page gave a date the view did not write")
+        return key_of(.date, F64::day, "", 0)
+    default
+        return key_of(.empty, 0.0, "", 0)
 
 extern fn ksmd_web_cell_text(block: Sz, row: Sz, column: Sz): Sz //<
     //< The text a cell shows to edit, written to the output; empty outside a table

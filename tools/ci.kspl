@@ -130,12 +130,8 @@ priv fn run_set(name: U8[], set: Set, round: Round, arena: Arena$@): I32 //<
     $ended_at: U8[]? = .none
     $by_switch: = false
     $not_run: = List<|U8[]|>(arena)
-    $left: = List<|Gate|>(arena)
     for g in ci_gates.run_order(round.stop, arena)
         if !set.runs(g, round.platform)
-            continue
-        if left_out(g, round, arena)
-            left.push(g)
             continue
         if ended_at.is_some()
             not_run.push(g.log)
@@ -153,9 +149,6 @@ priv fn run_set(name: U8[], set: Set, round: Round, arena: Arena$@): I32 //<
     print_digest(round, arena)
     if round.full
         print_skips(arena)
-    for g in left
-        io.out().s("# left out here: ").s(g.log).s(", as the change reaches no file under ")
-            .s(g.local_when).s(" (GitHub CI runs it; `make ").s(g.args).s("` runs it by hand)\n")
     // **A round with a switch off says so last**: green there is not CI's verdict.
     if round.relaxed.len > 0
         io.out().s("# turned off here: ").s(round.relaxed)
@@ -173,11 +166,6 @@ priv fn run_set(name: U8[], set: Set, round: Round, arena: Arena$@): I32 //<
         return 1
     io.out().s("# \{name\}: ALL GREEN\n")
     return 0
-
-priv fn left_out(gate: Gate, round: Round, arena: Arena$@): Bool //<
-    //< Whether a local full round leaves the gate out, as the change misses its folder
-    return round.full && gate.local_when.len > 0 &&
-        !ci_gates.change_reaches(gate.local_when, arena)
 
 priv fn run_anywhere(gate: Gate): Bool //< whether some set runs the gate
     for s in Set.variants()

@@ -49,7 +49,7 @@ flowchart LR
 | weights | Numbers that training adjusts | The `Tensor` each layer holds |
 | forward | Compute an output from an input | Each layer's `forward(...)` |
 | backward | Calculate gradients from the output error | `grad_*` in `lib/ksai/grad.kspl` and `lib/ksai/nn_grad.kspl` |
-| gradient | How the loss changes with a weight; used to calculate weight updates | The tensors that `backward(...)` and `grad_*` return |
+| gradient | How the loss changes with a weight; used to calculate weight updates | The tensors that `backward_grads(...)` and `grad_*` return |
 | loss | A measure of error; smaller is better | `cross_entropy_loss(...)` |
 | optimizer | The rule for updating weights from gradients | `sgd_step` and `optim.Adam` |
 | activation | A nonlinear function between layers that lets the model learn nonlinear relationships | `silu` |
@@ -148,11 +148,11 @@ Each layer's `forward(...)` returns an output tensor from an input tensor. Read 
 | File | What it contains |
 | :-- | :-- |
 | `lib/ksai/grad.kspl` | Tensor gradient functions: `grad_matmul_input/weight`, `grad_silu`, `cross_entropy_loss`, `grad_softmax_cross_entropy`, and `sgd_step`. Each forward operation has an explicitly called backward operation, with no automatic differentiation tape |
-| `lib/ksai/nn_grad.kspl` | Each layer's `backward(...)` calculates gradients, updates weights immediately, and returns the gradient for the previous layer |
+| `lib/ksai/nn_grad.kspl` | Each layer's `backward_grads(...)` calculates the weight gradients and returns the gradient for the previous layer. Its `apply_grads(...)` moves the weights |
 | `lib/ksai/optim.kspl` | `Updater` updates model weights by stochastic gradient descent (SGD) or Adam |
 | `lib/ksai/attention_train.kspl` / `lib/ksai/block_train.kspl` | Forward and backward operations for whole sequences during training, kept out of inference binaries |
 
-Each layer's `backward_grads` calculates weight gradients, and its `apply_grads` sends them to the `Updater`. For a batch, `accumulate` sums the sequence gradients before one `apply_grads` updates the weights.
+A layer's `apply_grads` sends its gradients to an `Updater`, which applies SGD or Adam. For a batch, `accumulate` sums the sequence gradients before one `apply_grads` updates the weights.
 
 Both `_grad` and `_train` files contain backward operations. `_grad` contains functions that need no saved values from the forward pass. `_train` contains the structures that save them: `Attention_train` and `Block_train`.
 

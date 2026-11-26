@@ -13,6 +13,7 @@ import "ksai/examples/car_pilot/encoding"
 import "ksai/grad"
 import "ksai/nn"
 import "ksai/nn_grad"
+import "ksai/optim"
 import "ksai/safetensors" as st
 import "ksai/sampler"
 import "ksai/tensor" { Tensor }
@@ -165,6 +166,7 @@ priv fn measure_agreement(pilot: Pilot$@, compute: Arena$@, out_seen: Sz$@): F64
 priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< trains the net
     //< It learns from `rule_action`, with cross-entropy loss.
     base: = compute.save()
+    defer $sgd: = optim.Updater<|F32|>.sgd(LEARNING_RATE)
     $last_loss: F64 = 0.0
     for _epoch in Range.asc(TRAIN_EPOCHS)
         // The distances are the same every epoch (the generator is re-seeded), or a falling loss
@@ -182,7 +184,9 @@ priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< trains the net
                 loss_sum += logits.cross_entropy_loss(target)
                 seen += 1
                 dy: = logits.grad_softmax_cross_entropy(target)
-                _dx: = mlp.backward(x, dy, LEARNING_RATE)
+                $g: nn_grad.Mlp_grads<|F32|> = ::{}
+                _dx: = mlp.backward_grads(x, dy, g@)
+                mlp.apply_grads(g@, sgd@)
                 // Caution: Rewind on every step, or the arena grows throughout the training.
                 compute.restore(base)
         last_loss = loss_sum / F64::seen if seen > 0 else 0.0

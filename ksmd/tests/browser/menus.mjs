@@ -217,6 +217,27 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
       "a double-click on the border between two cells fits the column too");
   },
 
+  // A filter's panel lists a column's values in the order Sort ascending gives them, text past
+  // ASCII too. Case is folded for A to Z only, and other text is ordered by its UTF-8 bytes, so
+  // `Ä` comes before `à`, and `ｱ` (U+FF71) before an emoji.
+  async filterOrderIsSortOrder() {
+    await load(`${H}:::table name="t"\n| "word" |\n| "😀" |\n| "ä" |\n| "ｱ" |\n| "B" |\n| "Ä" |\n| "a" |\n| "à" |\n:::\n`);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await menu("sort-up");
+    // The panel lists each value once, ignoring case, as the first row holding it shows it.
+    const sorted = await js(`(() => {
+      const seen = new Set();
+      return Array.from(document.querySelectorAll('#doc td[data-c="0"]')).map((td) => td.textContent.trim())
+        .filter((t) => !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join();
+    })()`);
+    check(sorted === "a,B,Ä,à,ｱ,😀", "Sort ascending orders text by its bytes past A to Z", sorted);
+    await click('#doc th.name[data-c="0"] .filter-arrow');
+    const listed = await js("Array.from(document.querySelectorAll('.filter-values label')).slice(1)" +
+      ".map((l) => l.textContent.trim()).join()");
+    check(listed === sorted, "the filter's panel lists the values in the order Sort gives", listed);
+    await press("Escape");
+  },
+
   // The quick access bar, looks on text and cells, and copying and pasting cells as Excel does.
   // Ctrl+; on a chosen cell types the date into that cell alone, never into the text beside it.
   async dateInChosenCell() {
@@ -293,6 +314,19 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     check(!await onBar("table-csv"), "Reset brings back the tools the bar starts with");
     await click(".quick-choose .quick-buttons button:last-child");
     check(!await js("document.querySelector('.quick-choose').open"), "and Close closes the chooser");
+    // Closed, it gives the focus back where it was, as a panel does: here a chosen cell far down.
+    const words = Array.from({ length: 60 }, (_, k) => `Line ${k}.`).join("\n\n");
+    await load(`${H}${words}\n\n:::table name="t"\n| "a" |\n| 1 |\n| 2 |\n:::\n`);
+    await js("document.querySelector('#doc td[data-r=\"0\"]').scrollIntoView({ block: 'center' })");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    const scrolled = await js("window.scrollY");
+    await menu("quick-choose");
+    await press("Escape");
+    await press("ArrowDown");
+    const after = await js("window.scrollY");
+    check(Math.abs(after - scrolled) < 2 && await js("document.querySelector('#doc td.chosen')?.dataset.r") === "1",
+      "closing the chooser keeps the page where it was, and the chosen cell takes the keys again",
+      `${scrolled} ${after}`);
     // The bar shows what stands at the caret, as Word's does.
     await load(`${H}# T*odo*\n\nab **cd** ef\n\n\`\`\`\ncode\n\`\`\`\n`);
     const pressed = (cmd) => js(`document.querySelector('.quick [data-cmd="${cmd}"]').getAttribute('aria-pressed') === 'true'`);
@@ -404,6 +438,14 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     await pasteInto("#doc", "Item\tCount\r\nPens\t2\r\n");
     await saves("cells pasted into text make a new table, the first row its names",
       `${H}Text\n\n:::table name="table1"\n| "Item" | "Count" |\n| "Pens" | 2 |\n:::\n`);
+    // Text copied across a table holds lines with no tab around its rows. It pastes as text,
+    // rather than as one table with each line of prose a row of it.
+    await load(`${H}Text\n`);
+    await select(0, 0, 4);
+    await pasteInto("#doc", "Before\r\nItem\tCount\r\nPens\t2\r\n\r\nAfter\r\n");
+    const mixed = await source();
+    check(!mixed.includes(":::table") && ["Before", "Item", "Count", "Pens", "After"].every((w) => mixed.includes(w)),
+      "text with a line that holds no tab pastes as text, and keeps the rows' text", mixed);
   },
 
   // Whole blocks removed by their button, a range dragged across cells, the page's width, and the

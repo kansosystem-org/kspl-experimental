@@ -47,8 +47,16 @@ priv const WIDE_IN_CLASS: U8[] = //<
 priv const PAIR_LEFT_REC: U8[] = //< the message for rule `pair` entering itself first
     "Rule 'pair' can enter itself before reading a character (left recursion), so it never ends"
 
+priv const COMMENT_LEFT_REC: U8[] = //< the message for `comment`, which `_Space` calls
+    "Rule 'comment' can enter itself before reading a character, through '_Space' (left recursion), \
+        so it never ends"
+
 priv const EMPTY_CLASS: U8[] = "A character class must hold one byte at least" //<
     //< The message for `[]` (parse_primary in lib/kspeg/notation.kspl)
+
+priv const BACKWARD_RANGE: U8[] = //<
+    //< The message for `[z-a]` (BACKWARD_RANGE_MSG in lib/kspeg/notation.kspl)
+    "A range in a character class must not end below its start: write [a-z], not [z-a]"
 
 priv const NO_RULE: U8[] = "A grammar must define one rule at least" //<
     //< The message for a grammar that defines no rule (parse_grammar in lib/kspeg/notation.kspl)
@@ -295,6 +303,7 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     nested_grammar_errors(arena)
     peg_termination(arena)
     whole_source(arena)
+    memo_answers(arena)
     rule_profile(arena)
 
 priv fn default_tokens(arena: Arena$@) //<
@@ -485,6 +494,18 @@ priv fn class_hyphen(arena: Arena$@) //<
     expect("an unescaped hyphen still makes a range", "pair = [a-z]\n", "m", "pair", true, arena)
     expect("a hyphen at the end is a byte", "pair = [a-]\n", "-", "pair", true, arena)
     expect("an escaped hyphen can end a range", "pair = [+-\\-]\n", ",", "pair", true, arena)
+    // A range from a higher byte to a lower one holds no byte, so its branch is dead.
+    expect_bad_grammar("a range from z down to a is rejected", "pair = [z-a]\n", BACKWARD_RANGE,
+        arena)
+    expect_bad_grammar("a backward range beside others is rejected", "pair = [0-9z-a_]\n",
+        BACKWARD_RANGE, arena)
+    // **Stray text where a rule's name belongs is named**, not left at a position alone.
+    expect_bad_grammar("stray text after a rule is named", "pair = \"a\" )\nnext = \"b\"\n",
+        "Expected a rule's name, found ')'", arena)
+    expect_bad_grammar("stray text before the first rule is named", "= \"a\"\n",
+        "Expected a rule's name, found '= \"a\"'", arena)
+    // The control: a range of one byte is no mistake.
+    expect("a range of one byte holds that byte", "pair = [a-a]\n", "a", "pair", true, arena)
 
 priv fn nested_grammar_errors(arena: Arena$@) //<
     //< An error in the grammar keeps its own message wherever the element stands
@@ -537,8 +558,19 @@ priv fn peg_termination(arena: Arena$@) //<
     // CI timeout. Left recursion never ends under PEG, so the grammar is refused when it is read.
     expect_bad_grammar("direct left recursion is rejected", "pair = pair \"x\" | \"y\"\n",
         PAIR_LEFT_REC, arena)
-    expect_bad_grammar("indirect left recursion is rejected",
-        "pair = mid\nmid = pair \"x\" | \"y\"\n", PAIR_LEFT_REC, arena)
+    expect_bad_grammar("indirect left recursion is rejected, naming the rule on the way",
+        "pair = mid\nmid = pair \"x\" | \"y\"\n",
+        "Rule 'pair' can enter itself before reading a character, through 'mid' (left recursion), \
+            so it never ends", arena)
+    // **A syntax-mode part skips whitespace first, and so enters `_Space`.** A syntax-mode rule
+    // that `_Space` calls enters itself there, though no rule names it twice.
+    expect_bad_grammar("left recursion through the whitespace skip is rejected",
+        "top = \"a\"\ncomment = \"#\" (!\"\\n\" .)*\n_Space = ([ \\t\\n] | comment)*\n",
+        COMMENT_LEFT_REC, arena)
+    // The control: a transparent comment rule reads in lexical mode and skips nothing.
+    expect("a comment rule _Space calls in lexical mode loads",
+        "top = \"a\" \"b\"\n_Comment = \"#\" (!\"\\n\" .)*\n_Space = ([ \\t\\n] | _Comment)*\n",
+        "a # note\n b", "top", true, arena)
     // A repetition of something that can succeed without consuming input must not loop in place.
     expect("repetition of a possibly-empty expression terminates", "pair = (\"x\"?)*\n", "xxx",
         "pair", true, arena)
@@ -619,6 +651,22 @@ priv fn whole_source(arena: Arena$@) //<
         " at 2: end of input", arena)
     expect_outcome("what could continue is listed after it", "x = 'a' 'b'?\n", "a c", "x",
         " at 2: end of input b?", arena)
+
+priv fn memo_answers(arena: Arena$@) //<
+    //< That a memo answer leaves the syntax error a fresh parse would leave
+    //< Each case compares a grammar with one that calls a copy of the rule the second time, so the
+    //< memo cannot answer there. Caution: **The message must not depend on the memo.** It turns off
+    //< for a rule after enough unanswered writes, and that count carries from file to file.
+    // `n` fails at 0 twice: first inside the optional, where its label need not be written, then
+    // where it stopped the parse.
+    expect_same_outcome("a memo answer keeps a label's mark as what stopped the parse",
+        "s = (n \",\")? (n | \"z\") \";\"\nn = [0-9]+\n",
+        "s = (n \",\")? (m | \"z\") \";\"\nn = [0-9]+\nm = [0-9]+\n", "x", "s", arena)
+    // `_body` fails at 4 inside each token: how far it got decides where each token stopped.
+    expect_same_outcome("a memo answer inside a token keeps how far the token got",
+        "s = A | B\nA = \"x\" _body \"!\"\nB = \"x\" _body \"?\"\n_body = \"(\" [a-z]* \")\"\n",
+        "s = A | B\nA = \"x\" _body \"!\"\nB = \"x\" _copy \"?\"\n_body = \"(\" [a-z]* \")\"\n_copy \
+            = \"(\" [a-z]* \")\"\n", "x(ab", "s", arena)
 
 priv fn rule_profile(arena: Arena$@) //<
     //< The rule profile: calls / memo hits / read and succeeded / read and failed

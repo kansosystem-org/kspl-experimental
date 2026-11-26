@@ -483,17 +483,22 @@ priv fn resolve_dot_access_def(ctx: Sema_ctx$@, path: List<|Ast_node$@|>$@,
             return .some(mod_sym.node)
     return .none
 
-priv fn resolve_fallback_parent_def(path: List<|Ast_node$@|>$@, target_node: Ast_node$@,
-    target_text: U8[]): Ast_node$@?
+fn resolve_fallback_parent_def(path: List<|Ast_node$@|>$@, target_node: Ast_node$@,
+    target_text: U8[]): Ast_node$@? //<
+        //< The nearest declaration on the path that binds target_text, seen from target_node
+        //< It is the scope rule for a name sema did not link, as in a template's body.
     for $i: = path.len; i > 0; i -= 1
-        if found: = binding_in(path.get(i - 1), target_node, target_text)
+        toward: = path.get(i) if i < path.len else target_node
+        if found: = binding_in(path.get(i - 1), toward, target_node, target_text)
             return .some(found)
     return .none
 
-priv fn binding_in(node: Ast_node$@, target_node: Ast_node$@, name: U8[]): Ast_node$@? //<
-    //< What `node` binds as name, seen from target_node
-    //< A declaration binds its type parameters (a function its parameters too). A block binds the
-    //< locals declared before target_node. A case pattern binds its bound names.
+priv fn binding_in(node: Ast_node$@, toward: Ast_node$@, target_node: Ast_node$@, name: U8[]):
+    Ast_node$@? //<
+        //< What `node` binds as name, seen from target_node through its child `toward`
+        //< A declaration binds its type parameters (a function its parameters too). A block binds
+        //< the locals declared before target_node. A `for` binds its variable in its body, `catch`
+        //< its error in its block, and a `switch` an arm's pattern names in that arm's block.
     switch node.kind_id
     case .k_decl_fn, .k_decl_fn_proto
         if type_param: = type_param_named(node, name)
@@ -509,14 +514,61 @@ priv fn binding_in(node: Ast_node$@, target_node: Ast_node$@, name: U8[]): Ast_n
                 id_n: = stmt.get_var_decl_id()
                 if id_n != null && id_n.text.equals(name)
                     return .some(stmt)
+    case .k_stmt_for
+        // The variable of `for x in xs` is the identifier written before the collection. That of
+        // `for $i: = 0; ...` is a local declared before the condition.
+        for c in node.children
+            if c.kind_id == .k_decl_var
+                id_n: = c.get_var_decl_id()
+                if id_n != null && id_n.text.equals(name)
+                    return .some(c)
+            if c == toward
+                break
+            if c.kind_id == .k_identifier && c.text.equals(name) && toward == node.last_child()
+                return .some(c)
+    case .k_expr_catch
+        // `catch e` binds the error in its block.
+        if toward == node.last_child()
+            for c in node.children
+                if c.kind_id == .k_identifier && c.text.equals(name)
+                    return .some(c)
+    case .k_stmt_switch
+        return arm_binding(node, toward, name)
     case .k_case_pattern
-        for bind_var in node.children
-            if bind_var.kind_id == .k_identifier && bind_var.text.equals(name)
-                return .some(bind_var)
+        return pattern_binding(node, name)
     default {}
     return .none
 
-fn type_param_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
+priv fn arm_binding(switch_node: Ast_node$@, arm: Ast_node$@, name: U8[]): Ast_node$@? //<
+    //< The name the patterns of `arm`, one block of a `switch`, bind
+    //< An arm's patterns are the children between the block before it and the block itself.
+    if arm.kind_id != .k_stmt_block
+        return .none
+    $found: Ast_node$@? = .none
+    for c in switch_node.children
+        if c == arm
+            return found
+        if c.kind_id == .k_stmt_block
+            found = .none
+        else if c.kind_id == .k_case_pattern && found.is_none()
+            found = pattern_binding(c, name)
+    return .none
+
+priv fn pattern_binding(pattern: Ast_node$@, name: U8[]): Ast_node$@? //<
+    //< The name a case pattern binds, as `w` of `.some(w)`
+    //< Caution: **Skip the variant's own name**, the first identifier after the `.`.
+    if pattern.children.len == 0 || !pattern.get_child(0).is_literal(".")
+        return .none
+    $seen_variant: = false
+    for c in pattern.children
+        if c.kind_id != .k_identifier
+            continue
+        if seen_variant && c.text.equals(name)
+            return .some(c)
+        seen_variant = true
+    return .none
+
+priv fn type_param_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
     //< The declaration's type parameter called name
     gen_params: = decl.find_child(.k_type_gen_params)
     if gen_params == null

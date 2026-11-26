@@ -5,6 +5,7 @@ import "ksai/grad" as ai_grad
 import "ksai/lora" as ai_lora
 import "ksai/nn" as ai_nn
 import "ksai/nn_grad" as ai_nn_grad
+import "ksai/optim" as ai_optim
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
 import "ksai/tests/grad_test"
@@ -94,7 +95,10 @@ fn test_linear_weight_grad()
     lp: = lin@
     $ps: Param[1] = ::{ snap("Linear: dW", lin.weights, work) }
     dy: = ones_like(lin.forward(x), work)
-    lin.backward(x, dy, PROBE_LR)
+    defer $sgd: = ai_optim.Updater<|F64|>.sgd(PROBE_LR)
+    $g: ai_nn_grad.Linear_grads<|F64|> = ::{}
+    lin.backward_grads(x, dy, g@)
+    lin.apply_grads(g@, sgd@)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-6,
@@ -117,7 +121,10 @@ fn test_rmsnorm_weight_grad()
     rp: = rn@
     $ps: Param[1] = ::{ snap("RMSNorm: dW", rn.weight, work) }
     dy: = ones_like(rn.forward(x), work)
-    rn.backward(x, dy, PROBE_LR)
+    defer $sgd: = ai_optim.Updater<|F64|>.sgd(PROBE_LR)
+    $g: ai_nn_grad.Rms_norm_grads<|F64|> = ::{}
+    rn.backward_grads(x, dy, g@)
+    rn.apply_grads(g@, sgd@)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-6,
@@ -143,7 +150,10 @@ fn test_mlp_weight_grad()
     $ps: Param[2] = ::{ snap("MLP: fc1's dW", mlp.fc1.weights, work),
         snap("MLP: fc2's dW", mlp.fc2.weights, work) }
     dy: = ones_like(mlp.forward(x), work)
-    mlp.backward(x, dy, PROBE_LR)
+    defer $sgd: = ai_optim.Updater<|F64|>.sgd(PROBE_LR)
+    $g: ai_nn_grad.Mlp_grads<|F64|> = ::{}
+    mlp.backward_grads(x, dy, g@)
+    mlp.apply_grads(g@, sgd@)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-6,
@@ -172,7 +182,10 @@ fn test_attention_weight_grad()
         snap("Attn: dWo", att.wo.weights, work) }
     $c: = att.train_forward(x)
     dout: = ones_like(c.out, work)
-    att.backward(c@, dout, PROBE_LR)
+    defer $sgd: = ai_optim.Updater<|F64|>.sgd(PROBE_LR)
+    $g: ai_attn_train.Attention_grads<|F64|> = ::{}
+    att.backward_grads(c@, dout, g@)
+    att.apply_grads(g@, sgd@)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-5,
@@ -214,7 +227,10 @@ fn test_block_weight_grad()
 
     $c: = blk.train_forward(x)
     dout: = ones_like(c.out, work)
-    blk.backward(c@, dout, PROBE_LR)
+    defer $sgd: = ai_optim.Updater<|F64|>.sgd(PROBE_LR)
+    $g: ai_block_train.Block_grads<|F64|> = ::{}
+    blk.backward_grads(c@, dout, g@)
+    blk.apply_grads(g@, sgd@)
 
     recover(Param$[]::ps, work)
 
@@ -248,7 +264,10 @@ fn test_lora_weight_grad()
     op: = lo@
     $ps: Param[2] = ::{ snap("LoRA: dA", lo.a, work), snap("LoRA: dB", lo.b, work) }
     dy: = ones_like(lo.forward(x), work)
-    lo.backward(x, dy, PROBE_LR)
+    defer $sgd: = ai_optim.Updater<|F64|>.sgd(PROBE_LR)
+    $g: ai_lora.Grads<|F64|> = ::{}
+    lo.backward_grads(x, dy, g@)
+    lo.apply_grads(g@, sgd@)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-6,
@@ -396,6 +415,7 @@ fn test_lora_finetune(arena: Arena$@)
     $lora: = ai_lora.Lora<|F32|>(in_dim, out_dim, 2, 4.0, rng@, arena)
 
     $loss0: = 0.0
+    defer $sgd: = ai_optim.Updater<|F32|>.sgd(0.3)
     for step in Range.asc(300)
         base_out: = base.forward(x) // the frozen base [1,4]
         delta: = lora.forward(x) // the adapter's contribution [1,4]
@@ -404,7 +424,9 @@ fn test_lora_finetune(arena: Arena$@)
         if step == 0
             loss0 = loss
         dlogits: = logits.grad_softmax_cross_entropy(target)
-        lora.backward(x, dlogits, 0.3) // only A and B updated (the base stays frozen)
+        $g: ai_lora.Grads<|F32|> = ::{}
+        lora.backward_grads(x, dlogits, g@)
+        lora.apply_grads(g@, sgd@) // only A and B updated (the base stays frozen)
     // What is checked: the base weights unchanged, the loss lower, the prediction matching target
     $base_sum_after: = 0.0
     for i in Range.asc(base.weights.size)

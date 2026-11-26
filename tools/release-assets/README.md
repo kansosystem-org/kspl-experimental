@@ -53,14 +53,14 @@ A function used only inside its own folder needs no `pub`; only what another fol
 
 ## Making an executable
 
-To get the executable itself, `build` it:
+To get the executable itself, name it as the output:
 
 ```sh
-./ksplc build hello.kspl hello     # hello.c and hello.libs are left beside it
+./ksplc hello.kspl hello     # hello.c and hello.libs are left beside it
 ./hello
 ```
 
-`build` writes the C, then has `clang` (or the compiler `CC` names) compile and link it, with the libraries this platform and the program need.
+ksplc writes the C, then has `clang` (or the compiler `CC` names) compile and link it, with the libraries this platform and the program need.
 
 | You want | Write |
 | :-- | :-- |

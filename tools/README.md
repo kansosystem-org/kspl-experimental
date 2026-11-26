@@ -2,14 +2,6 @@
 
 **Programs that need more than one package and `std`, and the data files beside them, written in KSPL wherever possible.** Most are for whoever changes Kanso: they regenerate documents and run the CI's gates. Some reach the end user as well. Where ksmd can be built, `make install` builds `ksmd.kspl` into `ksmd.exe` and installs it. `make chat` starts `ksagent_chat.kspl`. The release zip carries `kspl_lldb.py` and the contents of `release-assets/`. Each program runs from the tree with `ksplc run tools/<name>.kspl`, or through the make target named beside it.
 
-## Run it
-
-After `make` has built the compiler, this writes the repository's size to `out/log/repo_stat.txt`:
-
-```sh
-./out/ksplc_stage1.exe run tools/repo_stat.kspl   # the repository's size -> out/log/repo_stat.txt
-```
-
 ## What is here
 
 Most tools come in pairs: the program holds `main`, and a second file holds what its test imports, so the test does not pull in that `main`.
@@ -21,7 +13,6 @@ Most tools come in pairs: the program holds `main`, and a second file holds what
 | `tutorial.kspl` / `tutorial_page.kspl` | The language tutorial (`docs/TUTORIAL-programming-language.md`), generated from its program by `make tutorial`. `make test-docs` fails on a drift, or when the page's code blocks, joined in order, do not run as the program does. |
 | **The repository and its CI** | |
 | `seed_sum.kspl` | Records which compiler source `ksplc/seed.c` was taken from (`make commit-seed`), and checks the tree still holds it (`make test-seed-sum`). |
-| `repo_stat.kspl` / `repo_stat_path.kspl` | Writes the repository's size as one page of text, over the files git tracks or does not ignore. It totals functional code, test code, tooling and prose apart. |
 | `ci.kspl` / `ci_gates.kspl` | The CI's gate table and runner. `make ci` runs every gate the host can answer, and `make ci-summary` asks for the job's summary page. How the gates are read is in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md). |
 | `make_db.kspl` | Reads make's database and the make files' own lines. The root's checks of the make names in documents and of the make files' text use it. |
 | **Launchers for the user** | |
@@ -35,7 +26,7 @@ Most tools come in pairs: the program holds `main`, and a second file holds what
 | `msys2-packages.txt`, `msys2-packages-full.txt` | The MSYS2 UCRT64 packages CI's Windows job needs. CI, the release's Windows build (`.github/actions/msys2-ucrt64/`) and "The environment for each platform" in [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) all read this one list. The second list adds what `make ci` uses on Windows for the gates CI runs on Linux alone. |
 | `release-assets/` | What the release zip carries beside the executable (its own `README.md` and the `.vscode/` settings), copied in by `.github/workflows/release.yml`. |
 | **Folders** | |
-| `tests/` | The tools' tests. `page_test.kspl` covers the URL that opens a document, the surface listing and the tutorial page. `repo_test.kspl` covers the file statistics and the CI's sets. `aim_rows_test.kspl` checks the rows of `docs/SPEC-opener-aim.ksmd` against the code. `ksmd_aim_test.kspl` covers the other rules of ksmd's opener, and `opener_test.kspl` how it gives up on a server. `all.kspl` runs them; `main.kspl` gives them a `main` for `make debug-tools`. `lldb_sample.kspl` is the program `kspl_lldb.py`'s self-test debugs. `ksmd_launch.kspl` (`make test-ksmd-open`) starts ksmd's opener on scratch workspaces and asks each server it started. `chat_launch.mjs` and `chat_page.mjs` (`make test-ksagent-chat`) check the launcher's model server, then drive ksagent's chat page in a headless Chromium, through kssrv and `ksagent watch`. `chat_support.mjs` holds their stand-in model server. |
+| `tests/` | The tools' tests. `page_test.kspl` covers the URL that opens a document, the surface listing and the tutorial page. `repo_test.kspl` covers the CI's sets. `aim_rows_test.kspl` checks the rows of `docs/SPEC-opener-aim.ksmd` against the code. `ksmd_aim_test.kspl` covers the other rules of ksmd's opener, and `opener_test.kspl` how it gives up on a server. `all.kspl` runs them; `main.kspl` gives them a `main` for `make debug-tools`. `lldb_sample.kspl` is the program `kspl_lldb.py`'s self-test debugs. `ksmd_launch.kspl` (`make test-ksmd-open`) starts ksmd's opener on scratch workspaces and asks each server it started. `chat_launch.mjs` and `chat_page.mjs` (`make test-ksagent-chat`) check the launcher's model server, then drive ksagent's chat page in a headless Chromium, through kssrv and `ksagent watch`. `chat_support.mjs` holds their stand-in model server. |
 | `docs/` | The design, and the opener's rules as rows ("Further reading" below). |
 
 ## Changing a rule of the opener

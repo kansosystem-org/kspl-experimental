@@ -56,7 +56,7 @@
 * **What the panel holds is "Filters" in [`SPEC-editing-page.md`](SPEC-editing-page.md)**, with Clear filter from this column beside the two sorts.
 * **"Is greater than" and "is less than" compare a number at the 15 digits it shows**, as a formula's `>` and `<` do. A colour rule compares so too. The page asks the editor (`ks.compareNumbers` in `ksmd/port/web/core.js`), so it has no rule of its own that could disagree with a formula.
 * Typing in the search box narrows the list shown, and never unticks a value.
-* The values are listed in the order the column sorts in. Values that differ only in case are one value, and empty cells one value listed last. The list stops at 1,000 values and says so.
+* **The values are listed in the order Sort ascending gives them.** The page asks the editor (`ks.compareValues` in `ksmd/port/web/core.js`), so text past A to Z is not ordered by a second rule. Values that differ only in case are one value, and empty cells one value listed last. The list stops at 1,000 values and says so.
 * **Past 1,000 values, the search looks through all of them**, and lists the first 1,000 it finds.
 * **A value the list never showed was never unticked, so it stays shown.** Past 1,000 values, OK keeps whichever is fewer: the values ticked (`in:`), or those left out (`out:`), which lets a value added later show. Up to 1,000, OK keeps the values ticked.
 * **A column's dates stand in a tree: years, then months, then days.** Each year and month starts folded, and its button or Right and Left open and fold it. A month is named in the browser's language. A day stands by its date, whatever format its cell shows it in, so a year stands once.
@@ -444,7 +444,7 @@ style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; f
 
 ## Find and replace
 
-**Ctrl+F opens a find bar under the formula bar, and Ctrl+H opens it with its replace part.** The Edit menu and the bar's Find tool open it too. A short selection on one line becomes the search text.
+**Ctrl+F opens a find bar under the formula bar, and Ctrl+H opens it with its replace part.** In Read-only, Ctrl+H opens it without that part: a person there most often wants to find. The Edit menu and the bar's Find tool open it too. A short selection on one line becomes the search text.
 
 * **Find looks in the text the page shows, and in each cell's text as a person edits it.** So a formula's source is searched, and its calculated value is not.
 * **A match can cross formatting**, but stays inside one paragraph, heading, list item, code block or cell.

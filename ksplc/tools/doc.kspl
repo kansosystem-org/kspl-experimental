@@ -431,21 +431,25 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     //< **With `--emit-surface=`, it writes the file's record there instead**, and prints nothing.
     //< **The entry follows the first `.` after the last `/`** (`std/mem.Arena.alloc` is the file
     //< `std/mem` and the entry `Arena.alloc`), since a logical name holds no `.`.
+    //< **A name ending in `.kspl` is the file**, as a shell's completion writes it: read as the
+    //< entry `kspl`, `ksplc doc main.kspl` refused a file that stands there.
+    named: =
+        target.sub(0, target.len - ".kspl".len) if target.ends_with(".kspl") else target
     $after_slash: Sz = 0
-    if slash: = target.rfind_char('/')
+    if slash: = named.rfind_char('/')
         after_slash = slash + 1
-    $cut: = target.len
+    $cut: = named.len
     // **A last part of `.` or `..` is a folder**, and holds no entry.
-    last: = target.sub_from(after_slash)
+    last: = named.sub_from(after_slash)
     if !last.equals(".") && !last.equals("..")
         if dot_rel: = last.find_char('.')
             cut = after_slash + dot_rel
     // **The name is made logical first**, as a compile makes its input's: `lib/kspeg/`,
     // `./lib/kspeg` and `lib/kspeg` are one folder, and its files are listed under one name.
-    $name: = logical_of(base_locate.to_project_relative(target.sub(0, cut)))
+    $name: = logical_of(base_locate.to_project_relative(named.sub(0, cut)))
     if name.len == 0
         name = "."
-    key: = "" if cut >= target.len else target.sub_from(cut + 1)
+    key: = "" if cut >= named.len else named.sub_from(cut + 1)
     defer $out: = Str()
     path: = file_path_of(name)
     record: = base_core.config.surface_path

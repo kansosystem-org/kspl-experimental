@@ -24,7 +24,7 @@ The optimizer is the rule that moves the weights after each step. *SGD* (stochas
 
 | Function | Works out the gradients | Moves the weights | Optimizer |
 | :-- | :-- | :-- | :-- |
-| `backward` / `backward_lora` | yes | yes | fixed to SGD |
+| `backward_lora` | yes | yes, the adapters only | fixed to SGD |
 | `backward_grads` / `backward_lora_grads` | yes | no; the caller passes the gradients to an `Updater` | SGD, or Adam ([`optim.kspl`](../optim.kspl)) |
 
 **The applying versions are built on the `_grads` ones**, so the computation sits in one place.

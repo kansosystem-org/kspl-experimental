@@ -23,6 +23,7 @@ import "std/verdict"
 // ==========================================
 priv const MARKS_SRC: U8[] =
     """import "std/ds" { List }
+import "std/io"
 import "std/net"
 
 priv struct Pair
@@ -40,6 +41,7 @@ fn sum(words: List<|U8[]|>$@, x: U8): I32
     defer more.free()
     _n: = sum(more@, x)
     y: = I32::x
+    io.out().s("y=\{y\}\n")
     return y * 2 + I32::words.len + I32::ns.len + on_ready()
 
 extern fn on_ready(): I32
@@ -81,6 +83,10 @@ priv const NAMED_SPOTS: Spot[_] = ::{ //< the positions on a name, and a piece o
         .want = "free(" },
     Spot::{ .line = "    defer more.free", .needle = "()",
         .name = "the position just past a method's name", .want = "free(" },
+    // **A `.s` whose string interpolates is rewritten into a chain**, whose first `s` keeps the
+    // written one's position.
+    Spot::{ .line = "    io.out().s(", .needle = ".s(", .step = 1,
+        .name = "the 's' of a call whose string interpolates", .want = "Writer.s(" },
     // **A function C calls by its own name says so**, as it is written (`extern`).
     Spot::{ .line = "    return y", .needle = "on_ready", .step = 1,
         .name = "a function published to C", .want = "extern fn" },

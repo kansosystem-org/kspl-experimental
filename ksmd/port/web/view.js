@@ -446,8 +446,13 @@ function ksmdView(ks) {
     return el;
   }
 
+  // The page place of a spot in text, or of the gap before a block, where no gap element stands.
   function pointOf(spot) {
     const b = blocks()[spot[1]];
+    if (spot[0] === ks.SPOT.BLOCK_GAP) {
+      const kids = ks.root.childNodes;
+      return { node: ks.root, offset: b ? Array.prototype.indexOf.call(kids, b) : kids.length };
+    }
     if (!b) return { node: ks.root, offset: ks.root.childNodes.length };
     const u = b.classList.contains("list") ? items(b)[spot[2]] : b;
     return pointIn(u || b, spot[3]);
@@ -468,18 +473,25 @@ function ksmdView(ks) {
   // Shows the model's selection on the page, or no caret while the person works in a table.
   // With `caret` false, only a gap the selection stands in is drawn, and the page's selection
   // stays where it is, as in a bar that holds the focus (`ks.redraw`).
+  // Caution: **A selection from or to a gap shows whole on the page**, as Select All makes over a
+  // table at either end. Shown as a caret alone, it was lost at the next key, which reads the
+  // page's selection back (`ks.sync`). An anchor in a list's gap shows at the focus.
   function showSelection(sel, caret = true) {
     if (ks.inTable()) return hideCaret();
     removeGap();
     const s = window.getSelection();
+    const same = sel.a.every((v, i) => v === sel.f[i]);
+    const anchor = (f) => (same || sel.a[0] === ks.SPOT.ITEM_GAP ? f : pointOf(sel.a));
     if (sel.f[0] !== ks.SPOT.TEXT) {
       const g = makeGap(sel.f, sel.g);
-      if (caret) s.setBaseAndExtent(g, 0, g, 0);
+      if (!caret) return;
+      const a = anchor({ node: g, offset: 0 });
+      s.setBaseAndExtent(a.node, a.offset, g, 0);
       return;
     }
     if (!caret) return;
-    const a = pointOf(sel.a[0] === ks.SPOT.TEXT ? sel.a : sel.f);
     const f = pointOf(sel.f);
+    const a = anchor(f);
     s.setBaseAndExtent(a.node, a.offset, f.node, f.offset);
   }
 

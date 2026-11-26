@@ -106,8 +106,11 @@
 | Note a paragraph | Insert ▸ Note… (`Shift`+`F2`). An empty note resolves it |
 | Find and replace | Edit ▸ Find… (`Ctrl`+`F`), Replace… (`Ctrl`+`H`). `Enter` and `F3` go to the next match |
 | Go to the document's start or end | `Ctrl`+`Home`, `Ctrl`+`End`, also past a table, a chart or a diagram there. Or press below the last block |
+| Select the whole document | `Ctrl`+`A` in the text, also past a table, a chart or a diagram at either end |
 
-**A paste takes the clipboard's plain text.** Where the clipboard also held formatting, the page says it was not kept. Rows of tab-separated values pasted into text make a table.
+**A paste takes the clipboard's plain text.** Where the clipboard also held formatting, the page says it was not kept. Rows of tab-separated values pasted into text make a table, where each line that holds text holds a tab. Text with a line that holds no tab pastes as paragraphs, so text copied across a table keeps its lines before and after it.
+
+**A copy or a cut of text takes its plain text.** A table in it gives its cells as tab-separated rows, as a copy of all its cells does. An image gives its alt text and caption. A chart, a diagram, a divider and an included file give nothing.
 
 **An image goes in by Insert ▸ Image…, a paste, or a drop.** It takes a PNG or a JPEG, and asks nothing. The file is written in the document's data folder, such as `OfficeMemo-data/image-1.png`, so the document needs a file first. Caption… in the image's tools gives it a caption, which a reference can name. Alt text… gives it a description for someone who cannot see it. A screen reader passes over an image with none, as decoration.
 
@@ -125,14 +128,14 @@
 
 | To | Do |
 | :-- | :-- |
-| Choose a cell | Press on it. `Enter` moves the choice down and `Tab` right, and with `Shift` up and left. The arrow keys move it too |
+| Choose a cell | Press on it. `Enter` moves the choice down and `Tab` right, and with `Shift` up and left. The arrow keys move it too. On the last row `Enter` keeps the choice there, and on the first row `Shift`+`Enter` does, as in Excel |
 | Go to the edge of the values | `Ctrl`+an arrow key: to the last value before an empty cell, or over empty cells to the next value |
 | Go to a row's first or last cell | `Home`, `End` |
 | Go to the first data cell or the last cell | `Ctrl`+`Home`, `Ctrl`+`End` |
 | Add a row at the end | `Tab` in the last cell. `Tab` past a row's last cell goes on to the next row's first |
 | Edit a cell | Press twice, or press `F2`: the arrow keys then move the caret inside the cell. Typing on a chosen cell replaces its value, and an arrow key then moves to the next cell |
 | Edit a long formula | Press in the formula bar, under the quick access bar. It edits the chosen cell with the window's width |
-| Take the edit | `Enter`, `Tab`, or a press elsewhere. `Shift`+`Enter` takes it and moves up. `Esc` drops it |
+| Take the edit | `Enter`, `Tab`, or a press elsewhere. `Shift`+`Enter` takes it and moves up. On the last or first row, the cell stays chosen. `Esc` drops it |
 | Give back the value you typed over | `Esc` or `Ctrl`+`Z`, while the cell you typed into is still open |
 | Type a line break in a cell | `Alt`+`Enter` |
 | Leave the table | `Esc`, a press in the text, or an arrow key past the first or last row. An arrow key puts the caret on the text after the table, or before it |

@@ -40,7 +40,7 @@ The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, over
 
 ### [W0101] An out-of-bounds array access
 A constant index lies outside a fixed-length array (`a[5]` on an `I32[3]`, or `a[-1]`).
-* **Every compile prints it**, `ksplc run` and `ksplc build` included, not `ksplc lint` alone: the index panics at run time.
+* **Every compile prints it**, `ksplc run` and a compile to an executable included, not `ksplc lint` alone: the index panics at run time.
 * **Fix**: correct the index, or it panics at run time.
 
 ### [W0102] A side effect lost in an array length
@@ -48,10 +48,11 @@ An array's `.len` is evaluated at compile time, so its subject expression never 
 * **Fix**: move the side effect into its own statement, keep its result in a variable, and take `.len` from that.
 
 ### [W0103] A digit-accumulating loop with no ceiling check
-A loop builds a number digit by digit and never checks a limit, so a long input overflows it. It fires where a `for` accumulates in one of these patterns, and no `if` in the loop tests the variable:
+A loop builds a number digit by digit, or multiplies into it, and never checks a limit. A long input, or many turns, overflows it. It fires where a `for` accumulates in one of these patterns, and no `if` in the loop tests the variable:
 1. `x = x * <an integer literal> + <an expression>` (on signed integers)
 2. `x *= <an expression>` (a compound multiplication; on unsigned integers and `Sz` as well)
-* **Fix**: compare the variable against the permitted ceiling, and treat exceeding it as an error (see `parse_number` in `std/json.kspl` and `content_length` in `std/jsonrpc.kspl`).
+* **The message names no input**: a factorial reads none, and overflows all the same.
+* **Fix**: compare the variable against the permitted ceiling, and treat exceeding it as an error (see `parse_number` in `std/json.kspl` and `content_length` in `std/jsonrpc.kspl`). Or compute with `checked_mul` and `checked_add` from `std/checked_int`, which throw on overflow.
 
 ### [W0104] A pointer from an arena handed to a free
 A pointer from `arena.alloc()` / `arena.create(v)` is passed to `mem.dealloc()`. An arena's memory is freed all at once, not piece by piece.
@@ -66,7 +67,7 @@ A pointer from `arena.alloc()` / `arena.create(v)` is passed to `mem.dealloc()`.
 * (B) `return`ed to the caller, or
 * (C) stored through a parameter or into a global (`out$ = p`), where it outlives the function.
 
-It follows the dataflow of one function: branches, each way out, and a loop's back edge. So a borrow kept over a loop whose body unlocks is caught on the loop's second turn. A guard type of the same shape is caught too, and an alias (`q: = p`) inherits the tracking.
+It follows the dataflow of one function: branches, each way out, and a loop's back edge. So a borrow kept over a loop whose body unlocks is caught on the loop's second turn. A guard type of the same shape is caught too, and an alias (`q: = p`) inherits the tracking. A local given a new value is read as its declaration is: after `p = m.lock()`, `p` is usable and the lock is held again.
 * **It is a lint, not a guarantee.** A lock reached through a field, a borrow passed to another function, and two branches on the same condition are not followed.
 * **Fix**: for (A), use the borrow before the `unlock()`, or `lock()` again just before the use. For (B) and (C), copy out the value needed while holding the lock, and pass on the copy.
 
@@ -111,7 +112,7 @@ A pointer to such a value (`Arena(…)`'s result) is read only up to a `defer` l
 A local value becomes a trait value where the trait is expected, with no `@` written, and the trait value keeps the local's address. Here it is handed to a method that takes its receiver as `Self$@`, on a container that holds that trait as a type argument: `xs.push(sq)` with `xs: List<|Shape|>`. The container can keep the address after the local's block ends. It is reported where the container is behind a pointer, in a global, or in a local of an outer block.
 * **A container in a local of the same block or a deeper one is not reported.** It dies no later than the value. Returning it, or storing it where it outlives the frame, is a compile error instead ("8.4.5 Tracking a free with `Manual_free`" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-manual_free)).
 * **It is a warning, not an error**: the signature does not say whether the method keeps what it is handed.
-* **Every compile prints it**, `ksplc run` and `ksplc build` included, not `ksplc lint` alone: what it warns of reads freed memory at run time.
+* **Every compile prints it**, `ksplc run` and a compile to an executable included, not `ksplc lint` alone: what it warns of reads freed memory at run time.
 * **Fix**: keep the value as long as the container. Make it in the container's arena (`arena.create(Sq::{ … })`) and pass that pointer, or let the container hold the concrete type (`List<|Sq|>`).
 
 ### [W0111] A view used after its owner moved its memory

@@ -362,7 +362,7 @@ def kspl_ast_node_summary(valobj, internal_dict):
 # payload. **The tag is a plain `I32`**, so its type names no case. genc writes the cases as the
 # enumerators `kspl_<C type name>_<case>`, and they are looked up here by that name.
 # Caution: **clang leaves an enum out of the debug information when no variable has its type**,
-# which is the case for most of them. `ksplc build` passes `-fno-eliminate-unused-debug-types`
+# which is the case for most of them. A compile to an executable passes `-fno-eliminate-unused-debug-types`
 # to keep them; a program built another way may show only the number (`tag=1`). `Option` and
 # `Result` still show theirs, from `STD_ENUM_CASES`.
 
@@ -736,8 +736,8 @@ DEMANGLE_FN_CASES = [
 SAMPLE = "tools/tests/lldb_sample.kspl"
 SAMPLE_STOP = "kspl_priv_tools_tests_lldb_sample_stop_here"
 
-# What `frame variable` shows in the sample's `main`, local by local. `ksplc build` keeps the
-# enum `Shape`'s names in the debug information, so its case shows by name.
+# What `frame variable` shows in the sample's `main`, local by local. A compile to an executable
+# keeps the enum `Shape`'s names in the debug information, so its case shows by name.
 LLDB_WANTS = [
     ("list", ("(List<|I32|>) len=2",)),
     ("map", ("(Map<|U8[], I32|>) entries=1",)),
@@ -915,7 +915,7 @@ def _selftest():
         return rep
     with tempfile.TemporaryDirectory() as tmp:
         exe = os.path.join(tmp, "lldb_sample" + exe_ext)
-        built = subprocess.run([ksplc, "build", "--cflags=-O0", SAMPLE, exe], cwd=root,
+        built = subprocess.run([ksplc, "--cflags=-O0", SAMPLE, exe], cwd=root,
                                capture_output=True, text=True, timeout=240)
         rep.check("the sample builds", built.returncode == 0, built.stdout + built.stderr)
         c_file = os.path.join(tmp, "lldb_sample.c")

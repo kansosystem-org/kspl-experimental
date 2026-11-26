@@ -1,0 +1,100 @@
+//< A waiter lends a mutex's holder only its own priority, never one lent to it (a POSIX host)
+//< A (priority 1) holds m1. B (priority 2) holds m2 and waits on m1, so it lends A its own 2.
+//< C (priority 5) waits on m2 with a timeout, so it lends B 5. **A chain is not followed**: A stays
+//< at 2 while C waits, and when C gives up, B goes back to 2 and A stays at 2. The run is made
+//< twice, with A first in the task table and then B first. A recompute that read what a waiter was
+//< lent would give A 5 in one of the two orders.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/verdict"
+
+priv const A_PRIO: I32 = 1
+priv const B_PRIO: I32 = 2
+priv const C_PRIO: I32 = 5
+priv const X_PRIO: I32 = 6 // above them all, so it looks at the others between their steps
+
+$g_m1: sync.Mutex
+$g_m2: sync.Mutex
+$tcb_a: Task
+$tcb_b: Task
+$tcb_c: Task
+$tcb_x: Task
+$stack_a: U8[65536]
+$stack_b: U8[65536]
+$stack_c: U8[65536]
+$stack_x: U8[65536]
+
+struct Seen //< the priorities one round saw, for main to judge once the round has ended
+    a_while_c_waits: I32
+    b_while_c_waits: I32
+    a_after_c_gave_up: I32
+    b_after_c_gave_up: I32
+    c_got_m2: Bool
+
+$g_seen: Seen
+
+fn holder_a(_arg: Void$@): Void //< holds m1 from the start until tick 30
+    g_m1.lock()
+    Task.delay(30)
+    g_m1.unlock()
+
+fn middle_b(_arg: Void$@): Void //< from tick 1, holds m2 and waits on m1
+    Task.delay(1)
+    g_m2.lock()
+    g_m1.lock()
+    g_m1.unlock()
+    g_m2.unlock()
+
+fn waiter_c(_arg: Void$@): Void //< from tick 2, waits 5 ticks for m2, and gives up at tick 7
+    Task.delay(2)
+    g_seen.c_got_m2 = g_m2.lock_for(5)
+    if g_seen.c_got_m2
+        g_m2.unlock()
+
+fn checker_x(_arg: Void$@): Void //< looks at A and B at tick 4, while C waits, and at tick 8
+    Task.delay(4)
+    g_seen.a_while_c_waits = tcb_a.get_prio()
+    g_seen.b_while_c_waits = tcb_b.get_prio()
+    Task.delay(4)
+    g_seen.a_after_c_gave_up = tcb_a.get_prio()
+    g_seen.b_after_c_gave_up = tcb_b.get_prio()
+
+fn run_round(a_first: Bool) //< runs the four tasks to their end, with A or B first in the table
+    g_seen = ::{ .a_while_c_waits = 0, .b_while_c_waits = 0, .a_after_c_gave_up = 0,
+        .b_after_c_gave_up = 0, .c_got_m2 = false }
+    g_m1.init()
+    g_m2.init()
+    if a_first
+        tcb_a.create(U8$[]::stack_a, holder_a, null, A_PRIO, "A")
+        tcb_b.create(U8$[]::stack_b, middle_b, null, B_PRIO, "B")
+    else
+        tcb_b.create(U8$[]::stack_b, middle_b, null, B_PRIO, "B")
+        tcb_a.create(U8$[]::stack_a, holder_a, null, A_PRIO, "A")
+    tcb_c.create(U8$[]::stack_c, waiter_c, null, C_PRIO, "C")
+    tcb_x.create(U8$[]::stack_x, checker_x, null, X_PRIO, "X")
+    task.start_scheduler()
+    // Every task is done: deleting them frees their slots for the next round.
+    tcb_a.delete()
+    tcb_b.delete()
+    tcb_c.delete()
+    tcb_x.delete()
+
+fn main(): I32
+    verdict.begin("ksos lend_chain")
+
+    run_round(true)
+    verdict.check("A first in the table: while C waits, B runs at C's 5 and A at B's own 2",
+        g_seen.b_while_c_waits == C_PRIO && g_seen.a_while_c_waits == B_PRIO, "")
+    verdict.check("A first in the table: C gives up on m2 at its timeout", !g_seen.c_got_m2, "")
+    verdict.check("A first in the table: once C gave up, B and A both run at 2",
+        g_seen.b_after_c_gave_up == B_PRIO && g_seen.a_after_c_gave_up == B_PRIO,
+        "A kept a priority that B was lent, so the chain was followed")
+
+    run_round(false)
+    verdict.check("B first in the table: while C waits, B runs at C's 5 and A at B's own 2",
+        g_seen.b_while_c_waits == C_PRIO && g_seen.a_while_c_waits == B_PRIO, "")
+    verdict.check("B first in the table: C gives up on m2 at its timeout", !g_seen.c_got_m2, "")
+    verdict.check("B first in the table: once C gave up, B and A both run at 2",
+        g_seen.b_after_c_gave_up == B_PRIO && g_seen.a_after_c_gave_up == B_PRIO,
+        "A kept a priority that B was lent, so the chain was followed")
+    return verdict.finish()

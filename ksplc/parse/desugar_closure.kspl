@@ -20,6 +20,7 @@ import "ksplc/parse/desugar" { Desugar_ctx, Gen_param, CLOSURE_EMPTY_FIELD, next
 import "ksplc/parse/desugar_slice" { spell_as_written, spell_before_postfix, is_fixed_array_type,
     spell_array_element }
 import "ksplc/parse/load" as parse_load
+import "std/chars"
 import "std/ds" { List }
 import "std/str" { Str }
 
@@ -57,7 +58,7 @@ impl Ast_node
         // copied over, since nothing decides the instantiation where a value is passed. Without
         // this check, the lifted `T` gives the baffling "missing import alias prefix for type 'T'".
         fwd: =
-            forwarded_gen_params(ctx, sig, sig.find_child(.k_param_list), null, body)
+            forwarded_gen_params(ctx, sig, sig.find_child(.k_param_list), null, body, false)
         if fwd.len > 0
             used: = fwd.get(0).name
             defer $msg: = Str()
@@ -132,11 +133,15 @@ impl Ast_node
         serial: = next_anon_serial(ctx, loc.file())
         // The synthesized declarations go to the top level, where the enclosing type arguments are
         // not visible. Those the signature uses are copied over (with none, it stays non-generic).
-        fwd_params: = forwarded_gen_params(ctx, sig, params, captures, body)
+        // So is the enclosing `Self`, which names the environment inside the synthesized `impl`.
+        fwd_params: = forwarded_gen_params(ctx, sig, params, captures, body, true)
+        if fwd_params.len > 0 &&
+            fwd_params.get(fwd_params.len - 1).name.equals(SELF_STAND_IN)
+            respell_self(body)
 
         defer $src: = Str()
         if !r.build_closure_src(ctx, sig, params, arity, captures, serial,
-            gen_args_text(fwd_params, true), gen_args_text(fwd_params, false), src@)
+            gen_args_text(fwd_params, .declared), gen_args_text(fwd_params, .passed), src@)
             return
 
         // Caution: **Do not copy the ordinary path (parse -> normalize -> validate) here**; it
@@ -215,7 +220,7 @@ impl Ast_node
         $first: = true
         for cap in base_ast_ext.Param_cursor(captures, false)
             c_name: = cap.find_text(.k_identifier)
-            c_ty: = spell_before_postfix(cap.get_decl_type_node())
+            c_ty: = in_synth(spell_before_postfix(cap.get_decl_type_node()))
             if !first
                 src.s(", ")
             src.s("\{c_name\}: \{c_ty\}@")
@@ -234,10 +239,10 @@ impl Ast_node
 
         // The impl of Callable; the written argument and return types become its type arguments.
         ret_node: = sig.find_child(.k_type_expr)
-        ret_ty: = "Void" if ret_node == null else spell_as_written(ret_node)
+        ret_ty: = "Void" if ret_node == null else in_synth(spell_as_written(ret_node))
         src.s("impl\{gen_decl\} \{env_name\}\{gen_args\}: Callable\{arity\}<|")
         for p in base_ast_ext.Param_cursor(params, false)
-            p_ty: = spell_as_written(p.get_decl_type_node())
+            p_ty: = in_synth(spell_as_written(p.get_decl_type_node()))
             if p_ty.equals(base_core.UNKNOWN_TYPE_NAME)
                 r.desugar_err(ctx, "a closure parameter must have a type annotation")
                 return false
@@ -249,10 +254,10 @@ impl Ast_node
         src.s("\{ret_ty\}|> {\n  fn call(r: Self@")
         for p in base_ast_ext.Param_cursor(params, false)
             p_name: = p.find_text(.k_identifier)
-            src.s(", \{p_name\}: \{spell_as_written(p.get_decl_type_node())\}")
+            src.s(", \{p_name\}: \{in_synth(spell_as_written(p.get_decl_type_node()))\}")
         src.s("): \{ret_ty\} {\n")
-        // It rebinds the captured names, so **the body needs no rewriting**. `n` resolves as an
-        // ordinary local. Since it is immutable, the mutability check stops a write to it.
+        // It rebinds the captured names, so **the body needs no rewriting for them**. `n` resolves
+        // as an ordinary local. Since it is immutable, the mutability check stops a write to it.
         for cap in base_ast_ext.Param_cursor(captures, false)
             c_name: = cap.find_text(.k_identifier)
             src.s("    \{c_name\}: = r.\{c_name\}$;\n")
@@ -296,7 +301,7 @@ impl Ast_node
                     \{elem\}[]'")
             cap.desugar_err(ctx, m.slice())
             return false
-        src.s("  priv \{c_name\}: \{spell_before_postfix(ty_node)\}@;\n")
+        src.s("  priv \{c_name\}: \{in_synth(spell_before_postfix(ty_node))\}@;\n")
         return true
 
     priv fn name_closure_receiver(r: Ast_node$@) //<
@@ -408,24 +413,23 @@ priv fn build_anon_env_val_name(serial: Sz): U8[]
 priv fn written_gen_param(node: Ast_node$@, name: U8[]): Gen_param //<
     //< One type parameter as its declaration writes it: `T`, or `const N: Sz` with its type
     if !node.is_const_gen_param()
-        return Gen_param::{ .name = name, .written = name, .is_const = false }
+        return Gen_param::{ .name = name, .written = name, .is_const = false, .arg = name }
     out: = base_core.arena.text().s("const ").s(name)
     ty: = node.find_child(.k_type_expr)
     if ty != null
         out.s(": ").s(spell_as_written(ty))
-    return Gen_param::{ .name = name, .written = out.take(), .is_const = true }
+    return Gen_param::{ .name = name, .written = out.take(), .is_const = true, .arg = name }
 
 fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
-    captures: Ast_node$@, body: Ast_node$@): List<|Gen_param|>$@ //<
+    captures: Ast_node$@, body: Ast_node$@, self_too: Bool): List<|Gen_param|>$@ //<
         //< It returns the enclosing type parameters that the closure uses, in order
         //< The order is the order they were declared in. A type parameter counts where the
         //< signature's types name it. **A `const` one counts where the body reads it too**: it is a
         //< value there (`return N`), and the lifted body would have no `N` to read.
+        //< With self_too, a `Self` the signature or the body names comes last, as SELF_STAND_IN.
         //< Caution: Keep only the ones it uses. A synthesized type differs per instantiation. So an
         //< unused one duplicates the closure for every instantiation of the enclosing declaration.
     out: = List<|Gen_param|>.create(base_core.arena)
-    if ctx.gen_params.len == 0
-        return out
     defer $types: = Str()
     signature_type_text(sig, params, captures, types@)
     type_text: = types.slice()
@@ -433,7 +437,67 @@ fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
         if base_ast_spell.mentions_ident(type_text, gp.name) ||
             (gp.is_const && names_identifier(body, gp.name))
             out.push(gp)
+    if self_too && (base_ast_spell.mentions_ident(type_text, "Self") || names_self(body))
+        out
+            .push(Gen_param::{ .name = SELF_STAND_IN, .written = SELF_STAND_IN, .is_const = false,
+            .arg = "Self" })
     return out
+
+priv const SELF_STAND_IN: U8[] = "_anon_self" //<
+    //< The type parameter that carries the enclosing `Self` into a closure's declarations
+    //< **Inside the synthesized `impl`, `Self` names the environment**, so each type the closure
+    //< writes spells it as this (in_synth). The closure's place passes `Self`, which names the
+    //< enclosing type there, in each copy of a trait's default body too. Like the environment's
+    //< own name, it opens with `_`.
+
+priv fn in_synth(spelled: U8[]): U8[] //<
+    //< A type's spelling for the synthesized source: each `Self` word becomes SELF_STAND_IN
+    if !base_ast_spell.mentions_ident(spelled, "Self")
+        return spelled
+    out: = base_core.arena.text()
+    $at: Sz = 0
+    for at < spelled.len
+        if at + 4 <= spelled.len && spelled.sub(at, 4).equals("Self") &&
+            (at == 0 || !is_word_char(spelled[at - 1])) &&
+            (at + 4 == spelled.len || !is_word_char(spelled[at + 4]))
+            out.s(SELF_STAND_IN)
+            at += 4
+        else
+            out.c(spelled[at])
+            at += 1
+    return out.take()
+
+priv fn is_word_char(ch: U8): Bool //< whether ch can stand inside a name
+    return ch.is_alnum() || ch == '_'
+
+priv fn spells_type_or_path(node: Ast_node$@): Bool //< whether node's text can name a type
+    switch node.kind_id
+    case .k_identifier, .k_expr_path, .k_type_path, .k_type_args, .k_type_arg, .k_type_expr,
+        .k_type_postfix, .k_type_atom
+        return true
+    default
+        return false
+
+priv fn names_self(node: Ast_node$@): Bool //< whether a name or a type under node says `Self`
+    if node == null
+        return false
+    if spells_type_or_path(node) && base_ast_spell.mentions_ident(node.text, "Self")
+        return true
+    for c in node.children
+        if names_self(c)
+            return true
+    return false
+
+priv fn respell_self(node: Ast_node$@) //<
+    //< It spells each `Self` of the closure's body as SELF_STAND_IN, as in_synth does for its types
+    //< **The body moves into the synthesized `impl`**, where `Self` would name the environment.
+    //< A closure nested in it already passes `<|Self|>`, which this carries on too.
+    if node == null
+        return
+    if spells_type_or_path(node)
+        node.text = in_synth(node.text)
+    for c in node.children
+        respell_self(c)
 
 priv fn names_identifier(node: Ast_node$@, name: U8[]): Bool //<
     //< whether an identifier under node is name
@@ -446,9 +510,13 @@ priv fn names_identifier(node: Ast_node$@, name: U8[]): Bool //<
             return true
     return false
 
-priv fn gen_args_text(params: List<|Gen_param|>@, declared: Bool): U8[] //<
-    //< The `<|T, const N: Sz|>` that declares the type parameters copied over, or the `<|T, N|>`
-    //< that passes them
+priv enum Gen_spelling //< which spelling of the copied type parameters gen_args_text writes
+    declared //< `<|T, const N: Sz|>`, declaring them on a synthesized declaration
+    passed //< `<|T, N|>`, passing them on inside the synthesized declarations
+    at_place //< `<|T, N, Self|>`, passing them at the closure's place
+
+priv fn gen_args_text(params: List<|Gen_param|>@, how: Gen_spelling): U8[] //<
+    //< The type parameters copied over, spelled as how says
     //< Empty where there are none, leaving the synthesized declarations non-generic.
     if params.len == 0
         return ""
@@ -456,7 +524,14 @@ priv fn gen_args_text(params: List<|Gen_param|>@, declared: Bool): U8[] //<
     out.s("<|")
     for i in Range.asc(params.len)
         gp: = params.get(i)
-        out.s(", " if i > 0 else "").s(gp.written if declared else gp.name)
+        out.s(", " if i > 0 else "")
+        switch how
+        case .declared
+            out.s(gp.written)
+        case .passed
+            out.s(gp.name)
+        case .at_place
+            out.s(gp.arg)
     out.s("|>")
     return out.take()
 
@@ -468,10 +543,10 @@ priv fn build_generic_path_ref(name: U8[], params: List<|Gen_param|>$@, loc: bas
         //< the path's text alone. It rebuilds the text from the children.
     if params.len == 0
         return build_path_ref(name, loc)
-    args_text: = gen_args_text(params, false)
+    args_text: = gen_args_text(params, .at_place)
     type_args: = Ast_node(.k_type_args, args_text, loc)
     for gp in params
-        type_args.add_child(Ast_node(.k_type_atom, gp.name, loc))
+        type_args.add_child(Ast_node(.k_type_atom, gp.arg, loc))
     full: = base_core.arena.text().s(name).s(args_text).take()
     return Ast_node(.k_expr_path, full, loc).add_child(Ast_node.build_ident(name, 0, loc))
         .add_child(type_args)

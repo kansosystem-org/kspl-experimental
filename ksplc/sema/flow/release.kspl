@@ -49,15 +49,19 @@ priv fn is_free_fn_path(callee: Ast_node$@): Bool //<
         return false
     return callee.get_path_or_ident_name().equals("dealloc")
 
-priv fn expr_names_local(node: Ast_node$@, name: U8[]): Bool //<
-    //< Whether the expression refers to the binding named `name` itself
-    //< `f@` and `Void$@::f` are stripped (as get_addressed_local_def does) down to a bare name. A
-    //< field like `r.ptr` is excluded (its lifetime is not tracked, so it would be a false
-    //< positive).
+priv fn is_rooted_at(node: Ast_node$@, name: U8[], through_parts: Bool): Bool //<
+    //< Whether the expression is the binding `name`, or with through_parts a part reached through it
+    //< `f@` and `Void$@::f` always count. With through_parts, `r.buf`, `r.rows[i]` and `r$` count
+    //< too: freeing any of them leaves the value `r` stands for unusable. Without it, a field like
+    //< `r.ptr` is excluded: its lifetime is not tracked, so it would be a false positive.
     $curr: = node
     for curr != null && curr.kind_id == .k_expr_postfix
         op: = curr.get_postfix_op()
-        if op == null || !(op.text.equals("@") || op.text.equals("::"))
+        if op == null
+            break
+        t: = op.text
+        is_part: = t.equals(".") || t.equals("[") || t.equals("$")
+        if !(t.equals("@") || t.equals("::") || through_parts && is_part)
             break
         curr = curr.get_postfix_receiver()
     if curr == null
@@ -77,34 +81,54 @@ priv fn may_exit_body(node: Ast_node$@): Bool //< an earlier exit makes a later 
             return true
     return false
 
-priv fn is_rooted_at(node: Ast_node$@, name: U8[]): Bool //<
-    //< Whether the expression is the binding `name` or a part reached through it
-    //< `r`, `r.buf`, `r.rows[i]`, `r$` and `Void$@::r.ptr` all count: freeing any of them leaves
-    //< the value `r` stands for unusable.
-    $curr: = node
-    for curr != null && curr.kind_id == .k_expr_postfix
-        op: = curr.postfix_op_text()
-        if !(op.equals("@") || op.equals("::") || op.equals(".") || op.equals("[") ||
-            op.equals("$"))
-            break
-        curr = curr.get_postfix_receiver()
-    if curr == null
-        return false
-    return (curr.kind_id == .k_identifier || curr.kind_id == .k_expr_path) &&
-        curr.text.equals(name)
+struct Passed_arg //< one formal parameter of a called function, with the actual argument for it
+    callee_fn: Ast_node$@ //< the called function's declaration
+    param_name: U8[] //< the formal parameter's name
+    arg: Ast_node$@ //< the actual argument the call passes for it
 
-fn call_arg_for_param(callee: Ast_node$@, args_node: Ast_node$@, param_idx: Sz, is_method: Bool):
-    Ast_node$@? //<
-        //< The actual-argument node for the formal parameter param_idx, or none
-        //< On a method call 0 is the receiver (as in mark_call_freed_args).
-    $arg: Ast_node$@ = null
-    if is_method && param_idx == 0
-        arg = callee.get_postfix_receiver()
-    else
-        at: = param_idx - 1 if is_method else param_idx
-        if at < args_node.children.len
-            arg = args_node.get_child(at)
-    return .some(arg) if arg != null else .none
+struct Passed_arg_cursor //< a cursor that returns a call's parameters with their arguments
+    //< Use `for pa in Passed_arg_cursor(call)` on a call node (`foo(x)`, `obj.m(x)`, `T.m(x)`).
+    //< It returns nothing where the callee is not a declared function. It stops at the first
+    //< parameter the call passes no argument for.
+    //< **A method call shifts the parameters by one**: parameter 0 is the receiver.
+    callee: Ast_node$@
+    callee_fn: Ast_node$@
+    args_node: Ast_node$@
+    params: base_ast_ext.Param_cursor
+    at: Sz
+    is_method: Bool
+
+impl Passed_arg_cursor
+    fn new(call: Ast_node$@): Passed_arg_cursor
+        callee: = call.get_postfix_receiver()
+        callee_fn: Ast_node$@ = callee.def_node if callee != null else null
+        args_node: = call.find_child(.k_expr_args)
+        $params: Ast_node$@ = null
+        if callee_fn != null && callee_fn.kind_id == .k_decl_fn && args_node != null
+            params = callee_fn.get_fn_params()
+        return Passed_arg_cursor::{ .callee = callee, .callee_fn = callee_fn,
+            .args_node = args_node, .params = base_ast_ext.Param_cursor(params, false), .at = 0,
+            .is_method = callee != null && callee.kind_id == .k_method_access }
+
+    priv fn arg_at(r: Self$@): Ast_node$@? //< the actual argument for parameter `at`, if any
+        $arg: Ast_node$@ = null
+        if r.is_method && r.at == 0
+            arg = r.callee.get_postfix_receiver()
+        else
+            i: = r.at - 1 if r.is_method else r.at
+            if i < r.args_node.children.len
+                arg = r.args_node.get_child(i)
+        return .some(arg) if arg != null else .none
+
+impl Passed_arg_cursor: Iter<|Passed_arg|>
+    fn next(r: Self$@): Passed_arg? //< the next parameter and its argument
+        //< `.none` when there are no more.
+        if p: = r.params.next()
+            if arg: = r.arg_at()
+                r.at += 1
+                return .some(Passed_arg::{ .callee_fn = r.callee_fn,
+                    .param_name = p.get_decl_id_text(), .arg = arg })
+        return .none
 
 impl Ast_node
     fn get_free_call_receiver(r: Self$@, ctx: Sema_ctx$@): Ast_node$@? //<
@@ -202,7 +226,7 @@ impl Ast_node
             // Caution: **Check the free-function form `dealloc(Void$@::x)` too**: it is nearly
             // always `free()`'s last line.
             if arg: = inner.get_free_fn_arg()
-                if expr_names_local(arg, param_name)
+                if is_rooted_at(arg, param_name, false)
                     return true
             // `x.free()` is a call "(" node whose receiver is a k_method_access.
             if inner != null && inner.kind_id == .k_expr_postfix
@@ -241,7 +265,7 @@ impl Ast_node
     priv fn call_releases_param(r: Self$@, param_name: U8[], depth: I32): Bool //<
         //< Whether this call is `dealloc(p…)`, `p….free()`, or hands `p…` to a function that frees it
         if arg: = r.get_free_fn_arg()
-            if is_rooted_at(arg, param_name)
+            if is_rooted_at(arg, param_name, true)
                 return true
         callee: = r.get_postfix_receiver()
         if callee == null
@@ -249,25 +273,14 @@ impl Ast_node
         if callee.is_free_call_access(true)
             member: = callee.get_postfix_member()
             if member != null && member.text.equals("free") &&
-                is_rooted_at(callee.get_postfix_receiver(), param_name)
+                is_rooted_at(callee.get_postfix_receiver(), param_name, true)
                 return true
-        fn_node: = callee.def_node
-        args_node: = r.find_child(.k_expr_args)
-        if depth <= 0 || fn_node == null || fn_node.kind_id != .k_decl_fn || args_node == null
+        if depth <= 0
             return false
-        params: = fn_node.get_fn_params()
-        if params == null
-            return false
-        is_method: = callee.kind_id == .k_method_access
-        $idx: Sz = 0
-        for p in base_ast_ext.Param_cursor(params, false)
-            if arg: = call_arg_for_param(callee, args_node, idx, is_method)
-                if is_rooted_at(arg, param_name) &&
-                    fn_node.body_releases_param(p.get_decl_id_text(), depth - 1)
-                    return true
-            else
-                break
-            idx += 1
+        for pa in Passed_arg_cursor(r)
+            if is_rooted_at(pa.arg, param_name, true) &&
+                pa.callee_fn.body_releases_param(pa.param_name, depth - 1)
+                return true
         return false
 
     priv fn is_free_call_access(r: Self$@, as_written: Bool): Bool //<
@@ -286,10 +299,10 @@ impl Ast_node
             //< else the receiver's own, as get_free_call_receiver decides.
         if arg_type_id == 0
             if receiver: = r.get_free_call_receiver(ctx)
-                return expr_names_local(receiver, param_name)
+                return is_rooted_at(receiver, param_name, false)
             return false
         member: = r.get_postfix_member()
         receiver: = r.get_postfix_receiver()
         return member != null && member.text.equals("free") && receiver != null &&
-            expr_names_local(receiver, param_name) &&
+            is_rooted_at(receiver, param_name, false) &&
             ctx.env.has_release_contract(arg_type_id)

@@ -92,6 +92,9 @@ function ksmdStart(root, bar, status, wasmBytes) {
       ks.say(`The editor stopped: ${why}. Copy what you need, then open the document again.`);
     }
 
+    // Says why an edit was refused in Read-only.
+    ks.sayReadOnly = () => ks.say("The page is read-only. View, Read-only turns editing on again.");
+
     // Runs one action and shows its result; returns the result, or null when the page stopped.
     ks.act = (name, ...args) => run(name, false, args);
 
@@ -144,7 +147,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
       if (ks.stopped) return null;
       // Read-only takes every action that changes the document; showing it again is no change.
       if (ks.readOnly && !["ksmd_web_render", "ksmd_web_render_files", "ksmd_web_selection"].includes(name)) {
-        ks.say("The page is read-only. View, Read-only turns editing on again.");
+        ks.sayReadOnly();
         return null;
       }
       const here = document.activeElement;
@@ -214,6 +217,17 @@ function ksmdStart(root, bar, status, wasmBytes) {
     // is no number, as a rule's value `abc`, gives NaN, which neither meets `< 0`, `> 0` nor `=== 0`.
     ks.compareNumbers = (a, b) => (Number.isFinite(a) && Number.isFinite(b) ? w.ksmd_web_compare_numbers(a, b) :
       a < b ? -1 : a > b ? 1 : a === b ? 0 : NaN);
+    // Two cells' values, `[kind, value, …]`, in the order Sort puts them: below 0 where the first
+    // comes first, 0 where they sort as one. A filter's list orders its values through this alone.
+    ks.compareValues = (a, b) => {
+      const text = (v) => enc.encode(v[0] === ks.CELL.NUMBER || v.length < 2 ? "" : String(v[1]));
+      const number = (v) => (v[0] === ks.CELL.NUMBER ? v[1] : 0);
+      const left = text(a);
+      const right = text(b);
+      ks.putBytes(left, right);
+      if (ks.stopped) return 0;
+      return w.ksmd_web_compare_values(a[0], number(a), left.length, b[0], number(b), right.length);
+    };
     // Today's date as 2026-10-23, or the time now as 14:05: what Ctrl+; and Ctrl+: type, as in
     // Excel. The form is ISO 8601's, which reads the same in every country and sorts as text.
     ks.now = (time) => {

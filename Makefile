@@ -305,9 +305,9 @@ perf_run = KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) -
 # **Speed is judged by counted instructions, never by a time** ("No fixed time bound in a test" in
 # docs/SPEC-gates.md). Cachegrind counts them, the same on every run of one build; GitHub's
 # runners expose no hardware counter to `perf stat`. **One fixed input is counted twice**: stage1
-# translating it on an empty cache, then the program stage1 builds from it as `ksplc build` ships
-# it. The second sees code that ksplc generates slower, before the seed is baked again. **kssrv is
-# counted too**, built as `make kssrv` ships it, answering the fixed requests of
+# translating it on an empty cache, then the executable stage1 builds from it, as a program
+# ships. The second sees code that ksplc generates slower, before the seed is baked again. **kssrv
+# is counted too**, built as `make kssrv` ships it, answering the fixed requests of
 # `kssrv/tests/workload.kspl`. Only the server runs under Cachegrind: the workload starts it.
 # **The language server's worker is counted too**, stage1's as the compile count's, over the fixed
 # editor session of `$(PERF_LSP)`. Only the worker runs under Cachegrind: the session starts it.
@@ -332,7 +332,7 @@ perf-log: $(STAGE1_EXE) $(SEED_EXE) kssrv | $(OUT_DIR)
 	@export KSPLC_CACHE_DIR=$(TMP_DIR)/perf_work_cache; $(call perf_count,compile_count, \
 	  ./$(STAGE1_EXE) $(KSPL_FLAGS) $(PERF_WORK) $(TMP_DIR)/perf_work.c)
 	@echo "# COUNTING the instructions of the program built from it"
-	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_work_cache ./$(STAGE1_EXE) build $(KSPL_FLAGS) \
+	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_work_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) \
 	  $(PERF_WORK) $(TMP_DIR)/perf_work.exe
 	@$(call perf_count,run_count,$(TMP_DIR)/perf_work.exe)
 	@echo "# COUNTING kssrv's instructions on the requests of kssrv/tests/workload.kspl"
@@ -435,7 +435,6 @@ ifeq ($(BACKEND),c)
 	@awk '!/^#line /' $(TMP_DIR)/seed_fmt.c > $(TMP_DIR)/seed_stripped.c
 	@cmp -s $(TMP_DIR)/seed_stripped.c $(SEED_C) \
 		|| (cp $(TMP_DIR)/seed_stripped.c $(SEED_C) \
-			&& ./$(STAGE1_EXE) run tools/repo_stat.kspl \
 			&& echo "Seed updated successfully.")
 	@./$(STAGE1_EXE) run tools/seed_sum.kspl write $(SEED_SUM) $(SEED_SUM_FILES)
 else

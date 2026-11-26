@@ -343,7 +343,7 @@ pub struct Response //< one received response, and how much of the buffer it use
     pub status: I32 //< the status number
     pub reason: U8$[] //< the reason phrase, as the peer wrote it
     pub headers: Headers //< the headers in the order they arrived
-    pub body: U8$[] //< the body, of the length `Content-Length` gave
+    pub body: U8$[] //< the body, of the length `Content-Length` gave; empty for a HEAD's answer
     pub consumed: Sz //< how many bytes of the buffer this message used; the rest is the next one
     priv own: Own_arena //< the arena it lives in, when it was read with a null arena
 
@@ -577,13 +577,24 @@ pub fn parse_response( //< the one response at the start of the buffer; fails if
 ): Response$@!Http_error //< the response; fails with incomplete while more bytes are due
     // The scratch gives its work back where the parse fails; `build_response` keeps it.
     defer $work: = mem.scratch(arena)
-    return response_in(src, work@)
+    return response_in(src, work@, false)
 
-priv fn response_in(src: U8[], work: mem.Scratch$@): Response$@!Http_error //<
-    //< parse_response's work
-    h: = scan_head(src, DEFAULT_MAX_BODY_BYTES, work.arena)!
+pub fn parse_response_to_head( //< the answer to a HEAD at the start of the buffer: its head alone
+    //< It can name a length or chunks for a body it does not carry (RFC 9110 §9.3.2). So it ends
+    //< at its empty line (RFC 9112 §6.3), and `body` is empty. `parse_response` would wait for
+    //< that body.
+    src: U8[], //< what has arrived so far
+    arena: Arena$@, //< where the parts go; null means an arena of the response's own and a `free()`
+): Response$@!Http_error //< the response; fails with incomplete while its head is due
+    defer $work: = mem.scratch(arena)
+    return response_in(src, work@, true)
+
+priv fn response_in(src: U8[], work: mem.Scratch$@, to_head: Bool): Response$@!Http_error //<
+    //< The work of parse_response, and of parse_response_to_head where `to_head` is true
+    // No body follows a HEAD's answer, so the length it names meets no body limit.
+    h: = scan_head(src, mem.SZ_MAX if to_head else DEFAULT_MAX_BODY_BYTES, work.arena)!
     status_line: = parse_status_line(h.first_line, work.arena)!
-    body_len: = response_body_len(h, status_line.status)!
+    body_len: = 0 if to_head else response_body_len(h, status_line.status)!
     body: = body_in(src, h, body_len)!
     return build_response(work, status_line, h.head, body, h.head_end + body_len)
 

@@ -545,7 +545,11 @@ static void kspl_check_stdout_at_exit(void);
  *
  * Caution: Put them back once done, on exit and after a panic too (abort() skips atexit, and
  * raises SIGABRT first). A code page is the whole console's state and outlives the process. Left
- * behind, it breaks the output of the next program run there. */
+ * behind, it breaks the output of the next program run there. **Ctrl+C, Ctrl+Break and closing
+ * the window skip atexit too**: the default action calls ExitProcess, which does not run the CRT's
+ * atexit list. So a console handler puts them back first (kspl_restore_console_cp_on_event).
+ * Note: **A TerminateProcess from outside cannot be caught**, as `subproc`'s kill does to a child.
+ * A child killed so leaves the code pages it set behind. */
 #ifdef _WIN32
 #include <windows.h>
 #include <stdlib.h> /* atexit */
@@ -560,6 +564,14 @@ static UINT kspl_saved_in_cp = 0;
 static void kspl_restore_console_cp(void) {
     if (kspl_saved_out_cp != 0) SetConsoleOutputCP(kspl_saved_out_cp);
     if (kspl_saved_in_cp != 0) SetConsoleCP(kspl_saved_in_cp);
+}
+/* Puts the code pages back on Ctrl+C, Ctrl+Break, a closed window, a logoff or a shutdown.
+ * Returns FALSE, so the next handler, or the default one that ends the process, still acts.
+ * Windows runs it on a thread of its own. */
+static BOOL WINAPI kspl_restore_console_cp_on_event(DWORD event) {
+    (void)event;
+    kspl_restore_console_cp();
+    return FALSE;
 }
 /* abort() raises SIGABRT first, in msvcrt and UCRT alike. This ends the process there with
  * the code __fastfail gives (STATUS_STACK_BUFFER_OVERRUN). A parent reads that as SIGABRT's 134
@@ -583,6 +595,7 @@ KSPL_LINK void kspl_io_init_console(void) {
     if (in != 0 && in != CP_UTF8 && SetConsoleCP(CP_UTF8)) kspl_saved_in_cp = in;
     if (kspl_saved_out_cp == 0 && kspl_saved_in_cp == 0) return;
     atexit(kspl_restore_console_cp);
+    SetConsoleCtrlHandler(kspl_restore_console_cp_on_event, TRUE);
 }
 #else
 #include <stdlib.h> /* atexit */

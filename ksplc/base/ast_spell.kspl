@@ -73,6 +73,7 @@ fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str$@, Bool|>, out
     //< every call must pass.
     defer $parts: = List<|Sig_part|>(null)
     fn_node.sig_parts(parts@)
+    write_sig_gen_params(fn_node, out)
     out.c('(')
     for i in Range.asc(parts.len)
         if i > 0
@@ -81,6 +82,50 @@ fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str$@, Bool|>, out
             return false
     out.c(')')
     return write_sig_ret(fn_node, spell, out)
+
+fn write_sig_gen_params(fn_node: Ast_node$@, out: Str$@) //<
+    //< The type parameters the function writes, as `<|$T: Area + Copy, const N: Sz|>`
+    //< Nothing where it writes none. **Each bound is kept**: it says which types a call may pass.
+    //< Caution: **Leave out an impl's type parameters.** `collect.kspl` copies them in front of the
+    //< name of a method that has none. The method's source does not write them there.
+    params: = fn_node.find_child(.k_type_gen_params)
+    id_n: = fn_node.find_child(.k_identifier)
+    if params == null || id_n == null || params.loc.offset < id_n.loc.offset
+        return
+    out.s("<|")
+    $first: = true
+    for p in params.children
+        if p.kind_id != .k_type_gen_param && p.kind_id != .k_identifier
+            continue
+        if !first
+            out.s(", ")
+        first = false
+        if p.kind_id == .k_identifier
+            out.s(p.text)
+            continue
+        for part in p.children
+            write_gen_param_part(part, out)
+    out.s("|>")
+
+priv fn write_gen_param_part(part: Ast_node$@, out: Str$@) //<
+    //< One piece of a type parameter: `const`, `$`, its name, `:`, or its bound
+    switch part.kind_id
+    case .k_keyword
+        out.s(part.text).c(' ')
+    case .k_literal
+        out.s(": " if part.text.equals(":") else part.text)
+    case .k_type_constraint
+        // The `+` between the traits is not kept as a node.
+        $first: = true
+        for t in part.children
+            if !first
+                out.s(" + ")
+            first = false
+            t.extract_type_name_to(out, 0)
+    case .k_type_expr
+        part.extract_type_name_to(out, 0)
+    default
+        out.s(part.text)
 
 fn write_sig_ret(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str$@, Bool|>, out: Str$@): Bool //<
     //< The return type as `: T`, written by `spell`, or nothing where the function returns none

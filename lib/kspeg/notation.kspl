@@ -24,6 +24,10 @@ priv const WIDE_IN_CLASS_MSG: U8[] =
     "A character above 007F is not allowed in a character class. A class matches one byte at a \
         time, so write the character in a literal instead"
 
+// For a range such as `[z-a]`, whose end lies below its start.
+priv const BACKWARD_RANGE_MSG: U8[] =
+    "A range in a character class must not end below its start: write [a-z], not [z-a]"
+
 priv fn is_kspeg_escape(ec: U8): Bool
     return ec == 'n' || ec == 'r' || ec == 't' || ec == '"' || ec == '\'' || ec == '\\' || ec == '['
         || ec == ']' || ec == '-' || ec == 'u'
@@ -78,6 +82,14 @@ impl Meta
             r.pos += text.len
             return true
         return false
+
+    priv fn stray_text(r: Self@): U8[] //<
+        //< the text at the position, up to its line's end or 20 bytes
+        $end: = r.pos
+        for end < r.source.len && end - r.pos < 20 && r.source[end] != '\n' &&
+            r.source[end] != '\r'
+            end += 1
+        return r.source.sub(r.pos, end - r.pos)
 
     priv fn parse_identifier(r: Self$@): U8[]!Kspeg_signal
         r.skip_ws()
@@ -137,6 +149,9 @@ impl Meta
         $k: Sz = 0
         for k < bytes.len
             if k + 2 < bytes.len && bytes.get(k + 1) == '-' && !escaped.get(k + 1)
+                // A backward range holds no byte, so a branch that needs it could never be taken.
+                if bytes.get(k) > bytes.get(k + 2)
+                    throw .fatal(BACKWARD_RANGE_MSG)
                 b.c(bytes.get(k)).c('-').c(bytes.get(k + 2))
                 k += 3
                 continue
@@ -275,7 +290,11 @@ impl Meta
         return rules.get(0) if rules.len == 1 else r.arena.create(Rule.choice(rules))
 
     priv fn parse_definition(r: Self$@): Rule_entry$@!Kspeg_signal
-        name: = r.parse_identifier()!
+        // **Text where a rule's name belongs is named**: refused with a mismatch, a grammar with a
+        // stray `)` gave its reader no reason, only a position.
+        name: = r.parse_identifier() catch
+            throw .fatal(r.arena.text().s("Expected a rule's name, found '").s(r.stray_text())
+                .s("'").take())
         if !r.match_str("=")
             throw .fatal("Expected '=' in rule definition")
 
@@ -360,11 +379,14 @@ impl Meta
         ctx: = r.arena.create(engine.Target(r.source, r.arena))
         ctx.load_rules(rules)
         // Caution: **After load_rules**, which works out what each rule can begin with.
-        switch left_recursive_rule(rules)
-        case .some(name)
-            why: = r.arena.text().s("Rule '").s(name)
-                .s("' can enter itself before reading a character (left recursion), so it never \
-                    ends").take()
+        switch left_recursive_rule(rules, r.arena)
+        case .some(names)
+            b: = r.arena.text()
+            b.s("Rule '").s(names[0]).s("' can enter itself before reading a character")
+            // **Name the rules on the way.** A cycle through `_Space` is not written in any rule.
+            for i in Range.asc(names.len - 1)
+                b.s(", through " if i == 0 else ", ").c('\'').s(names[i + 1]).c('\'')
+            why: = b.s(" (left recursion), so it never ends").take()
             // The caller never receives the target, so its name table is freed here.
             ctx.free_memo()
             throw .fatal(why)

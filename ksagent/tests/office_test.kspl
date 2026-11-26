@@ -189,6 +189,27 @@ fn test_a_word_symbol_shows_its_character()
     verdict.check("a check box, a mark, and a plain font's character; an unknown symbol left out",
         view.equals("Sym ☑ done ☒☐ 5±1→\n"), view)
 
+fn test_a_list_of_a_list_style_takes_the_style_s_numbers()
+    verdict.start("[ksagent] a list that names a list style is numbered by the style's levels")
+    defer arena: = Arena(64 * 1024)
+    // **Word writes such a list with no levels of its own**, only `numStyleLink`; the levels stand
+    // in the list whose `styleLink` names the style. Read alone, it wrote no "第1条".
+    lists: =
+        "<numbering><abstractNum abstractNumId=\"0\"><styleLink val=\"Rules\"/><lvl \
+            ilvl=\"0\"><start val=\"1\"/><numFmt val=\"decimal\"/><lvlText \
+            val=\"第%1条\"/></lvl></abstractNum><abstractNum abstractNumId=\"1\"><numStyleLink \
+            val=\"Rules\"/></abstractNum><num numId=\"2\"><abstractNumId \
+            val=\"1\"/></num></numbering>"
+    para: = "<p><pPr><numPr><numId val=\"2\"/></numPr></pPr><r><t>"
+    doc: = arena.text().s("<document><body>").s(para).s("規則</t></r></p>").s(para)
+        .s("休暇</t></r></p></body></document>").take()
+    view: =
+        word.text_of(office_files.docx_of(doc, lists, arena), VIEW_CAP, arena) catch why
+            fallback why
+    verdict.check("each paragraph shows the style's number",
+        view.find_str("第1条").is_some() && view.find_str("規則").is_some() &&
+        view.find_str("第2条").is_some(), view)
+
 fn test_list_numbers_take_each_format()
     verdict.start("[ksagent] a list number is written in its format: kanji, kana, letters, roman")
     defer arena: = Arena(64 * 1024)
@@ -224,6 +245,9 @@ fn test_a_cell_number_is_shown_as_its_format_shows_it()
         cell_format.show("0.375", time, false, arena),
         cell_format.show("45383.75", cell_format.built_in(22), false, arena),
         cell_format.show("1.5", hours, false, arena),
+        cell_format.show("1.5", hours, true, arena),
+        cell_format.show("0", date, false, arena),
+        cell_format.show("0.75", date, false, arena),
         cell_format.show("0.255", percent, false, arena),
         cell_format.show("300000", money, false, arena),
         cell_format.show("0.30000000000000004", general, false, arena),
@@ -233,8 +257,9 @@ fn test_a_cell_number_is_shown_as_its_format_shows_it()
         cell_format.show("99999999999999999", general, false, arena),
         cell_format.show("abc", date, false, arena) }
     expected: = U8[][]::{ "2024-04-01", "2024-04-01", "1900-02-29", "1900-02-28", "1900-03-01",
-        "1904-01-01", "09:00", "2024-04-01 18:00", "36:00:00", "25.5%", "300000", "0.3", "0.0015",
-        "1.23456789012346E+17", "-12.5", "1E+17", "abc" }
+        "1904-01-01", "09:00", "2024-04-01 18:00", "36:00:00", "36:00:00", "1900-01-00",
+        "1900-01-00", "25.5%", "300000", "0.3", "0.0015", "1.23456789012346E+17", "-12.5", "1E+17",
+        "abc" }
     for i in Range.asc(expected.len)
         verdict.check(arena.text().s("shows ").s(expected[i]).take(),
             results[i].equals(expected[i]), results[i])
@@ -315,6 +340,32 @@ fn test_a_citation_of_a_word_or_excel_file_is_checked(work: U8[], arena: Arena$@
     why: = answer.check_source(files.Folder(root), deleted, out@, arena)
     verdict.check("a quote of deleted text fails, since the view holds the text as changed",
         why.len > 0, why)
+
+fn test_an_excel_quote_must_hold_the_cells_words(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] an Excel quote passes on its cells' words, not on the line's head")
+    // **Every line of a sheet starts with the sheet's name**, so a quote of the name alone, or of
+    // one line's head, stood in each line of the sheet and backed nothing.
+    root: = fs.mkdir_unique(work, "heads-", arena) catch panic("the test folder can be made")
+    sheet: =
+        "<worksheet><sheetData><row r=\"12\"><c r=\"A12\" t=\"inlineStr\"><is><t>Base \
+            salary</t></is></c><c r=\"B12\"><v>320000</v></c></row></sheetData></worksheet>"
+    book: = office_files.xlsx_of(sheet, "", "", arena, "Payroll2024")
+    fs.write_tree(root, U8[][]::{ "pay.xlsx" }, U8[][]::{ book }, arena)
+        catch panic("the test folder can be written")
+    // Each case: the quote, and whether it passes.
+    cases: = U8[][]::{ "Payroll2024", "the sheet's name alone", "Payroll2024!1", "a head alone",
+        "Payroll2024!12: ", "a head alone", "Payroll2024!12: Base salary | 320000", "pass",
+        "Base salary | 320000", "pass" }
+    for k in Range.asc(cases.len / 2)
+        s: = Source::{ .path = "pay.xlsx", .from_line = 1I64, .to_line = 1I64,
+            .quote = cases[2 * k], .rows = answer.NO_ROWS }
+        $out: = s
+        why: = answer.check_source(files.Folder(root), s, out@, arena)
+        pass: = cases[2 * k + 1].equals("pass")
+        name: =
+            (arena.text().s("passes: ").s(cases[2 * k]).take() if pass
+            else arena.text().s("is refused, with ").s(cases[2 * k + 1]).take())
+        verdict.check(name, (why.len == 0) == pass, why)
 
 fn test_a_search_matches_an_excel_row_by_its_cells(work: U8[], arena: Arena$@)
     verdict.start("[ksagent] a search matches an Excel row by its cells, not by its sheet's name")

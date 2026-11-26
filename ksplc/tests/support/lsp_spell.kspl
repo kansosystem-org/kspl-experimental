@@ -392,6 +392,29 @@ fn check_hover_default_arg(client: jsonrpc_client.Client$@, arena: Arena$@)
         DEFAULT_SRC,
         Spot::{ .line = "  return bump(2)", .needle = "bump", .want = "step: I32 = 1" }, arena)
 
+// **A generic function's signature names its type parameters, each with its bound.** Without
+// them, `xs: T[]` names a `T` declared nowhere, and the hover hides which types a call may pass.
+priv const GENERIC_SIG_SRC: U8[] =
+    """pub trait Sized3
+  fn size3(r: Self): I32
+
+
+pub fn total<|T: Sized3, const N: Sz|>(xs: T[]): I32
+  return 0
+
+"""
+
+priv const GENERIC_SIG_URI: U8[] = "file:///generic_sig_probe.kspl"
+
+fn check_hover_type_params(client: jsonrpc_client.Client$@, arena: Arena$@)
+    lsp_client.open(client, GENERIC_SIG_URI, GENERIC_SIG_SRC, arena)
+    defer lsp_client.close(client, GENERIC_SIG_URI, arena)
+    lsp_client.check_hover(client,
+        "a generic function's hover shows its type parameters with their bounds", GENERIC_SIG_URI,
+        GENERIC_SIG_SRC,
+        Spot::{ .line = "pub fn total", .needle = "total",
+        .want = "total<|T: Sized3, const N: Sz|>(xs: T[]): I32" }, arena)
+
 // ==========================================
 // A method is named by its owner, not by the file its `impl` stands in
 // ==========================================

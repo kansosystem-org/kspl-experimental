@@ -244,6 +244,15 @@ KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
     return mkdir(path, 0755);
 }
 
+/* Creates a directory that only its owner can list or enter (for std/fs.kspl's mkdir_unique).
+ * 0 = made. 0700 is the mode from the start, as at kspl_create_owned: a chmod after it leaves a
+ * moment in which another user can open the directory. */
+KSPL_LINK I32 kspl_mkdir_owned(const U8 *path_ptr, Sz path_len) {
+    char path[KSPL_PATH_CAP];
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
+    return mkdir(path, 0700);
+}
+
 /* Creates a file that did not stand, readable and writable by its owner alone, and writes data
  * into it (for std/fs.kspl's write_unique). 0 = written, 1 = the name is taken, -1 = refused.
  * **O_EXCL decides that it is new**, so a link planted at the name is not followed. 0600 is the

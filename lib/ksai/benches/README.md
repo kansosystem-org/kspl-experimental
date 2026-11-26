@@ -64,7 +64,7 @@ Why pure KSPL is still the default is "The matrix backend is chosen where it is 
 A model generating text multiplies each weight matrix by one input row per token. Reading a prompt, it multiplies by 64 rows at a time, as `chat_server` reads them. So these two products set a model's speed in tokens per second. `bench_quant.kspl` times both on one thread and on every CPU, the fastest of seven runs each.
 
 ```sh
-out/ksplc_stage1.exe build --cflags=-O3 lib/ksai/benches/bench_quant.kspl out/benches/bench_quant.exe
+out/ksplc_stage1.exe --cflags=-O3 lib/ksai/benches/bench_quant.kspl out/benches/bench_quant.exe
 out/benches/bench_quant.exe                  # a 4096 × 4096 Q4_K matrix of random blocks
 ```
 
@@ -90,7 +90,7 @@ The following relationships held on a 4-CPU x86-64 machine with AVX-512 that oth
 `bench_qwen.kspl` reads token IDs from standard input as a prompt, then generates greedily. It prints each generated token with its two top scores, and how many tokens a second it read and generated. `lib/ksai/tools/qwen_gguf_check.py` runs it beside llama.cpp on the same file, to compare both the tokens and the speed; its docstring says how to run it.
 
 ```sh
-out/ksplc_stage1.exe build "--cflags=-O3 -march=native" lib/ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
+out/ksplc_stage1.exe "--cflags=-O3 -march=native" lib/ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
 echo "151644 872 198 9707 151645 198 151644 77091 198" | \
     out/benches/bench_qwen.exe data/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --generate=32 --threads=4
 ```

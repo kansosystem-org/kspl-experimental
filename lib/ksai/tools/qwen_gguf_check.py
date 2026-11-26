@@ -4,7 +4,7 @@
 It needs the downloaded model and llama.cpp's Python packages `llama_cpp` and `gguf`, so no gate
 runs it. Build the program it drives first, then run it from the repository's root:
 
-  out/ksplc_stage1.exe build --cflags=-O3 lib/ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
+  out/ksplc_stage1.exe --cflags=-O3 lib/ksai/benches/bench_qwen.kspl out/benches/bench_qwen.exe
   python3 lib/ksai/tools/qwen_gguf_check.py --model data/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
   python3 lib/ksai/tools/qwen_gguf_check.py --model data/Qwen3.5-9B-Q3_K_M.gguf
 

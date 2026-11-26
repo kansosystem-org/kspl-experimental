@@ -262,6 +262,63 @@ priv fn from_literal(): Look
 
 fn main(): I32
   return from_local().look() + from_param("ab").look() + from_literal().look()
+// ==== case frame_address_upcast_leaves
+//< A trait value made of a pointer keeps that pointer, so it is checked as the pointer is
+//< Each refused one points at a local, by `return` or `throw`, alone or inside a field or an
+//< option. `ok_*` upcast a pointer that points elsewhere: a parameter's target or a global.
+// EXPECT: frame_address_upcast_leaves.kspl:27:10: error: cannot return the address of local storage: 'c' lives in this function's frame
+// EXPECT: frame_address_upcast_leaves.kspl:32:10: error: cannot return 'p': it was set from the address of local storage
+// EXPECT: frame_address_upcast_leaves.kspl:36:9: error: cannot throw the address of local storage: 'c' lives in this function's frame
+// EXPECT: frame_address_upcast_leaves.kspl:40:21: error: cannot return the address of local storage: 'c' lives in this function's frame
+// EXPECT: frame_address_upcast_leaves.kspl:44:16: error: cannot return the address of local storage: 'c' lives in this function's frame
+// EXPECT: Finished with 5 error(s)
+priv trait Counter
+  fn count(r: Self): I32
+
+priv struct C
+  n: I32
+
+impl C: Counter
+  fn count(r: Self): I32
+    return r.n
+
+priv struct Hd
+  c: Counter
+
+priv $g_c: C = ::{ .n = 9 }
+
+priv fn of_local(n: I32): Counter
+  c: = C::{ .n = n }
+  return c@
+
+priv fn through_local(n: I32): Counter
+  c: = C::{ .n = n }
+  p: = c@
+  return p
+
+priv fn thrown(n: I32): I32!Counter
+  c: = C::{ .n = n }
+  throw c@
+
+priv fn in_field(n: I32): Hd
+  c: = C::{ .n = n }
+  return Hd::{ .c = c@ }
+
+priv fn in_option(n: I32): Counter?
+  c: = C::{ .n = n }
+  return .some(c@)
+
+priv fn ok_param(p: C@): Counter
+  return p
+
+priv fn ok_param_target(p: C@): Counter
+  return p$@
+
+priv fn ok_global(): Counter
+  return g_c@
+
+fn main(): I32
+  return ok_param(g_c@).count() + ok_param_target(g_c@).count() + ok_global().count()
 // ==== case frame_pointer_set_into_local_then_leaves
 //< A local whose field or element is set to a pointer into the frame carries it, as `p: = x@` does
 //< A field set afterwards (`h.s = U8[]::a`), an element of a local array, and a container a call

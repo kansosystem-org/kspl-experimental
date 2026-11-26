@@ -1,17 +1,18 @@
 # ksplc
 
-**`ksplc` is the KSPL compiler.** It reads KSPL source and writes C99 by default (`--to=c`), or LLVM IR (`--to=llvm`), the text form of code that LLVM turns into machine code. It is written in KSPL itself, so it compiles its own source (*self-hosting*).
+**`ksplc` is the KSPL compiler.** It reads KSPL source and writes C99, LLVM IR or an executable, as the output's name asks. LLVM IR is the text form of code that LLVM turns into machine code. It is written in KSPL itself, so it compiles its own source (*self-hosting*).
 
 **This page is a map of the compiler's source, for whoever reads or changes it.** The internal design and its reasons are in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md), whose "The glossary" defines the words used here. To only use the compiler, the quick start in the root README is enough.
 
 ## Run it
 
 ```sh
-ksplc build hello.kspl hello            # the default target, C99, compiled and linked by clang
-ksplc --to=llvm hello.kspl hello.ll   # then clang hello.ll with the runtime ksplc emit-runtime puts out
+ksplc hello.kspl hello      # an executable: C99, compiled and linked by clang
+ksplc hello.kspl hello.c    # the C99 alone
+ksplc hello.kspl hello.ll   # then clang hello.ll with the runtime ksplc emit-runtime puts out
 ```
 
-The first line makes an executable `hello`. The second writes LLVM IR, which clang compiles together with the C runtime (the support code every program needs) that `ksplc emit-runtime` writes.
+The first line makes an executable `hello`. The second writes only the C. The third writes LLVM IR, which clang compiles together with the C runtime (the support code every program needs) that `ksplc emit-runtime` writes.
 
 Two `make` commands, run in this folder ([`ksplc/Makefile`](Makefile)), test and rebuild the compiler:
 
@@ -226,8 +227,8 @@ What `ksplc fmt` and `--style` promise is "3. The formatter (ksplc fmt)" in [`ks
 | [`doc.kspl`](tools/doc.kspl) | What a file, an entry or a folder publishes, rendered from the source as the reference to read | `ksplc doc` |
 | [`explain.kspl`](tools/explain.kspl) | Prints a diagnostic code's section of the diagnostics specification (`ksplc/docs/SPEC-diagnostics.md`) | `ksplc explain` |
 | [`run.kspl`](tools/run.kspl) | Compiles, links and runs a program in one command | `ksplc run` |
-| [`libs.kspl`](tools/libs.kspl) | The libraries a program names with `##link`: written by a compile, read back for the link | `--emit-libs=`, `ksplc run`, `ksplc build` |
-| [`run_start.kspl`](tools/run_start.kspl) | Starts a built program; says why a start failed, and on Windows tries a held file again | `ksplc run`, `ksplc build` |
+| [`libs.kspl`](tools/libs.kspl) | The libraries a program names with `##link`: written by a compile, read back for the link | `--emit-libs=`, `ksplc run`, a compile to an executable |
+| [`run_start.kspl`](tools/run_start.kspl) | Starts a built program; says why a start failed, and on Windows tries a held file again | `ksplc run`, a compile to an executable |
 
 ```sh
 make lint   # the static analysis alone; zero down to hints is a pass

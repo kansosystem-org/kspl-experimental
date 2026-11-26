@@ -56,8 +56,13 @@ function ksmdFilter(ks) {
     return `${cond.op}:${enc(cond.arg.toLowerCase())}`;
   }
   // A table's conditions now: the viewer's in Read-only, else the file's; null for none.
+  // Caution: **A viewer's filter with no condition left is none.** Returned as an empty set, it
+  // counted as a filter: Show all rows left "Showing 2 of 2 rows" above the table.
   function condsOf(wrap) {
-    if (ks.readOnly && viewed.has(wrap.dataset.name)) return viewed.get(wrap.dataset.name);
+    if (ks.readOnly && viewed.has(wrap.dataset.name)) {
+      const own = viewed.get(wrap.dataset.name);
+      return own.size > 0 ? own : null;
+    }
     const conds = new Map();
     (wrap.filterEntries || []).forEach((entry, c) => {
       const cond = condOf(entry);
@@ -65,24 +70,12 @@ function ksmdFilter(ks) {
     });
     return conds.size > 0 ? conds : null;
   }
-  // A cell's value as the table shows it, and how it sorts: numbers, dates, text, false and true,
-  // errors, then blanks. A number carries the text it shows third, written by the engine, so the
-  // page has no rule of its own for a number's digits. A date is written `2026-10-23`, so its
-  // text sorts by day; a date in a column with a date format carries that text third.
+  // A cell's value as the table shows it. A number carries the text it shows third, written by
+  // the engine, so the page has no rule of its own for a number's digits. A date in a column with
+  // a date format carries that text third. The editor orders the values (`ks.compareValues`).
   const shownText = (v) => (v.length > 2 ? v[2] : v.length > 1 ? String(v[1]) : "");
   // The text without the column's format: a number in a column with a format carries it fourth.
   const plainText = (v) => (v[0] === ks.CELL.NUMBER && v.length > 3 ? v[3] : shownText(v));
-  const ORDER = [ks.CELL.NUMBER, ks.CELL.DATE, ks.CELL.TEXT, ks.CELL.BOOL, ks.CELL.ERROR, ks.CELL.EMPTY];
-  const group = (v) => ORDER.indexOf(v[0]);
-  function compare(a, b) {
-    if (group(a) !== group(b)) return group(a) - group(b);
-    if (a[0] === ks.CELL.NUMBER) return a[1] - b[1];
-    // A date sorts by its day, as `2026-10-23`: a cell's own format can show it otherwise.
-    if (a[0] === ks.CELL.DATE) return a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0;
-    const x = shownText(a).toLowerCase();
-    const y = shownText(b).toLowerCase();
-    return x < y ? -1 : x > y ? 1 : 0;
-  }
 
   const OPS = [["is", "is"], ["not", "is not"], ["contains", "contains"], ["above", "is greater than"],
     ["below", "is less than"], ["empty", "is empty"], ["filled", "is not empty"]];
@@ -244,7 +237,7 @@ function ksmdFilter(ks) {
       const key = shownText(v).toLowerCase();
       if (!distinct.has(key)) distinct.set(key, v);
     }
-    const values = Array.from(distinct.entries()).sort((a, b) => compare(a[1], b[1]));
+    const values = Array.from(distinct.entries()).sort((a, b) => ks.compareValues(a[1], b[1]));
     // Whether each value is ticked, by its key. The list shows at most FILTER_LIST_CAP values, so
     // this holds the ones it does not show as well.
     const ticked = new Map(values.map(([key, v]) => [key, !cond || meets(cond, v)]));

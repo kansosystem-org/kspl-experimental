@@ -11,7 +11,7 @@
 //      after the resume.
 //   4. A task deleted while blocked never advances again, even when the resource comes.
 // ==========================================
-//   5. A `delay_until` to a past time returns without waiting.
+//   5. `delay(0)` and a `delay_until` to a past time return before any lower task runs.
 //   6. Unlock returns a lent priority.
 //   7. Deleting a task that waits on a mutex returns what it lent the holder.
 //   8. A delay suspended and resumed lasts its whole length, or ends at the resume once expired.
@@ -43,7 +43,8 @@ priv const MAX_TASKS: Sz = 32 //<
     //< It equals the kernel's `MAX_TASKS`, which is priv, so the number is repeated here and
     //< checked against it. Only `delete` frees a slot; a task that returned from its entry and
     //< became done keeps its slot. Deleting `gone` in check 4 frees one, so the free room is 32 - 8
-    //< + 1 (`lender` in check 7 and `sleeper` in check 8 take a slot and give it back).
+    //< + 1 (`low` in check 5, `lender` in check 7 and `sleeper` in check 8 take a slot and give it
+    //< back).
 priv const FIXED_TASKS: Sz = 8 // coord + lo/mid/hi + first/second + hold + gone
 priv const FREED_BY_DELETE: Sz = 1 // gone
 priv const FREE_SLOTS: Sz = MAX_TASKS - FIXED_TASKS + FREED_BY_DELETE
@@ -58,6 +59,7 @@ $tcb_first: Task
 $tcb_second: Task
 $tcb_hold: Task
 $tcb_gone: Task
+$tcb_low: Task
 $tcb_lender: Task
 $tcb_sleeper: Task
 $tcb_filler: Task[26]
@@ -69,6 +71,7 @@ $stack_first: U8[65536]
 $stack_second: U8[65536]
 $stack_hold: U8[65536]
 $stack_gone: U8[65536]
+$stack_low: U8[65536]
 $stack_lender: U8[65536]
 $stack_sleeper: U8[65536]
 $stack_filler: U8[851968] // filler_slots × filler_stack
@@ -107,6 +110,11 @@ fn holder(_arg: Void$@): Void //< 3. The task suspended while it waits
 fn goner(_arg: Void$@): Void //< 4. The task deleted while it waits
     g_sem_gone.take()
     g_gone_progress = 1
+
+$g_low_ran: Bool = false
+
+fn low(_arg: Void$@): Void //< 5. It ranks below coord, so it runs only once coord waits
+    g_low_ran = true
 
 fn lender(_arg: Void$@): Void //< 7. It outranks coord, so it lends coord its priority, then waits
     g_mutex.lock()
@@ -174,12 +182,20 @@ fn coordinator(_arg: Void$@): Void
     assert(g_gone_progress == 0, "kernel_check: a deleted waiter came back to life")
     verdict.pass("a task erased never advances again, even when the resource it awaited comes.")
 
-    // --- 5. delay_until into the past ---
-    verdict.start("[ksos] delay_until into the past")
+    // --- 5. delay_until into the past, and delay(0) ---
+    verdict.start("[ksos] delay_until into the past, and delay(0)")
     before: = task.current_tick()
     Task.delay_until(0)
     assert(task.current_tick() == before, "kernel_check: delay_until(past) advanced the clock")
-    verdict.pass("handed a past moment, it returns without waiting.")
+    // low is ready but ranks below coord: a delay(0) that waited would let it run first.
+    tcb_low.create(U8$[]::stack_low, low, null, 1, "low")
+    Task.delay(0)
+    assert(!g_low_ran, "kernel_check: delay(0) let a lower-priority task run first")
+    assert(task.current_tick() == before, "kernel_check: delay(0) advanced the clock")
+    tcb_low.delete()
+    verdict
+        .pass("handed a past moment, or a delay of 0, it returns without waiting behind a \
+            lower-priority task.")
 
     // --- 6. the lent priority is returned ---
     verdict.start("[ksos] inherited priority is returned")

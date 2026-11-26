@@ -154,13 +154,16 @@ fn test_nn_training(arena: Arena$@)
     $mlp: = ai_nn.Mlp<|F32|>(in_dim, hidden, out_dim, arena)
 
     $loss0: = 0.0
+    defer $sgd: = ai_optim.Updater<|F32|>.sgd(0.2)
     for step in Range.asc(200)
         $logits: = mlp.forward(x) // [1,4]
         loss: = logits.cross_entropy_loss(target)
         if step == 0
             loss0 = loss
         dlogits: = logits.grad_softmax_cross_entropy(target)
-        mlp.backward(x, dlogits, 0.2) // the backward pass + the online SGD update
+        $g: ai_nn_grad.Mlp_grads<|F32|> = ::{}
+        mlp.backward_grads(x, dlogits, g@)
+        mlp.apply_grads(g@, sgd@) // the online SGD update
     $final_logits: = mlp.forward(x)
     loss_final: = final_logits.cross_entropy_loss(target)
     pred: = ai_sampler.argmax(final_logits)
@@ -198,8 +201,9 @@ fn test_rmsnorm_grad(arena: Arena$@)
     // dy = 1 (L = Σ y)
     dy: = Tensor<|F32|>(Sz[]::x_shape, arena)
     dy.fill(F32::1.0)
-    // lr=0 leaves the weights frozen and gives dX
-    dx: = rn.backward(x, dy, 0.0)
+    // Only the gradients: the weights stay as they are
+    $g: ai_nn_grad.Rms_norm_grads<|F32|> = ::{}
+    dx: = rn.backward_grads(x, dy, g@)
 
     rp: = rn@
     gap: =
@@ -257,11 +261,12 @@ fn test_attention_grad(arena: Arena$@)
     x: = Tensor<|F64|>(Sz[]::x_shape, arena)
     for i in Range.asc(x.size)
         (x.data + i)$ = 0.1 * (F64::i) - 0.5 // a deterministic input that varies
-    // the analytic gradient (lr=0 freezes the weights)
+    // the analytic gradient (the weights are not moved)
     $c: = att.train_forward(x)
     dout: = Tensor<|F64|>(c.out.shape, arena)
     dout.fill(1.0)
-    dx: = att.backward(c@, dout, 0.0)
+    $g: ai_attn_train.Attention_grads<|F64|> = ::{}
+    dx: = att.backward_grads(c@, dout, g@)
 
     ap: = att@
     gap: =
@@ -272,11 +277,14 @@ fn test_attention_grad(arena: Arena$@)
     assert(gap < 1.0e-4, "Attn: dX must match finite difference")
     // L=Σout decreases under gradient descent (backward pass and update together)
     before: = tsum_f64(att.train_forward(x).out)
+    defer $sgd: = ai_optim.Updater<|F64|>.sgd(0.01)
     for _step in Range.asc(20)
         $cc: = att.train_forward(x)
         d1: = Tensor<|F64|>(cc.out.shape, arena)
         d1.fill(1.0)
-        att.backward(cc@, d1, 0.01)
+        $g1: ai_attn_train.Attention_grads<|F64|> = ::{}
+        att.backward_grads(cc@, d1, g1@)
+        att.apply_grads(g1@, sgd@)
     after: = tsum_f64(att.train_forward(x).out)
     assert(after < before, "Attn: SGD must reduce the sum-of-outputs loss")
     verdict
@@ -297,11 +305,12 @@ fn test_block_grad(arena: Arena$@)
     x: = Tensor<|F64|>(Sz[]::x_shape, arena)
     for i in Range.asc(x.size)
         (x.data + i)$ = 0.07 * (F64::i) - 0.4
-    // the analytic gradient (lr=0 freezes every layer)
+    // the analytic gradient (no layer is moved)
     $c: = blk.train_forward(x)
     dout: = Tensor<|F64|>(c.out.shape, arena)
     dout.fill(1.0)
-    dx: = blk.backward(c@, dout, 0.0)
+    $g: ai_block_train.Block_grads<|F64|> = ::{}
+    dx: = blk.backward_grads(c@, dout, g@)
 
     bp: = blk@
     gap: =
@@ -312,11 +321,14 @@ fn test_block_grad(arena: Arena$@)
     assert(gap < 1.0e-3, "Block: dX must match finite difference")
     // Σout decreases under gradient descent (the whole block's training)
     before: = tsum_f64(blk.train_forward(x).out)
+    defer $sgd: = ai_optim.Updater<|F64|>.sgd(0.01)
     for _step in Range.asc(20)
         $cc: = blk.train_forward(x)
         d1: = Tensor<|F64|>(cc.out.shape, arena)
         d1.fill(1.0)
-        blk.backward(cc@, d1, 0.01)
+        $g1: ai_block_train.Block_grads<|F64|> = ::{}
+        blk.backward_grads(cc@, d1, g1@)
+        blk.apply_grads(g1@, sgd@)
     after: = tsum_f64(blk.train_forward(x).out)
     assert(after < before, "Block: SGD must reduce the sum-of-outputs loss")
     verdict

@@ -81,36 +81,6 @@ debug-tools: $(STAGE1_EXE)
 		DEBUG_EXE_DIR=$(TEST_DIR) $(C_FMT_OFF)
 	./$(TEST_DIR)/debug_tools.exe
 
-# --- kssrv, kstls and ksagent through the LLVM backend ---
-# **`make LLVM=1 debug` holds none of them** (they link OpenSSL, so they run only as their own
-# `make test`), so genllvm broken on code only they reach would go unseen. The server is built
-# through LLVM and kssrv's tests drive it; kstls's tests are built through LLVM and run; ksagent and
-# its tests are both built through LLVM, and the tests start it. **Linux alone**: its image holds
-# kstls's libraries, where elsewhere kstls's own tests skip.
-# **The compiler built in C translates them** (`STAGE1_EXE` passed down): the nested `LLVM=1`
-# would otherwise build a second compiler through LLVM first, which `selfhost_llvm` already checks.
-## Gates|test-llvm-pkgs|Build kssrv, ksagent and the three packages' tests through the LLVM backend, and run the tests on them
-test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
-	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
-		SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm DEBUG_EXE_DIR=$(TEST_DIR)
-	rm -rf "$(TMP_DIR)/kssrv_llvm_test"
-	cd kssrv && KSPLC_STD_DIR="$(abspath std)" \
-		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspl)" \
-		"$(abspath $(TEST_DIR))/kssrv_llvm.exe" \
-		"$(abspath $(TMP_DIR))/kssrv_llvm_test"
-	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
-		SRC_KSPL=lib/kstls/tests/main.kspl OUT_STEM=kstls_llvm DEBUG_EXE_DIR=$(TEST_DIR)
-	./$(TEST_DIR)/kstls_llvm.exe
-	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
-		SRC_KSPL=ksagent/main.kspl OUT_STEM=ksagent_llvm DEBUG_EXE_DIR=$(TEST_DIR)
-	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
-		SRC_KSPL=ksagent/tests/main.kspl OUT_STEM=ksagent_tests_llvm DEBUG_EXE_DIR=$(TEST_DIR)
-	rm -rf "$(TMP_DIR)/ksagent_llvm_test"
-	cd ksagent && "$(abspath $(TEST_DIR))/ksagent_tests_llvm.exe" \
-		"$(abspath $(TEST_DIR))/ksagent_llvm.exe" "$(abspath $(TMP_DIR))/ksagent_llvm_test"
-
-.PHONY: test-llvm-pkgs
-
 # **The one way to call a package's `Makefile`**: $(call pkg_make,<package>) <target> [<var>=<val>]
 # Caution: **Keep the leading `+`**: make passes its job slots only to a line it sees as a sub-make,
 # and a `$(MAKE)` reached through a variable is not seen, so the child warns and runs at `-j1`.
@@ -256,7 +226,7 @@ cov_by_source_prog := FNR == NR { if ($$0 ~ /^\#line [0-9]+ "/) { split($$0, q, 
 
 # $(call coverage_build,<name>,<entry file>): `<name>_cov.exe` and its C, from the top folder, so
 # each `#line` names its file from there (`ksplc/base/…`).
-coverage_build = KSPLC_STD_DIR="$(abspath std)" "$(STAGE1_EXE)" build --cflags="$(COV_CFLAGS)" \
+coverage_build = KSPLC_STD_DIR="$(abspath std)" "$(STAGE1_EXE)" --cflags="$(COV_CFLAGS)" \
   $(2) "$(COV_DIR)/$(1)_cov.exe"
 # $(call coverage_env,<name>): where a run writes its counts; `%p` keeps each process apart.
 coverage_env = LLVM_PROFILE_FILE="$(COV_ABS)/$(1)-%p.profraw" KSPLC_STD_DIR="$(abspath std)" \

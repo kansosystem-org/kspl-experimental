@@ -25,7 +25,7 @@ priv fn holds(path: U8[], want: U8[]): Bool //< whether the file at path contain
     return got.equals(want)
 
 fn test_fs_mkdir_unique()
-    verdict.start("[Fs] making a directory nobody took test...")
+    verdict.start("[Fs] making a directory nobody took, for its owner alone test...")
     defer arena: = Arena(64 * 1024)
     a: = fs.mkdir_unique(BASE, "box_", arena) catch panic("mkdir_unique should make a directory")
     b: = fs.mkdir_unique(BASE, "box_", arena) catch panic("mkdir_unique should make a second one")
@@ -34,13 +34,23 @@ fn test_fs_mkdir_unique()
     leaf: = a.sub_from(BASE.len + 1)
     assert(leaf.starts_with("box_") && leaf.len == 4 + 16,
         "the name is the prefix and 16 hex digits")
+    // A probe of known mode decides whether the mode tells anything, as at `write_unique`.
+    modes: = scratch.keeps_modes(a, arena)
+    if modes
+        assert(scratch.mode_shown(a, arena).equals("drwx------"),
+            "only its owner may list or enter it")
     // A base that cannot contain a directory is refused at once, without trying name after name.
     file: = fs.join(a, "a_file", arena)
     io.write_file(file, "x") catch panic("the probe file must be writable")
     _refused: = fs.mkdir_unique(file, "box_", arena) catch
         scratch.remove_tree(a, arena)
         scratch.remove_tree(b, arena)
-        verdict.pass("Each call makes a place of its own, and a base holding a file is refused.")
+        if !modes
+            verdict.skip("this system shows no POSIX mode (Windows, or a filesystem without one)")
+            return
+        verdict
+            .pass("Each call makes a place of its own that only its owner may open, and a base \
+                holding a file is refused.")
         return
     panic("a base that is a file must be refused")
 

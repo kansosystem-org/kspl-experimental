@@ -123,10 +123,6 @@ Caution: **List both the matching and the non-matching side.** A one-sided table
 
 This checks only the decision. `harness.tracked_matching`, which picks the files, stops when a string without a wildcard matches nothing.
 
-## Moving a tool out of Python
-
-**When a tool moves out of Python, check that it gives the old version's verdict, broken input included.**
-
 ## If it goes wrong
 
 | Symptom | Cause | Fix |

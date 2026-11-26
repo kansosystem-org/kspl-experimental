@@ -155,8 +155,8 @@ struct Mutex //<
     //< A mutex with single-stage priority inheritance
     //< A holder runs at the highest of its own priority and the priorities waiting on any mutex it
     //< holds. Every release computes this again, so the holder can release them in any order. A
-    //< nested inheritance chain (the holder itself waiting on a mutex held by a third task) is not
-    //< followed.
+    //< waiter lends only its own priority, so a nested inheritance chain (the holder itself waiting
+    //< on a mutex held by a third task) is not followed.
     priv own: task.Holding //< the holder, kept by the kernel core; waiters wait on its address
 
 impl Mutex
@@ -202,9 +202,10 @@ impl Mutex
             if task.deadline_passed(deadline)
                 h.prio = task.lent_prio(h) // me no longer waits, so what it lent goes back
                 return false
-            // Contention: lend the requester's priority to the holder.
-            if h.prio < me.prio
-                h.prio = me.prio
+            // Contention: lend the holder the requester's own priority, not one lent to it, as
+            // `task.lent_prio` counts it.
+            if h.prio < me.base_prio
+                h.prio = me.base_prio
             st = task.block_and_rearm(Void$@::r.own@, deadline, st)
     fn unlock(r: Self$@) //<
         //< Wakes one waiter, and lowers the holder to what the mutexes it still holds lend it

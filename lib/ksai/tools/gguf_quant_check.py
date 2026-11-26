@@ -8,7 +8,7 @@ the one `make_quant_fixtures.py` writes, and `lib/ksai/benches/bench_quant.kspl`
 
   python3 lib/ksai/tools/gguf_quant_check.py --out-dir out/ksai/gguf_check \\
       qwen2.5-0.5b-instruct-q8_0.gguf qwen2.5-0.5b-instruct-q4_k_m.gguf
-  out/ksplc_stage1.exe build lib/ksai/benches/bench_quant.kspl out/benches/bench_quant.exe
+  out/ksplc_stage1.exe lib/ksai/benches/bench_quant.kspl out/benches/bench_quant.exe
   out/benches/bench_quant.exe out/ksai/gguf_check/*.bin
 
 A file that is not there is skipped with a line saying so, so the same command runs anywhere.

@@ -230,11 +230,13 @@ fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow
     $jobs: = List<|subproc.Job|>(arena)
     for f in all.slice()
         $m: = harness_markers.markers(f.body)
-        out_c: = fs.join(work, arena.text().s("\{f.stem\}.c").take(), arena)
+        // **The output's name chooses the language** (2.1 of `../../docs/SPEC-tools.md`), so a
+        // case that asks for LLVM IR writes to a name ending in `.ll`.
+        ending: = ".ll" if m.args.slice().contains("--to=llvm") else ".c"
+        out: = fs.join(work, arena.text().s(f.stem).s(ending).take(), arena)
         jobs
             .push(subproc.Job::{ .argv =
-            fixture_argv(f.path, out_c, m.args.slice(), lint_mode, arena, parser_exe),
-            .cwd = work })
+            fixture_argv(f.path, out, m.args.slice(), lint_mode, arena, parser_exe), .cwd = work })
         cases.push(f.label)
         marks.push(m)
     outs: = harness.run_all(jobs.slice(), name)

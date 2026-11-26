@@ -2,6 +2,7 @@
 //< The editor makes each row's key from its calculated value; this file orders the rows by them.
 import "ksmd/base/marker" { compare_text }
 import "ksmd/calc/formula" { Positions }
+import "ksmd/calc/value" { Value_kind }
 import "ksmd/edit/edit" { Edit_error, Saved, fits, restore, table_at }
 import "ksmd/model/model" { Cell, Document }
 import "std/ds" { List }
@@ -13,6 +14,24 @@ struct Sort_key //< where one data row sorts, by the value of its cell in the so
     number: F64 //< a number's value, a date's day; 0 for false and 1 for true
     text: U8[] //< a text's bytes; an error's mark, so equal errors stay together
     row: Sz //< the row's place before the sort
+
+fn key_of(kind: Value_kind, number: F64, text: U8[], row: Sz): Sort_key //<
+    //< Where a value of this kind sorts, for the row at `row`
+    //< `number` is a number's value, a date's day, or 1 for true and 0 for false. `text` is a
+    //< text's bytes, or an error's mark. Each kind ignores what it does not use.
+    switch kind
+    case .number
+        return Sort_key::{ .group = 0, .number = number, .text = "", .row = row }
+    case .date
+        return Sort_key::{ .group = 1, .number = number, .text = "", .row = row }
+    case .text
+        return Sort_key::{ .group = 2, .number = 0.0, .text = text, .row = row }
+    case .boolean
+        return Sort_key::{ .group = 3, .number = number, .text = "", .row = row }
+    case .error
+        return Sort_key::{ .group = 4, .number = 0.0, .text = text, .row = row }
+    case .empty
+        return Sort_key::{ .group = 5, .number = 0.0, .text = "", .row = row }
 
 fn sort_rows(doc: Document$@, table: Sz, keys: List<|Sort_key|>@, descending: Bool,
     arena: Arena$@): Void!Edit_error //<
@@ -109,8 +128,9 @@ priv fn keep_ranges(doc: Document$@, table: Sz, at: Positions@, saved: List<|Sav
             p.to.row = t.rows[to]
             doc.tables[v].pieces[k] = p
 
-priv fn compare_keys(left: Sort_key@, right: Sort_key@, descending: Bool): I32 //<
+fn compare_keys(left: Sort_key@, right: Sort_key@, descending: Bool): I32 //<
     //< Below zero when `left` sorts first; empty cells sort last in either direction
+    //< A filter's list of a column's values uses this too, so it shows the order Sort gives.
     if left.group == right.group
         within: = compare_within(left, right)
         return -within if descending else within

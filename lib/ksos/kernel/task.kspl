@@ -177,12 +177,10 @@ impl Task
         //< **ticks are logical ticks, not real time.** It never wakes before the expiry, but when
         //< no other task is runnable it returns in zero real time. For a real-time period on
         //< hardware, use a hardware timer (`lib/ksos/drivers/rp2040/timer.kspl` and the like).
+        //< `delay(0)` yields, as delay_until with a past tick does: no lower task runs first.
         s: = open_wait()
         defer ksos_port_irq_restore(s)
-        cur: = require_current()
-        cur.state = .delayed
-        cur.delay_until = deadline_after(ticks)
-        schedule()
+        sleep_until(deadline_after(ticks))
 
     fn delay_until(wake_tick: U64) //<
         //< Unlike delay (a relative time), it sleeps until the absolute tick wake_tick
@@ -190,11 +188,7 @@ impl Task
         //< (next += period; Task.delay_until(next);).
         s: = open_wait()
         defer ksos_port_irq_restore(s)
-        cur: = require_current()
-        if wake_tick > g_tick
-            cur.state = .delayed
-            cur.delay_until = wake_tick
-        schedule()
+        sleep_until(wake_tick)
 
     fn suspend(r: Self$@) //<
         //< Takes r out of scheduling; it can be paused from any state (ready, delayed or blocked)
@@ -297,6 +291,16 @@ impl Task
         return g_task_count
     fn at(i: Sz): Task$@
         return g_tasks[i]
+
+priv fn sleep_until(wake_tick: U64) //<
+    //< [Call it inside a critical section] The current task sleeps until wake_tick
+    //< **A tick not after now only yields**, the task staying ready. Made delayed with no time to
+    //< wait, it would wait until no task of any priority was ready.
+    cur: = require_current()
+    if wake_tick > g_tick
+        cur.state = .delayed
+        cur.delay_until = wake_tick
+    schedule()
 
 priv fn slot_of(task: Task@): Sz //< task's index in g_tasks, or MAX_TASKS if it is not there
     $slot: Sz = MAX_TASKS
@@ -579,13 +583,15 @@ priv fn preempt_if_outranked() //<
             return
 
 priv fn highest_waiter_prio(obj: Void@): I32 //<
-    //< [Call it inside a critical section] The highest priority among the tasks waiting on obj
+    //< [Call it inside a critical section] The highest own priority of the tasks waiting on obj
     //< 0 if nobody waits (an application's tasks have 1 or more). lent_prio is built on it.
+    //< **It reads each waiter's own priority (base_prio), not what the waiter was lent.** So a
+    //< chain is not followed, and the answer does not depend on which holder is recomputed first.
     $top: I32 = 0
     for i in Range.asc(g_task_count)
         t: = g_tasks[i]
-        if t != null && t.state == .blocked && t.wait_obj == obj && t.prio > top
-            top = t.prio
+        if t != null && t.state == .blocked && t.wait_obj == obj && t.base_prio > top
+            top = t.base_prio
     return top
 // ============================ Who holds which mutex ============================
 // The kernel core keeps each mutex's holder, and each holder's list of what it holds. (sync.kspl's
@@ -625,9 +631,9 @@ impl Holding
 
 fn lent_prio(holder: Task$@): I32 //<
     //< [Call it inside a critical section] The priority `holder` runs at for the mutexes it holds
-    //< The highest of its own priority and of every task waiting on one of them. A single
-    //< per-mutex saved priority cannot give this: releasing one mutex would drop a priority still
-    //< lent through another.
+    //< The highest of its own priority and of the own priority of every task waiting on one of
+    //< them (highest_waiter_prio). A single per-mutex saved priority cannot give this: releasing
+    //< one mutex would drop a priority still lent through another.
     $top: = holder.base_prio
     $m: = holder.held
     for m != null

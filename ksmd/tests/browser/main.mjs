@@ -392,6 +392,22 @@ const sections = {
     await menu("undo");
     await saves("and undoing that", `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |` +
       `\n| 5 | 3 | =A1*B1 | |\n:::\n`);
+    // A row a filter or a closed group hides takes no choice: the row in sight below takes it, or
+    // else the row above.
+    const hiding = (attrs, rows) => `${H}:::table name="h"${attrs}\n| "k" | "v" |\n${rows}:::\n`;
+    for (const [kind, attrs, rows, row, want] of [
+      ["a filter hides the row below", ' filter="is:x,"', '| "x" | 1 |\n| "y" | 2 |\n| "x" | 3 |\n', 0, "1:1"],
+      ["a closed group hides the row below", ' groups="rows 2 closed"', '| "x" | 1 |\n| "y" | 2 |\n| "x" | 3 |\n', 0, "1:1"],
+      ["a filter hides the last row", ' filter="is:x,"', '| "x" | 1 |\n| "x" | 2 |\n| "y" | 3 |\n', 1, "0:1"],
+    ]) {
+      await load(hiding(attrs, rows));
+      await click(`#doc td[data-r="${row}"][data-c="1"]`);
+      await menu("row-remove");
+      check(await focusOf(js) === want, `where ${kind}, Remove row chooses a row in sight`,
+        await focusOf(js));
+      await press("z", CTRL);
+      await saves("so Ctrl+Z right after brings the row back", hiding(attrs, rows));
+    }
     // A row or column command acts on every line the range spans, as in Excel.
     const lines = `${H}:::table name="t"\n| "a" | "b" |\n| 1 | =sum(A1:A4) |\n| 2 | |\n| 3 | |\n| 4 | |\n:::\n`;
     await load(lines);
@@ -413,6 +429,23 @@ const sections = {
     await menu("column-right");
     await saves("Insert column right with two columns chosen inserts two after them",
       lines.replace('| "b" |', '| "b" | "" | "" |').replace(/\| \|\n/g, "| | | |\n").replace("=sum(A1:A4) |", "=sum(A1:A4) | | |"));
+    // A press between two blocks, from a chosen cell far down, puts the caret there in place.
+    const words = Array.from({ length: 60 }, (_, k) => `Line ${k}.`).join("\n\n");
+    await load(`${H}${words}\n\n${table}`);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    const at = JSON.parse(await js(`(() => {
+      const p = document.querySelectorAll('#doc p');
+      const a = p[57].getBoundingClientRect();
+      const b = p[58].getBoundingClientRect();
+      return JSON.stringify([a.left + 20, (a.bottom + b.top) / 2, window.scrollY]);
+    })()`));
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page("Input.dispatchMouseEvent", { type, x: at[0], y: at[1], button: "left", clickCount: 1 });
+    }
+    const scrolled = await js("window.scrollY");
+    check(Math.abs(scrolled - at[2]) < 2 && JSON.stringify((await js("ksmd.selection()")).a) ===
+      JSON.stringify([1, 58, 0, 0]), "a press between two blocks from a chosen cell keeps the page where it was",
+    `${at[2]} -> ${scrolled}`);
   },
 
   // While a person works in a table, the page draws no caret in the text. No empty line then opens
@@ -689,9 +722,20 @@ const sections = {
     // frames were not always enough there, so it waits for the gap itself to go.
     await until("!document.querySelector('#doc .gap')", 3000);
     await frames();
+    // **Each event of the press is written down**, with what it met and whether Ctrl was down. A
+    // failure on GitHub's Windows runner said only that nothing opened, twice, after two guesses
+    // at its cause.
+    await js(`window.seen = []; for (const t of ["mousedown", "mouseup", "click"]) {
+      document.addEventListener(t, (e) => window.seen.push([t, e.target.nodeName, e.ctrlKey,
+        !!(e.target.closest && e.target.closest("a[href]")), e.detail, Math.round(e.clientX),
+        Math.round(e.clientY)].join(" ")), true); }`);
+    const before = await js(`JSON.stringify(document.querySelector('${link("site")}').getBoundingClientRect())`);
     await click(link("site"), CTRL);
     check(await opened() === "https://kanso.example/x _blank noopener,noreferrer",
-      "Ctrl+press opens the link in a new tab, with no way back to this page", await opened());
+      "Ctrl+press opens the link in a new tab, with no way back to this page",
+      `opened: ${await opened()}; events (type, target, ctrl, in a link, detail, x, y): ` +
+      `${await js("window.seen.join(' | ')")}; the link stood at ${before}, now ` +
+      `${await js(`JSON.stringify(document.querySelector('${link("site")}').getBoundingClientRect())`)}`);
     await menu("read-only");
     await js("window.opened = []");
     await click(link("site"));

@@ -97,8 +97,8 @@ impl Sema_ctx
 
     priv fn check_main_present(r: Self$@) //<
         //< Refuses a program with no `main`, where one is built (`--program`)
-        //< `ksplc run` and `ksplc build` pass the option. A plain compile may hold none: its C may
-        //< be linked with a `main` written elsewhere.
+        //< `ksplc run` and a compile to an executable pass the option. A plain compile may hold
+        //< none: its C may be linked with a `main` written elsewhere.
         if !base_core.config.is_program
             return
         for m_entry in r.env.files.items()
@@ -170,6 +170,24 @@ impl Sema_ctx
                     r.report_c_symbol_clash(sym, here, first)
                 continue
             seen.set(sym.name, here)
+
+    fn mark_c_symbols_published(r: Self$@) //<
+        //< Marks each C symbol `extern` brings in that a file of this program publishes
+        //< genc keeps the C name of such a symbol (`binds_by_asm_label` in `../../gen/c/ctx.kspl`).
+        //< **A private C name would be a second C object for one symbol.** gcc then reads the two
+        //< as different objects in one translation unit: at `-O2`, a write through one name was not
+        //< seen through the other.
+        $published: = Map<|U8[], Bool|>(base_core.arena)
+        for e in r.symtab.by_fqn.items()
+            sym: = e.value
+            if sym.node != null && sym.flags.is_export
+                published.set(sym.name, true)
+        if published.len == 0
+            return
+        for e in r.symtab.by_fqn.items()
+            sym: = e.value
+            if sym.node != null && sym.flags.is_ext && published.get(sym.name).is_some()
+                sym.flags.is_published_by_program = true
 
     priv fn c_signature(r: Self$@, sym: Sema_symbol$@): C_symbol_seen //<
         //< sym's type as C sees it, read in its own file: a canonical spelling, and the one shown

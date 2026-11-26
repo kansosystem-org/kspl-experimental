@@ -325,6 +325,12 @@ function ksmdTable(ks) {
     while (hiddenRow(block, r)) r += by;
     return r;
   }
+  // The row `Enter` moves to from `row`, up with `back`. Past the first or last row it stays, as
+  // in Excel: `Enter` never leaves the table, so the next keys do not type a paragraph.
+  function enterRow(block, row, back) {
+    const r = stepRow(block, row, back ? -1 : 1);
+    return r < -1 || r >= size(block).rows ? row : r;
+  }
   // The next column a person sees from `column`, one way, passing over a hidden group's columns;
   // the column itself where none shows that way.
   function stepColumn(block, column, by) {
@@ -350,7 +356,7 @@ function ksmdTable(ks) {
   };
 
   // The cell opened to edit and its box are `cellbox.js`, which alone keeps them.
-  const box = ksmdCellBox(ks, { letters, blockOf, size, find, stepRow, stepColumn, chooseCell, choose });
+  const box = ksmdCellBox(ks, { letters, blockOf, size, find, stepRow, enterRow, stepColumn, chooseCell, choose });
   const { edit, take, moveTo, tab, redrawn } = box;
 
   // Downloads the table as CSV: its names, then each row's calculated values, every row whether
@@ -610,6 +616,7 @@ function ksmdTable(ks) {
     tab,
     // The row `dr` steps from `row`, passing over the rows a filter or a group hides.
     step: (block, row, dr) => stepRow(block, row, dr),
+    enterRow,
     pin,
     // Pins the first columns again on the next frame, after a change of a table's widths.
     pinSoon: pinLater,

@@ -9,6 +9,7 @@
 // output).
 // ==========================================
 import "ksai/grad" as _grad // uses Tensor's grad_* operations
+import "ksai/optim"
 import "ksai/tensor" { Tensor }
 import "std/mem" + { Arena }
 import "std/prng"
@@ -55,9 +56,9 @@ impl<|T|> Lora<|T|>
         return xab.scale(r.scale)
     pub fn backward_grads( //<
         //< writes the gradients of A and B to `grads`; returns the input's gradient
-        //< **It does not update**, so the caller picks the optimizer (SGD / Adam); `backward` below
-        //< is built on it. It returns `dx` so a LoRA in an intermediate layer can be summed with
-        //< the base path's dx and passed further back.
+        //< **It does not update**: `apply_grads` does, with the optimizer the caller picks (SGD or
+        //< Adam). It returns `dx` so a LoRA in an intermediate layer can be summed with the base
+        //< path's dx and passed further back.
         r: Self$@,
         $input: Tensor<|T|>, //< the input the forward pass was given, needed again here
         $dy: Tensor<|T|>, //< the gradient of the output
@@ -70,17 +71,13 @@ impl<|T|> Lora<|T|>
         $dxa: = dxab.grad_matmul_input(r.b) // dxab · B^T   [m, rank]
         grads.da = input.grad_matmul_weight(dxa) // input^T · dxa    [in, rank]
         return dxa.grad_matmul_input(r.a) // dxa · A^T   [m, in]
-    pub fn backward( //< one SGD step on A and B with the base frozen; returns the input's gradient
+    pub fn apply_grads( //< moves A and B by `grads`; the base layer is not touched
         r: Self$@,
-        input: Tensor<|T|>, //< the input the forward pass was given
-        dy: Tensor<|T|>, //< the gradient of the output
-        lr: F64, //< the learning rate
-    ): Tensor<|T|>
-        $g: Grads<|T|> = ::{}
-        dx: = r.backward_grads(input, dy, g@)
-        r.a.sgd_step(g.da, lr)
-        r.b.sgd_step(g.db, lr)
-        return dx
+        grads: Grads<|T|>$@, //< the gradients `backward_grads` computed
+        updater: optim.Updater<|T|>$@, //< the optimizer that moves them
+    )
+        updater.update(r.a, grads.da)
+        updater.update(r.b, grads.db)
     pub fn raw_size(r: Self@): Sz //< how many bytes `save_raw` writes
         //< This is the smallest heap-free format: A's and B's raw bytes and `scale` back to back,
         //< for an embedded target's flash or NVRAM. Restoring assumes the caller knows the shapes.

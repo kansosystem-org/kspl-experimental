@@ -41,6 +41,17 @@ function ksmdSettings(ks) {
       (s.footer ? ` @bottom-left { content: ${content(s.footer)}; }` : "") + " }";
   }
 
+  // The place a `#` link names: its text after the `#`, each run of `%XX` escapes read as the
+  // UTF-8 it writes. Caution: **A `%` that starts no escape stays itself.** Read as an escape, it
+  // threw, and a reference to a heading such as `Rise 5%` stopped the document opening.
+  const placeOf = (href) => href.slice(1).replace(/(%[0-9A-Fa-f]{2})+/g, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch (_) {
+      return run;
+    }
+  });
+
   // Numbers the headings, the captions and the references of the page as it stands now.
   function apply() {
     const first = ks.view.blocks()[0];
@@ -89,7 +100,7 @@ function ksmdSettings(ks) {
     if (ks.contents) ks.contents.build();
     for (const a of ks.root.querySelectorAll('a[href^="#"]')) {
       if (a.textContent !== "#") continue;
-      const t = targets.get(decodeURIComponent(a.getAttribute("href").slice(1)));
+      const t = targets.get(placeOf(a.getAttribute("href")));
       a.classList.add("ref");
       a.classList.toggle("ref-missing", !t);
       a.dataset.ref = t ? t.shows : "#?";
@@ -99,7 +110,7 @@ function ksmdSettings(ks) {
 
   // Where a `#place` link goes: the heading, table or image it names, or null.
   const target = (href) => {
-    const t = targets.get(decodeURIComponent(href.slice(1)));
+    const t = targets.get(placeOf(href));
     return t ? t.el : null;
   };
 

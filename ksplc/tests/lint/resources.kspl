@@ -380,6 +380,39 @@ fn main()
   early_unlock(mx@, true)
   break_unlocks(mx@, 5)
   defer_in_branch(mx@, true)
+// ==== case lock_taken_by_assignment
+//< [W0105] and [W0106] read `p = m.lock()` as taking the lock, as `p: = m.lock()` is
+//< Given a new borrow, the local is usable again, and the lock is held until `m.unlock()`.
+// EXPECT: lock_taken_by_assignment.kspl:21:3: warning: [W0105]
+// EXPECT: lock_taken_by_assignment.kspl:25:3: warning: [W0106]
+// EXPECT-NOT: lock_taken_by_assignment.kspl:14:
+// EXPECT: 0 error(s), 2 warning(s)
+import "std/thread"
+
+priv fn locked_again(m: thread.Mutex<|I64|>$@) //< silent: the borrow comes from a new lock()
+  $p: = m.lock()
+  p$ += 1
+  m.unlock()
+  p = m.lock()
+  p$ += 1
+  m.unlock()
+
+priv fn used_after(m: thread.Mutex<|I64|>$@) //< (A) the new borrow is used after unlock
+  $p: I64$@ = null
+  p = m.lock()
+  m.unlock()
+  p$ += 1
+
+priv fn held_at_end(m: thread.Mutex<|I64|>$@) //< [W0106] the lock taken by assignment is held
+  $p: I64$@ = null
+  p = m.lock()
+  p$ = 1
+
+fn main()
+  defer $mx: = thread.Mutex<|I64|>(0) catch panic("mutex")
+  locked_again(mx@)
+  used_after(mx@)
+  held_at_end(mx@)
 // ==== case release_method_spelling
 //< Warns about a method that frees its receiver under a name or contract that is not tracked
 // EXPECT: [W0107] 'close' releases the receiver
@@ -485,6 +518,8 @@ fn main(): I32
 //< A loop that accumulates digits with no cap check
 //< Untrusted input overflowing the digits goes on in silence.
 // EXPECT: [W0103] Accumulating into
+// EXPECT: or use checked_mul and checked_add (std/checked_int)
+// EXPECT-NOT: Untrusted input
 pub fn parse_digits(text: U8[]): I32
   $acc: I32 = 0
   for i in Range.asc(text.len)

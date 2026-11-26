@@ -526,7 +526,7 @@ fn main(): I32
     return 0
 ```
 
-**`ksplc run stock.kspl` compiles and runs a program in one step.** `ksplc build stock.kspl stock` leaves an executable. No build file names the sources, since the imports do. `main` takes no parameters; `sys.args()` gives the command line. What `main` returns is the exit status.
+**`ksplc run stock.kspl` compiles and runs a program in one step.** `ksplc stock.kspl stock` leaves an executable. No build file names the sources, since the imports do. `main` takes no parameters; `sys.args()` gives the command line. What `main` returns is the exit status.
 
 **What you gain:** One command builds or runs a program. There is no Makefile or list of header dependencies to keep up.
 

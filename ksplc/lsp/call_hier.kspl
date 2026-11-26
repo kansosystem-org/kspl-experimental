@@ -4,7 +4,7 @@
 //< never mixed up. Passing a function as a pointer is an edge too, marked `(as fn pointer)`: much
 //< code is reachable only that way. A workspace not analysed far enough is answered with an error,
 //< never with an empty list.
-import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast" { Ast_node, is_anon_fn_name, is_anon_env_ctor_name }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
@@ -57,6 +57,12 @@ priv fn add_call_entry(idx: Fqn_lookup_idx$@, caller: Ast_node$@, callee: Ast_no
         entry.has_ref = true
     else
         entry.has_call = true
+    // **Each instance of a generic repeats its template's call at the same place.** Listed once
+    // per instance, one call would show as several.
+    for r in entry.ranges
+        if r.loc.offset == range_node.loc.offset &&
+            r.loc.file().equals(range_node.loc.file())
+            return
     entry.ranges.push(range_node)
 
 priv fn build_call_hier_item(target: Ast_node@, id_n: Ast_node@, name: U8[], fqn_slice: U8[],
@@ -87,25 +93,30 @@ priv fn build_call_hier_item(target: Ast_node@, id_n: Ast_node@, name: U8[], fqn
 
 priv fn build_call_hier_json(ctx: Sema_ctx$@, idx: Fqn_lookup_idx$@, entry: Call_hier_entry$@,
     is_incoming: Bool, style: base_locate.Uri_style, $builder: Json_builder): json.Value
-    target: = entry.caller_def if is_incoming else entry.callee_def
+    target: = written_decl(idx, entry.caller_def if is_incoming else entry.callee_def)
 
     id_n: = target.find_child(.k_identifier)
     name: = id_n.text if id_n != null else target.text
     fqn: = compute_def_fqn(idx, target)
 
-    d_file: = target.loc.file()
-    src_res: = base_core.source_of(ctx.source_map, d_file)
+    t_file: = target.loc.file()
+    t_src: = base_core.source_of(ctx.source_map, t_file)
     // Caution: Build the line-start table once per file (the reason is at get_line_info in
     // base/lines.kspl); `line_starts_for` keeps it across one file's entries.
-    starts_res: = ctx.line_starts_for(d_file, src_res)
+    t_starts: = ctx.line_starts_for(t_file, t_src)
     item: =
-        build_call_hier_item(target, id_n, name, fqn, src_res, starts_res,
+        build_call_hier_item(target, id_n, name, fqn, t_src, t_starts,
         entry.has_ref && !entry.has_call, style, builder)
 
+    // Caution: **Read each call's place in its own file**, the caller's. In outgoing calls the
+    // item is the callee, which can stand in another file. Read with its lines, the place moved.
     $ranges_arr: = builder.arr()
     for r_node in entry.ranges
+        r_file: = r_node.loc.file()
+        r_src: = base_core.source_of(ctx.source_map, r_file)
+        r_starts: = ctx.line_starts_for(r_file, r_src)
         ranges_arr = ranges_arr
-            .push(builder.range_in(src_res, r_node.loc.offset, r_node.text.len, starts_res))
+            .push(builder.range_in(r_src, r_node.loc.offset, r_node.text.len, r_starts))
 
     return builder.obj().set("from" if is_incoming else "to", item)
         .set("fromRanges", ranges_arr.build()).build()
@@ -127,7 +138,7 @@ impl Ast_node
                 recv: = r.get_postfix_receiver()
                 if recv != null
                     res.target_def = recv.def_node
-                    res.range_node = recv
+                    res.range_node = recv.called_name(recv.def_node, 0).unwrap_or(recv)
                 return res
         else if r.kind_id == .k_enum_init_call && r.children.len > 0
             first: = r.get_child(0)
@@ -141,6 +152,19 @@ impl Ast_node
                 res.target_def = r.def_node
                 res.range_node = mark
         return res
+
+    priv fn called_name(r: Self$@, target: Ast_node$@, depth: Sz): Ast_node$@? //<
+        //< The last identifier under a call's callee that names `target`: the name written
+        //< **The callee is often no name** (`s.get` is a member access). Its own text is the kind's
+        //< (`postfix`), so a range as long as it covered unrelated text.
+        if r == null || target == null || depth > lsp_position.MAX_WALK_DEPTH
+            return .none
+        for i in Range.desc(r.children.len)
+            if found: = r.children.get(i).called_name(target, depth + 1)
+                return .some(found)
+        if r.kind_id == .k_identifier && r.def_node == target
+            return .some(r)
+        return .none
 
     priv fn operator_mark(r: Self$@): Ast_node$@? //<
         //< The operator's own node in an expression an operator trait can rewrite; none otherwise
@@ -156,11 +180,11 @@ impl Ast_node
         default {}
         return .none
 priv struct Fqn_lookup_idx //< the indexes compute_def_fqn uses, built once per request
-    //< The call hierarchy calls compute_def_fqn per call site. Its two reverse lookups (an
-    //< instance's template name, a generic method template's FQN) would be O(N*M) as linear walks.
-    //< build_fqn_lookup_idx indexes both.
-    inst_names: Map<|U8[], U8[]|>$@ //<
-        //< an instance's name -> the original template's registration key
+    //< The call hierarchy calls compute_def_fqn per call site. A generic function's template has
+    //< no symbol, so its FQN is found by position; as a linear walk that would be O(N*M).
+    fn_templates: Map<|Sz, U8[]|>$@ //<
+        //< each instantiated function's template key, by its node (the analysis's own table)
+    templates: Map<|U8[], Ast_node$@|>$@ //< the templates by key (the analysis's own table)
     template_locs: Map<|U8[], U8[]|>$@ //< a template's file#offset -> its registration key
 
 priv fn node_loc_key(node: Ast_node@): U8[] //<
@@ -170,20 +194,13 @@ priv fn node_loc_key(node: Ast_node@): U8[] //<
     return base_core.arena.text().s(node.loc.file()).c(0U8).s("\{node.loc.offset\}").take()
 
 priv fn build_fqn_lookup_idx(ctx: Sema_ctx$@): Fqn_lookup_idx$@
-    inst_names: = base_core.arena.create(Map<|U8[], U8[]|>(base_core.arena))
-    // The list is taken from the heap, once per request.
-    for entry in ctx.env.instantiated_nodes.items()
-        if entry.value != null
-            id_node: = entry.value.find_child(.k_identifier)
-            if id_node != null
-                inst_names.set(id_node.text, entry.key)
-
     template_locs: = base_core.arena.create(Map<|U8[], U8[]|>(base_core.arena))
     for e in ctx.generics.templates.items()
         template_locs.set(node_loc_key(e.value), e.key)
 
     return base_core.arena
-        .create(Fqn_lookup_idx::{ .inst_names = inst_names, .template_locs = template_locs })
+        .create(Fqn_lookup_idx::{ .fn_templates = ctx.env.fn_templates,
+        .templates = ctx.generics.templates, .template_locs = template_locs })
 
 priv fn find_template_fqn_indexed(idx: Fqn_lookup_idx@, node: Ast_node$@): U8[]
     return idx.template_locs.get(node_loc_key(node)).unwrap_or("")
@@ -192,7 +209,7 @@ priv fn qualified_sym_name(sym: Sema_symbol$@): U8[] //<
     //< A global symbol's full name ("ksos.drivers.ht16k33.init")
     //< **A top-level sym.name is the bare name.** As the identity, same-named functions in
     //< different files (`init`) would merge, and unrelated callers would be listed. It matches the
-    //< FQN sema puts in symtab.by_fqn (make_fqn in sema/decl/resolve.kspl), so resolve_def_by_fqn
+    //< FQN sema puts in symtab.by_fqn (make_fqn in sema/decl/resolve.kspl), so resolve_defs_by_fqn
     //< is O(1).
     if !sym.flags.is_global
         return sym.name
@@ -202,14 +219,27 @@ priv fn qualified_sym_name(sym: Sema_symbol$@): U8[] //<
 
 priv fn compute_def_fqn(idx: Fqn_lookup_idx$@, def_node: Ast_node$@): U8[] //<
     //< The FQN that identifies a definition node
-    //< That is the full name, a generic instance's template name, or, with no sym_ptr, the template
-    //< table's key.
+    //< That is the full name, or a generic's template key, for the template and each instance.
+    //< Caution: **Name an instance by its template's key**, never by its own name. The analysis
+    //< files an instance under two names (`Base<|args|>` and the C name), and neither is the
+    //< template's. A caller of one instance then answered no caller of the template.
     if def_node.sym_ptr != null
         sym: = Sema_symbol$@::def_node.sym_ptr
         if sym.flags.is_generated_instance
-            return idx.inst_names.get(sym.name).unwrap_or(sym.name)
+            return idx.fn_templates.get(Sz::def_node).unwrap_or(sym.name)
         return qualified_sym_name(sym)
     return find_template_fqn_indexed(idx, def_node)
+
+priv fn written_decl(idx: Fqn_lookup_idx$@, def_node: Ast_node$@): Ast_node$@ //<
+    //< The declaration the source writes for def_node: an instance's template, else def_node
+    //< **An instance's name is the C name** (`main_Stack_I32_push`), which no file spells. An
+    //< item built from it shows that name, with a range as long as it.
+    if def_node == null || def_node.sym_ptr == null
+        return def_node
+    if !(Sema_symbol$@::def_node.sym_ptr).flags.is_generated_instance
+        return def_node
+    key: = idx.fn_templates.get(Sz::def_node).unwrap_or("")
+    return idx.templates.get(key).unwrap_or(def_node)
 
 priv fn build_callee_id_set(root: Ast_node$@): Map<|U8[], I32|>$@ //<
     //< The call targets' identifiers, so a function used as a value is told apart from a call
@@ -277,6 +307,14 @@ priv fn find_incoming_calls(search: Call_search, node: Ast_node$@, target_fqn: U
     for child in node.children
         find_incoming_calls(search, child, target_fqn, current_caller, depth + 1)
 
+priv fn is_closure_lift(idx: Fqn_lookup_idx$@, def_node: Ast_node$@): Bool //<
+    //< Whether it is a function the compiler made from a closure written in the caller
+    //< That is the closure's own body, or the function that builds its captures. **The person
+    //< wrote a closure there, not a call**, and no file spells these names (`_anon_env_new_1`).
+    id_n: = written_decl(idx, def_node).find_child(.k_identifier)
+    return id_n != null &&
+        (is_anon_fn_name(id_n.text) || is_anon_env_ctor_name(id_n.text))
+
 priv fn find_outgoing_calls(search: Call_search, node: Ast_node$@, depth: Sz) //<
     //< The calls and function-pointer uses under node, the caller's body
     if node == null || depth > lsp_position.MAX_WALK_DEPTH
@@ -284,37 +322,42 @@ priv fn find_outgoing_calls(search: Call_search, node: Ast_node$@, depth: Sz) //
 
     info: = node.extract_call_target()
     if is_fn_or_impl_decl(info.target_def)
-        add_call_entry(search.idx, null, info.target_def, info.range_node, false, search.map)
+        if !is_closure_lift(search.idx, info.target_def)
+            add_call_entry(search.idx, null, info.target_def, info.range_node, false, search.map)
     else if is_fn_ref_use(node, search.callee_ids)
         // The reverse direction is recorded for the same reason: without the edge, someone tracing
         // a task entry point has no lead.
-        add_call_entry(search.idx, null, node.def_node, node, true, search.map)
+        if !is_closure_lift(search.idx, node.def_node)
+            add_call_entry(search.idx, null, node.def_node, node, true, search.map)
 
     for child in node.children
         find_outgoing_calls(search, child, depth + 1)
-priv fn find_def_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[], depth: Sz = 0):
-    Ast_node$@? //<
-        //< It looks for the definition node matching target_fqn in the whole AST
+priv fn collect_defs_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[],
+    out: List<|Ast_node$@|>$@, depth: Sz = 0) //<
+        //< The definition nodes matching target_fqn in the whole AST
         //< Not Symbol_table.resolve(). That tries current_file (whichever was walked last) and then
         //< FQN keys. So a function in an unrelated file can fail to resolve.
+        //< **A generic has several**: its template and each instance share the template's key.
     if node == null || depth > lsp_position.MAX_WALK_DEPTH
-        return .none
+        return
     if is_fn_or_impl_decl(node) && compute_def_fqn(idx, node).equals(target_fqn)
-        return .some(node)
+        out.push(node)
+        return
     for child in node.children
-        if found: = find_def_by_fqn(child, idx, target_fqn, depth + 1)
-            return .some(found)
-    return .none
-priv fn resolve_def_by_fqn(root: Ast_node$@, ctx: Sema_ctx$@, idx: Fqn_lookup_idx$@,
-    target_fqn: U8[]): Ast_node$@ //<
-        //< It resolves target_fqn's definition node
-        //< It tries Symbol_table.resolve_fqn first, then the tree walk (find_def_by_fqn) for what
-        //< symtab lacks, such as a generics template.
+        collect_defs_by_fqn(child, idx, target_fqn, out, depth + 1)
+
+priv fn resolve_defs_by_fqn(root: Ast_node$@, ctx: Sema_ctx$@, idx: Fqn_lookup_idx$@,
+    target_fqn: U8[]): List<|Ast_node$@|>$@ //<
+        //< target_fqn's definition nodes; empty where none is found
+        //< It tries Symbol_table.resolve_fqn first, then the tree walk (collect_defs_by_fqn) for
+        //< what symtab lacks, such as a generic's template and its instances.
+    out: = base_core.arena.create(List<|Ast_node$@|>(base_core.arena))
     sym: = ctx.symtab.resolve_fqn(target_fqn).unwrap_or(null)
-    if sym != null
-        return sym.node
-    found: = find_def_by_fqn(root, idx, target_fqn).unwrap_or(null)
-    return found
+    if sym != null && sym.node != null
+        out.push(sym.node)
+        return out
+    collect_defs_by_fqn(root, idx, target_fqn, out)
+    return out
 // ==========================================
 // Interface APIs for Handlers
 // ==========================================
@@ -327,13 +370,13 @@ fn prepare_call_hierarchy(state: Doc_state$@, params: json.Value, id_val: json.V
     if path.len > 0
         $def_node: Ast_node$@ = null
         // On the declaration's own name this is the declaration itself (`get_definition_node`).
+        idx: = build_fqn_lookup_idx(state.sema)
         if d: = lsp_nav.get_definition_node(state.sema, path)
-            def_node = d
+            def_node = written_decl(idx, d)
 
         if is_fn_or_impl_decl(def_node)
             id_node: = def_node.find_child(.k_identifier)
             name: = id_node.text if id_node != null else def_node.text
-            idx: = build_fqn_lookup_idx(state.sema)
             fqn: = compute_def_fqn(idx, def_node)
             // **An error can stop the analysis before the functions are registered** (a method its
             // trait does not declare, say). The function then has no name to find it by, and an
@@ -401,6 +444,17 @@ priv const NOT_ANALYSED: U8[] = //< the answer where a function has no name the 
     "the function was not analysed, as an error stops the analysis before it. Fix the errors, then \
         ask again"
 
+priv fn analysed_bodies(defs: List<|Ast_node$@|>$@): List<|Ast_node$@|>$@ //<
+    //< The definitions whose bodies to search for calls: a generic's instances where it has any
+    //< **A template's body is not analysed**, and it carries marks an instantiation left there.
+    //< Only a generic nothing instantiates is searched in its template, for the names resolved in
+    //< it. Only an instance has a symbol among a generic's definitions.
+    out: = base_core.arena.create(List<|Ast_node$@|>(base_core.arena))
+    for d in defs
+        if d.sym_ptr != null
+            out.push(d)
+    return out if out.len > 0 else defs
+
 fn item_fqn(params: json.Value): U8[] //<
     //< The FQN of the function a call hierarchy request asks about (the `data` prepare returned)
     return params.get("item").get("data").as_str().unwrap_or("")
@@ -412,10 +466,10 @@ fn handle_calls(ws_state: Doc_state$@, params: json.Value, id_val: json.Value, i
         return
     target_fqn: = item_fqn(params)
     idx: = build_fqn_lookup_idx(ws_state.sema)
-    target_def: = resolve_def_by_fqn(ws_state.root_file, ws_state.sema, idx, target_fqn)
+    target_defs: = resolve_defs_by_fqn(ws_state.root_file, ws_state.sema, idx, target_fqn)
     // Caution: **Answer an error, not the empty array, where the function is not found.** An error
     // in another file can stop the workspace's analysis before it registers the function.
-    if target_fqn.len == 0 || target_def == null
+    if target_fqn.len == 0 || target_defs.len == 0
         lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED, NOT_ANALYSED, arena)
         return
     defer calls_map: = base_core.arena
@@ -428,6 +482,7 @@ fn handle_calls(ws_state: Doc_state$@, params: json.Value, id_val: json.Value, i
     if is_incoming
         find_incoming_calls(search, ws_state.root_file, target_fqn, null, 0)
     else
-        find_outgoing_calls(search, target_def, 0)
+        for target_def in analysed_bodies(target_defs)
+            find_outgoing_calls(search, target_def, 0)
     respond_with_call_hier_entries(calls_map, ws_state.sema, idx, is_incoming,
         base_locate.uri_style_of(ws_state.uri_perm), Json_builder(arena), id_val, arena)

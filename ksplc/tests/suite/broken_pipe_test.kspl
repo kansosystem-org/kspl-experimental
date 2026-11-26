@@ -104,6 +104,28 @@ fn main()
 
 """
 
+// The same probe with its own SIGPIPE handler, which counts each delivery. It writes the count to
+// standard error at the end, after the mark file.
+priv const HANDLED_SRC: U8[] =
+    """import "std/io"
+import "std/sys"
+
+priv $pipes_seen: I32 = 0
+
+priv fn count_pipe(_sig: I32): Void
+  pipes_seen += 1
+
+fn main()
+  $a: = sys.args()
+  sys.set_signal_handler(13, count_pipe)
+  for i in Range.asc(200000)
+    io.out().s("line \{i\} this is a line long enough to go on writing past the buffer\n")
+
+  io.write_file(a[1], "done") catch {}
+  io.err().s("HANDLED \{pipes_seen\}\n")
+
+"""
+
 // The probe that plays `head`: it starts the writer its arguments name, reads a little of its
 // standard output, then stops reading. It prints `CODE <n>`, the writer's exit status, and below
 // it what the writer wrote to standard error. It ends with 0 only where it read something and
@@ -263,6 +285,30 @@ priv fn check_head( //< checks that it ends quietly once the destination is gone
     verdict.check(arena.text().s("a closed pipe ends it without a word \{how\}").take(),
         piped.out.find_str(REFUSED_LINE).is_none(), piped.out)
 
+priv fn check_own_handler(head: U8[], work: U8[], arena: Arena$@) //<
+    //< Checks that a SIGPIPE handler the program set stays in charge of a closed pipe
+    //< The runtime must not put the default back over it. The program runs on to its end, and
+    //< the check of standard output at exit then reports the refused write.
+    exe: = build("handled", HANDLED_SRC, work, arena)
+    if exe.len == 0
+        return
+    mark: = fs.join(work, "handled_cut.txt", arena)
+    piped: = harness.run(U8[][]::{ head, exe, mark })
+    verdict.check("the writer with its own handler ran, and its reader stopped part way",
+        piped.exited_with(0),
+        arena.text()
+        .s("the reader's exit status \{piped.code.unwrap_or(-1)\} / output: \{piped.out\}").take())
+    if !piped.exited_with(0)
+        return
+    // Caution: **Require the count the probe writes at its end.** A probe that died part way
+    // writes none, and the exit status alone could pass by chance.
+    verdict.check("the program's own SIGPIPE handler runs, and the program runs on to its end",
+        fs.exists(mark) && piped.out.find_str("HANDLED 0\n").is_none() &&
+        piped.out.find_str("HANDLED ").is_some(), piped.out)
+    verdict.check("the refused standard output then fails the exit with one line",
+        piped.out.find_str("CODE 1\n").is_some() &&
+        piped.out.find_str(REFUSED_LINE).is_some(), piped.out)
+
 priv fn run_to_files(argv: U8[][], out_path: U8[], err_path: U8[]): I32? //<
     //< runs a probe with its outputs going to files, and returns its exit status
     //< None where it could not start, or ran past 300 s and was stopped.
@@ -345,6 +391,8 @@ fn main(): I32 //<
     if windows
         verdict.skip_check("the checks of SIGPIPE itself", "Windows has no SIGPIPE")
         return harness.finish()
+    if head.len > 0
+        check_own_handler(head, work, arena)
     check_dead_child(work, arena)
     check_child_default(work, arena)
     return harness.finish()

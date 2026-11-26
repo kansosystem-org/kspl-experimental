@@ -1,8 +1,8 @@
 //< Checks completion (not a suite; part of `../suite/lsp_test.kspl`)
 //< Caution: **Test that the replacement works with half-written text** — tested with text that
 //< parses, it stays green with the replacement removed.
-//< **Test the three kinds of head separately**: `p.` (a receiver's type), `io.` (an import's alias)
-//< and a bare name take different paths (the reason is at `PICK_TAILS`).
+//< **Test each kind of head separately**: `p.` (a receiver's type), `io.` (an import's alias), a
+//< bare name and a lone `.` take different paths (the reason is at `PICK_TAILS`).
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
@@ -363,7 +363,9 @@ priv const VIEW_LINES: U8[][_] = ::{ "    _a: = r.", "  _b: = mugs.", "    _c: =
     "  _d: = Mug.", "  _e: = Shade." } //< where to ask
         //< Caution: **Only one place may be half-typed** (see `PICK_HEAD`), so the others are
         //< written whole in each text asked.
-priv const VIEW_WANT: U8[][_] = ::{ "tea", "contains", "tea", "tea", "dark" }
+priv const VIEW_WANT: U8[][_] = ::{ "tea", "contains", "tea", "look", "dark" }
+priv const VIEW_NOT: U8[][_] = ::{ "", "", "", "tea", "" } //< a name the list must leave out
+    //< **A field follows a value, never a type's name**: `Mug.tea` does not compile.
 priv const VIEW_NAMES: U8[][_] = ::{ "after a concrete `Self@` receiver",
     "after a `List<|T|>@` parameter", "after a `for` item", "after a struct's name",
     "after an enum's name" }
@@ -387,6 +389,86 @@ fn check_completion_view(client: jsonrpc_client.Client$@, arena: Arena$@)
         $rows: =
             picks_in(client, "lsp_pick_view.kspl", text.take(), at, line.len, arena)
         $names: = labels(rows@, arena)
+        listed: = lsp_client.why(client, lsp_client.join(names@, arena), arena)
         verdict.check(arena.text().s("completion ").s(VIEW_NAMES[i]).s(" returns its members")
-            .take(), holds(rows@, VIEW_WANT[i]),
-            lsp_client.why(client, lsp_client.join(names@, arena), arena))
+            .take(), holds(rows@, VIEW_WANT[i]), listed)
+        if VIEW_NOT[i].len > 0
+            verdict.check(arena.text().s("completion ").s(VIEW_NAMES[i])
+                .s(" leaves out '\{VIEW_NOT[i]\}'").take(), !holds(rows@, VIEW_NOT[i]), listed)
+
+// ==========================================
+// Completion after a lone `.`, which names a variant
+// ==========================================
+
+// **After a `.` with nothing before it, only a variant fits**: a name of the scope is an error
+// once chosen. Each place takes the expected type from a different statement, so each is asked.
+priv const LONE_HEAD: U8[] = """enum Shape
+  dot
+  circle
+
+
+struct Point
+  x: I32
+
+
+"""
+
+priv const LONE_TAILS: U8[][_] = ::{ """fn f(): Shape
+  return .
+""",
+    """fn f(): I32
+  t: Shape = .
+  return 0
+""",
+    """fn f(s: Shape): I32
+  $t: = s
+  t = .
+  return 0
+""",
+    """fn f(s: Shape): I32
+  switch s
+  case .
+    return 1
+  default
+    return 0
+""",
+    """fn f(s: Shape): I32
+  if s == .
+    return 1
+  return 0
+""",
+    """fn f(): I32
+  _x: = .
+  return 0
+""" }
+
+priv const LONE_LINES: Sz[_] = ::{ 10, 10, 11, 11, 10, 10 } //< where to ask (line and column)
+    //< **It is the position with `LONE_HEAD`'s line count added** (the head is 9 lines).
+priv const LONE_COLS: Sz[_] = ::{ 10, 14, 7, 8, 11, 9 }
+priv const LONE_NAMES: U8[][_] = ::{ "after `return`", "in a typed declaration", "in an assignment",
+    "in a `case`", "after `==`", "where no type is expected" }
+
+fn check_completion_variant(client: jsonrpc_client.Client$@, arena: Arena$@)
+    for i in Range.asc(LONE_TAILS.len)
+        text: = arena.text().s(LONE_HEAD).s(LONE_TAILS[i]).take()
+        $rows: =
+            picks_in(client, "lsp_pick_lone.kspl", text, LONE_LINES[i], LONE_COLS[i], arena)
+        $names: = labels(rows@, arena)
+        listed: = lsp_client.why(client, lsp_client.join(names@, arena), arena)
+        said_of: = arena.text().s("completion after a lone '.' ").s(LONE_NAMES[i]).take()
+        // **Where nothing gives the type, offer nothing**: any name offered there is wrong.
+        if i == LONE_TAILS.len - 1
+            verdict.check(arena.text().s(said_of).s(" offers nothing").take(), rows.len == 0,
+                listed)
+        else
+            verdict.check(arena.text().s(said_of).s(" offers the variants and nothing else").take(),
+                rows.len == 2 && holds(rows@, "dot") && holds(rows@, "circle"), listed)
+    // **A name the compiler writes is not offered**: an enum's list of variants is no one's to
+    // call.
+    bare: = arena.text().s(LONE_HEAD).s("fn f(): I32\n  return _\n").take()
+    $rows: =
+        picks_in(client, "lsp_pick_lone.kspl", bare, LONE_LINES[0], LONE_COLS[0], arena)
+    $names: = labels(rows@, arena)
+    verdict.check("completion of a bare name offers no name the compiler wrote",
+        !holds(rows@, "_variants_of_Shape"),
+        lsp_client.why(client, lsp_client.join(names@, arena), arena))

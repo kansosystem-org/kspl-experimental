@@ -252,6 +252,7 @@ pub fn is_absolute(path: U8[]): Bool //< whether it starts from the root; on Win
     //< **that drive's current working directory**, not the root. A copy that skips the separator
     //< answers differently in just that case. On POSIX `C:\x` is a relative name.
     //< A root that opens with a separator is from the root whatever follows (`\\server\share`).
+    //< On Windows `\w` is from the root of the working directory's drive; `fs.absolute` adds it.
     return is_absolute_on(path, is_windows())
 
 fn is_absolute_on(path: U8[], windows: Bool): Bool //< `is_absolute`, on Windows or on POSIX
@@ -334,9 +335,20 @@ pub fn get_dir_name_on(path: U8[], windows: Bool): U8[] //< `get_dir_name`, on W
     return path.sub(0, root_len_on(path, windows))
 
 pub fn get_file_name(path: U8[]): U8[] //< the last segment, without the folder part
+    //< **It starts after the root as well**, so `get_dir_name` and it split a path between them:
+    //< on Windows `C:x` is `x` in `C:`, and a share, `\\srv\sh`, holds no name. On POSIX `C:x`
+    //< is a name.
+    return get_file_name_on(path, is_windows())
+
+fn get_file_name_on(path: U8[], windows: Bool): U8[] //< `get_file_name`, on Windows or on POSIX
+    //< It takes the OS, so a test on any OS checks both answers.
+    //< Caution: **Do not start at the last separator alone.** A file written beside `C:x` would
+    //< then be named `C:C:x...`, which Windows reads as a stream of a file named `C`.
+    $from: = root_len_on(path, windows)
     if last_slash: = last_path_sep(path)
-        return path.sub_from(last_slash + 1)
-    return path
+        if last_slash >= from
+            from = last_slash + 1
+    return path.sub_from(from)
 
 priv fn ext_dot(path: U8[]): Sz? //<
     //< The position of the extension's leading `.`, or none

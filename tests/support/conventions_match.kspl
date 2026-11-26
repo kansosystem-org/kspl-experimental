@@ -456,26 +456,18 @@ priv fn check_directives(src: U8[], arena: Arena$@)
             list")
 
 // ==========================================
-// Every package that fuzzes a program it builds builds it with the address sanitizer, one way
-// **Each `Makefile` stands alone, so the recipe is written once per package.** One that drifts (a
-// flag dropped, the requirement not handed on) fuzzes a plain build. Its gate stays green.
+// Every package that fuzzes a program has the driver build it, and hands the requirement on
+// **The driver builds it, with the sanitizer where it can** (`fuzz.build`). A `Makefile` that drops
+// `--build=` fuzzes a program built before; one that drops the requirement passes without the
+// sanitizer. Either way its gate stays green.
 // ==========================================
 priv const FUZZ_TARGET: U8[] = "\ntest-fuzz:"
-priv const ASAN_FLAGS_MARK: U8[] = "ASAN_BUILD := "
-priv const ASAN_MARKS: U8[][_] = ::{ "ASAN_BUILD := --sanitize=address ",
-    "$(call fuzz_build,$(ASAN_BUILD))", "$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)" } //<
-        //< The sanitizer asked for, the build with it, and the requirement handed to the driver
-
-priv fn word_after(text: U8[], mark: U8[], arena: Arena$@): U8[] //<
-    //< The text from `mark` to the end of its line, the spaces cut
-    //< Empty where there is none.
-    for line in text.lines(arena)
-        if at: = line.find_str(mark)
-            return line.sub_from(at + mark.len).trim_spaces()
-    return ""
+priv const ASAN_MARKS: U8[][_] = ::{ "--ksplc=\"$(KSPLC)\" --build=",
+    "$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)" } //<
+        //< The build asked of the driver, and the requirement handed to it
 
 priv fn fuzzes_sanitized(text: U8[], _arena: Arena$@): Bool //<
-    //< Whether a `Makefile` builds what it fuzzes with the sanitizer and hands the requirement on
+    //< Whether a `Makefile` has the driver build what it fuzzes, and hands the requirement on
     for m in ASAN_MARKS
         if text.find_str(m).is_none()
             return false
@@ -484,22 +476,16 @@ priv fn fuzzes_sanitized(text: U8[], _arena: Arena$@): Bool //<
 // Caution: **Leave out each mark in turn**: a table missing one cannot notice its test is gone.
 priv const ASAN_SAMPLES: Sample[_] = ::{
     Sample::{ .text =
-        "ASAN_BUILD := --sanitize=address --cflags=-O1\n$(call fuzz_build,$(ASAN_BUILD))\n$(if \
-            $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)", .hits = true },
+        "--ksplc=\"$(KSPLC)\" --build=main.kspl \\\n$(if $(filter \
+            1,$(KANSO_REQUIRE_ASAN)),--require-asan)", .hits = true },
     Sample::{ .text =
-        "ASAN_BUILD := --cflags=-O1\n$(call fuzz_build,$(ASAN_BUILD))\n$(if $(filter \
-            1,$(KANSO_REQUIRE_ASAN)),--require-asan)", .hits = false },
-    Sample::{ .text =
-        "ASAN_BUILD := --sanitize=address --cflags=-O1\n$(call fuzz_build,--cflags=-O0)\n$(if \
-            $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)", .hits = false },
-    Sample::{ .text =
-        "ASAN_BUILD := --sanitize=address --cflags=-O1\n$(call fuzz_build,$(ASAN_BUILD))\n",
+        "\"$(KSPLC)\" main.kspl \\\n$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)",
         .hits = false },
+    Sample::{ .text = "--ksplc=\"$(KSPLC)\" --build=main.kspl\n", .hits = false },
 }
 
 priv fn check_fuzz_sanitized(arena: Arena$@)
     $bad: = scan.misjudged(Sample[]::ASAN_SAMPLES, fuzzes_sanitized, arena)
-    $flags: U8[] = ""
     $seen: Sz = 0
     for rel in harness.package_makefiles()
         text: = harness.read_under_root(rel)
@@ -508,19 +494,11 @@ priv fn check_fuzz_sanitized(arena: Arena$@)
         seen += 1
         if !fuzzes_sanitized(text, arena)
             bad
-                .push(arena.text().s(rel).s("'s `test-fuzz` does not build with the sanitizer")
+                .push(arena.text().s(rel).s("'s `test-fuzz` does not have the driver build it")
                 .take())
-        got: = word_after(text, ASAN_FLAGS_MARK, arena)
-        if flags.len == 0
-            flags = got
-        else if !got.equals(flags)
-            bad
-                .push(arena.text().s(rel).s("'s `ASAN_BUILD` is `").s(got).s("`, another's `")
-                .s(flags).s("`").take())
-    verdict.check_list("every fuzzed program is built with the address sanitizer, one way", seen,
-        "packages", bad@,
+    verdict.check_list("every fuzzed program is built by the driver, with the sanitizer if it can",
+        seen, "packages", bad@,
         "write `test-fuzz` as `lib/ksai/Makefile` does (the samples are `asan_samples`)")
-
 fn run(arena: Arena$@) //< runs every check that "two things written apart agree"
     check_fuzz_sanitized(arena)
     check_code_fires(arena)

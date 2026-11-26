@@ -44,8 +44,8 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
 # an option given twice, so `make fuzz-long` stopped at the property check.
 PROPERTY_ARGS ?=
 suite_args_property = $(if $(filter --n=%,$(PROPERTY_ARGS)),,--n=60) $(PROPERTY_ARGS)
-# **The random equivalence test is a suite run apart** (`make test-random-equiv`), as the scattering
-# is: it takes about a minute of four cores, and CI runs it in the Linux job alone.
+# **The random equivalence test is a suite run by hand** (`make test-random-equiv`), as `make
+# fuzz-long` is: it takes about a minute of four cores, and no CI job runs it.
 # `--n=N` / `--seed=N` replace how many programs the random equivalence test writes and its first
 # seed; `--open=1` also writes the shapes ksplc fails on today (`tests/support/random_prog.kspl`).
 RANDOM_EQUIV_ARGS ?=

@@ -41,6 +41,14 @@ priv const CONFIRM_TIMES: I32 = 5 //<
     //< How many times longer the timeout is when a trial that timed out is run again
     //< **A program that never stops does not stop at any multiple**, and only those trials pay.
 
+priv const ASAN_CFLAGS: U8[] = "--cflags=-O1 -g -fno-omit-frame-pointer" //<
+    //< How the program under test is built with the address sanitizer
+    //< -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
+
+priv const PLAIN_CFLAGS: U8[] = "--cflags=-O0" //< how it is built where the sanitizer is missing
+
+priv const BUILD_WAIT_MS: I32 = 30 * 60 * 1000 //< how long its sanitized build can take
+
 // ==========================================
 // The options, the seeds and the mutations
 // ==========================================
@@ -59,19 +67,63 @@ pub fn declare( //< adds `--trials` and `--seed` to the caller's parser
     parser.int_opt("--seed", options.seed@,
         "where the generator starts; the same seed gives the same rounds")
 
-pub struct Sanitized //< whether the program under test was built with the address sanitizer
-    //< The driver cannot see it from the program, so its build says so. An out-of-range read stops
-    //< where it happens only in such a build. Without one it passes unseen.
-    pub asan: Bool //< it was (`--asan`)
+pub struct Sanitized //< how the program under test is built, and whether with the address sanitizer
+    //< The driver builds it (`build`), so it knows. An out-of-range read stops where it happens
+    //< only in a sanitized build. Without one it passes unseen.
+    pub source: U8[] //< the source it is built from (`--build`); empty: it stands, built plain
+    pub ksplc: U8[] //< the compiler that builds it (`--ksplc`)
+    pub asan: Bool //< it was built with the sanitizer; `build` sets it
     pub required: Bool //< a build without it is a failure (`--require-asan`)
 
-pub fn declare_asan( //< adds `--asan` and `--require-asan` to the caller's parser
+pub fn unsanitized(): Sanitized //< the values before the command line is read
+    return Sanitized::{ .source = "", .ksplc = "ksplc", .asan = false, .required = false }
+
+pub fn declare_asan( //< adds `--build`, `--ksplc` and `--require-asan` to the caller's parser
     parser: argparse.Parser$@, //< the parser that holds the program's other arguments
-    sanitized: Sanitized$@, //< where the two flags are stored
+    sanitized: Sanitized$@, //< where the three are stored
 )
-    parser.flag("--asan", sanitized.asan@,
-        "the program under test was built with the address sanitizer")
+    parser.str_opt("--build", sanitized.source@,
+        "the source the program under test is built from, with the address sanitizer if it can")
+    parser.str_opt("--ksplc", sanitized.ksplc@, "the compiler that builds it")
     parser.flag("--require-asan", sanitized.required@, "a program built without it is a failure")
+
+pub fn build( //< builds the program under test from `--build`, and says how in a line
+    //< **First with the address sanitizer.** Where the C compiler holds no runtime for it, the
+    //< program is built plain at -O0. The first build's output goes to `asan.log` beside the
+    //< program, which then says why. Without `--build` the program stands already, built plain.
+    sanitized: Sanitized$@, //< what the command line said; `asan` is set to how it was built
+    exe: U8[], //< where the program goes
+    name: U8[], //< how the line names the program (`the reader`)
+    arena: Arena$@, //< where the line a failure stops on goes (null: the heap, freed with `dealloc`)
+): Void!U8[] //<
+    //< fails with the line to stop on: a build that cannot start, or a plain one that fails
+    if sanitized.source.len == 0
+        return
+    defer $work: = mem.scratch(null)
+    dir: = sys.get_dir_name(exe)
+    fs.mkdir_all(dir) catch
+        throw arena.text().s("the folder ").s(dir).s(" cannot be made").take()
+    log: = fs.join(dir, "asan.log", work.arena)
+    got: =
+        subproc.run_capture(U8[][]::{ sanitized.ksplc, "--sanitize=address", ASAN_CFLAGS,
+        sanitized.source, exe }, "", BUILD_WAIT_MS, CAPTURE_CAP, work.arena) catch
+            throw arena.text().s("cannot start ").s(sanitized.ksplc).take()
+    io.write_file(log,
+        work.arena.text().s(got.stdout_data).s(got.stderr_data).take()) catch
+            throw arena.text().s("cannot write ").s(log).take()
+    sanitized.asan = got.exited_with(0)
+    if sanitized.asan
+        io.out().s("# ").s(name).s(": with the address sanitizer\n")
+        return
+    // Caution: **Flush the line first.** The plain build writes to the same output, and its lines
+    // would come before it.
+    io.out().s("# ").s(name).s(": without the address sanitizer (").s(log).s(" says why)\n").flush()
+    code: =
+        subproc.spawn_wait(U8[][]::{ sanitized.ksplc, PLAIN_CFLAGS, sanitized.source, exe }, "")
+        catch
+            throw arena.text().s("cannot start ").s(sanitized.ksplc).take()
+    if code != 0
+        throw arena.text().s("the plain build of ").s(sanitized.source).s(" failed").take()
 
 pub fn report_asan(sanitized: Sanitized) //<
     //< says whether the program under test is sanitized, in a line
@@ -87,12 +139,16 @@ pub fn report_asan(sanitized: Sanitized) //<
         verdict.skip_check("building the program under test with the address sanitizer",
             "this environment's C compiler holds no sanitizer runtime")
 
-pub fn again_with_asan( //< the reproduce line, carrying `--asan` where the build had it
+pub fn again_with_asan( //< the reproduce line, carrying `--build` and `--ksplc` where it had them
+    //< So the run again builds the program as this one did.
     sanitized: Sanitized, //< what the command line said
-    again: U8[], //< the line without it (`Setup.again`)
+    again: U8[], //< the line without them (`Setup.again`)
     arena: Arena$@, //< where the line goes; null means the heap, freed with `dealloc`
 ): U8[] //< the line to print
-    return arena.text().s(again).s(" --asan" if sanitized.asan else "").take()
+    line: = arena.text().s(again)
+    if sanitized.source.len > 0
+        line.s(" --ksplc=\"").s(sanitized.ksplc).s("\" --build=\"").s(sanitized.source).s("\"")
+    return line.take()
 
 pub struct Setup //< what a fuzz driver's command line names
     pub exe: U8[] //< the program under test, as a full path
@@ -477,9 +533,10 @@ pub fn scatter( //< runs the trials, checks that they reached the program, and r
     report_all(found, options, campaign.subject, campaign.wait_ms, campaign.again, work.arena)
 
 pub fn run_main( //< a package's fuzz driver from start to end, as its `main` runs it
-    //< It reads the command line (`setup`), says whether the reader is sanitized, checks the
-    //< seeds, then scatters. **The driver is `tests/fuzz_main.kspl`** in its package, and the
-    //< program under test is `<reader>`, which reads one file of the kind named before it.
+    //< It reads the command line (`setup`), builds the reader (`build`), says whether it is
+    //< sanitized, checks the seeds, then scatters. **The driver is `tests/fuzz_main.kspl`** in its
+    //< package, and the program under test is `<reader>`, which reads one file of the kind named
+    //< before it.
     subject: U8[], //< the program under test, as the lines name it (`std`)
     about: U8[], //< what the driver does, as its usage says
     defaults: Options, //< the two numbers where the command line names none
@@ -493,12 +550,15 @@ pub fn run_main( //< a package's fuzz driver from start to end, as its `main` ru
     verdict.begin("fuzz")
     defer arena: = Arena(arena_bytes)
     $o: = defaults
-    $a: = Sanitized::{ .asan = false, .required = false }
+    $a: = unsanitized()
     p: = argparse.Parser.create("fuzz_main", about, arena)
     declare_asan(p, a@)
     s: =
         setup(p, o@, "ksplc run tests/fuzz_main.kspl", "<reader>", seed_dirs, arena) catch why
             return verdict.fatal(why)
+    // The path as given, so the line names the log as the command line did.
+    build(a@, p.rest.get(0), "the reader", arena) catch why
+        return verdict.fatal(why)
     report_asan(a)
     // The same reader and work folder run it again, from this folder.
     c: = Campaign::{ .subject = subject, .argv = U8[][]::{ s.exe }, .tell_kind = true,

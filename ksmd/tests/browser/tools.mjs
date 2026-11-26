@@ -744,6 +744,16 @@ export function tools({ browser, page, media, js, settle, until, press, type, se
       "a press on a cell chooses it without opening it");
       await press("Delete");
       await saves("typing and Delete change nothing", start);
+      // A key runs no command the menu leaves out, so nothing asks for words it then refuses.
+      await js("window.__asked = 0; window.__prompt = window.prompt; " +
+        "window.prompt = () => { window.__asked += 1; return 'Count again'; }");
+      await press("F2", SHIFT);
+      await press("k", CTRL);
+      const said = await js("document.getElementById('status').textContent");
+      await js("window.prompt = window.__prompt");
+      check(await js("window.__asked") === 0 && said.startsWith("The page is read-only"),
+        "Shift+F2 and Ctrl+K on a chosen cell ask nothing, and the page says it is read-only",
+        `${await js("window.__asked")} ${said}`);
       await rightClick('#doc td.chosen');
       check(await js("document.querySelector('.menu.context [data-cmd=\"row-above\"]').disabled && " +
         "!document.querySelector('.menu.context [data-cmd=\"filter-value\"]').disabled"),
@@ -754,6 +764,16 @@ export function tools({ browser, page, media, js, settle, until, press, type, se
       check(await js("Array.from(document.querySelectorAll('#doc tbody tr')).filter((r) => !r.hidden).length") === 1,
         "a filter still narrows the rows");
       await menu("filter-clear");
+      check(await js("Array.from(document.querySelectorAll('#doc tbody tr')).filter((r) => !r.hidden).length === 2 && " +
+        "!document.querySelector('#doc .filter-note') && !document.querySelector('#doc .filter-arrow.on')"),
+      "Show all rows shows every row, and no line above the table says a filter stands",
+      await js("document.querySelector('#doc .filter-note')?.textContent || ''"));
+      // Last, since the bar takes the focus from the chosen cell.
+      await press("h", CTRL);
+      check(await js("!document.querySelector('.find').hidden && " +
+        "document.querySelector('.find .replace-part').hidden"),
+      "Ctrl+H opens the find bar without its replace part");
+      await press("Escape");
       await menu("read-only");
       await click("#doc p");
       await type("x");

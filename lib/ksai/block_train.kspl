@@ -7,10 +7,10 @@
 // backward: at each residual, the gradient is the direct path plus the path through the
 // transform.
 // ==========================================
-import "ksai/attention_train" as attn_train // Self_attention's train_forward/backward
+import "ksai/attention_train" as attn_train // Self_attention's train_forward and backward passes
 import "ksai/lora"
 import "ksai/nn"
-import "ksai/nn_grad" // Rms_norm's / Mlp's backward, and their gradients
+import "ksai/nn_grad" // Rms_norm's and Mlp's backward passes, and their gradients
 import "ksai/optim"
 import "ksai/tensor" { Tensor }
 
@@ -46,17 +46,6 @@ impl<|T|> nn.Transformer_block<|T|>
         ffn_out: = r.ffn.forward(norm_h)
         out: = h + ffn_out // residual 2
         return Block_train<|T|>::{ .out = out, .x = input, .attn = attn, .h = h, .norm_h = norm_h }
-    pub fn backward( //< one SGD step on every weight in the block; returns the input's gradient
-        r: Self$@,
-        kept: Block_train<|T|>$@, //< what `train_forward` kept for this same input
-        dout: Tensor<|T|>, //< the gradient of the block's output
-        lr: F64, //< the learning rate
-    ): Tensor<|T|>
-        $g: Block_grads<|T|> = ::{}
-        dx: = r.backward_grads(kept, dout, g@)
-        defer $u: = optim.Updater<|T|>.sgd(lr)
-        r.apply_grads(g@, u@)
-        return dx
     pub fn backward_grads( //<
         //< writes every weight's gradient into `grads`; returns the input's gradient
         r: Self$@,
@@ -102,8 +91,8 @@ impl<|T|> nn.Transformer_block<|T|>
         out: = h + ffn_out // residual 2
         return Block_train<|T|>::{ .out = out, .x = input, .attn = attn, .h = h, .norm_h = norm_h }
     pub fn backward_lora( //< one step on the adapters only; every base weight stays frozen
-        //< The base is frozen (a backward with lr=0 returns only the gradient). The returned
-        //< gradient sums every path.
+        //< The base is frozen: its norms' `backward_grads` give the input's gradient, and their own
+        //< gradients are never applied. The returned gradient sums every path.
         r: Self$@,
         kept: Block_train<|T|>$@, //< what `train_forward_lora` kept for this same input
         dout: Tensor<|T|>, //< the gradient of the block's output
@@ -115,10 +104,12 @@ impl<|T|> nn.Transformer_block<|T|>
     ): Tensor<|T|>
         // Residual 2 (out = h + ffn_out): the ffn_out route's gradient to h.
         dnorm_h: = r.ffn.backward_lora(kept.norm_h, dout, lr, fc1_lora, fc2_lora)
-        dh_ffn: = r.ffn_norm.backward(kept.h, dnorm_h, 0.0) // frozen (lr=0)
+        $ffn_norm_g: nn_grad.Rms_norm_grads<|T|> = ::{} // computed but never applied: frozen
+        dh_ffn: = r.ffn_norm.backward_grads(kept.h, dnorm_h, ffn_norm_g@)
         dh: = dout + dh_ffn // joins at h
         // Residual 1 (h = x + attn_out): the attn_out route's gradient to x.
         dnorm_x: = r.attention.backward_lora(kept.attn@, dh, lr, q_lora, v_lora)
-        dx_attn: = r.attention_norm.backward(kept.x, dnorm_x, 0.0) // frozen (lr=0)
+        $attention_norm_g: nn_grad.Rms_norm_grads<|T|> = ::{} // never applied: frozen
+        dx_attn: = r.attention_norm.backward_grads(kept.x, dnorm_x, attention_norm_g@)
         dx: = dh + dx_attn // joins at x
         return dx

@@ -145,6 +145,57 @@ fn test_closure_reads_const_param()
     assert(const_beside_type<|I64, 9|>(1) == 9, "N beside a type parameter")
     verdict.pass("a closure reads an enclosing `const` parameter in its signature and its body.")
 
+// A closure in a method writes `Self` for the type the method stands in, as the method does
+// ("8.1.3 Closures" in `../../docs/SPEC-programming-language.md`). In a trait's default body
+// that is the only name the type has, and each impl's copy of the body takes its own type.
+priv struct Self_box
+    n: I32
+
+impl Self_box
+    priv fn size(r: Self): I32
+        return r.n
+
+    priv fn bigger(r: Self, by: I32): I32 //< the size times by, through a closure over `r`
+        f: = fn(times: I32; r: Self): I32
+            return r.size() * times
+        return f.call(by)
+
+    priv fn grown(r: Self, by: I32): Self //< a copy grown by by, made in a closure's body
+        f: = fn(step: I32; r: Self): Self
+            made: = Self::{ .n = r.n + step }
+            return made
+        return f.call(by)
+
+priv trait Self_sized
+    fn size(r: Self): I32
+    fn twice(r: Self): I32 //< the size times two, through a closure over `r`
+        f: = fn(times: I32; r: Self): I32
+            return r.size() * times
+        return f.call(2)
+
+priv struct Self_small
+    n: I32
+
+priv struct Self_large
+    n: I32
+
+impl Self_small: Self_sized
+    fn size(r: Self): I32
+        return r.n
+
+impl Self_large: Self_sized
+    fn size(r: Self): I32
+        return r.n + 100
+
+fn test_closure_writes_self()
+    verdict.start("[Lang] a closure that writes `Self` in a method test...")
+    b: = Self_box::{ .n = 3 }
+    assert(b.bigger(4) == 12, "a capture of type Self in an impl's method")
+    assert(b.grown(2).n == 5, "Self as a return type and in the body")
+    assert(Self_small::{ .n = 5 }.twice() == 10, "a trait's default body, one impl")
+    assert(Self_large::{ .n = 1 }.twice() == 202, "the same body, another impl")
+    verdict.pass("a closure's `Self` names the type of the method it is written in.")
+
 // A closure or a frame's slice can be stored where the frame keeps it. A function pointer goes
 // into a global. A closure the caller built is stored through the caller's pointer. The check
 // refuses only a value this frame made, stored where it outlives the frame

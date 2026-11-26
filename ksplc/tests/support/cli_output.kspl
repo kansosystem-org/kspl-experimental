@@ -1,0 +1,128 @@
+//< What a compile makes, by the output's name: C, LLVM IR or an executable, and what it refuses
+//< Not a suite; `../suite/cli_test.kspl` runs it.
+import "ksplc/tests/support/cli_emit" { cli, ok_case, ng_case, std_flag }
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/ds"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+fn case_executable(arena: Arena$@) //<
+    //< A compile to an executable leaves a runnable program, with its C and libraries beside it
+    //< **`--cflags` is shown to reach the C compiler by a flag it refuses**: one it accepts would
+    //< pass whether it reached it or not.
+    dir: = harness.sandbox("cli_executable")
+    src: = fs.join(dir, "prog.kspl", arena)
+    io.write_file(src,
+        "import \"std/io\"\n\nfn main(): I32\n  io.out().s(\"built\\n\")\n  return 3\n") catch
+            verdict.check("executable: the program can be written", false, "")
+            return
+    // The output's folder is not there yet: the build makes it.
+    exe: = fs.join(dir, "bin/prog", arena)
+    ok_case("executable: a name with no ending builds one",
+        U8[][]::{ std_flag(), src, exe }, "")
+    ran: = harness.run(U8[][]::{ exe })
+    verdict.check("executable: it runs, with the program's exit code",
+        ran.exited_with(3) && ran.out.equals("built\n"), ran.out)
+    verdict.check("executable: the C and the libraries stay beside it",
+        fs.exists(fs.join(dir, "bin/prog.c", arena)) &&
+        fs.exists(fs.join(dir, "bin/prog.libs", arena)), "")
+    with_exe: = fs.join(dir, "prog.exe", arena)
+    ok_case("executable: a name ending in .exe builds one",
+        U8[][]::{ std_flag(), src, with_exe }, "")
+    verdict.check("executable: the .exe one runs",
+        harness.run(U8[][]::{ with_exe }).exited_with(3), "")
+    ng_case("executable: --cflags reaches the C compiler",
+        U8[][]::{ std_flag(), "--cflags=-fkspl-no-such-flag", src, exe },
+        "ksplc: the C compiler failed")
+    // **A missing input and an output folder that cannot be made are named**, and nothing is
+    // written: a build that went on would leave a C file with no program.
+    absent: = fs.join(dir, "absent.kspl", arena)
+    ng_case("executable: a missing input is named",
+        U8[][]::{ std_flag(), absent, fs.join(dir, "absent", arena) }, "ksplc: no such file: ")
+    verdict.check("executable: a missing input leaves no C behind",
+        !fs.exists(fs.join(dir, "absent.c", arena)), "")
+    blocked: = fs.join(dir, "prog.kspl/bin/prog", arena)
+    ng_case("executable: an output folder behind a file is named, not written",
+        U8[][]::{ std_flag(), src, blocked }, "ksplc: cannot make the folder ")
+    // **[W0110] is printed by a build, not by `ksplc lint` alone** ("5.2 The diagnostics' four
+    // weights" in `../../docs/SPEC-tools.md`): what it warns of reads freed memory at run time.
+    io.write_file(src,
+        "import \"std/ds\" { List }\n\nfn fill(l: List<|Callable1<|I32, I32|>|>$@)\n  n: = 5\n  \
+            l.push(fn(x: I32; n: I32): I32 { return x + n; })\n\nfn main(): I32\n  defer $l: = \
+            List<|Callable1<|I32, I32|>|>(null)\n  fill(l@)\n  return 0\n") catch
+                verdict.check("executable: the program keeping a closure can be written", false, "")
+                return
+    ok_case("executable: a container that keeps a local's closure is warned of",
+        U8[][]::{ std_flag(), src, exe }, "[W0110]")
+    // **[W0101] is printed by every compile too**: the index panics at run time.
+    io.write_file(src, "fn main(): I32\n  a: = I32[3]::{ 1, 2, 3 }\n  return a[5]\n") catch
+        verdict.check("executable: the program indexing past the end can be written", false, "")
+        return
+    ok_case("executable: a constant index past an array's end is warned of",
+        U8[][]::{ std_flag(), src, exe }, "[W0101]")
+    ok_case("a translation to C warns of a constant index past an array's end",
+        U8[][]::{ std_flag(), src, fs.join(dir, "index.c", arena) }, "[W0101]")
+    io.write_file(src, "fn helper(): I32\n  return 1\n") catch {}
+    ng_case("executable: a program with no main() is refused by ksplc, not by the linker",
+        U8[][]::{ std_flag(), src, exe }, "this program has no main()")
+
+fn case_output_kind(arena: Arena$@) //<
+    //< The output's name chooses the kind; `--to` must agree with it, and some names are refused
+    //< **A refusal leaves no file of the refused name**: an exit code alone would pass after a
+    //< build that wrote one anyway.
+    dir: = harness.sandbox("cli_output_kind")
+    src: = fs.join(dir, "prog.kspl", arena)
+    io.write_file(src, "fn main(): I32\n  return 3\n") catch
+        verdict.check("output kind: the program can be written", false, "")
+        return
+    // **The ending is read ignoring case**, so `OUT.C` is C on every OS, as Windows reads it.
+    upper: = fs.join(dir, "OUT.C", arena)
+    ok_case("a name ending in .C writes C", U8[][]::{ std_flag(), src, upper }, "")
+    text: = io.read_file(upper, null) catch ""
+    verdict.check("the .C output holds C", text.find_str("int main(").is_some(), "")
+    ll: = fs.join(dir, "prog.ll", arena)
+    ok_case("a name ending in .ll writes LLVM IR", U8[][]::{ std_flag(), src, ll }, "")
+    ir: = io.read_file(ll, null) catch ""
+    verdict.check("the .ll output holds LLVM IR", ir.find_str("target triple = ").is_some(), "")
+    ok_case("--to agreeing with the name is taken",
+        U8[][]::{ std_flag(), "--to=llvm", src, ll }, "")
+    refusals: = U8[][][]::{ U8[][]::{ "--to=c", "prog.ll", "names LLVM IR" },
+        U8[][]::{ "--to=llvm", "prog.c", "--to=llvm writes LLVM IR, but" },
+        U8[][]::{ "--to=c", "prog", "names an executable" },
+        U8[][]::{ "", "prog.o", "names an object file" },
+        U8[][]::{ "", "prog.OBJ", "names an object file" },
+        U8[][]::{ "", "prog.h", "--library=<name>.h" }, U8[][]::{ "", "prog.s", "-S" },
+        U8[][]::{ "", "libprog.so", "names a library" },
+        U8[][]::{ "", "prog.dll", "a library" },
+        U8[][]::{ "", "prog.libs", "--emit-libs=<file>" },
+        U8[][]::{ "", "other.kspl", "names a KSPL source" },
+        U8[][]::{ "--emit-deps=d.txt", "prog", "where the output is an executable" },
+        U8[][]::{ "--freestanding", "prog", "where the output is an executable" },
+        U8[][]::{ "--library=prog.h", "prog", "where the output is an executable" },
+        U8[][]::{ "--cflags=-O0", "prog.c", "'--cflags' takes effect only where" },
+        U8[][]::{ "--cflags=-O0", "prog.ll", "'--cflags' takes effect only where" } }
+    for r in refusals
+        out: = fs.join(dir, r[1], arena)
+        argv: =
+            (U8[][]::{ std_flag(), r[0], src, out } if r[0].len > 0
+            else U8[][]::{ std_flag(), src, out })
+        name: = arena.text().s("'\{r[0]\} \{r[1]\}' is refused").take()
+        ng_case(name, argv, r[2])
+        verdict.check(arena.text().s("'\{r[1]\}' is not written").take(),
+            r[1].equals("prog.ll") || !fs.exists(out), "")
+    ng_case("a name ending in a separator is refused as a folder",
+        U8[][]::{ std_flag(), src, arena.text().s(dir).s("/bin/").take() }, "names a folder")
+    ng_case("an executable is not built from standard input",
+        U8[][]::{ std_flag(), "-", "prog" },
+        "Standard input ('-') is read where the output is C (.c) or LLVM IR (.ll)")
+    // **The subcommand that is not there answers in one line**, naming the form that builds.
+    r: = cli(U8[][]::{ "build", src, fs.join(dir, "built", arena) })
+    verdict.check("'ksplc build' is answered with the form that builds an executable",
+        r.exited_with(1) &&
+        r.out
+        .find_str("'build' is not a subcommand. 'ksplc <input.kspl> <output>' builds an executable")
+        .is_some() && r.out.find_str("usage:").is_none(), r.out)

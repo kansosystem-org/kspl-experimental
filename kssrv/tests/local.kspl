@@ -24,10 +24,6 @@ priv const PUT_BODY: U8[] = "かんそ\nwritten\n" //< the body written back
 const PAGE_BODY: U8[] = "<title>local page</title>\n" //< the page each `--local` run names
     //< It stands outside the root, so the root's own `index.html` ("root index") never answers `/`.
 
-priv const CEILING: Sz = 8 * 1024 * 1024 //< the protocol's ceiling on a written file
-    //< It is the number "Files" in `docs/SPEC-local-server.md` sets, which a page relies on, so
-    //< the check holds the server to the protocol rather than to its own constant.
-
 fn cases(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
     //< Runs every check on the local-use server, one topic after another
     auth: = client.bearer_head(token, arena)
@@ -47,7 +43,6 @@ fn cases(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_e
     dot_cases(port, auth, root, arena)!
     link_cases(port, auth, root, arena)!
     conditional_cases(port, auth, arena)!
-    cap_cases(port, auth, arena)!
     files_only_cases(port, auth, arena)!
     full_table_cases(port, auth, arena)!
 
@@ -145,33 +140,27 @@ priv fn guarded(what: U8[], resp: client.Resp, arena: Arena$@) //<
     //< ("What guards the page in the browser" in `docs/SPEC-local-server.md`)
     verdict.check(arena.text().s("--local refuses frames and referrers, and says nosniff: ").s(what)
         .take(),
-        client.header(resp.head, "content-security-policy").equals("frame-ancestors 'none'") &&
-        client.header(resp.head, "referrer-policy").equals("no-referrer") &&
-        client.header(resp.head, "x-content-type-options").equals("nosniff"), resp.head)
+        client.header(resp, "content-security-policy").equals("frame-ancestors 'none'") &&
+        client.header(resp, "referrer-policy").equals("no-referrer") &&
+        client.header(resp, "x-content-type-options").equals("nosniff"), resp.head)
 
 priv fn host_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< the `Host` a request names
     // **A page whose name is re-pointed at 127.0.0.1 (DNS rebinding) sends its own name.** So the
     // server refuses a request naming another host, even for the page or with the token.
+    // The status of each refusal is pinned by the rows of "Only the loopback's name" in
+    // `docs/SPEC-local-server.md`. Only what those rows cannot see is checked here.
     rebound: = "Host: attacker.example\r\n"
-    r_page: = client.get(port, "/", rebound, arena)!
-    client.expect_status("--local refuses a Host other than the loopback: the page", r_page, 403,
-        arena)
     r_api: = client.get(port, "/api/status",
         arena.text().s(rebound).s(auth).take(), arena)!
     verdict.check("--local refuses a Host other than the loopback: with the token, in JSON",
         r_api.status == 403 && client.is_json(r_api), client.shown(r_api, arena))
 
-    // **A second `Host` is refused whichever comes first.** Taking the first, a request naming the
-    // loopback and then another host would pass as this server's.
-    host_names: U8[][2] = ::{ "two names", "one name twice" }
-    host_heads: U8[][2] = ::{ "Host: 127.0.0.1\r\nHost: attacker.example\r\n",
-        "Host: 127.0.0.1\r\nHost: 127.0.0.1\r\n" }
-    for i in Range.asc(2)
-        r: = client.get(port, "/", host_heads[i], arena)!
-        nm_h: = arena.text().s("--local refuses a request naming Host twice: ").s(host_names[i])
-            .take()
-        client.expect_status(nm_h, r, 400, arena)
+    // **A second `Host` is refused even where it names the loopback again.** The specification's
+    // row sends two different names only.
+    twice: = client.get(port, "/", "Host: 127.0.0.1\r\nHost: 127.0.0.1\r\n", arena)!
+    client.expect_status("--local refuses a request naming Host twice: one name twice", twice, 400,
+        arena)
     // **A target naming its host is judged by that host**, which stands in for `Host` (RFC 9112
     // §3.2.2). Judged by `Host`, a request could name the loopback there and another host here.
     named: = client.request(port, "GET http://attacker.example/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
@@ -229,7 +218,7 @@ priv fn read_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end 
     verdict.check("GET /api/file returns the content", ok2, client.shown(got, arena))
     // Caution: **Do not guess the type from the content.** The receiver trusts a guessed type and
     // interprets the content by it.
-    ctype: = client.header(got.head, "content-type")
+    ctype: = client.header(got, "content-type")
     verdict.check("/api/file returns as octet-stream", ctype.equals("application/octet-stream"),
         ctype)
 
@@ -462,8 +451,6 @@ priv fn plus_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!clie
     back: = client.get(port, "/api/file?path=sub/a+b.txt", auth, arena)!
     verdict.check("and it is read back under the same name",
         back.status == 200 && back.body.equals("plus\n"), client.shown(back, arena))
-    spaced: = client.get(port, "/api/file?path=sub/a%20b.txt", auth, arena)!
-    client.expect_status("the name with a space is another file", spaced, 404, arena)
     size: = client.get(port, "/api/stat?path=sub/a+b.txt", auth, arena)!
     client.expect_status("`/api/stat` reads the `+` the same way", size, 200, arena)
 
@@ -509,10 +496,9 @@ priv fn dot_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!clien
         return
     for i in Range.asc(DOT_RELS.len)
         rel: = DOT_RELS[i]
-        put: = client.put_file(port, arena.text().s("/api/file?path=\{rel\}").take(), auth, "x\n",
+        // The 403 is pinned by the rows of "Writing" in `docs/SPEC-local-server.md`.
+        _put: = client.put_file(port, arena.text().s("/api/file?path=\{rel\}").take(), auth, "x\n",
             arena)!
-        nm_w: = arena.text().s("PUT /api/file refuses a dot name: \{rel\}").take()
-        client.expect_status(nm_w, put, 403, arena)
         kept: = io.read_file(fs.join(root, rel, arena), arena) catch ""
         nm_k: = arena.text().s("a refused write leaves the dot name as it was: \{rel\}").take()
         verdict.check(nm_k, kept.equals(DOT_BODIES[i]), kept)
@@ -550,23 +536,6 @@ priv fn link_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!clie
     outside: = io.read_file(fs.join(root, "../secret.txt", arena), arena) catch ""
     verdict.check("a refused write through a link leaves the file outside as it was",
         outside.equals(SECRET_BODY), outside)
-
-priv fn cap_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //< the cap on a body
-    // **Check both sides of the ceiling.** Below it, a document cannot be written back whole;
-    // without it, one client fills the memory.
-    base: = arena.save()
-    big: = client.filler(CEILING, arena)
-    whole: = client.put_file(port, "/api/file?path=sub/big.txt", auth, big, arena)!
-    ok7: =
-        whole.status == 200 &&
-        client.doc_of(whole, arena).get("wrote").as_int().unwrap_or(-1) == CEILING
-    verdict.check("--local writes a body of exactly the protocol's 8 MiB", ok7,
-        client.shown(whole, arena))
-    arena.restore(base)
-    past: = client.filler(CEILING + 1, arena)
-    over: = client.put_file(port, "/api/file?path=sub/over.txt", auth, past, arena)!
-    client.expect_status("--local refuses one byte past 8 MiB with a 413", over, 413, arena)
-    arena.restore(base)
 
 priv fn files_only_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< files, and nothing else

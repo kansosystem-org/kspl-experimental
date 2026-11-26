@@ -30,6 +30,8 @@ priv struct Level //< how one level of a list writes its number
 
 priv struct List_def //< one abstract number: a list's levels, and its counters
     levels: List<|Level|>
+    style_link: U8[] //< `styleLink`: the list style whose levels this list defines; empty for none
+    num_style_link: U8[] //< `numStyleLink`: the list style this list takes its levels from
     value: I32[9] //< each level's current number
     used: Bool[9] //< whether the level has a number since it last restarted
 
@@ -91,6 +93,10 @@ fn read(src: U8[], work: Work$@, arena: Arena$@): Numbering!U8[] //<
         else if name.equals("startOverride") && num >= 0 && override >= 0
             at: = n.nums.at(num)
             at.starts[override] = whole(x.attr_or("val", "0", arena)!, 0)
+        else if name.equals("styleLink") && list >= 0 && level < 0
+            n.lists.at(list).style_link = x.attr_or("val", "", arena)!
+        else if name.equals("numStyleLink") && list >= 0 && level < 0
+            n.lists.at(list).num_style_link = x.attr_or("val", "", arena)!
         else if name.equals("lvl") && list >= 0 && override < 0
             level = level_number(x.attr_or("ilvl", "0", arena)!)
         else if list >= 0 && level >= 0
@@ -100,9 +106,21 @@ fn read(src: U8[], work: Work$@, arena: Arena$@): Numbering!U8[] //<
     lists: = sorted_names.sorted(n.list_keys@, arena)
     for i in Range.asc(n.nums.len)
         at: = n.nums.at(i)
-        at.list = lists.find(at.list_id).unwrap_or(-1)
+        at.list = styled_list(n@, lists.find(at.list_id).unwrap_or(-1))
     n.num_index = sorted_names.sorted(n.num_keys@, arena)
     return n
+
+priv fn styled_list(lists_of: Numbering@, list: Sz): Sz //<
+    //< The list whose levels `list` shows: the one defining its list style, or `list` itself
+    //< **A list of a list style holds no levels of its own** (`numStyleLink`); Word reads them, and
+    //< counts, in the list whose `styleLink` names the style. Read as it stood, it wrote no label.
+    if list < 0 || lists_of.lists.get(list).num_style_link.len == 0
+        return list
+    style: = lists_of.lists.get(list).num_style_link
+    for j in Range.asc(lists_of.lists.len)
+        if lists_of.lists.get(j).style_link.equals(style)
+            return j
+    return list
 
 priv fn read_level_field(reader: xml.Reader@, lv: Level$@, arena: Arena$@): Void!U8[] //<
     //< Takes one child of a `lvl` into the level
@@ -142,7 +160,7 @@ impl Numbering
             levels
                 .push(Level::{ .start = 0, .format = "decimal", .text = "", .legal = false,
                 .keep = false, .suffix = "tab" })
-        def: = List_def::{ .levels = levels }
+        def: = List_def::{ .levels = levels, .style_link = "", .num_style_link = "" }
         r.list_keys.push(Keyed::{ .key = id, .pos = r.lists.len })
         r.lists.push(def)
         return r.lists.len - 1

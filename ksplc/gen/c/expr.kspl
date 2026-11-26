@@ -6,7 +6,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as _base_core // the operator classes (`is_shift_op` ...)
 import "ksplc/base/mangle" as base_mangle
-import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/gen/c/ctx" as gen_c_ctx + { Genc_ctx }
 import "ksplc/gen/c/expr_postfix" as gen_c_expr_postfix
 import "ksplc/gen/c/literal" as gen_c_literal
 import "ksplc/sema/body/binary" as sema_body_binary
@@ -271,7 +271,9 @@ impl Ast_node
         else if r.text.len > 0
             // Only a name goes through nm; literals come here too, and a string containing `int`
             // would be rewritten.
-            if r.kind_id == .k_identifier
+            if r.kind_id == .k_identifier && gen_c_ctx.binds_by_asm_label(r.def_node)
+                cg.extern_c_name(r.text)
+            else if r.kind_id == .k_identifier
                 cg.nm(r.text)
             else
                 cg.s(r.text)

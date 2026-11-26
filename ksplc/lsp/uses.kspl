@@ -386,14 +386,13 @@ impl Walk
     priv fn refers(r: Self$@, node: Ast_node$@): Bool //<
         //< whether an identifier is a place of the target
         return is_def_match(node.def_node, r.target_def) || is_def_match(node, r.target_def) ||
-            r.names_type_param(node)
+            r.names_by_scope(node)
 
-    priv fn names_type_param(r: Self@, node: Ast_node$@): Bool //<
-        //< Whether an identifier is a use of the target, where the target is a type parameter
-        //< **Sema links no use of a type parameter to it**: a template is not analysed, and an
-        //< instance holds the argument in its place. So a use is matched as the jump resolves it
-        //< (`type_param_named` in `nav.kspl`): the nearest declaration around it that binds the
-        //< name is the one it means. Unmatched, a rename changed the `<|T|>` alone.
+    priv fn names_by_scope(r: Self@, node: Ast_node$@): Bool //<
+        //< Whether an identifier sema did not link is a use of the target, found by its scope
+        //< **Sema links no local name in a template's body, nor any use of a type parameter.** The
+        //< nearest declaration around the name that binds it is the one it means, as for a jump
+        //< (`resolve_fallback_parent_def` in `nav.kspl`). Unmatched, a rename changed only that.
         //< Caution: **Only a name that opens a path.** A member after a `.` spelled the same is
         //< another thing.
         if node.def_node != null || r.above.len == 0 || !node.text.equals(r.name)
@@ -405,10 +404,9 @@ impl Walk
                 return false
         default
             return false
-        for i in Range.desc(r.above.len)
-            if bound: = lsp_nav.type_param_named(r.above.get(i), r.name)
-                return is_same_loc(bound, r.target_def)
-        return false
+        bound: = lsp_nav.resolve_fallback_parent_def(r.above, node, r.name) catch
+            return false
+        return is_same_loc(bound, r.target_def)
 
     priv fn add_spot(r: Self$@, hit: Ast_node$@) //<
         //< It adds one place, dropping a duplicate by `<file>:<offset>`

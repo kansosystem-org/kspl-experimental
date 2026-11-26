@@ -14,7 +14,7 @@ import "ksmd/edit/history" { Transaction, begin, capture, is_empty, record_table
 import "ksmd/edit/moving"
 import "ksmd/edit/region" { Unit, blank_unit, gap_spot, paragraph_style, settle, whole_unit }
 import "ksmd/edit/series" { Series, series_of, value_at }
-import "ksmd/edit/sort" { Sort_key, sort_rows }
+import "ksmd/edit/sort" { Sort_key, key_of, sort_rows }
 import "ksmd/edit/typed" { Reading, is_web_address, value_of, write_text }
 import "ksmd/model/choice" { entry_of }
 import "ksmd/model/filter" { is_filter_entry }
@@ -333,26 +333,9 @@ impl Editor
         $keys: = List<|Sort_key|>(scratch)
         for row in Range.asc(t.rows.len)
             v: = values.at(table, row, column)
-            $key: = Sort_key::{ .group = 5, .number = 0.0, .text = "", .row = row }
-            switch v.kind
-            case .number
-                key.group = 0
-                key.number = v.number
-            case .date
-                key.group = 1
-                key.number = v.number
-            case .text
-                key.group = 2
-                key.text = v.text
-            case .boolean
-                key.group = 3
-                key.number = 1.0 if v.boolean else 0.0
-            case .error
-                key.group = 4
-                key.text = v.error.mark()
-            case .empty
-                key.group = 5
-            keys.push(key)
+            number: = (1.0 if v.boolean else 0.0) if v.kind == .boolean else v.number
+            text: = v.error.mark() if v.kind == .error else v.text
+            keys.push(key_of(v.kind, number, text, row))
         before: = capture(ed.doc@, scratch)
         sort_rows(ed.doc@, table, keys@, descending, scratch) catch why
             throw .table(why)

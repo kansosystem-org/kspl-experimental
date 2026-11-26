@@ -216,10 +216,13 @@ priv fn find_frame_escape(ctx: Sema_ctx$@, expr_node: Ast_node$@, with_address: 
     if target.kind_id == .k_expr_upcast
         // **A slice's trait value keeps the descriptor's address**, as any value's does, not the
         // address its elements lie at. A descriptor that is no place (`"ab"`, a call's result) is
-        // a temporary of the block the statement stands in.
+        // a temporary of the block the statement stands in. **A pointer's trait value keeps that
+        // pointer**, so it is checked as the pointer would be (`return c@` as a trait value).
         inner: = target.get_upcast_inner()
-        if inner == null || ctx.env.is_pointer(inner.type_id)
+        if inner == null
             return .none
+        if ctx.env.is_pointer(inner.type_id)
+            return find_frame_escape(ctx, inner, with_address, deeper_than)
         held: =
             is_frame_storage(ctx, inner) ||
             (ctx.env.is_slice(inner.type_id) && !ctx.env.is_place_expr(inner))

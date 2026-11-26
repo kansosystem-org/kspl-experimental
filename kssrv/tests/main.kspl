@@ -36,8 +36,8 @@ priv const USAGE: U8[] =
         //< With a run's name, only that run goes, to reproduce one by hand. `--RUNS` prints the
         //< names, one a line. So whoever picks one does not have to read them out of this file.
         //< `--spec=` names a specification with tables of requests for the run `SPEC_RUN`.
-        //< `--seed=N` and `--trials=N` set the run `paths` (`fuzz.declare`). `--asan` and
-        //< `--require-asan` say how the server was built (`fuzz.declare_asan`).
+        //< `--seed=N` and `--trials=N` set the run `paths` (`fuzz.declare`). `--build=`,
+        //< `--ksplc=` and `--require-asan` build the server first (`fuzz.declare_asan`).
 
 priv const RUNS: U8[][9] = ::{ "outward", "https", "local", "linked", "page", "idle", "stop",
     "memory", "paths" } //<
@@ -95,7 +95,7 @@ fn main(): I32
     p: = argparse.Parser.create(RUN_AS, "starts kssrv and checks it from outside", arena)
     p.positional("<kssrv> <work_dir> [<run>]")
     fuzz.declare(p, o@)
-    $a: = fuzz.Sanitized::{ .asan = false, .required = false }
+    $a: = fuzz.unsanitized()
     fuzz.declare_asan(p, a@)
     $spec: U8[] = ""
     p.str_opt("--spec", spec@, "a specification with tables of requests, for the run `claims`")
@@ -111,11 +111,13 @@ fn main(): I32
         said: = arena.text().s("the run '\{SPEC_RUN\}' goes with --spec=, and only it\n").s(USAGE)
             .take()
         panic(arena.dup_str(said))
+    exe: = arena.dup_str(p.rest.get(0))
+    fuzz.build(a@, exe, "the server", arena) catch why
+        panic(why)
     // **Whether the server is sanitized is told where the run `paths` goes alone**, as `make
     // test-fuzz` runs it. The other runs take the server `make test` builds, plain.
     if only.equals("paths")
         fuzz.report_asan(a)
-    exe: = arena.dup_str(p.rest.get(0))
     tmp: = arena.dup_str(p.rest.get(1))
     root: = fs.join(tmp, "www", arena)
     fs.mkdir_all(root) catch
@@ -686,22 +688,22 @@ priv fn serve_cases(port: I32, arena: Arena$@): Void!client.Http_end
     ok2: = slash.status == 200 && slash.body.equals("root index\n")
     d3: = client.shown(slash, arena)
     verdict.check("GET / returns index.html", ok2, d3)
-    ctype: = client.header(slash.head, "content-type")
+    ctype: = client.header(slash, "content-type")
     verdict.check("the Content-Type is chosen from the extension",
         ctype.starts_with("text/html"), ctype)
     // **Facing outward, only `nosniff` is added**: framing and the referrer are the site's choice.
     verdict.check("facing outward, an answer says nosniff and sets no frame or referrer policy",
-        client.header(slash.head, "x-content-type-options").equals("nosniff") &&
-        client.header(slash.head, "content-security-policy").len == 0 &&
-        client.header(slash.head, "referrer-policy").len == 0, slash.head)
+        client.header(slash, "x-content-type-options").equals("nosniff") &&
+        client.header(slash, "content-security-policy").len == 0 &&
+        client.header(slash, "referrer-policy").len == 0, slash.head)
     // **The extension's letter case does not count**, and a module script is JavaScript: sent as
     // octet-stream, a browser downloads the one and refuses the other.
     loud: = client.get(port, "/LOUD.HTML", "", arena)!
-    loud_type: = client.header(loud.head, "content-type")
+    loud_type: = client.header(loud, "content-type")
     verdict.check("an extension in capitals gets its Content-Type",
         loud_type.starts_with("text/html"), loud_type)
     module: = client.get(port, "/mod.mjs", "", arena)!
-    module_type: = client.header(module.head, "content-type")
+    module_type: = client.header(module, "content-type")
     verdict.check("a .mjs module is sent as JavaScript",
         module_type.starts_with("text/javascript"), module_type)
     sub: = client.get(port, "/sub/", "", arena)!
@@ -756,8 +758,7 @@ priv fn api_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end
     st: = client.get(port, "/api/status", "", arena)!
     doc: = client.doc_of(st, arena)
     ok21: =
-        st.status == 200 &&
-        client.header(st.head, "content-type").equals("application/json") &&
+        st.status == 200 && client.header(st, "content-type").equals("application/json") &&
         doc.get("max_connections").as_int().unwrap_or(0) > 0 &&
         doc.get("requests").as_int().unwrap_or(0) > 0
     d22: = client.shown(st, arena)
@@ -826,7 +827,7 @@ priv fn api_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end
     // it as "an empty file").
     ok31: =
         hd.status == 200 && hd.body.len == 0 &&
-        client.header(hd.head, "content-length").equals("7")
+        client.header(hd, "content-length").equals("7")
     d32: = client.shown(hd, arena)
     verdict.check("a HEAD names the body's length with no body", ok31, d32)
     // **No answer to a HEAD carries a body, a refusal's included.** The client reads the next
@@ -882,9 +883,9 @@ priv fn keepalive_cases(port: I32, arena: Arena$@): Void!client.Http_end
     d71: = arena.text().s("\{got.get(0).status\} \{got.get(1).status\} \{got.get(2).status\} ")
         .s(got.get(1).body).take()
     verdict.check("one connection handles three in order", ok70, d71)
-    keep: = client.header(got.get(0).head, "connection")
+    keep: = client.header(got.get(0), "connection")
     verdict.check("it says keep-alive", keep.equals("keep-alive"), keep)
-    closed: = client.header(got.get(2).head, "connection")
+    closed: = client.header(got.get(2), "connection")
     verdict.check("a Connection: close gets a close back", closed.equals("close"), closed)
     // **HTTP/1.0 closes unless it lists `keep-alive`**, and `close` counts among other tokens.
     old: = answer_then(port, "GET /index.html HTTP/1.0\r\n", arena)
@@ -914,7 +915,7 @@ priv fn answer_then(port: I32, first_lines: U8[], arena: Arena$@): U8[] //<
         return "not sent"
     r: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena) catch
         return "no answer"
-    said: = client.header(r.head, "connection")
+    said: = client.header(r, "connection")
     _more: = c.next(false, STILL_OPEN_MS, arena) catch e
         switch e
         case .closed

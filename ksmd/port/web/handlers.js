@@ -91,9 +91,15 @@ function ksmdCommands(ks) {
     if (!ks.point.turn(e.target)) ks.repeat();
   }, true);
 
+  // Caution: **Read-only runs only a command that looks, as the menu offers no other.** A key still
+  // reaches the rest, and Note... asked for words that the edit then refused.
   ks.command = (name) => {
     const h = ks.handler(name);
     if (!h) return null;
+    if (ks.readOnly && !h.looks) {
+      ks.sayReadOnly();
+      return null;
+    }
     if (name === "redo" && !ks.canRedo) return ks.repeat();
     if (h.direct) return h.run(name);
     return runs(name, () => command(name, h));

@@ -167,11 +167,6 @@ fn check_source(folder: files.Folder, source: Source, out: Source$@, arena: Aren
     //< often breaks a sentence across lines with no space, and a model copies it with none.
     //< `out` gets the path as the root holds it, and an Excel file's sheet and rows. Caution:
     //< **This shows that the words stand there, not that they back the answer.**
-    quote: = without_spaces(source.quote, arena)
-    // **The characters counted are those compared**: a quote of full-width spaces alone counted
-    // 8, then compared as empty, and an empty quote stands in every range.
-    if char_count(quote) < MIN_QUOTE_CHARS
-        return arena.text().s("the quote is shorter than \{MIN_QUOTE_CHARS\} characters").take()
     if source.from_line < 1I64 || source.to_line < source.from_line
         return "the lines are not a range from a first line to a last one"
     if source.to_line - source.from_line + 1I64 > MAX_CITED_LINES
@@ -184,19 +179,49 @@ fn check_source(folder: files.Folder, source: Source, out: Source$@, arena: Aren
     lines: = files.split_lines(body, arena)
     if source.to_line > I64::lines.len
         return arena.text().s("the file has only \{lines.len\} lines").take()
+    // **An Excel line is compared by its cells**: each line starts with its sheet's name, so a
+    // quote of the name alone stood in every line. A head copied into the quote is taken out too.
+    sheet: = files.is_excel(at.full)
     cited: = arena.text()
+    $heads: = List<|U8[]|>(arena)
     for k in Range.asc(Sz::(source.to_line - source.from_line + 1I64))
-        cited.s(lines.get(Sz::(source.from_line - 1I64) + k))
+        line: = lines.get(Sz::(source.from_line - 1I64) + k)
+        head: = excel.head_of(line) if sheet else ""
+        cited.s(line.sub_from(head.len))
+        if head.len > 0
+            heads.push(without_spaces(head, arena))
+    quote: = without_heads(without_spaces(source.quote, arena), heads.slice(), arena)
+    // **The characters counted are those compared**: a quote of full-width spaces alone counted
+    // 8, then compared as empty, and an empty quote stands in every range.
+    if char_count(quote) < MIN_QUOTE_CHARS
+        return arena.text().s("the quote is shorter than \{MIN_QUOTE_CHARS\} characters").take()
     if without_spaces(cited.take(), arena).find_str(quote).is_none()
         return "the quote does not stand in those lines"
     out.rows = NO_ROWS
-    if files.is_excel(at.full)
+    if sheet
         if first: = excel.place_of(lines.get(Sz::(source.from_line - 1I64)))
             if last: = excel.place_of(lines.get(Sz::(source.to_line - 1I64)))
                 out.rows = Sheet_rows::{ .sheet = arena.dup_str(first.sheet),
                     .from_row = first.row, .to_sheet = arena.dup_str(last.sheet),
                     .to_row = last.row }
     return ""
+
+priv fn without_heads(quote: U8[], heads: U8[][], arena: Arena$@): U8[] //<
+    //< The quote with each of the cited lines' heads taken out, both without spaces
+    //< A quote across rows may hold a head in its middle. No head starts another, since a sheet's
+    //< name holds no `:`, so the first head that matches is the only one.
+    out: = arena.text()
+    $i: Sz = 0
+    for i < quote.len
+        $n: Sz = 0
+        for h in heads
+            if quote.starts_with(h, i)
+                n = h.len
+                break
+        if n == 0
+            out.c(quote[i])
+        i += 1 if n == 0 else n
+    return out.take()
 
 priv fn char_count(text: U8[]): Sz //< how many UTF-8 characters the text holds
     //< Each byte that does not continue a character starts one.
@@ -339,7 +364,10 @@ fn write_console(answer: Answer@, out: Writer, arena: Arena$@) //<
         s: = answer.sources.get(i)
         out.s("- ")
         write_shown(out, s.path)
-        out.c(' ').s(span_words(s, answer.lang, arena)).s("\n  > ")
+        // **The words name the sheet**, which is the file's text and can hold a control.
+        out.c(' ')
+        write_shown(out, span_words(s, answer.lang, arena))
+        out.s("\n  > ")
         write_shown(out, collapse_spaces(s.quote, arena))
         out.c('\n')
     if answer.removed.len > 0

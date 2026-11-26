@@ -260,6 +260,25 @@ fn test_dir_name() //< the folder that contains a path
         .pass("a file under the root is in the root, the root is its own folder, and a bare name is \
             in none.")
 
+fn test_file_name() //< the last segment, which starts after the root
+    //< Caution: **Test a drive with no separator after it.** On Windows `C:x` names `x` in drive
+    //< C's working folder. Taken as the name `C:x`, a file written beside it becomes `C:C:x...`,
+    //< which Windows reads as a stream of a file named `C`.
+    verdict.start("[Sys] taking the file name off a path...")
+    paths: U8[][11] = ::{ "dir/a.kspl", "a.kspl", "/a", "/", "C:/a", "C:a", "C:", "C:\\",
+        "\\\\srv\\sh", "\\\\srv\\sh\\x", "dir/" }
+    // On Windows the root holds no name: a bare drive and a share give empty.
+    on_windows: U8[][11] = ::{ "a.kspl", "a.kspl", "a", "", "a", "a", "", "", "", "x", "" }
+    on_posix: U8[][11] = ::{ "a.kspl", "a.kspl", "a", "", "a", "C:a", "C:", "", "sh", "x", "" }
+    for win in BOTH_OSES
+        for i in Range.asc(paths.len)
+            want: = on_windows[i] if win else on_posix[i]
+            assert(sys.get_file_name_on(paths[i], win).equals(want),
+                "get_file_name's answer differs")
+    here: = on_windows[5] if sys.is_windows() else on_posix[5]
+    assert(sys.get_file_name(paths[5]).equals(here), "get_file_name answers for this OS")
+    verdict.pass("the file name starts after the last separator and after the root.")
+
 fn test_share_roots() //< a Windows share, and a path past `\\?\`, as a root
     //< Caution: **Test a file directly in a share.** Its folder is the share; a root cut at the
     //< first separator would make it the server, and a share's parent `\\`.

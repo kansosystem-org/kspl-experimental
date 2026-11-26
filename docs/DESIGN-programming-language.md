@@ -1063,11 +1063,12 @@ It lowers to `return (Shape){ .obj = (void*)&s, … };`, with no `@` written. **
 | `U8[]::a` or `U8[]::{ … }` over a local array | Yes | The compiler would write the descriptor's pointer unseen |
 | `x@`, `a[0]@` or `s.f@` of a local, `v@` of a parameter passed by value | Yes | The address is of storage folded at the return |
 | `U8[]::{ .ptr = a[0]@, .len = 4 }`, `.some(x@)`, `a[0]@ + 1`, `U8@::x@` | Yes | The value carries such an address inside it |
+| `x@` of a local as a trait (`Shape`) | Yes | The trait value keeps the pointer it was made of |
 | A local set from any of those forms | Yes | The mark follows the name (below) |
 | `pp$`, `hp.p` or `s[0]`, read through a pointer or a slice to such a local | Yes | The value read is that local's, so it carries the local's mark |
 | `b.s("a")` of a local `b`, where `s` returns only its receiver | Yes | The call gives back `b@` (above) |
 | `builder.slice()`, `arena.alloc()` | No | The compiler does not know where any other call's result points |
-| A global or its address, an upcast pointer, `p$@`, `p.f@` through a pointer `p` | No | None of them points into the frame |
+| A global or its address, a pointer parameter as a trait, `p$@`, `p.f@` through a pointer `p` | No | None of them points into the frame |
 
 Caution: **Do not reject other calls' results, or widen the check to "do not return a slice" or "do not return a pointer".** Returning allocated memory, or what a pointer parameter points at, is legitimate.
 

@@ -7,6 +7,13 @@ import "std/verdict"
 
 extern fn abs(value: I32): I32 //< C's, from the C library every program links
 
+extern fn snprintf(str: Void$@, size: Sz, format: Void@, ...): I32 //<
+    //< C's, its format a `Void@` where `<stdio.h>` has `const char*`
+extern fn strlen(text: Void@): Sz //< C's, its result signed where `<string.h>` has `size_t`
+extern optind: U32 //< C's `getopt` index, unsigned where `<unistd.h>` has `int`
+    //< POSIX's C library defines it as 1, and so does MinGW's. Nothing in this program calls
+    //< `getopt`, which alone changes it.
+
 extern struct Kspl_test_opaque //< never defined: only a pointer to it crosses
 
 extern fn extern_decl_doubled(value: I32): I32 //< published to C under its own name
@@ -20,6 +27,14 @@ priv fn opaque_is_null(opaque: Kspl_test_opaque$@?): Bool //< takes the opaque t
 fn test_extern_decl(): Void
     verdict.start("[extern_decl]")
     assert(abs(-5) == 5, "a C function brought in with `extern fn` is called")
+    // **A header the generated C includes declares both with other types**: C refused the
+    // second declaration ("conflicting types") until genc gave each a private C name.
+    $buf: U8[16] = ::{}
+    written: = snprintf(Void$@::buf@, 16, "hi %d", 5)
+    assert(written == 4 && strlen(Void@::buf@) == 4 && buf[3] == '5',
+        "a C function that a header declares with other types is called")
+    // The same holds for a variable: C refused `extern U32 optind;` after the header's `int`.
+    assert(optind == 1, "a C variable that a header declares with another type is read")
     assert(opaque_is_null(.none), "an opaque C type brought in with `extern struct` is named")
     assert(peer.doubled_through_c(4) == 8,
         "a function published with `extern fn` is called by its C name")

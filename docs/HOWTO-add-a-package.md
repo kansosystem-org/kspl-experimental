@@ -33,7 +33,7 @@
 ## Optional, and checked by nothing
 
 8. **macOS's one run of it**: macOS runs no `test-extract`, so a package reaches its gates only through `make debug` (`tests/debug/main.kspl`). Add it there, unless macOS must not run it.
-9. **The LLVM backend**: `make LLVM=1 debug` reaches what `make debug` does; a package outside it joins `test-llvm-pkgs` in `mk/test.mk`.
+9. **The LLVM backend**: `make LLVM=1 debug` reaches what `make debug` does. On Linux, a package's tests reach LLVM only through `test-sanitize`: add them to `PKG_TESTS` in `tests/suite/sanitize_test.kspl`.
 10. **The prose that counts packages**: the root [`README.md`](../README.md)'s layout table, and the count in [`DESIGN-repository.md`](DESIGN-repository.md) ("Why one repository").
 
 ## Run it

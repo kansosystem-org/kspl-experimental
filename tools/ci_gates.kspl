@@ -70,14 +70,10 @@ pub struct Gate //< one gate: what `make` is asked for, and where it runs
         //< **For a gate that `Shard.linux` would also suit**, put in a shared job because the Linux
         //< job would otherwise end last. That job's start-up is paid already, so the move is free.
     not_on: U8[] //<
-        //< The platforms `ci` leaves it out on, space-separated as `PLATFORM` spells them
-        //< **Only for a gate that cannot give a true answer there**, never for a missing tool: the
-        //< port it runs needs Linux, or its baseline was measured on Linux.
-    local_when: U8[] //<
-        //< A folder: a local `make ci` runs it only when the change reaches that folder
-        //< **For a costly gate that finds faults only there.** GitHub's jobs always run it. Left
-        //< out, the round names it with the reason last (`left_out` in `tools/ci.kspl`), so no
-        //< green hides it. Empty for every other gate.
+        //< The platforms `ci` and the shared jobs leave it out on, as `PLATFORM` spells them
+        //< **Only for a gate that cannot give a true answer there, or whose answer another gate
+        //< there gives**, never for a missing tool. The port it runs needs Linux, its baseline was
+        //< measured on Linux, or another gate builds the same tests the same way.
     pub fails: U8[] //<
         //< Its failure case, `<file>#<name>`: an input its check must reject
         //< **A gate that cannot fail stays green while what it checks breaks.** A row that runs a
@@ -149,13 +145,10 @@ pub const GATES: Gate[_] = ::{
     // Caution: **Put the run-time tests through the LLVM backend too.** A self-host that passes
     // does not tread a shape ksplc itself never uses, so a broken genllvm goes unseen. Windows runs
     // it as well: only Win64 passes arguments on the stack, where a wrong argument type shows.
+    // **Not on Linux**: `test-sanitize` builds every package's tests through LLVM there. Only
+    // `tools/` is left, and `debug_tools` runs its tests on the C backend.
     Gate::{ .log = "debug_llvm", .args = "LLVM=1 debug", .par = .serial, .verdict = true,
-        .shard = .b, .macos = true, .stops = false, .early = false,
-        .fails = "std/tests/verdict_test.kspl#FALLS_MAIN" },
-    // kssrv's, kstls's and ksagent's tests through LLVM, which `debug` holds none of
-    // (`test-llvm-pkgs`).
-    Gate::{ .log = "llvm_pkgs", .args = "test-llvm-pkgs", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false, .early = false,
+        .shard = .b, .macos = true, .stops = false, .early = false, .not_on = "linux",
         .fails = "std/tests/verdict_test.kspl#FALLS_MAIN" },
     // Peak memory, the tree types' exact sizes and counted instructions settle it; the time is only
     // recorded (`tests/checkers/perf_guard.kspl`).
@@ -175,15 +168,6 @@ pub const GATES: Gate[_] = ::{
     Gate::{ .log = "equiv", .args = "test-equiv", .par = .serial, .verdict = true, .shard = .none,
         .macos = true, .stops = false, .early = false,
         .fails = "ksplc/tests/suite/equiv_test.kspl#TRAP_PROBE" },
-    // **Linux alone**: it costs about a minute of four cores, and what it finds is in ksplc's C and
-    // IR, the same on every system. A Windows minute counts double, a macOS one ten times.
-    // Caution: **Keep it out of job a.** There it came just before the browser gates, and on a
-    // two-core runner five served sections got no answer from the browser in 20 s.
-    // **A local `make ci` runs it only for a change under `ksplc/`**: it found three compiler
-    // faults when it came, and none since.
-    Gate::{ .log = "random_equiv", .args = "test-random-equiv", .par = .serial, .verdict = true,
-        .shard = .linux_race, .macos = false, .stops = false, .early = false,
-        .local_when = "ksplc/", .fails = "ksplc/tests/suite/random_equiv_test.kspl#PLANTED" },
     Gate::{ .log = "emit_runtime", .args = "test-emit-runtime", .par = .serial, .verdict = true,
         .shard = .none, .macos = true, .stops = false, .early = false,
         .fails = "ksplc/tests/suite/emit_runtime_test.kspl#other_rt" },
@@ -260,7 +244,7 @@ fn run_order(stop: Bool, arena: Arena$@): List<|Gate|> //<
     return out
 
 pub fn change_reaches(folder: U8[], arena: Arena$@): Bool //<
-    //< Whether the change reaches a file under `folder` (`Gate.local_when`)
+    //< Whether the change reaches a file under `folder`
     //< The change is what this branch holds beyond `origin/main`, what is not committed, and new
     //< files. **Where git cannot say, and in GitHub's jobs, the answer is yes**, so what depends on
     //< it runs.
@@ -310,7 +294,8 @@ pub fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if 
 impl Set
     fn runs(r: Self, gate: Gate, platform: U8[] = "linux"): Bool //< selected gates for this host
         shared: = gate.shard == Shard.a || gate.shard == Shard.b
-        here: = !gate.linux_only || platform.equals("linux") //< a shared job on this host runs it
+        here: = //< a shared job on this host runs it
+            (!gate.linux_only || platform.equals("linux")) && !lists(gate.not_on, platform)
         switch r
         case .ci
             // `Shard.none` is macOS's stand-in for the copies `test-extract` builds, which this set

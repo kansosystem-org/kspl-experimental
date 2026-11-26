@@ -17,6 +17,7 @@ import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/query" as _sema_type_query // `get_clean_real_type`
 import "ksplc/sema/type/scope" as sema_type_scope
 import "std/chars"
 import "std/ds" { List, Map }
@@ -118,8 +119,10 @@ priv fn add_pick(out: List<|Pick|>$@, name: U8[], kind: I32, prefix: U8[], node:
     type_id: I32) //<
         //< It adds the name as a candidate where it starts with `prefix`
         //< Caution: **Do not add the same name twice** (the enclosing scope and the file may both
-        //< hold it).
-    if name.len == 0 || name.equals(PICK_MARK) || !name.starts_with(prefix)
+        //< hold it). **A declaration the compiler wrote is left out** (an enum's
+        //< `_variants_of_Shape`): no one can write its name.
+    if name.len == 0 || name.equals(PICK_MARK) || !name.starts_with(prefix) ||
+        (node != null && node.made_by_compiler())
         return
     for p in out
         if p.name.equals(name)
@@ -231,6 +234,29 @@ priv fn alias_module_of(state: Doc_state@, head: U8[], arena: Arena$@): U8[] //<
         return b.take()
     return ""
 
+priv fn lone_dot_type(path: List<|Ast_node$@|>@, mark: Ast_node$@): I32? //<
+    //< The type expected where a `.` stands with nothing before it (`return .dot`), or none for any
+    //< other place
+    //< **The analysis already worked it out.** It gives a `.variant` the expected type, also when
+    //< the enum has no variant of that name. A `case` takes its switch subject's type.
+    //< 0 (unknown) where nothing gives a type, so the list stays empty.
+    if path.len < 2 || path.get(path.len - 1) != mark
+        return .none
+    parent: = path.get(path.len - 2)
+    switch parent.kind_id
+    case .k_expr_implicit_dot, .k_implicit_enum
+        return .some(parent.type_id)
+    case .k_case_pattern
+        // A `case` naming a value (`case tw`) is no variant.
+        if !parent.get_child(0).is_literal(".")
+            return .none
+        for $i: = path.len - 2; i > 0; i -= 1
+            if path.get(i - 1).kind_id == .k_stmt_switch
+                return .some(path.get(i - 1).get_switch_cond().type_id)
+        return .some(0)
+    default
+        return .none
+
 fn send_none(id_val: json.Value, arena: Arena$@) //< it answers that there is no candidate
     //< Caution: **Return an empty array rather than `null`.** `null` means "no answer" and an empty
     //< array means "it looked and found none". **Whether to show it is the client's decision.**
@@ -260,7 +286,12 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
     $out: = List<|Pick|>(arena)
     recv: = lsp_nav.dot_receiver_of(state.sema, path, mark)
     head: = qualifier_of(path, mark)
-    if recv.node != null
+    if lone: = lone_dot_type(path, mark)
+        // **After a lone `.` only a variant fits**, so neither the scope's names nor any other.
+        // Where nothing gives the expected type, the list stays empty.
+        env: = state.sema.env
+        add_variants(state.sema, env.get_str(env.get_clean_real_type(lone)), swapped.prefix, out@)
+    else if recv.node != null
         picks_of_receiver(state.sema, recv, swapped.prefix, out@)
     else if head.len > 0
         // **Where there is a head, do not mix in the scope's names**, which cannot follow an `io.`.
@@ -270,11 +301,11 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
         if seg.len > 0
             add_by_dot_prefix_syms(state.sema, seg, swapped.prefix, state.mod_name_perm, out@)
         else if typed.len > 0
-            picks_of_type(state.sema, typed, swapped.prefix, out@)
+            picks_of_type(state.sema, typed, true, swapped.prefix, out@)
         else
             named: = lsp_nav.named_type_name(state.sema, path, head)
             add_variants(state.sema, named, swapped.prefix, out@)
-            picks_of_type(state.sema, named, swapped.prefix, out@)
+            picks_of_type(state.sema, named, false, swapped.prefix, out@)
     else
         picks_in_scope(state, path, mark, swapped.prefix, out@)
     // By name; picks of one name keep the order they were found in.
@@ -289,14 +320,31 @@ priv fn picks_of_receiver(ctx: Sema_ctx$@, recv: lsp_nav.Dot_receiver, prefix: U
         //< They come from the same `dot_receiver_of` (`nav.kspl`) that jump-to-definition uses.
         //< **A module alias does not come here** (`qualifier_of` handles it).
     if recv.type_name.len > 0
-        picks_of_type(ctx, recv.type_name, prefix, out)
+        picks_of_type(ctx, recv.type_name, true, prefix, out)
 
-priv fn picks_of_type(ctx: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
-    //< That type's fields and methods
-    //< Caution: **Both the path from a receiver and the path qualified by a type's name must go
-    //< through here** (Principle 6). Otherwise a member shows for `p.` and not for `P.`.
+priv fn picks_of_type(ctx: Sema_ctx$@, raw: U8[], fields: Bool, prefix: U8[],
+    out: List<|Pick|>$@) //<
+        //< That type's methods, and its fields where `fields` is set
+        //< Caution: **Both the path from a receiver and the path qualified by a type's name must go
+        //< through here** (Principle 6). Otherwise a method shows for `p.` and not for `P.`. **A
+        //< field follows a value alone**: `P.x` does not compile, so a type's name passes false.
     base_only: = ctx.env.original_generic_name(raw).get_generic_base_name()
-    // Fields.
+    if fields
+        add_fields_of(ctx, raw, base_only, prefix, out)
+    // Methods. **A trait value's are its trait's** (`w.` on a `w: io.Writer`); a trait has no
+    // entry in the methods table.
+    add_trait_methods(ctx, raw, prefix, out)
+    if !base_only.equals(raw)
+        add_trait_methods(ctx, base_only, prefix, out)
+    add_methods(ctx, raw, prefix, out)
+    if !base_only.equals(raw)
+        add_methods(ctx, base_only, prefix, out)
+    // A method with its own type arguments is not in the table; it is found by the template's name.
+    add_by_dot_prefix(ctx.generics.templates, base_only, prefix, out, KIND_METHOD)
+
+priv fn add_fields_of(ctx: Sema_ctx$@, raw: U8[], base_only: U8[], prefix: U8[],
+    out: List<|Pick|>$@) //<
+        //< The fields of the type `raw`, whose generic base name is `base_only`
     // **Look a generic up by its base name too** (a `List<|U8[]|>` is registered under
     // `List`).
     switch ctx.env.get_struct_def(raw)
@@ -308,16 +356,6 @@ priv fn picks_of_type(ctx: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|
             add_fields(sd2, prefix, out)
         default
             add_declared_fields(ctx, raw, prefix, out)
-    // Methods. **A trait value's are its trait's** (`w.` on a `w: io.Writer`); a trait has no
-    // entry in the methods table.
-    add_trait_methods(ctx, raw, prefix, out)
-    if !base_only.equals(raw)
-        add_trait_methods(ctx, base_only, prefix, out)
-    add_methods(ctx, raw, prefix, out)
-    if !base_only.equals(raw)
-        add_methods(ctx, base_only, prefix, out)
-    // A method with its own type arguments is not in the table; it is found by the template's name.
-    add_by_dot_prefix(ctx.generics.templates, base_only, prefix, out, KIND_METHOD)
 
 priv fn add_variants(ctx: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@) //<
     //< An enum's variants, which follow its name (`Color.red`) and never a value of it

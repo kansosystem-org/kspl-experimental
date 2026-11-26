@@ -331,46 +331,78 @@ fn left_refs( //< the rules this part can enter before reading a byte
     rule: Rule$@,
     entries: List<|Rule_entry$@|>$@,
     skips: Bool,
+    space_id: I32, //< `_Space`'s index, or -1 where the grammar has none
     out: List<|I32|>$@, //< where their indices are appended
 )
     if rule == null
         return
     switch rule$
-    case .resolved_ref(r_id)
-        out.push(r_id)
+    case .literal, .keyword_literal, .keyword_set, .wildcard, .char_class, .reference,
+        .resolved_ref
+        // Caution: **In syntax mode, count the whitespace skip.** Each of these parts enters
+        // `_Space` before it reads (`Rule.parse_impl` in `engine.kspl`). A rule that `_Space`
+        // calls would otherwise enter itself unseen, and every parse would stop on depth.
+        if skips && space_id >= 0
+            out.push(space_id)
+        switch rule$
+        case .resolved_ref(r_id)
+            out.push(r_id)
+        default {}
     case .sequence(rules)
         for i in Range.asc(rules.len)
-            left_refs(rules.get(i), entries, skips, out)
+            left_refs(rules.get(i), entries, skips, space_id, out)
             if !first_bytes_of(rules.get(i), entries, skips).can_be_empty
                 break
     case .choice(rules)
         for i in Range.asc(rules.len)
-            left_refs(rules.get(i), entries, skips, out)
+            left_refs(rules.get(i), entries, skips, space_id, out)
     case .zero_or_more(inner), .one_or_more, .optional, .and_pred, .not_pred
-        left_refs(inner, entries, skips, out)
+        left_refs(inner, entries, skips, space_id, out)
     default {}
 
 fn left_recursive_rule( //< a rule that can enter itself before reading a byte, if any
     //< Such a rule never matches: each entry enters it again at the same position, until the depth
     //< limit stops the parse. Call it after compute_first_bytes, which says what can be empty.
     entries: List<|Rule_entry$@|>$@,
-): U8[]? //< the first such rule in the grammar's order
+    arena: Arena$@, //< where the answer is allocated
+): List<|U8[]|>$@? //<
+    //< the first such rule in the grammar's order, then each rule it passes through on the way
+    //< The rules on the way show a cycle the grammar does not spell out, as one through `_Space`.
+    $space_id: I32 = -1
     for i in Range.asc(entries.len)
-        defer $seen: = List<|Bool|>(null)
+        if entries.get(i).name.equals("_Space")
+            space_id = I32::i
+    for i in Range.asc(entries.len)
+        // The rule each one was first reached from, to name the way back.
+        defer $came_from: = List<|I32|>(null)
         for _ in Range.asc(entries.len)
-            seen.push(false)
+            came_from.push(-1)
         defer $todo: = List<|I32|>(null)
-        left_refs(entries.get(i).rule, entries, entries.get(i).skips_space, todo@)
+        // The rule whose body put each `todo` entry there.
+        defer $via: = List<|I32|>(null)
+        left_refs(entries.get(i).rule, entries, entries.get(i).skips_space, space_id, todo@)
+        for _ in Range.asc(todo.len)
+            via.push(I32::i)
         // A queue read from the front; each rule is looked into once.
         for $k: Sz = 0; k < todo.len; k += 1
             r_id: = todo[k]
             if Sz::r_id == i
-                return .some(entries.get(i).name)
-            if seen[r_id]
+                defer $back: = List<|I32|>(null)
+                for $at: = via[k]; Sz::at != i; at = came_from[at]
+                    back.push(at)
+                names: = List<|U8[]|>.create(arena)
+                names.push(entries.get(i).name)
+                for j in Range.desc(back.len)
+                    names.push(entries.get(back[j]).name)
+                return .some(names)
+            if came_from[r_id] >= 0
                 continue
-            seen[r_id] = true
+            came_from[r_id] = via[k]
             e: = entries.get(r_id)
-            left_refs(e.rule, entries, e.skips_space, todo@)
+            before: = todo.len
+            left_refs(e.rule, entries, e.skips_space, space_id, todo@)
+            for _ in Range.asc(todo.len - before)
+                via.push(r_id)
     return .none
 
 pub struct Keyword_set //< keywords folded into one rule: extract one word, then look it up once

@@ -42,6 +42,17 @@
 #define KSPL_EXPORT(name)
 #endif
 
+/* The symbol a C function binds to when a file outside std brings it in with `extern` (genc's
+ * `binds_by_asm_label`). genc declares the function under a private C name: a standard header can
+ * declare the same function with other types, and C refuses two declarations that disagree.
+ * Mach-O and 32-bit Windows put `_` before a C name, so the label opens with
+ * `__USER_LABEL_PREFIX__`. The name is a string, so a header's macro of that name stays out.
+ * Caution: **Keep the middle step.** `#` takes its argument unexpanded: without the step, the
+ * label would hold the word `__USER_LABEL_PREFIX__` itself. */
+#define KSPL_SYMBOL(name) KSPL_SYMBOL_AT_(__USER_LABEL_PREFIX__, name)
+#define KSPL_SYMBOL_AT_(prefix, name) KSPL_SYMBOL_STR_(prefix, name)
+#define KSPL_SYMBOL_STR_(prefix, name) __asm__(#prefix name)
+
 // `#section("...")`'s output target. ELF takes the name as it is; Mach-O accepts only
 // "segment,section", so the segment is filled in (a named section inside the data area).
 #if defined(__APPLE__)

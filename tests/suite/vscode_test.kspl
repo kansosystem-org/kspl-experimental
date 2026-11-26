@@ -258,7 +258,8 @@ priv fn side_of(value: json.Value, key: U8[]): json.Value //<
     return value.get(key)
 
 priv fn check_build_task(tasks: json.Value, launch: json.Value, arena: Arena$@) //<
-    //< The build task is `ksplc build`, writing what launch.json starts, on each platform
+    //< The build task is `ksplc <file> <executable>`, writing what launch.json starts, on each
+    //< platform
     //< **The link words are ksplc's**, so none is written in the task to drift. What can drift is
     //< the executable's name. A name out of step makes F5 start the last one built.
     $build: = json.Value.null_val
@@ -278,11 +279,14 @@ priv fn check_build_task(tasks: json.Value, launch: json.Value, arena: Arena$@) 
         args: = side.get("args").arr_list(arena)
         cmd: = side.get("command").as_str().unwrap_or("")
         where: = "default" if key.len == 0 else key
+        // **The output's name chooses an executable**: one ending in .c or .ll would write that.
+        last: = arg_text(args.get(args.len - 1)) if args.len > 0 else ""
         runs: =
-            (cmd.ends_with("/ksplc") || cmd.ends_with("/ksplc.exe")) && args.len > 0 &&
-            arg_text(args.get(0)).equals("build")
-        verdict.check(arena.text().s("release-assets tasks.json[\{where\}]: it runs ksplc build")
-            .take(), runs, cmd)
+            (cmd.ends_with("/ksplc") || cmd.ends_with("/ksplc.exe")) && args.len >= 2 &&
+            !last.ends_with(".c") && !last.ends_with(".ll")
+        verdict.check(arena.text()
+            .s("release-assets tasks.json[\{where\}]: ksplc builds an executable").take(), runs,
+            cmd)
         if args.len == 0
             continue
         built: = arg_text(args.get(args.len - 1))

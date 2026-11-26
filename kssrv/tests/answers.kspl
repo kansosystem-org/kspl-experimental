@@ -70,7 +70,7 @@ priv fn type_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< Each common kind of file comes as its registered type, not as bytes to download
     for i in Range.asc(TYPED_KINDS)
         r: = client.get(port, arena.text().c('/').s(TYPED_RELS[i]).take(), "", arena)!
-        got: = client.header(r.head, "content-type")
+        got: = client.header(r, "content-type")
         nm: = arena.text().s("a file named ").s(TYPED_RELS[i]).s(" comes as ").s(TYPED_AS[i]).take()
         verdict.check(nm, r.status == 200 && got.equals(TYPED_AS[i]), got)
 
@@ -80,7 +80,7 @@ priv fn folder_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< image and script in it fails to load.
     for i in Range.asc(FOLDER_ASKED.len)
         r: = client.get(port, FOLDER_ASKED[i], "", arena)!
-        to: = client.header(r.head, "location")
+        to: = client.header(r, "location")
         nm: = arena.text().s("a folder asked for as ").s(FOLDER_ASKED[i]).s(" is sent to ")
             .s(FOLDER_SENT[i]).take()
         verdict.check(nm, r.status == 301 && to.equals(FOLDER_SENT[i]), client.shown(r, arena))
@@ -96,7 +96,7 @@ priv fn date_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< Every answer names the time it was made (RFC 9110 §6.6.1), a refusal's and a redirect's too
     for target in U8[][]::{ "/style.css", "/no-such.txt", "/sub", "/api/status" }
         r: = client.get(port, target, "", arena)!
-        date: = client.header(r.head, "date")
+        date: = client.header(r, "date")
         nm: = arena.text().s("the answer to ").s(target).s(" names the time as an HTTP date").take()
         verdict.check(nm, date.len == 29 && date.ends_with(" GMT") && date[3] == ',', date)
 
@@ -104,18 +104,18 @@ priv fn kept_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end 
     //< A file's validators let a client keep it, and check it again without fetching it
     target: = arena.text().c('/').s(KEPT_REL).take()
     first: = client.get(port, target, "", arena)!
-    tag: = client.header(first.head, "etag")
-    since: = client.header(first.head, "last-modified")
+    tag: = client.header(first, "etag")
+    since: = client.header(first, "last-modified")
     verdict.check("a file names an entity tag and its time",
         first.status == 200 && tag.starts_with("\"") && tag.ends_with("\"") && since.len == 29,
         first.head)
     verdict.check("a file asks the browser to check it again before using a copy",
-        client.header(first.head, "cache-control").equals("no-cache"), first.head)
+        client.header(first, "cache-control").equals("no-cache"), first.head)
     same: = client.get(port, target,
         arena.text().s("If-None-Match: ").s(tag).s("\r\n").take(), arena)!
     verdict.check("a client holding the version named gets a 304 with no body",
         same.status == 304 && same.body.len == 0 &&
-        client.header(same.head, "etag").equals(tag), client.shown(same, arena))
+        client.header(same, "etag").equals(tag), client.shown(same, arena))
     listed: = client.get(port, target,
         arena.text().s("If-None-Match: \"other\", W/").s(tag).s("\r\n").take(), arena)!
     client.expect_status("a weak tag in a list is a match for If-None-Match", listed, 304, arena)
@@ -136,7 +136,7 @@ priv fn kept_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end 
         arena.text().s("If-None-Match: ").s(tag).s("\r\n").take(), arena)!
     verdict.check("a file saved again is sent again, under a new tag",
         after.status == 200 && after.body.equals(KEPT_CHANGED) &&
-        !client.header(after.head, "etag").equals(tag), client.shown(after, arena))
+        !client.header(after, "etag").equals(tag), client.shown(after, arena))
 
 priv fn part_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< One range of a file comes as a 206 naming where it lies, so a video can be scrubbed
@@ -144,7 +144,7 @@ priv fn part_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     all: = patterned(PARTS_BYTES, arena)
     whole: = client.get(port, target, "", arena)!
     verdict.check("a file says it can be asked for in parts",
-        client.header(whole.head, "accept-ranges").equals("bytes"), whole.head)
+        client.header(whole, "accept-ranges").equals("bytes"), whole.head)
     // A part far from the start and across many chunks, the file's end, and from a byte on.
     asked: U8[][3] = ::{ "bytes=400003-700012", "bytes=-7", "bytes=1048570-" }
     firsts: Sz[3] = ::{ 400003, PARTS_BYTES - 7, 1048570 }
@@ -153,7 +153,7 @@ priv fn part_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
         r: = client.get(port, target,
             arena.text().s("Range: ").s(asked[i]).s("\r\n").take(), arena)!
         want: = all.sub(firsts[i], lasts[i] - firsts[i] + 1)
-        said: = client.header(r.head, "content-range")
+        said: = client.header(r, "content-range")
         named: = arena.text().s("bytes \{firsts[i]\}-\{lasts[i]\}/\{PARTS_BYTES\}").take()
         nm: = arena.text().s("the range ").s(asked[i]).s(" comes as a 206 of those bytes").take()
         verdict.check(nm, r.status == 206 && said.equals(named) && r.body.equals(want),
@@ -161,7 +161,7 @@ priv fn part_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     past: = client.get(port, target, "Range: bytes=2000000-\r\n", arena)!
     verdict.check("a range past the end is a 416 naming the file's length",
         past.status == 416 &&
-        client.header(past.head, "content-range")
+        client.header(past, "content-range")
         .equals(arena.text().s("bytes */\{PARTS_BYTES\}").take()), client.shown(past, arena))
     // **A range the server does not take gets the whole file**, as RFC 9110 §14.2 allows.
     for i in Range.asc(4)
@@ -175,9 +175,9 @@ priv fn part_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
         client.DEFAULT_TIMEOUT_MS, true, arena)!
     verdict.check("a HEAD with a range names the whole file",
         head.get(0).status == 200 &&
-        client.header(head.get(0).head, "content-length")
+        client.header(head.get(0), "content-length")
         .equals(arena.text().s("\{PARTS_BYTES\}").take()), head.get(0).head)
-    tag: = client.header(whole.head, "etag")
+    tag: = client.header(whole, "etag")
     held: = client.get(port, target,
         arena.text().s("Range: bytes=5-9\r\nIf-Range: ").s(tag).s("\r\n").take(), arena)!
     verdict.check("a range of the version the client holds comes as a 206",

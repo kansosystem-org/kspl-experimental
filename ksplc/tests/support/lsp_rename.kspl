@@ -188,7 +188,8 @@ fn held_one(): I32
     return s.get()
 
 fn first_of<|Elem|>(items: Elem[]): Elem
-    return items[0]
+    head: = items[0]
+    return head
 """
 priv const SLOT_USE_URI: U8[] = "slot_use.kspl"
 priv const SLOT_USE_SRC: U8[] =
@@ -205,6 +206,20 @@ priv const CALL_SRC: U8[] =
     limit: = 3
     add: = fn(x: I32; limit: I32): I32 { return x + limit; }
     return add.call(4)
+"""
+
+priv const LIFT_URI: U8[] = "lift.kspl" //< a function that writes a closure and an anonymous one
+priv const LIFT_SRC: U8[] =
+    """fn run_on(f: Callable1<|I32, I32|>, v: I32): I32
+    return f.call(v)
+
+fn bump_with(f: fn(n: I32): I32, v: I32): I32
+    return f(v)
+
+fn makes_closures(): I32
+    step: = 3
+    add: = fn(x: I32; step: I32): I32 { return x + step; }
+    return run_on(add, step) + bump_with(fn(n: I32): I32 { return n + 1; }, 2)
 """
 
 priv struct Ask //< one client, and where the probe's names stand in its document
@@ -235,6 +250,40 @@ impl Ask
             .set("position", pos.get("position")).set("newName", b.str_val(new_name)).build()
         return lsp_client.answer(r.c, "textDocument/rename", params, lsp_client.WALK_MS, r.arena)
 
+    priv fn call_item(r: Self, uri: U8[], src: U8[], line_head: U8[], word: U8[]): json.Value //<
+        //< The call hierarchy's item for `word`, or null where none is prepared
+        got: = lsp_client.answer(r.c, "textDocument/prepareCallHierarchy",
+            r.at_in(uri, src, line_head, word), lsp_client.READ_MS, r.arena)
+        items: = got.get("result").arr_list(r.arena)
+        return items.get(0) if items.len == 1 else .null_val
+
+    priv fn call_names(r: Self, item: json.Value, method: U8[], side: U8[]): U8[] //<
+        //< The names at the other end of item's calls, each followed by a comma
+        //< The error's message instead, where the server answers one.
+        $b: = Json_builder(r.arena)
+        got: = lsp_client.answer(r.c,
+            r.arena.text().s("callHierarchy/").s(method).take(),
+            b.obj().set("item", item).build(), lsp_client.WALK_MS, r.arena)
+        if !is_missing(got.get("error"))
+            return lsp_client.dump(got, r.arena)
+        names: = r.arena.text()
+        for call in got.get("result").arr_list(r.arena)
+            names.s(call.get(side).get("name").as_str().unwrap_or("?")).c(',')
+        return names.take()
+
+    priv fn call_range(r: Self, item: json.Value, method: U8[], name: U8[]): json.Value //<
+        //< The first range in `fromRanges` of the call whose other end is `name`, or null
+        side: = "from" if method.equals("incomingCalls") else "to"
+        $b: = Json_builder(r.arena)
+        got: = lsp_client.answer(r.c,
+            r.arena.text().s("callHierarchy/").s(method).take(),
+            b.obj().set("item", item).build(), lsp_client.WALK_MS, r.arena)
+        for call in got.get("result").arr_list(r.arena)
+            if call.get(side).get("name").as_str().unwrap_or("").equals(name)
+                ranges: = call.get("fromRanges").arr_list(r.arena)
+                return ranges.get(0) if ranges.len > 0 else .null_val
+        return .null_val
+
     priv fn refuses(r: Self, label: U8[], got: json.Value, says: U8[]) //<
         //< Checks that a response is an error whose message says `says`, and carries no edit
         message: = got.get("error").get("message").as_str().unwrap_or("")
@@ -251,9 +300,9 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     dir: = harness.sandbox("lsp_rename")
     fs.write_tree(dir,
         U8[][]::{ "lib.kspl", USER_URI, PICK_URI, SHADE_URI, PAINT_URI, "tint.kspl", VEC_URI,
-        "sum.kspl", SHAPE_URI, SLOT_URI, SLOT_USE_URI },
+        "sum.kspl", SHAPE_URI, SLOT_URI, SLOT_USE_URI, LIFT_URI },
         U8[][]::{ LIB_SRC, USER_SRC, PICK_SRC, SHADE_SRC, PAINT_SRC, TINT_SRC, VEC_SRC, SUM_SRC,
-        SHAPE_SRC, SLOT_SRC, SLOT_USE_SRC }, arena) catch
+        SHAPE_SRC, SLOT_SRC, SLOT_USE_SRC, LIFT_SRC }, arena) catch
             verdict.check("the rename workspace can be laid out", false, dir)
             return
     defer $c: =
@@ -290,6 +339,10 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     check_traits(ask)
     check_call_items(ask)
     check_generics(ask)
+    check_generic_body(ask)
+    check_generic_calls(ask)
+    check_call_ranges(ask)
+    check_closure_calls(ask)
     check_unwritten(ask)
 
 priv fn check_prepare(ask: Ask) //< prepareRename: the name's range here, a refusal on std's
@@ -610,6 +663,91 @@ priv fn check_generics(ask: Ask) //<
         t_edits.len == 2 &&
         starts_at(t_edits@, decl_line(SLOT_SRC, "    held:", ask.arena), 10),
         lsp_client.why(ask.c, places(t_edits@, ask.arena), ask.arena))
+
+priv fn check_generic_body(ask: Ask) //<
+    //< A parameter and a local of a generic nothing instantiates are renamed at every use
+    //< **Sema links no local name in a template's body**, so the walk resolves each by its scope.
+    //< Missed, the rename changed the declaration alone and broke the program.
+    lsp_client.open(ask.c, SLOT_URI, SLOT_SRC, ask.arena)
+    defer lsp_client.close(ask.c, SLOT_URI, ask.arena)
+    param: =
+        edits_in(ask.rename_in(SLOT_URI, SLOT_SRC, "fn first_of", "items", "parts"), SLOT_URI,
+        ask.arena)
+    use_line: = decl_line(SLOT_SRC, "    head: =", ask.arena)
+    use_col: = col_in_line(SLOT_SRC, "    head: =", "items", ask.arena)
+    verdict.check("a generic's parameter is renamed where it is declared and where its body uses it",
+        param.len == 2 && starts_at(param@, use_line, use_col),
+        lsp_client.why(ask.c, places(param@, ask.arena), ask.arena))
+    local: =
+        edits_in(ask.rename_in(SLOT_URI, SLOT_SRC, "    head: =", "head", "top"), SLOT_URI,
+        ask.arena)
+    verdict.check("a generic's local is renamed where it is declared and where it is used",
+        local.len == 2 &&
+        starts_at(local@, decl_line(SLOT_SRC, "    return head", ask.arena), 11),
+        lsp_client.why(ask.c, places(local@, ask.arena), ask.arena))
+
+priv fn check_generic_calls(ask: Ask) //<
+    //< A generic type's method is one item of the call hierarchy, named as written
+    //< **Every instance stands for its template.** Named by an instance, the method had no callers,
+    //< and showed the name the C code uses (`slot_Slot_I32_get`).
+    lsp_client.open(ask.c, SLOT_URI, SLOT_SRC, ask.arena)
+    defer lsp_client.close(ask.c, SLOT_URI, ask.arena)
+    item: = ask.call_item(SLOT_URI, SLOT_SRC, "    pub fn get", "get")
+    callers: = ask.call_names(item, "incomingCalls", "from")
+    verdict.check("the callers of a generic type's method are found, in each file",
+        callers.find_str("held_one").is_some() && callers.find_str("held_two").is_some(),
+        lsp_client.why(ask.c, callers, ask.arena))
+    at_call: = ask.call_item(SLOT_URI, SLOT_SRC, "    return s.get", "get")
+    data: = item.get("data").as_str().unwrap_or("")
+    verdict.check("a call of an instance prepares the item the method's declaration does",
+        data.len > 0 && at_call.get("data").as_str().unwrap_or("").equals(data) &&
+        at_call.get("name").as_str().unwrap_or("").equals("get"),
+        lsp_client.why(ask.c, lsp_client.dump(at_call, ask.arena), ask.arena))
+    callees: = ask.call_names(ask.call_item(SLOT_URI, SLOT_SRC, "fn held_one", "held_one"),
+        "outgoingCalls", "to")
+    verdict.check("a call of a generic type's method shows the method's own name",
+        callees.equals("get,"), lsp_client.why(ask.c, callees, ask.arena))
+
+priv fn check_call_ranges(ask: Ask) //<
+    //< A call's range is read in the caller's file, in both directions
+    //< **The call stands in the caller's file**, though the item it leads to can be in another.
+    //< Read with the callee's lines, the range pointed at unrelated text.
+    lsp_client.open(ask.c, SLOT_USE_URI, SLOT_USE_SRC, ask.arena)
+    defer lsp_client.close(ask.c, SLOT_USE_URI, ask.arena)
+    line: = decl_line(SLOT_USE_SRC, "    return s.get", ask.arena)
+    col: = col_in_line(SLOT_USE_SRC, "    return s.get", "get", ask.arena)
+    out: = ask.call_range(ask.call_item(SLOT_USE_URI, SLOT_USE_SRC, "fn held_two", "held_two"),
+        "outgoingCalls", "get")
+    verdict.check("an outgoing call's range to another file is where the caller's file writes it",
+        range_is(out, line, col, 3),
+        lsp_client.why(ask.c, lsp_client.dump(out, ask.arena), ask.arena))
+    lsp_client.open(ask.c, SLOT_URI, SLOT_SRC, ask.arena)
+    defer lsp_client.close(ask.c, SLOT_URI, ask.arena)
+    inc: = ask.call_range(ask.call_item(SLOT_URI, SLOT_SRC, "    pub fn get", "get"),
+        "incomingCalls", "held_two")
+    verdict.check("an incoming call's range from another file is where the caller's file writes it",
+        range_is(inc, line, col, 3),
+        lsp_client.why(ask.c, lsp_client.dump(inc, ask.arena), ask.arena))
+
+priv fn range_is(range: json.Value, line: Sz, character: Sz, len: Sz): Bool //<
+    //< whether a one-line range starts at that line and column and is len long
+    start: = range.get("start")
+    end: = range.get("end")
+    return start.get("line").as_int().unwrap_or(-1) == line &&
+        start.get("character").as_int().unwrap_or(-1) == character &&
+        end.get("line").as_int().unwrap_or(-1) == line &&
+        end.get("character").as_int().unwrap_or(-1) == character + len
+
+priv fn check_closure_calls(ask: Ask) //<
+    //< A closure written in a function is not one of its calls; the calls written beside it are
+    //< **The compiler lifts a closure into functions of its own**, and the place it is written
+    //< calls or names them. Listed, they showed names no file spells (`_anon_env_new_1`).
+    lsp_client.open(ask.c, LIFT_URI, LIFT_SRC, ask.arena)
+    defer lsp_client.close(ask.c, LIFT_URI, ask.arena)
+    item: = ask.call_item(LIFT_URI, LIFT_SRC, "fn makes_closures", "makes_closures")
+    callees: = ask.call_names(item, "outgoingCalls", "to")
+    verdict.check("a function's closures are not among its calls",
+        callees.equals("run_on,bump_with,"), lsp_client.why(ask.c, callees, ask.arena))
 
 priv fn check_unwritten(ask: Ask) //<
     //< A name the source does not spell where it is declared is refused, with the reason

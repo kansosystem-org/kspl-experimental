@@ -8,13 +8,12 @@ A term is explained where it first appears. Shared technical terms are defined i
 
 ## 1. Introduction: ksplc is one binary holding every subcommand
 
-Every KSPL development tool is a subcommand of one executable, `ksplc`: you type `ksplc fmt`, `ksplc run` and so on. Only turning the generated C into a program needs a C compiler. `ksplc` translates KSPL into C, and a C compiler turns that C into a program; `ksplc run` and `ksplc build` take both steps for you.
+Every KSPL development tool is a subcommand of one executable, `ksplc`: you type `ksplc fmt`, `ksplc run` and so on. Only turning the generated C into a program needs a C compiler. `ksplc` translates KSPL into C, and a C compiler turns that C into a program. `ksplc run` takes both steps for you, as does a compile whose output names an executable.
 
 | How it is called | What it does | See |
 | :-- | :-- | :-- |
-| `ksplc <input.kspl> <output.c>` | compiles (the default, with no subcommand) | [2. The compiler](#2-the-compiler-ksplc) |
+| `ksplc <input.kspl> <output>` | compiles (the default, with no subcommand). The output's name chooses what is made: C (`.c`), LLVM IR (`.ll`) or an executable (any other name) | [2.1 Basic use](#21-basic-use) |
 | `ksplc run <script.kspl> [args...]` | builds and runs, caching the result | [2.5 Running as a script](#25-running-as-a-script-ksplc-run) |
-| `ksplc build <input.kspl> <output.exe>` | builds one executable, through the C compiler | [2.12 Building one executable](#212-building-one-executable-ksplc-build) |
 | `ksplc fmt <files...>` | formats the code | [3. The formatter](#3-the-formatter-ksplc-fmt) |
 | `ksplc lsp` | the language server, normally started by the editor | [4. The language server](#4-the-language-server-ksplc-lsp) |
 | `ksplc lint <input.kspl>` | static analysis (checking the code without running it): it stops after semantic analysis, before Lower, and prints only the diagnostics | [5. Static analysis and the linter](#5-static-analysis-and-the-linter-ksplc-lint) |
@@ -36,7 +35,7 @@ A name with no extension, as an `import` writes it, is opened as `.kspl`, and a 
 
 ```
 $ ksplc fmt --define=x a.kspl
-ksplc fmt: '--define' does not take effect on this subcommand. It takes effect on: compile run build lint
+ksplc fmt: '--define' does not take effect on this subcommand. It takes effect on: compile run lint
 ```
 
 **It is not silently ignored**, or you could not tell an ignored option from one that took effect. `ksplc --help` lists which options act on which subcommand, generated from the declarations.
@@ -47,16 +46,38 @@ ksplc fmt: '--define' does not take effect on this subcommand. It takes effect o
 
 ### 2.1 Basic use
 
-Give `ksplc` an input file and an output file, and it compiles one to the other. With no subcommand it writes C99, the 1999 C standard, which nearly every C compiler accepts. When asked, it writes LLVM IR: the text form of code that LLVM, the toolkit behind clang, turns into machine code.
+Give `ksplc` an input file and an output file, and it compiles one to the other. **The output's name chooses what is made:**
+
+| The output's name | What is made |
+| :-- | :-- |
+| ends in `.c` | C99, the 1999 C standard, which nearly every C compiler accepts |
+| ends in `.ll` | LLVM IR: the text form of code that LLVM, the toolkit behind clang, turns into machine code ([§2.2](#22-choosing-the-language-of-the-output---to)) |
+| any other name (none, `.exe`, …) | an executable, which the C compiler builds from the C ([§2.12](#212-building-one-executable-an-output-named-neither-c-nor-ll)) |
 
 ```sh
-# transpile to C99
+# an executable, in one step
+ksplc main.kspl main
+
+# C99, for a C compiler of your own choice
 ksplc main.kspl main.c
 clang main.c -o main
 
-# transpile to LLVM IR
-ksplc --to=llvm main.kspl main.ll
+# LLVM IR
+ksplc main.kspl main.ll
 ```
+
+**The ending is read without regard to letter case**: `OUT.C` is C, as Windows and macOS read it. **A name that suggests another kind of file is refused**, not built as an executable. A program named `x.o` would be found where an object file was expected. Each refusal says what to write instead.
+
+| The output's name ends in | It names | Instead |
+| :-- | :-- | :-- |
+| `.h` | a C header | `--library=<name>.h` beside an output ending in `.c` ([§2.10.2](#2102-writing-its-interfaces---libraryfile)) |
+| `.o`, `.obj` | an object file | write C, and compile it with the C compiler's `-c` |
+| `.s`, `.asm` | assembly | write C or LLVM IR, and give it to the C compiler with `-S` |
+| `.a`, `.lib`, `.so`, `.dylib`, `.dll` | a library | write C with `--library=<name>.h`, and build the library with the C compiler ([§2.10.3](#2103-shipping-a-library-and-using-it)) |
+| `.libs` | the list of libraries a program names | `--emit-libs=<file>` beside an output ending in `.c` |
+| `.kspl`, `.ksplb` | a KSPL source | name the output after what it holds |
+
+A name that ends in a separator (`out/`) names a folder, and is refused too. **A device named as the output (`/dev/null`) has no name to read**: it gets C, or what `--to` names.
 
 **A debugger shows the generated C's names.** A name C reserves carries a `_kw` suffix ("2.2 Identifiers and naming rules" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). A local that hides another of its name, or is spelled as a global's C name (`Slice_U8`), shows as `__k_shadow<N>_<name>`.
 
@@ -66,22 +87,24 @@ ksplc --to=llvm main.kspl main.ll
 
 ### 2.2 Choosing the language of the output (`--to`)
 
-`--to` names the language of the output, and so the backend that writes it.
+The output's name chooses the language ([§2.1](#21-basic-use)), and so the backend that writes it.
 
-| `--to=` | It writes | Suited to |
+| The output | It writes | Suited to |
 | :-- | :-- | :-- |
-| `c` (the default) | portable C99 (`.c`) | embedding in an existing C/C++ project, or deploying on a legacy OS or an embedded target |
-| `llvm` | LLVM IR (`.ll`) | an LLVM toolchain such as Clang or LLC, which turns it into a native binary |
+| `.c` | portable C99 | embedding in an existing C/C++ project, or deploying on a legacy OS or an embedded target |
+| `.ll` | LLVM IR | an LLVM toolchain such as Clang or LLC, which turns it into a native binary |
+
+**`--to=c` or `--to=llvm` is needed only where the name says nothing**: a device such as `/dev/null`. Elsewhere `--to` must agree with the name, or the compile is refused; one silently winning over the other would hide a typo in either.
 
 **The IR holds only the language's core.** The `kspl_*` functions that touch the OS are only declared in it. Their bodies come from linking the C runtime (the C code every program needs besides its own) that `ksplc emit-runtime` writes ([§2.10.5](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime)):
 
 ```sh
-ksplc --to=llvm main.kspl main.ll
+ksplc main.kspl main.ll
 ksplc emit-runtime kspl_runtime.c
 clang main.ll kspl_runtime.c -o main
 ```
 
-**`--to=llvm` is refused beside `--freestanding`.** The IR calls the hosted runtime's helpers (`kspl_bounds_check` and the like), which no bare-metal build has, and the LLVM backend has no freestanding runtime yet. A bare-metal program is written in C.
+**LLVM IR is refused beside `--freestanding`.** The IR calls the hosted runtime's helpers (`kspl_bounds_check` and the like), which no bare-metal build has, and the LLVM backend has no freestanding runtime yet. A bare-metal program is written in C.
 
 #### 2.2.1 Naming the machine the output is for (`--machine`)
 
@@ -103,11 +126,11 @@ The name after `kspl_folded_for_` is the machine ksplc laid the number out for. 
 | The case | What happens |
 | :-- | :-- |
 | A machine ksplc has no widths for | refused, with the machines it knows listed. They are the rows of `MACHINES` in [`../base/target.kspl`](../base/target.kspl) |
-| No `--machine`, on a machine ksplc has no widths for | every subcommand that lays values out refuses at its start: a compile, `lint`, `lsp`, `run` and `build`. The message names the machine ksplc runs on, as the triple its C compiler's macros give. It lists the known ones, and asks for `--machine=<triple>` on a compile or a lint. `fmt`, `doc`, `explain`, `info`, `emit-runtime` and `clean` read no type, and run |
-| `--to=llvm` for a machine with 4-byte pointers (Cortex-M, wasm32) | refused: the LLVM backend lays out only 8-byte pointers. Write C for it |
-| `--to=llvm` for any other machine | the IR names the machine's `target triple`, so an LLVM tool builds for it |
+| No `--machine`, on a machine ksplc has no widths for | every subcommand that lays values out refuses at its start: a compile, `lint`, `lsp` and `run`. The message names the machine ksplc runs on, as the triple its C compiler's macros give. It lists the known ones, and asks for `--machine=<triple>` on a compile or a lint. `fmt`, `doc`, `explain`, `info`, `emit-runtime` and `clean` read no type, and run |
+| LLVM IR for a machine with 4-byte pointers (Cortex-M, wasm32) | refused: the LLVM backend lays out only 8-byte pointers. Write C for it |
+| LLVM IR for any other machine | the IR names the machine's `target triple`, so an LLVM tool builds for it |
 
-**It takes effect on a compile and on `ksplc lint`**, so lint judges the same program the compile does. `ksplc run` and `ksplc build` refuse it: they build for the machine ksplc runs on. The parse cache ([§2.7](#27-the-cache-of-the-parse-result)) holds nothing a machine decides, and serves every machine.
+**It takes effect on a compile and on `ksplc lint`**, so lint judges the same program the compile does. `ksplc run` and a compile to an executable refuse it: they build for the machine ksplc runs on. The parse cache ([§2.7](#27-the-cache-of-the-parse-result)) holds nothing a machine decides, and serves every machine.
 
 #### 2.2.2 Watching a program with a sanitizer (`--sanitize`)
 
@@ -118,23 +141,23 @@ The name after `kspl_folded_for_` is the machine ksplc laid the number out for. 
 | `address` | an access outside an allocation, through a raw pointer too (`(p + n)$`), a use after free, and at exit a leak |
 | `thread` | a data race |
 | `memory` | a read of memory never written |
-| `undefined` (`ksplc build` alone) | an operation C leaves undefined, such as a misaligned access |
+| `undefined` (an executable alone) | an operation C leaves undefined, such as a misaligned access |
 
-Two subcommands take it, and each does what the C compiler cannot do by itself:
+Two kinds of output take it, and each does what the C compiler cannot do by itself:
 
 | Where | What it does |
 | :-- | :-- |
-| a compile with `--to=llvm` | **marks every function the IR defines** (`sanitize_address`, and so on), the program's and the ones ksplc writes by hand alike. clang's `-fsanitize=` instruments only a marked function; for C its front end marks them, and IR passes through none |
-| `ksplc build` ([§2.12](#212-building-one-executable-ksplc-build)) | hands the C compiler `-fsanitize=<names>` |
+| LLVM IR (`.ll`) | **marks every function the IR defines** (`sanitize_address`, and so on), the program's and the ones ksplc writes by hand alike. clang's `-fsanitize=` instruments only a marked function; for C its front end marks them, and IR passes through none |
+| an executable ([§2.12](#212-building-one-executable-an-output-named-neither-c-nor-ll)) | hands the C compiler `-fsanitize=<names>` |
 
 ```sh
 # LLVM IR: ksplc marks it, and clang instruments and links it
-ksplc --to=llvm --sanitize=address main.kspl main.ll
+ksplc --sanitize=address main.kspl main.ll
 ksplc emit-runtime kspl_runtime.c
 clang -fsanitize=address main.ll kspl_runtime.c -o main
 
 # one step through C
-ksplc build --sanitize=address,undefined main.kspl main.exe
+ksplc --sanitize=address,undefined main.kspl main
 ```
 
 **Name the same sanitizers to both** when building the IR yourself, as with `--machine` ([§2.2.1](#221-naming-the-machine-the-output-is-for---machine)): the marks alone change nothing.
@@ -143,11 +166,11 @@ ksplc build --sanitize=address,undefined main.kspl main.exe
 
 | Refused | Why |
 | :-- | :-- |
-| a compile that writes C | its C compiler marks the C it reads; give that compiler `-fsanitize=<names>` |
-| `undefined` with `--to=llvm` | its checks are written into C by clang's front end, which LLVM IR does not pass through. KSPL's own checks stop an index, a shift, a divisor or an enum's tag out of range in either backend ("13. Conditions that stop execution at run time" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)); a misaligned access is watched only through C |
+| an output of C (`.c`) | its C compiler marks the C it reads; give that compiler `-fsanitize=<names>` |
+| `undefined` for LLVM IR | its checks are written into C by clang's front end, which LLVM IR does not pass through. KSPL's own checks stop an index, a shift, a divisor or an enum's tag out of range in either backend ("13. Conditions that stop execution at run time" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)); a misaligned access is watched only through C |
 | `--freestanding` | a sanitizer's runtime maps its shadow memory and writes its reports through the OS, and none is built for bare metal |
-| `ksplc build`'s `--cflags` holding `-fsanitize=` | `--sanitize` is the one way to ask there |
-| `ksplc run` | it caches one program a script; `ksplc build` makes a sanitized one |
+| a `--cflags` that holds `-fsanitize=` | `--sanitize` is the one way to ask there |
+| `ksplc run` | it caches one program a script; a compile to an executable makes a sanitized one |
 
 **Which machine has which sanitizer is the C compiler's to say** (clang refuses `-fsanitize=thread` for Windows). **A report through LLVM names the function, not the `.kspl` line**, since the IR carries no debug information.
 
@@ -157,16 +180,17 @@ This table lists every option of a compile. Most have a section of their own, li
 
 | The option | Description |
 | :-- | :-- |
-| `--to=<c\|llvm>` | the language of the output, C99 (the default) or LLVM IR ([§2.2](#22-choosing-the-language-of-the-output---to)). |
+| `--to=<c\|llvm>` | the language of the output where its name does not say it, as for a device; elsewhere it must agree with the name ([§2.2](#22-choosing-the-language-of-the-output---to)). |
+| `--cflags=<words>` | flags for the C compiler, where the output is an executable ([§2.12](#212-building-one-executable-an-output-named-neither-c-nor-ll)). |
 | `--stats` | prints a report on standard error: grammar-rule attempts (`[KSPEG Rule]`), analysis costs per declaration (`[Sema Body]`), stage costs (`[Layer]`), cache hits and misses (`[AST Cache]`), and totals (`[Overall]`). A detail table whose phase took under 5% of the compile time is replaced by one line that says so. |
 | `--freestanding` | generates code for bare metal (a chip with no operating system), depending on neither an OS nor a standard library, and sets the `#cfg()` flag `freestanding`. |
 | `--machine=<triple>` | the machine the output is for, whose widths every size is laid out by; the default is the machine ksplc runs on ([§2.2.1](#221-naming-the-machine-the-output-is-for---machine)). |
-| `--sanitize=<names>` | marks `--to=llvm`'s IR for the sanitizers named, which the C compiler's `-fsanitize=` then instruments; refused on a compile that writes C ([§2.2.2](#222-watching-a-program-with-a-sanitizer---sanitize)). |
+| `--sanitize=<names>` | builds with the sanitizers named: it marks LLVM IR for them, or hands an executable's C compiler `-fsanitize=`. Refused where the output is C ([§2.2.2](#222-watching-a-program-with-a-sanitizer---sanitize)). |
 | `--define=<flag>` | defines a flag for `#cfg()` conditional compilation, which keeps or drops code by flag (`ksplc --define=debug main.kspl main.c`); it can be repeated. |
 | `--std-dir=<DIR>` | where to look for the standard library (`import "std/..."`) ([§2.9.1](#291-locating-the-standard-library---std-dir)). |
 | `--pkg-src-dir=<DIR>` | where to look for the **source** of a package other than `std` ([§2.9.2](#292-the-source-of-a-package-other-than-std---pkg-src-dir)). |
 | `--split=<N>` | splits the generated C into N translation units to compile in parallel (the default 1 is no split) ([§2.6](#26-splitting-the-generated-c-into-several-translation-units---split)). |
-| `--program` | says the output becomes a program, so an input with no `main` is refused with a diagnostic rather than left to the linker. `ksplc run` and `ksplc build` pass it to the compile they start. It cannot be combined with `--library`. |
+| `--program` | says the output becomes a program, so an input with no `main` is refused with a diagnostic rather than left to the linker. `ksplc run` and a compile to an executable pass it to the compile they start. It cannot be combined with `--library`. |
 | `--closed=<package>` | refuses, in the files of `<package>`, every way to C: `extern` in either direction, `##link`, the `__kspl_` built-ins, `#section`, `#naked` and `#raw_address`. Those reach the C compiler, the assembler and the linker, which the package rules do not watch. It is for code the build does not trust, such as a page's own functions; the standard library and the other packages stay open. A package no file of the compile is in is refused. |
 | `--library=<FILE>` | builds a library, whose `extern` functions alone are visible outside it, and writes its interface to `<FILE>`; it can be repeated ([§2.10.1](#2101-building-a-library---library), [§2.10.2](#2102-writing-its-interfaces---libraryfile)). |
 | `--emit-deps=<FILE>` | on success, writes the list of the sources read to `<FILE>` ([§2.9.3](#293-writing-out-the-list-of-sources-read---emit-deps)). |
@@ -316,7 +340,7 @@ Caution: **Keep the shared header in the same directory as the unit `.c` files**
 
 **The guide for N is the core count**. The cap of 256 stops a mistyped order of magnitude and is not a recommendation.
 
-**It cannot be combined with `--to=llvm`** (an error): the LLVM backend cannot split translation units. Nor with `--library`, whose functions the units would need to reach in each other ([§2.10.1](#2101-building-a-library---library)).
+**It cannot be combined with LLVM IR** (an error): the LLVM backend cannot split translation units. Nor with `--library`, whose functions the units would need to reach in each other ([§2.10.1](#2101-building-a-library---library)).
 
 ### 2.7 The cache of the parse result
 
@@ -347,7 +371,7 @@ An *artifact* is one thing a build makes: a program or a library. The rest of th
 | **Provider** | none (a folder is simply placed) | `--library=` (the library, its insides private, and its interfaces) |
 | **Record** (neither side) | `--emit-deps` (the sources read → the rebuild verdict, `run`'s cache), `ksplc doc --emit-surface` (the published API → comparing versions) | `--emit-libs` (the libraries the program names → the link line) |
 
-Note: `ksplc emit-runtime` stands apart from both: it writes the runtime that `--to=llvm`'s IR links ([§2.10.5](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime)).
+Note: `ksplc emit-runtime` stands apart from both: it writes the runtime that LLVM IR links ([§2.10.5](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime)).
 
 ### 2.9 Source crossing the boundary: its place, and what is recorded
 
@@ -485,7 +509,7 @@ With `--library=`, **only the `extern` functions have external linkage** in the 
 | an `extern` variable or `const` | refused (a compile error) | a DLL's data needs a mark on the caller's side that no one header can choose for every build; publish a function returning it |
 | no `extern` function at all | refused (a compile error) | the library would hold nothing a caller can reach |
 | `--split` | refused | the units reach each other's functions, which a library makes `static` |
-| `--to=llvm` | refused | the IR links its runtime from another file ([§2.10.5](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime)), which cannot be one library's own |
+| LLVM IR (`.ll`) | refused | the IR links its runtime from another file ([§2.10.5](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime)), which cannot be one library's own |
 | `--freestanding` | refused | the C compiler calls the bare-metal runtime's helpers (`__aeabi_memcpy` and the like) by name from any object. So they cannot be private; a bare-metal image is built from source |
 | `ksplc run` | not accepted | it builds a program |
 
@@ -602,7 +626,7 @@ clang prog.c @prog.libs $(ksplc info link-libs) -o prog
 ksplc emit-runtime [--freestanding] <output.c>
 ```
 
-It writes the C runtime's source to `<output.c>` as one translation unit and exits. **It analyses no source**, so it takes no `.kspl`. `--to=llvm`'s IR holds no runtime, and is linked beside this file.
+It writes the C runtime's source to `<output.c>` as one translation unit and exits. **It analyses no source**, so it takes no `.kspl`. LLVM IR holds no runtime, and is linked beside this file.
 
 **`--freestanding` changes the contents**, so emit it with the same setting as the IR it is linked with. No IR is written under `--freestanding` yet ([§2.2](#22-choosing-the-language-of-the-output---to)).
 
@@ -643,10 +667,10 @@ The closing object's keys:
 * **A run that stops before its verdict writes no closing object.** Its reason is a line of text: a refused command line, an input or output that cannot be read or written, a breakdown of `ksplc` itself.
 * **`--stats` is refused beside it**: its report is text on standard error.
 
-### 2.12 Building one executable (ksplc build)
+### 2.12 Building one executable (an output named neither `.c` nor `.ll`)
 
 ```sh
-ksplc build [--cflags="<words>"] [--sanitize=<names>] [--define=...] <input.kspl> <output.exe>
+ksplc [--cflags="<words>"] [--sanitize=<names>] [--define=...] <input.kspl> <output>
 ```
 
 It does in one step what `ksplc <input> <output.c>`, `--emit-libs`, `info exe-flags` and `info link-libs` do in four. **There is no cache**: the caller (a Makefile, say) decides when to build, and `ksplc run` is the command that caches ([§2.5](#25-running-as-a-script-ksplc-run)).
@@ -659,6 +683,10 @@ It does in one step what `ksplc <input> <output.c>`, `--emit-libs`, `info exe-fl
 | the C just written | `<output's stem>.c` |
 | `##link` ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)), then `info link-libs` | the libraries the program names, then the common ones |
 | `info exe-flags` | the executable's build options |
+
+**It takes `--cflags`, `--sanitize`, `--define`, `--std-dir` and `--pkg-src-dir` alone.** The executable is built for the machine ksplc runs on, as one translation unit, with `main` required. So every other option of a compile would change nothing, and is refused. They are `--emit-deps`, `--emit-libs`, `--machine`, `--split`, `--lint`, `--diagnostic-format`, `--stats`, `--freestanding`, `--program`, `--library` and `--closed`. **`--cflags` is refused where the output is C or LLVM IR**, which no C compiler of ksplc's reads. **Standard input (`-`) is refused as the input**: the C is written beside the executable, under its name.
+
+**No subcommand builds an executable.** `ksplc build a.kspl a`, the form of earlier versions, answers in one line with the form above and exits with 1.
 
 **The C compiler is `CC`'s, or `clang`**, as `ksplc run`'s is. **The C and the libraries stay beside the executable** (`out/x.c` and `out/x.libs` for `out/x.exe`): the C is a failed compile's only clue. An output ending in `.c` or `.libs` would be overwritten by its own C, and is refused. The output's folder is made where it is missing.
 
@@ -894,7 +922,7 @@ Every diagnostic has one of four weights, from "it does not run" down to "it run
 
 **A compile hides information diagnostics and hints**; `ksplc lint` and the editor show them.
 
-**A compile prints only the warnings of the checks it makes anyway**, and `ksplc run` and `ksplc build` print the same. Those are the checks its own analysis needs, such as [W0207]'s unread local. [W0101] and [W0110] are printed too. A constant index outside its array panics at run time, and a container that keeps a local's trait value reads freed memory then. **Every other check runs under `ksplc lint` alone**, or where a code is set to `error` ([§5.3.1](#531-the-levels)), since each costs time on every build.
+**A compile prints only the warnings of the checks it makes anyway**, and `ksplc run` and a compile to an executable print the same. Those are the checks its own analysis needs, such as [W0207]'s unread local. [W0101] and [W0110] are printed too. A constant index outside its array panics at run time, and a container that keeps a local's trait value reads freed memory then. **Every other check runs under `ksplc lint` alone**, or where a code is set to `error` ([§5.3.1](#531-the-levels)), since each costs time on every build.
 
 Only warnings, information and hints carry a code: a fixed number such as `W0201`, used to point at one or to narrow the output to it. **An error has no number**: with one, the mechanism of §5.3 could silence it.
 
@@ -1116,7 +1144,7 @@ It prints, as Markdown on standard output, each declaration a file publishes as 
 
 * **A name resolves as an `import` resolves it**: a `std/` name against `--std-dir` / `KSPLC_STD_DIR`, any other against `--pkg-src-dir` / `KSPLC_PKG_SRC_DIR` or the current folder ([§2.9](#29-source-crossing-the-boundary-its-place-and-what-is-recorded)).
 * **A name is made logical first**, as a compile makes its input's name: a `./` in front, a `/` at the end and each `.` part are dropped. So `lib/kspeg/`, `./lib/kspeg` and `lib/kspeg` list one folder, and its files are named `kspeg/engine` in each.
-* **The entry begins at the first `.` after the last `/`**, since a logical name holds no `.`. A name written with its extension (`std/io.kspl`) is therefore read as the file `std/io` asked for an entry `kspl`. A last part of `.` or `..` is a folder, not an entry: `ksplc doc .` lists the current folder, its files named from it.
+* **The entry begins at the first `.` after the last `/`**, since a logical name holds no `.`. **A name written with its extension (`std/io.kspl`) is the file `std/io`**, as a shell's completion writes it; no entry called `kspl` is looked for. A last part of `.` or `..` is a folder, not an entry: `ksplc doc .` lists the current folder, its files named from it.
 * **An entry is named as code calls it**, with no type arguments: `std/ds.List.push` finds the method keyed `List<|T|>.push`, and `std/ds.List` brings it with the type. A name written with them finds the same entry.
 * **It reads what the record reads** ([§2.9.4](#294-writing-out-the-published-api---emit-surface)): the source alone, with no analysis. So it answers in a fraction of a second and cannot disagree with `SURFACE.txt`. `--surface-scope=all` shows what is not `pub` as well.
 * **A name that resolves to nothing is an error** (exit 1), naming what was looked for, and so is an entry the file does not publish. A file in a folder that cannot be read is named in the listing, not dropped.

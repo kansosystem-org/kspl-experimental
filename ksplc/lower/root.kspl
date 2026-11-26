@@ -352,13 +352,15 @@ impl Ast_node
 
         cond: = r.get_switch_cond()
         // A subject built in place (`switch Wrap.filled(mk(9))`) is owned by its temporary.
+        // Caution: **Release it even where lowering left a plain name.** An `Index.get` subscript,
+        // a `catch` and a ternary each lower into a temporary of their own, which owns the value.
+        // Released only where a new temporary was made, such a subject leaked one count.
         owned: = lctx.can_own_temporaries() && cond.is_arc_fresh(lctx)
         cond.lower(lctx)
         if !cond.is_plain_name()
-            tmp: = cond.hoist_to_tmp(lctx, cond.loc)
-            if owned
-                lctx.register_arc_release(tmp, cond.type_id)
-            r.set_child(1, tmp)
+            r.set_child(1, cond.hoist_to_tmp(lctx, cond.loc))
+        if owned
+            lctx.register_arc_release(r.get_switch_cond(), cond.type_id)
 
         // The pattern whose bindings the arm's block sees: the first after its `case`.
         $arm_pattern: Ast_node$@ = null

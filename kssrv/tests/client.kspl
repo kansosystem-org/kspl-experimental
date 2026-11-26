@@ -6,12 +6,12 @@
 //< cannot answer, a read never returns. The socket is non-blocking and gives up at the timeout.
 import "std/chars"
 import "std/ds" { List }
+import "std/http"
 import "std/json"
 import "std/mem" { Arena, alloc, dealloc }
 import "std/net"
 import "std/str" { Str }
 import "std/strfmt" as _strfmt
-import "std/strnum"
 import "std/sys"
 import "std/verdict"
 
@@ -41,6 +41,8 @@ enum Http_end //< why a response could not be read
     closed
     // No complete response arrived by the timeout.
     timed_out
+    // The response breaks HTTP's rules, so `std/http` does not read it.
+    unreadable
 
 impl Http_end
     fn reason(r: Self): U8[]
@@ -55,11 +57,13 @@ impl Http_end
             return "it was closed midway through the response"
         case .timed_out
             return "it did not return by the timeout"
+        case .unreadable
+            return "the response breaks HTTP's rules"
 
-struct Resp //< one response
-    //< `head` runs from after the status line to before the blank line (`header` looks one up).
+struct Resp //< one response, as `std/http` reads it
     status: I32
-    head: U8[]
+    headers: http.Headers //< `header` looks one up
+    head: U8[] //< the status line and the headers as they arrived, for a check's message
     body: U8[]
 
 impl Conn: Manual_free
@@ -113,15 +117,15 @@ impl Conn
                 continue
             sent += n
 
-    fn next(r: Self$@, no_body: Bool, timeout_ms: I32, arena: Arena$@): Resp!Http_end //<
+    fn next(r: Self$@, to_head: Bool, timeout_ms: I32, arena: Arena$@): Resp!Http_end //<
         //< Reads one response
-        //< `no_body` is for HEAD (it declares a `Content-Length` but no body comes).
+        //< `to_head` reads the answer to a HEAD: it names a `Content-Length`, but no body comes.
         deadline: = sys.deadline_after_ms(timeout_ms)
         $spins: Sz = 0
         for sys.mono_us() <= deadline
             // Caution: **Try to cut a response out before reading.** The previous read may hold the
             // whole next response, and reading first would wait for nothing.
-            got: = take_resp(r, no_body, arena)
+            got: = take_resp(r, to_head, arena)!
             if v: = got
                 return v
             n: = recv_step(r.sock, r.buf)
@@ -163,63 +167,30 @@ priv fn recv_step(sock: net.Tcp_stream@, buf: U8$[]): I32
             return FAIL_STEP
     return I32::n
 
-priv fn take_resp(connection: Conn$@, no_body: Bool, arena: Arena$@): Resp? //<
+priv fn take_resp(connection: Conn$@, to_head: Bool, arena: Arena$@): Resp?!Http_end //<
     //< Cuts one response out of the collected bytes (none if it is incomplete)
     text: = U8[]::connection.acc.slice()
-    head_end: Sz = text.find_str("\r\n\r\n") catch
-        return .none
-    all_head: = text.sub(0, head_end)
-    $status_line: = all_head
-    $head: U8[] = ""
-    if nl: = all_head.find_str("\r\n")
-        status_line = all_head.sub(0, nl)
-        head = all_head.sub_from(nl + 2)
-    want: = 0 if no_body else header_int(head, "content-length")
-    body_at: = head_end + 4
-    if body_at + want > text.len
-        return .none
-    // Caution: **Copy before trimming the buffer**: head and body point into it, and after
-    // trimming they would read the next response.
-    resp: = Resp::{ .status = status_of(status_line), .head = arena.dup_str(head),
-        .body = arena.dup_str(text.sub(body_at, want)) }
-    connection.acc.drop_prefix(body_at + want)
+    // `std/http` copies the parts into the arena, so they outlive the trimmed buffer.
+    got: =
+        (http.parse_response_to_head(text, arena) if to_head
+        else http.parse_response(text, arena)) catch e
+            switch e
+            case .incomplete
+                return .none
+            default
+                throw .unreadable
+    resp: = Resp::{ .status = got.status, .headers = got.headers,
+        .head = arena.dup_str(text.sub(0, got.consumed - got.body.len)), .body = got.body }
+    connection.acc.drop_prefix(got.consumed)
     return .some(resp)
 
-priv fn status_of(line: U8[]): I32 //< the 200 of `HTTP/1.1 200 OK`
-    //< 0 where it cannot be read.
-    if sp: = line.find_char(' ')
-        return I32::digits_of(line.sub_from(sp + 1).trim_start())
-    return 0
-
-priv fn digits_of(text: U8[]): Sz //< reads the decimal digits at the start
-    //< 0 where there is no digit.
-    $n: Sz = 0
-    for n < text.len && text[n].is_digit()
-        n += 1
-    if n == 0
-        return 0
-    return Sz::(text.sub(0, n).to_i64() catch 0I64)
-
-fn header(head: U8[], name: U8[]): U8[] //<
-    //< looks up a header's value by name in `head` (case-insensitive)
-    //< Empty where there is none.
-    $at: Sz = 0
-    for at < head.len
-        rest: = head.sub_from(at)
-        line: = rest.sub(0, rest.find_str("\r\n").unwrap_or(rest.len))
-        if colon: = line.find_char(':')
-            if colon > 0 && line.sub(0, colon).trim_spaces().equals_ignore_case(name)
-                return line.sub_from(colon + 1).trim_spaces()
-        // After the last line, which has no CRLF, this steps past the end and ends the walk.
-        at += line.len + 2
-    return ""
-
-priv fn header_int(head: U8[], name: U8[]): Sz
-    return digits_of(header(head, name))
+fn header(resp: Resp, name: U8[]): U8[] //< a header's value, by `std/http`'s lookup
+    //< Empty where there is none; case is ignored.
+    return resp.headers.find(name).unwrap_or("")
 
 const DEFAULT_TIMEOUT_MS: I32 = 10000 //< the default receiving timeout (milliseconds)
 
-fn request(port: I32, raw: U8[], expect: Sz, timeout_ms: I32, no_body: Bool, arena: Arena$@):
+fn request(port: I32, raw: U8[], expect: Sz, timeout_ms: I32, to_head: Bool, arena: Arena$@):
     List<|Resp|>!Http_end //<
         //< Sends raw request bytes on one connection and reads `expect` responses
         //< Several keep-alive responses are read in order too.
@@ -227,7 +198,7 @@ fn request(port: I32, raw: U8[], expect: Sz, timeout_ms: I32, no_body: Bool, are
     conn.send(raw)!
     $out: = List<|Resp|>(arena)
     for _k in Range.asc(expect)
-        out.push(conn.next(no_body, timeout_ms, arena)!)
+        out.push(conn.next(to_head, timeout_ms, arena)!)
     return out
 
 struct Stream //<
@@ -378,11 +349,11 @@ fn shown(resp: Resp, arena: Arena$@): U8[] //<
     return arena.text().s("\{resp.status\} ").s(body).take()
 
 fn is_json(resp: Resp): Bool //< whether the answer says its body is JSON, a body sent or not
-    return header(resp.head, "content-type").equals("application/json")
+    return header(resp, "content-type").equals("application/json")
 
 fn check_405(name: U8[], resp: Resp, allow: U8[], arena: Arena$@) //<
     //< Checks that a 405 comes back, naming in `Allow` the methods that would have been taken
-    said: = header(resp.head, "allow")
+    said: = header(resp, "allow")
     verdict.check(name, resp.status == 405 && said.equals(allow),
         arena.text().s("\{resp.status\} Allow: ").s(said).take())
 

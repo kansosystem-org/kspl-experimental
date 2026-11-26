@@ -5,6 +5,7 @@
 import "ksai/examples/llama_engine/model" as ai_model
 import "ksai/grad" as ai_grad // adds the loss/gradient operations to Tensor
 import "ksai/lora" as ai_lora
+import "ksai/optim" as ai_optim
 import "ksai/safetensors" as ai_safetensors
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
@@ -137,6 +138,7 @@ priv fn lora_finetune_demo(llama: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenize
     // A rank=2 LoRA adapter against the LM head (dim=4 -> vocab=12)
     $rng: = prng.Prng(7U64)
     $lora: = ai_lora.Lora<|F32|>(4, 12, 2, 4.0, rng@, model_arena)
+    defer $sgd: = ai_optim.Updater<|F32|>.sgd(0.3)
 
     $loss0: = 0.0
     for step in Range.asc(200)
@@ -148,7 +150,9 @@ priv fn lora_finetune_demo(llama: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenize
         if step == 0
             loss0 = loss
         dlogits: = logits.grad_softmax_cross_entropy(target_token)
-        lora.backward(h, dlogits, 0.3) // only A and B are updated (the base is frozen)
+        $g: ai_lora.Grads<|F32|> = ::{}
+        lora.backward_grads(h, dlogits, g@)
+        lora.apply_grads(g@, sgd@) // only A and B are updated (the base is frozen)
     $after_logits: = predict_logits(llama, lora@, ctx_token, probe)
     after_pred: = ai_sampler.argmax(after_logits)
 
@@ -176,6 +180,7 @@ priv fn lora_continual_stream_demo(llama: ai_model.Mini_llama<|F32|>$@,
 
     $rng: = prng.Prng(11U64)
     $lora: = ai_lora.Lora<|F32|>(4, 12, 2, 4.0, rng@, model_arena)
+    defer $sgd: = ai_optim.Updater<|F32|>.sgd(0.3)
     defer probe: = Arena(1024 * 1024)
 
     steps_per_example: Sz = 150 // enough rounds to converge on every example, replay included
@@ -189,7 +194,9 @@ priv fn lora_continual_stream_demo(llama: ai_model.Mini_llama<|F32|>$@,
                 base: = llama.lm_head.forward(h) // the frozen base's output
                 $logits: = base + lora.forward(h) // the same adapter is reused
                 dlogits: = logits.grad_softmax_cross_entropy(target_stream[j])
-                lora.backward(h, dlogits, 0.3) // only A and B are updated (the base is frozen)
+                $g: ai_lora.Grads<|F32|> = ::{}
+                lora.backward_grads(h, dlogits, g@)
+                lora.apply_grads(g@, sgd@) // only A and B are updated (the base is frozen)
         // Right after training: is every example observed so far still predicted
         $kept_so_far: Sz = 0
         for j in Range.asc(idx + 1)

@@ -184,7 +184,7 @@ These rules hold for the cells of a table:
 * **A table may have a header and no data rows.**
 * **A cell's spaces are trimmed.** The writer puts one space on each side of a value, and writes an empty cell as `| |`.
 * **A number has JSON's form**: no `+`, no leading zero, and a finite value. It is kept as written, so `2.50` stays `2.50`.
-* **A formula is kept as written after `=`, up to 32,768 bytes.** It is checked when the tables calculate.
+* **A formula is kept as written after `=`, up to 4,096 bytes.** A longer one is refused at its cell. It is checked when the tables calculate.
 * **Quoted text is decoded by JSON's rules.** The writer escapes only what JSON requires.
 * **A path is kept as written**, and checked when the files are found ("Paths" below).
 * **A table row outside a table clause is refused.**
@@ -2985,7 +2985,7 @@ The window
 | One table | 256 columns, 10,000 data rows, 100,000 cells counting the header |
 | A colour rule's text | 100 bytes |
 | A filter's entry for one column | 65,536 bytes |
-| One formula | 4,096 bytes and 64 levels of nesting; 32,768 bytes in a file, which an older ksmd's conversion of a version 1 formula could write |
+| One formula | 4,096 bytes, in a file as in an edit, and 64 levels of nesting |
 | Text that `&` or a function gives | 32,767 bytes; past it, `#NUM!` |
 | `round`'s places | -15 to 15 |
 | Cell values read in one calculation | 500 million; past it, each formula not yet calculated shows `#LIMIT!` |

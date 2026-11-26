@@ -274,9 +274,12 @@ function ksmdQuick(ks) {
   // The chooser: every command, menu by menu, each with a box that puts it on the bar or takes it
   // off at once. Reset brings back the tools every page starts with.
   let dialog = null;
+  // Where the focus was before the chooser opened, so closing it gives the focus back there.
+  let from = null;
   function choose() {
     if (!dialog) dialog = chooser();
     for (const box of dialog.querySelectorAll("input[type=checkbox]")) box.checked = chosen.includes(box.value);
+    from = document.activeElement;
     dialog.showModal();
   }
   function chooser() {
@@ -321,7 +324,9 @@ function ksmdQuick(ks) {
     const close = ks.button("Close", null, null, () => d.close());
     buttons.append(reset, close);
     d.append(title, note, groups, buttons);
-    d.addEventListener("close", () => ks.root.focus());
+    // Caution: **Give the focus back as a panel does** (`ks.focusBack`). The document focused with
+    // a scroll jumped to its top, and a chosen cell lost the keys to the text.
+    d.addEventListener("close", () => ks.focusBack(from));
     document.body.appendChild(d);
     return d;
   }

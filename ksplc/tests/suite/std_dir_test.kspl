@@ -60,12 +60,12 @@ priv fn case_default(arena: Arena$@) //<
     harness_markers.check("a KSPLC_STD_DIR holding no std is named as the place taken",
         U8[][]::{ "no_std_here holds no lang.kspl",
         "(it was taken from the environment variable KSPLC_STD_DIR)" }, U8[][]::{}, e.out)
-    // **`run` compiles in a child given `--std-dir=`**, so the child alone would name the option
-    // as the place taken, though nobody wrote one.
-    for argv in U8[][][]::{ U8[][]::{ "run", "a.kspl" }, U8[][]::{ "build", "a.kspl", "a" } }
-        verb: = argv[0]
+    // **`run` and a compile to an executable compile in a child given `--std-dir=`**, so the
+    // child alone would name the option as the place taken, though nobody wrote one.
+    for argv in U8[][][]::{ U8[][]::{ "run", "a.kspl" }, U8[][]::{ "a.kspl", "a" } }
+        shown: = arena.text().s(argv[0]).s(" ").s(argv[1]).take()
         v: = ksplc_in(argv, dir, "", arena)
-        harness_markers.check(arena.text().s("`ksplc \{verb\}` with no std names the default")
+        harness_markers.check(arena.text().s("`ksplc \{shown\}` with no std names the default")
             .take(), U8[][]::{ "(it was taken from the default" },
             U8[][]::{ "taken from --std-dir=" }, v.out)
 
@@ -135,8 +135,9 @@ priv fn case_std_twin(arena: Arena$@) //<
     //< A file in another folder named `std` is refused, naming both folders
     //< Named `std/io` from its folder, it once ran the standard library's `std/io` instead, with no
     //< word said. A file with no twin there failed as "file not found" in the other folder.
-    //< **`run` and `build` refuse it before the child starts**, which would name its `--std-dir=`
-    //< as where std was taken. From the folder above, the file is the user's own and runs.
+    //< **`run` and a compile to an executable refuse it before the child starts**, which would
+    //< name its `--std-dir=` as where std was taken. From the folder above, the file is the user's
+    //< own and runs.
     name: = "a file in another folder named 'std' is refused, naming both folders"
     dir: =
         case_dir(name, "other_std", U8[][]::{ "proj/std/io.kspl", "proj/std/lone.kspl" },
@@ -150,7 +151,7 @@ priv fn case_std_twin(arena: Arena$@) //<
     argvs: = U8[][][]::{ U8[][]::{ "std/io.kspl", "out.c" },
         U8[][]::{ "./std/io.kspl", "out.c" }, U8[][]::{ lone, "out.c" },
         U8[][]::{ "lint", "std/io.kspl" }, U8[][]::{ "run", "std/io.kspl" },
-        U8[][]::{ "build", "std/io.kspl", "out" } }
+        U8[][]::{ "std/io.kspl", "out" } }
     for argv in argvs
         r: = ksplc_env(argv, proj, std, "", arena)
         label: = arena.text().s("'ksplc ").s(argv[0]).s(" ").s(argv[1] if argv.len > 1 else "")

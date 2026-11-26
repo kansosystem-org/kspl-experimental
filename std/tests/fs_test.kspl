@@ -749,6 +749,13 @@ fn test_fs_lies_under() //< whether a path lies inside a folder, by its steps
         assert(fs.lies_under_on("/a/b", "/a/x/../b/./c", win, arena),
             "`..` is taken back and `.` dropped")
         assert(fs.lies_under_on("/A/b", "/a/B/c", win, arena), "ASCII case is ignored")
+    // **A path with no drive takes the working directory's on Windows**: left without one, it lay
+    // outside every folder on a drive.
+    on_c: = fs.absolute_from("\\w\\x", "C:\\kspl\\out", true, arena) catch "failed"
+    assert(on_c.equals("C:\\w\\x") && fs.lies_under_on("C:\\w", on_c, true, arena),
+        "on Windows `\\w\\x` takes the drive of the working directory, and lies under `C:\\w`")
+    on_share: = fs.absolute_from("\\w", "\\\\srv\\sh\\out", true, arena) catch "failed"
+    assert(on_share.equals("\\\\srv\\sh\\w"), "in a share, it takes the share")
     drives: = fs.lies_under_on("C:\\w", "D:\\w\\x", true, arena)
     assert(!drives, "another drive is never inside")
     // Caution: **Test a share named without its last `\`.** Its root step must match the same

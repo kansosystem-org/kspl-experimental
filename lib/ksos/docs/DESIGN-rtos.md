@@ -125,9 +125,9 @@ flowchart TD
 
 ### The priority-inheriting mutex
 
-**A task locking a held mutex lends the holder its priority, then blocks.** This prevents *priority inversion*: a mid-priority task keeps preempting the low-priority holder, and the high-priority requester waits forever (`make ksos-cm-pi`).
+**A task locking a held mutex lends the holder its own priority, then blocks.** This prevents *priority inversion*: a mid-priority task keeps preempting the low-priority holder, and the high-priority requester waits forever (`make ksos-cm-pi`).
 
-**The holder runs at the highest of its own priority and every priority waiting on any mutex it holds.** That priority is recomputed on every release from the mutexes it still holds. So mutexes held together can be released in any order, and only the last release returns the task to its own priority (`make ksos-mutex-nested`):
+**The holder runs at the highest of its own priority and the own priority of every task waiting on any mutex it holds.** That priority is recomputed on every release from the mutexes it still holds. So mutexes held together can be released in any order, and only the last release returns the task to its own priority (`make ksos-mutex-nested`):
 
 ```mermaid
 sequenceDiagram
@@ -152,6 +152,8 @@ sequenceDiagram
 | recomputed from the mutexes held (ksos) | nothing above |
 
 **A chain is not followed.** When the holder itself waits on a mutex held by a third task, what it was lent does not pass on. Keeping one stage keeps a lock's cost a walk of the waiters.
+
+* **Every place reads a waiter's own priority**: the lend at `lock` and each recompute of a holder (`lent_prio` in `lib/ksos/kernel/task.kspl`). A recompute that read the waiter's present priority would pass a lend down the chain after all. Its answer would then depend on which holder the task table lists first (`make ksos-lend-chain` runs both orders).
 
 **The kernel core keeps who holds which mutex** (`Holding` in `lib/ksos/kernel/task.kspl`, which each `Mutex` embeds). So `Task.delete` sees a holder, and deleting a waiter takes back what it lent, recomputing every holder as on a release (`make ksos-kernel-check`). **Suspending a waiter takes it back too**, until it is resumed and waits again. A paused task's lent priority would only let the holder run ahead of tasks that can run (`make ksos-wake-pass-on`).
 
@@ -183,6 +185,7 @@ All three break with no diagnostic. A returned error code gets forgotten, so kso
   * The cost: the CPU wakes on every tick while idle. Stopping the tick until the next deadline would save power, but that needs a timer the port can set to one deadline. No port has one yet.
 * **Tickless idle, with no tick running**: where no task is runnable, the kernel moves the logical time (`g_tick`) to the nearest `delay` expiry. It does not wait in real time. So `Task.delay` works with no timer, and a test ends in the same order every time without waiting. With no `enable_preemption`, this is the only path that advances `g_tick`.
   * **So, with no tick, `Task.delay(n)` counts logical ticks, not real time.** It never wakes before the expiry, but where no other task runs, it returns at once. A timed wait for an interrupt ends at once too, so give such a program a tick.
+  * **`Task.delay(0)` yields, as `Task.delay_until` with a tick not after now does.** The task stays ready, so it gives way to a ready task of its own priority or higher, and to no other (`make ksos-kernel-check`). A delay that waited on the clock with no time to wait would let every lower-priority task run first.
   * Caution: **Where the real board needs a real-time period with no tick running, use a hardware timer rather than `Task.delay`.** On the RP2040 that is `delay_us`/`delay_ms` in `lib/ksos/drivers/rp2040/timer.kspl`.
 * **A timeout on a wait**: a blocking call is written three ways.
 
@@ -452,6 +455,7 @@ Each demo checks one feature. Why, how CI runs them and what makes one pass are 
 | `lib/ksos/demo/posix/msgq_demo.kspl` | `make ksos-mq` | a message queue blocking when full |
 | `lib/ksos/demo/posix/mutex_demo.kspl` | `make ksos-mutex` | exclusive holding with a mutex |
 | `lib/ksos/demo/posix/mutex_nested_demo.kspl` | `make ksos-mutex-nested` | Two mutexes released in either order, with inheritance kept through the one still held |
+| `lib/ksos/demo/posix/lend_chain_demo.kspl` | `make ksos-lend-chain` | A waiter lends a holder only its own priority, so a chain of mutexes passes no lend on, in either order of the task table |
 | `lib/ksos/demo/posix/lend_timeout_demo.kspl` | `make ksos-lend-timeout` | A waiter that gives up at its timeout stops lending its priority in that tick, even when deleted before it runs again |
 | `lib/ksos/demo/posix/wake_preempt_demo.kspl` | `make ksos-wake-preempt` | A higher-priority task woken by `give`, `unlock`, `send`, `set`, or `resume` runs before the waker continues, with no timer |
 | `lib/ksos/demo/posix/wake_pass_on_demo.kspl` | `make ksos-wake-pass-on` | A woken waiter deleted or suspended before it runs passes the wake on |
@@ -465,7 +469,7 @@ Each demo checks one feature. Why, how CI runs them and what makes one pass are 
 | `lib/ksos/demo/posix/isr_timeout_demo.kspl` | `make ksos-isr-timeout` | With a tick running, `take_for` waits in real time while idle, and takes an interrupt's give |
 | `lib/ksos/demo/posix/sleep_demo.kspl` | `make ksos-sleep` | With every task waiting on an interrupt, CPU time shows the scheduler sleeps |
 | `lib/ksos/demo/posix/task_manager_demo.kspl` | `make ksos-task-manager` | Heap-allocated tasks and queues, and `Task.cpu_percent` following each task's load |
-| `lib/ksos/demo/posix/kernel_check.kspl` | `make ksos-kernel-check` | Wake order, suspension and deletion while waiting, lent priority taken back, the task limit |
+| `lib/ksos/demo/posix/kernel_check.kspl` | `make ksos-kernel-check` | Wake order, `delay(0)` and a past `delay_until`, suspension and deletion while waiting, lent priority taken back, the task limit |
 | `lib/ksos/demo/posix/panic_demo.kspl mutex-relock` | `make ksos-mutex-relock` | Relocking a held mutex panics instead of waiting forever |
 | `lib/ksos/demo/posix/panic_demo.kspl mutex-foreign-unlock` | `make ksos-mutex-foreign-unlock` | Unlocking another task's mutex panics |
 | `lib/ksos/demo/posix/panic_demo.kspl delete-holder` | `make ksos-delete-holder` | Deleting a mutex holder panics instead of leaving the lock held forever |

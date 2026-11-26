@@ -14,14 +14,15 @@ import "std/sys"
 priv const TOOL_WAIT_MS: I32 = 60000 //<
     //< how long `ls`, `chmod` and `ln` may take on a busy machine
 
-pub fn mode_shown(path: U8[], arena: Arena$@): U8[] //< the permissions `ls -l` shows for a file
-    //< Such as `-rw-------`. `std/fs` reads no mode, so the test asks the system's own tool.
-    //< **Empty where `ls` cannot answer**, and on Windows, whose MSYS2 `ls` shows a mode it makes
-    //< up. Ask `keeps_modes` first whether the mode tells anything.
+pub fn mode_shown(path: U8[], arena: Arena$@): U8[] //< the permissions `ls -ld` shows for a path
+    //< Such as `-rw-------`, or `drwx------` for a folder itself, not its entries. `std/fs` reads
+    //< no mode, so the test asks the system's own tool. **Empty where `ls` cannot answer**, and on
+    //< Windows, whose MSYS2 `ls` shows a mode it makes up. Ask `keeps_modes` first whether the mode
+    //< tells anything.
     if sys.is_windows()
         return ""
     r: =
-        subproc.run_capture(U8[][]::{ "/bin/ls", "-l", path }, "", TOOL_WAIT_MS, 4096, arena) catch
+        subproc.run_capture(U8[][]::{ "/bin/ls", "-ld", path }, "", TOOL_WAIT_MS, 4096, arena) catch
             return ""
     if !r.exited_with(0) || r.stdout_data.len < 10
         return ""

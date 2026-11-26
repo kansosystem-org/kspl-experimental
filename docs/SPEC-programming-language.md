@@ -2055,7 +2055,7 @@ The two kinds of nameless function differ as follows; the rules after the table 
 | Uses outer values | No (pass them as arguments) | Yes: the names in its capture list, read-only |
 | Number of arguments | Any | One or two |
 | Can stand at the top level | Yes | No: only inside a function's body |
-| The enclosing type parameters (`T`) | Cannot be written | Can be written |
+| The enclosing type parameters (`T`) and `Self` | Cannot be written | Can be written |
 | Bound to a variable | The type must be written | Needs no type written |
 
 **The `;` fixes the type.** Without it the function is a function pointer ("Anonymous functions" above). With it, the function is a `Callable1<|argument, return|>` / `Callable2<|argument1, argument2, return|>`, carrying the place of its captured values with the function. Even with zero captures, the `;` makes it a `Callable`, for an API that takes no function pointer, such as `std/seq`'s:
@@ -2110,7 +2110,7 @@ impl<|T|> Holder<|T|>
 
 A program begins at `main`, which takes no arguments (command-line arguments are read with `sys.args()`). What `main` returns becomes the program's exit status.
 
-**`main` is a function with no parameters and no type parameters** (`main() takes no parameters`, `main() must not take type parameters`). **A program that is built to run has a `main`** (`this program has no main()` from `ksplc run`, `ksplc build` and `--program`); a `main` that names a constant or a variable is refused there too. A compile to C alone can lack one.
+**`main` is a function with no parameters and no type parameters** (`main() takes no parameters`, `main() must not take type parameters`). **A program that is built to run has a `main`**: `ksplc run`, a compile to an executable and `--program` refuse one without it (`this program has no main()`). A `main` that names a constant or a variable is refused there too. A compile to C alone can lack one.
 
 **`main` cannot be `priv`** (`main() must not be 'priv'`): the start-up code calls it from another file.
 
@@ -2889,8 +2889,11 @@ pub extern fn printf(fmt: Void@, ...): I32
 pub extern fn kai_init(model_path: Void@): llama_model@
 
 // 3. declaring an external variable (binding a C global variable): no value, so it is C's
-pub extern errno: I32
+// (`frames_drawn` is a counter that the program's own C file defines: `long frames_drawn;`)
+pub extern frames_drawn: I64
 ```
+
+**A C name that a header defines as a macro cannot be brought in as a variable.** `errno` is one: it stands for a value per thread, not for a variable of that name. To read why a start failed, use `std/subproc`'s `start_error`. For another C call, write a C function that returns `errno`, and bring that function in.
 
 **`extern` is written on each declaration, and takes no string.** Every machine KSPL builds for has one C calling convention, so `extern "C"` would only repeat it and is a compile error. A machine with a second convention would mark it with an attribute, on the few declarations that need it.
 

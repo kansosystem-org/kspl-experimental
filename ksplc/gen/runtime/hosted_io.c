@@ -19,6 +19,11 @@
  * the default is put back and the signal sent again** (kspl_io_broken_pipe below; the same shape
  * as Go).
  *
+ * Caution: **Only while the runtime's own "ignore" is still set.** A program that set its own
+ * handler (std/sys's set_signal_handler) has it run at every delivery. Its handler already ran at
+ * the write, so the runtime leaves the signal alone. The failed write is then reported as any
+ * other is: standard output fails the exit (below).
+ *
  * Caution: **Do not carry it over to a child.** The ignoring setting **is inherited** across
  * execve. So a child (`git`, `clang`, a shell's pipeline) stops dying too, and `yes | head -1`
  * never ends. It is put back after the fork and before the exec (kspl_child_restore_signals below,
@@ -83,6 +88,8 @@ KSPL_LINK void kspl_io_broken_pipe(void) {
      * or a removed device. Killing the process there takes away the refusal returned as a
      * value. */
     if (kspl_write_errno() != EPIPE) return;
+    /* Caution: **Do not override the program's own handler** (the caution above). */
+    if (!kspl_signal_is(SIGPIPE, SIG_IGN)) return;
     signal(SIGPIPE, SIG_DFL);
     raise(SIGPIPE);
 #endif
@@ -108,7 +115,8 @@ KSPL_LINK void kspl_io_broken_pipe(void) {
  * it writes one line to standard error and ends with 1.
  *
  * Caution: **A closed pipe stays quiet**, as "Writing when nobody is left to read it" above
- * decides: on POSIX it ends by SIGPIPE, on Windows with the program's own code.
+ * decides: on POSIX it ends by SIGPIPE, on Windows with the program's own code. Where the program
+ * set its own SIGPIPE handler, the closed pipe is reported as any other refused write.
  * Caution: **End with `_exit`, not `exit`.** This runs inside `exit` already, and C does not allow a
  * second call there. The flush is done, so nothing waits for `exit`'s own.
  * A panic or a crash does not come here: abort() and the crash handler skip atexit.
@@ -131,8 +139,11 @@ static void kspl_check_stdout_at_exit(void) {
     int err = flushed ? __atomic_load_n(&kspl_last_write_errno, __ATOMIC_RELAXED) :
         kspl_write_errno();
     if (err == EPIPE) {
+        /* On POSIX this ends the process by SIGPIPE, unless the program set its own handler. */
         kspl_io_broken_pipe();
+#ifdef _WIN32
         return;
+#endif
     }
     fprintf(stderr, "[Kanso] Error: standard output could not be written%s%s%s\n",
         err != 0 ? " (" : "", err != 0 ? strerror(err) : "", err != 0 ? ")" : "");

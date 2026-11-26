@@ -65,12 +65,15 @@ fn place_of(line: U8[]): Place? //< the sheet and row a line of the view names; 
         return .none
     return .some(Place::{ .sheet = line.sub(0, bang - 1), .row = row })
 
-fn cells_of(line: U8[]): U8[] //< a line of the view without its head, `<sheet>!<row>: `
-    //< **A search matches a line's words against its cells alone**: every line of a sheet names
-    //< the sheet, so a word in the name would match each of them.
+fn head_of(line: U8[]): U8[] //< a line's head, `<sheet>!<row>: `; empty for a line without one
     if place_of(line).is_none()
-        return line
-    return line.sub_from(line.find_char(':').unwrap_or(0) + 2)
+        return ""
+    return line.sub(0, line.find_char(':').unwrap_or(0) + 2)
+
+fn cells_of(line: U8[]): U8[] //< a line of the view without its head, `<sheet>!<row>: `
+    //< **A search and the citation check match words against a line's cells alone**: every line
+    //< of a sheet names the sheet, so a word in the name would match each of them.
+    return line.sub_from(head_of(line).len)
 
 priv struct Book //< what every sheet of a workbook shares
     strings: List<|U8[]|> //< the shared strings, by index
