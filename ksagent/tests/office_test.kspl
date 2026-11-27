@@ -210,6 +210,31 @@ fn test_a_list_of_a_list_style_takes_the_style_s_numbers()
         view.find_str("第1条").is_some() && view.find_str("規則").is_some() &&
         view.find_str("第2条").is_some(), view)
 
+fn test_list_levels_restart_and_override_as_word_says()
+    verdict.start("[ksagent] lvlRestart and a level a number overrides number as Word does")
+    defer arena: = Arena(64 * 1024)
+    // Level 2 restarts only after level 1 (`lvlRestart` 1), not after level 2. Number 2 gives
+    // level 1 a pattern of its own (`lvl` inside `lvlOverride`).
+    lv: =
+        "<lvl ilvl=\"0\"><start val=\"1\"/><lvlText val=\"%1.\"/></lvl><lvl ilvl=\"1\"><start \
+            val=\"1\"/><lvlText val=\"%1.%2.\"/></lvl><lvl ilvl=\"2\"><start val=\"1\"/><lvlRestart \
+            val=\"1\"/><lvlText val=\"(%3)\"/></lvl>"
+    lists: = arena.text().s("<numbering><abstractNum abstractNumId=\"0\">").s(lv)
+        .s("</abstractNum><num numId=\"1\"><abstractNumId val=\"0\"/></num><num numId=\"2\">")
+        .s("<abstractNumId val=\"0\"/><lvlOverride ilvl=\"0\"><lvl ilvl=\"0\"><start val=\"5\"/>")
+        .s("<lvlText val=\"Part %1:\"/></lvl></lvlOverride></num></numbering>").take()
+    doc: = arena.text().s("<document><body>")
+    for item in U8[][]::{ "1:2", "1:1", "1:2", "2:0" }
+        doc.s("<p><pPr><numPr><ilvl val=\"").s(item.sub_from(2)).s("\"/><numId val=\"")
+            .s(item.sub(0, 1)).s("\"/></numPr></pPr><r><t>x</t></r></p>")
+    view: =
+        word.text_of(office_files.docx_of(doc.s("</body></document>").take(), lists, arena),
+        VIEW_CAP, arena) catch why
+            fallback why
+    verdict.check("level 3 goes on past a level 2 paragraph, and number 2's own level 1 shows",
+        view.find_str("(1)").is_some() && view.find_str("(2)").is_some() &&
+        view.find_str("Part 5:").is_some(), view)
+
 fn test_list_numbers_take_each_format()
     verdict.start("[ksagent] a list number is written in its format: kanji, kana, letters, roman")
     defer arena: = Arena(64 * 1024)

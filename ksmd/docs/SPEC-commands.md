@@ -48,7 +48,7 @@
 * **A path that holds `..`.** Name the file from its own folder, or in full.
 * **A path where no file stands, or where a folder stands.**
 * **A `--workspace` folder that does not exist, holds `..`, or does not hold the file.**
-* **A file that is a link, or lies under a folder that is one.** The local server opens no link inside the workspace.
+* **A file that is a link, or lies under a folder inside the workspace that is one.** The local server opens no link inside the workspace. The workspace itself may be reached through a link, as macOS reaches `/tmp` through `/private/tmp`.
 
 ## Opening a document
 

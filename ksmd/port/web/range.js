@@ -412,9 +412,10 @@ function ksmdRange(ks) {
     const head = e.target.closest(".table th.row-number, .table th.letter");
     if (!head) return;
     e.preventDefault();
+    // **Read the place before the open cell closes**: a rename draws the table again, and `head`
+    // then stands in no document.
+    const block = ks.view.blocks().indexOf(head.closest(".table"));
     ks.table.take();
-    const wrap = head.closest(".table");
-    const block = ks.view.blocks().indexOf(wrap);
     const s = size(block);
     const was = e.shiftKey && ks.cell && ks.cell.block === block ? ks.cell : null;
     if (head.classList.contains("row-number")) {

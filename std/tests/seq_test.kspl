@@ -606,6 +606,23 @@ fn test_map_odd_cap() //< a capacity that is not a power of two
         m.set(k, k * 10)
     assert(m.len == 3 && m.get(3).unwrap_or(-1) == 30, "every key put in is reachable")
     verdict.pass("A count that is not a power of two is rounded up, and the map works.")
+fn test_map_spreads_strided_keys() //< integer keys far apart land in many slots
+    verdict.start("[Map] integer keys 64 KiB apart spread over the slots test...")
+    // **Counts slots, not time**: keys sharing their low zero bits, as addresses do, all fell in
+    // one slot, so each lookup walked the whole run.
+    defer $seen: = List<|Bool|>(null)
+    for _i in Range.asc(65536)
+        seen.push(false)
+    $slots: Sz = 0
+    for i in Range.asc(4096)
+        key: Sz = i * 65536
+        at: = Sz::(key.hash() & U32::65535)
+        if !seen.get(at)
+            seen.set(at, true)
+            slots += 1
+    assert(slots > 3000, "4096 keys 64 KiB apart take most of their own slots")
+    verdict.pass("Integer keys that share their low zero bits spread over the slots.")
+
 fn test_map_cap_of_one() //< a map asked for one slot
     verdict.start("[Map] new_with_cap(1) through set, remove and set again test...")
     // Caution: **Run this under the address sanitizer** (`make test-sanitize`). One slot held one

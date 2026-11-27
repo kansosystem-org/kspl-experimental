@@ -302,11 +302,24 @@ priv fn open(reader: Body_reader$@, arena: Arena$@, timeout_ms: I32): Opened!Htt
     //< last read added. Searched from the start each time, a head that arrives a byte at a time
     //< costs its length squared.
     reader.deadline_us = sys.deadline_after_ms(timeout_ms)
-    $from: Sz = 0
-    for reader.buf.slice().sub_from(from).find_str("\r\n\r\n").is_none() &&
-        reader.buf.len <= http.MAX_HEAD_BYTES
-        from = reader.buf.len - 3 if reader.buf.len > 3 else 0
-        reader.fill(reader.deadline_us)!
+    // **An interim answer (1xx but 101) is passed over**, as RFC 9110 §15.2 asks: a server can
+    // send `103 Early Hints` unasked. The heads passed over share `MAX_HEAD_BYTES` and the
+    // deadline.
+    $skipped: Sz = 0
+    for
+        $from: Sz = 0
+        for reader.buf.slice().sub_from(from).find_str("\r\n\r\n").is_none() &&
+            reader.buf.len <= http.MAX_HEAD_BYTES
+            from = reader.buf.len - 3 if reader.buf.len > 3 else 0
+            reader.fill(reader.deadline_us)!
+        first: = http.scan_head(reader.buf.slice(), reader.room, arena)!
+        status: = http.parse_status_line(first.first_line, arena)!.status
+        if status < 100 || status > 199 || status == 101
+            break
+        skipped += first.head_end
+        if skipped > http.MAX_HEAD_BYTES
+            throw .head_too_large
+        reader.drop(first.head_end)
     h: = http.scan_head(reader.buf.slice(), reader.room, arena)!
     line: = http.parse_status_line(h.first_line, arena)!
     if h.chunked

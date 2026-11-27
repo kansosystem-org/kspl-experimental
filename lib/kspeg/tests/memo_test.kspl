@@ -5,6 +5,7 @@
 import "kspeg/engine" as kspeg
 import "kspeg/memo" { Memo_key, Memo_table }
 import "kspeg/notation" as kspeg_notation
+import "std/chars"
 import "std/ds"
 import "std/mem" { Arena }
 import "std/str" + { Arena_str }
@@ -71,6 +72,19 @@ priv fn check_later_input(arena: Arena$@) //< a later input reads none of what a
     assert(shared.equals(alone), "a lent table handed a later input an earlier one's answer")
     verdict.pass("a later input reads none of the answers an earlier one left")
 
+priv fn check_void_after_backtrack(arena: Arena$@) //< a `_` rule's nodes survive a backtrack
+    //< **A `_` rule that adds nodes to its caller is not remembered**: answered from the memo after
+    //< the first choice failed, `_w` gave the second no `Name`.
+    grammar: U8[] = "top = _w \";\" | _w \"=\" Num\n_w = Name\nName = [a-z]+\nNum = [0-9]+\n"
+    $meta: = kspeg_notation.Meta(grammar, arena)
+    parser: = meta.parse_grammar() catch
+        panic("the grammar did not load")
+    defer parser.free_memo()
+    got: = tree_text(parser, "abc=1", arena)
+    assert(got.find_str("Name@0=abc").is_some(),
+        arena.text().s("the second choice keeps the node its `_` rule built: ").s(got).take())
+    verdict.pass("a `_` rule's nodes survive a backtrack")
+
 priv fn check_grow_past_cap() //< growing past the allocated slots keeps every answer
     $t: = Memo_table<|I64|>()
     defer t.free()
@@ -116,6 +130,7 @@ priv fn check_wrap() //< wrapping the generation counter revives no old answer
 pub fn test_memo(arena: Arena$@) //< every case, each named on its own line
     verdict.start("[KSPEG] one memo table serving every parse of a grammar")
     check_later_input(arena)
+    check_void_after_backtrack(arena)
     check_grow_past_cap()
     check_grow_within_cap()
     check_wrap()

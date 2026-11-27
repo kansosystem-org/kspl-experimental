@@ -37,6 +37,11 @@ export function tools({ browser, page, media, js, settle, until, press, type, se
       check(await found() === "2 of 3", "Enter goes to the next match");
       await press("Enter", SHIFT);
       check(await found() === "1 of 3", "Shift+Enter to the one before");
+      await press("F3");
+      await press("F3", SHIFT);
+      check(await found() === "1 of 3" && !await js("document.querySelector('.fx-dialog')?.open"),
+        "F3 and Shift+F3 step through the matches, and Shift+F3 opens no Insert function",
+        await found());
       await click(".find .find-case");
       check(await found() === "2 of 2" || await found() === "1 of 2", "Match case leaves out 'Words'",
         await found());
@@ -110,6 +115,12 @@ export function tools({ browser, page, media, js, settle, until, press, type, se
       check(sel.startsWith('{"a":[0,1,0,0],"f":[0,1,0,4]'), "and the match it showed is selected", sel);
       check(await js("!CSS.highlights.has('ksmd-found') && !document.querySelector('#doc .found, #doc .found-now')"),
         "and the highlights go");
+      // **A column a closed group folds away is passed over**, as a row out of sight is.
+      await load(`${H}:::table name="t" groups="columns B closed"\n| "a" | "b" |\n| "cat" | "cat" |\n:::\n`);
+      await press("f", CTRL);
+      await type("cat");
+      check(await found() === "1 of 1", "Find passes over a column a closed group folds away", await found());
+      await press("Escape");
     },
 
     async ranges() {
@@ -447,6 +458,9 @@ export function tools({ browser, page, media, js, settle, until, press, type, se
         await load(sums(` filter=",${filter}"`));
         check(await rowsShown(js) === want, what, await rowsShown(js));
       }
+      // An empty cell is neither greater nor less, as in Excel.
+      await load(sums(' filter=",below:1"').replace("| 0.4 |", "| |"));
+      check(await rowsShown(js) === "10", "Is less than 1 hides an empty cell", await rowsShown(js));
     },
 
     // A typed date is a date: it shows as typed, adds days in a formula, and the handle goes on.

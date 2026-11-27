@@ -303,11 +303,23 @@ priv fn weak_after_drop_body()
     assert(ph.get()$ == 0, "fallback placeholder must be usable")
     // ph and w are released as the scope ends; everything is freed once weak reaches 0 too.
 
+priv struct Tree_node //< a node whose parent may not be set yet
+    parent: Weak_rc<|I32|>
+
+priv fn weak_empty_body() //< **An empty handle upgrades to nothing**; it read through null before
+    orphan: Tree_node = ::{}
+    $none: = false
+    _p: = orphan.parent.upgrade() catch
+        none = true
+        fallback Rc<|I32|>(0)
+    assert(none, "upgrade() on an empty Weak_rc fails as on a dropped one")
+
 fn test_weak_upgrade()
     verdict.start("[Weak_rc] ARC downgrade/upgrade + avoiding a reference-cycle leak test...")
     heap_before: = mem.heap_used_bytes()
     weak_alive_body()
     weak_after_drop_body()
+    weak_empty_body()
     back_to(heap_before, "heap must return to the baseline once both strong and weak reach zero")
     verdict
         .pass("upgrade succeeds while alive, fails once every strong is gone, and everything is \

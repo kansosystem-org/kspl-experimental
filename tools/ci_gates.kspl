@@ -96,8 +96,8 @@ pub const GATES: Gate[_] = ::{
     Gate::{ .log = "debug_tools", .args = "debug-tools", .par = .serial, .verdict = true,
         .shard = .b, .linux_only = true, .macos = false, .stops = false, .early = false,
         .fails = "std/tests/verdict_test.kspl#FALLS_MAIN" },
-    // **Lint and the text suites run in job b's Linux run**: their answer cannot differ by
-    // platform, and the Linux-only jobs would otherwise end last.
+    // **Lint runs in job b's Linux run**: its answer cannot differ by platform, and the
+    // Linux-only jobs would otherwise end last.
     Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .b,
         .linux_only = true, .macos = false, .stops = false, .early = true,
         .fails = "tests/suite/lint_gate_test.kspl#TEN_ERRORS_PROBE" },
@@ -132,8 +132,9 @@ pub const GATES: Gate[_] = ::{
     Gate::{ .log = "suites_b", .args = "test-suites-b", .par = .synced, .verdict = false,
         .shard = .b, .macos = false, .stops = false, .early = false },
     // The suites that read or translate the tree's text (`SUITES_TEXT` in `mk/test.mk`).
+    // **They stand in the race job**, which ends first, since `test-ksmd-browser` went to job b.
     Gate::{ .log = "suites_text", .args = "test-suites-text", .par = .synced, .verdict = false,
-        .shard = .b, .linux_only = true, .macos = false, .stops = false, .early = true },
+        .shard = .linux_race, .macos = false, .stops = false, .early = true },
     // **Only macOS runs it**: Linux and Windows reach the same training check through
     // `test-extract` (ksai's own `make test`), which macOS does not run.
     Gate::{ .log = "run", .args = "run", .par = .serial, .verdict = true, .shard = .none,
@@ -187,8 +188,10 @@ pub const GATES: Gate[_] = ::{
     // **The browser gates run in job a, on Linux and on Windows**: it is the shorter job on both
     // without them. They stay together there, so the server and the page are built once. Windows
     // runs them in the Chrome its runner image installs; macOS does not, as its minute costs ten.
+    // **In job b, while `test-ksagent-chat` stays in job a**: the two browser gates were job a's
+    // longest after its suites, and job a ended minutes after job b on both platforms.
     Gate::{ .log = "ksmd_browser", .args = "test-ksmd-browser", .par = .serial, .verdict = true,
-        .shard = .a, .macos = false, .stops = false, .early = false,
+        .shard = .b, .macos = false, .stops = false, .early = false,
         .fails = "ksmd/tests/browser/main.mjs#refused" },
     Gate::{ .log = "ksmd_desktop", .args = "test-ksmd-desktop KSMD_REQUIRE_DESKTOP=1",
         .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false,

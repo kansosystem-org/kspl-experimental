@@ -501,7 +501,9 @@ priv fn merge(src: U8[], phys: List<|Phys|>@, arena: Arena$@): List<|Logical|>
         head: = heading_of(src, last.seg_from, last.code_end)
         out
             .push(Logical::{ .line = p.line, .indent = p.indent, .head = head,
-            .code_start = p.code_start, .code_end = last.code_end, .attr = is_attribute(head) })
+            .code_start = p.code_start, .code_end = last.code_end,
+            .attr =
+            is_attribute(head) && attributes_only(src, last.seg_from, last.code_end) })
         i = j
     return out
 
@@ -575,6 +577,44 @@ fn heads_a_block(code: U8[]): Bool //<
 priv fn is_attribute(head: U8[]): Bool //< whether the line is an attribute (`#name`)
     //< **A directive (`##name(…)`) is not** — that one ends in a `;`.
     return head.len > 0 && head[0] == '#' && !head.starts_with("##")
+
+priv fn attributes_only(src: U8[], from: Sz, to: Sz): Bool //<
+    //< Whether the text holds attributes alone (`#cfg(fast) #noinline`), and nothing after them
+    //< **A statement or a declaration after them on the same line needs its terminator**: taken
+    //< for an attribute line, `#cfg(debug) io.out().s("x")` left the next line in that statement.
+    //< A `#` with no name after it (a `#!` line) counts as one whole, as before.
+    $i: = skip_spaces(src, from, to)
+    for i < to
+        if src[i] != '#'
+            return false
+        i += 1
+        if i >= to || !(src[i].is_alnum() || src[i] == '_')
+            return true
+        for i < to && (src[i].is_alnum() || src[i] == '_')
+            i += 1
+        if i < to && src[i] == '('
+            i = after_parens(src, i, to)
+        i = skip_spaces(src, i, to)
+    return true
+
+priv fn after_parens(src: U8[], from: Sz, to: Sz): Sz //<
+    //< Where the brackets that open at `from` close; a `)` in a quoted string does not close them
+    $depth: Sz = 0
+    $i: = from
+    for i < to
+        c: = src[i]
+        if c == '"'
+            i += 1
+            for i < to && src[i] != '"'
+                i += 2 if src[i] == '\\' else 1
+        else if c == '('
+            depth += 1
+        else if c == ')'
+            depth -= 1
+        i += 1
+        if depth == 0
+            break
+    return i
 
 // ---------------------------------------------------------
 // The assembly

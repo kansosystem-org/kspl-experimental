@@ -435,6 +435,7 @@ ifeq ($(BACKEND),c)
 	@awk '!/^#line /' $(TMP_DIR)/seed_fmt.c > $(TMP_DIR)/seed_stripped.c
 	@cmp -s $(TMP_DIR)/seed_stripped.c $(SEED_C) \
 		|| (cp $(TMP_DIR)/seed_stripped.c $(SEED_C) \
+			&& ./$(STAGE1_EXE) run tools/repo_stat.kspl \
 			&& echo "Seed updated successfully.")
 	@./$(STAGE1_EXE) run tools/seed_sum.kspl write $(SEED_SUM) $(SEED_SUM_FILES)
 else

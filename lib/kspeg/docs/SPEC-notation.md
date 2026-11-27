@@ -257,7 +257,9 @@ This part states how the engine must implement Part I.
 
 #### 8.1 Making transparent mode fully transparent
 
-* **The requirement**: while a transparent-mode rule runs, the engine advances the parse position and nothing else, never allocating or adding a node. The name alone decides. A stray whitespace node would shift the indices for a reader that accesses children by index.
+* **The requirement**: a transparent-mode rule allocates and adds no node of its own. The name alone decides. A stray whitespace node would shift the indices for a reader that accesses children by index.
+* **A rule it calls still builds its node**, and that node goes to the transparent rule's caller. So `_w = Name` gives the caller a `Name` node, as a syntax rule called from a lexical one does (8.3).
+* **Such a rule's answer is not remembered.** The memo holds one node, and a transparent rule has none of its own. Answered from the memo after a backtrack, it would add nothing, and the same input would give another tree.
 
 #### 8.2 Suppressing subnode generation in lexical mode (Flattening)
 

@@ -790,8 +790,12 @@ function ksmdFiles(ks, api) {
     timer = setTimeout(() => one(holdAside), now - first >= 5000 ? 0 : 1000);
   };
   ks.changed.push(edited);
-  ks.root.addEventListener("input", (e) => {
-    if (e.target.classList && e.target.classList.contains("cell-input")) edited();
+  // **The formula bar's box stands outside the document**, so the whole page is listened to: typed
+  // there, a cell's text held no draft, and a reload lost it.
+  document.addEventListener("input", (e) => {
+    const open = ks.table.editing();
+    const cell = e.target.classList && e.target.classList.contains("cell-input");
+    if (cell || (open && e.target === open.input)) edited();
   });
   ks.root.addEventListener("click", (e) => {
     const b = e.target.closest && e.target.closest(".include-open");

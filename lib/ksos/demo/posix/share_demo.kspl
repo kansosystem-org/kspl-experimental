@@ -1,0 +1,45 @@
+//< Two equal tasks share the CPU while a higher one wakes on every tick
+//< A and B never yield, at priority 1. H, at priority 2, takes a little of each tick and sleeps one
+//< tick (`Task.delay(1)`), as a polling loop does. Each tick wakes H, and H's sleep hands the rest
+//< of the tick back. **Both A and B must get the CPU**: round-robin among equals has to survive
+//< a higher task that runs between their turns.
+import "ksos/kernel/task" + { Task }
+import "std/io"
+import "std/sys"
+import "std/verdict"
+
+$g_ran_a: I32 = 0
+$g_ran_b: I32 = 0
+
+$tcb_a: Task
+$tcb_b: Task
+$tcb_h: Task
+// The POSIX port's ucontext needs larger stacks than Cortex-M's (`posix_preempt_demo.kspl`).
+$stack_a: U8[65536]
+$stack_b: U8[65536]
+$stack_h: U8[65536]
+
+fn task_a(_arg: Void$@): Void
+    for
+        g_ran_a = 1
+
+fn task_b(_arg: Void$@): Void
+    for
+        g_ran_b = 1
+
+fn task_h(_arg: Void$@): Void //< wakes on 40 ticks in a row, then reports
+    for _i in Range.asc(40)
+        Task.delay(1)
+    io.out().s("=== Kanso OS (POSIX) equal tasks under a task that wakes each tick ===\n")
+    verdict.check("share: task A gets the CPU", g_ran_a == 1, "")
+    verdict.check("share: task B gets the CPU", g_ran_b == 1, "")
+    io.out().s("=== done ===\n")
+    // A and B loop forever, so start_scheduler() never returns.
+    sys.exit(verdict.finish())
+
+fn main()
+    tcb_a.create(U8$[]::stack_a, task_a, null, 1, "a")
+    tcb_b.create(U8$[]::stack_b, task_b, null, 1, "b")
+    tcb_h.create(U8$[]::stack_h, task_h, null, 2, "h")
+    task.enable_preemption(1000)
+    task.start_scheduler()

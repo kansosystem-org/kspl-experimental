@@ -243,8 +243,10 @@ function ksmdChart(ks) {
     if (!b || b.closest(".include .inside") || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    ks.table.take();
+    // **The place is read before the open cell closes**: its value can draw the chart again, and
+    // the button pressed then stands in no document.
     const block = ks.view.blocks().indexOf(b.closest(".b"));
+    ks.table.take();
     ask(block);
   }
   ks.root.addEventListener("mousedown", edit, true);

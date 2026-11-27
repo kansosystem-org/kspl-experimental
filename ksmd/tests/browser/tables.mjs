@@ -988,6 +988,5 @@ export function tables({ page, media, js, settle, press, type, select, click, me
       await menu("auto-dates");
       await menu("auto-links");
     },
-
   };
 }

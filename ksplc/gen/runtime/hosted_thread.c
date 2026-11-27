@@ -32,6 +32,10 @@ static void kspl_lock_misuse(const char *what) {
     abort();
 }
 
+/* **A zero Mutex or Cond_var holds no lock**: a global never given `new()`. Passed over, two
+ * threads changed its data at once in silence. Only destroy and join take 0 as nothing to do. */
+static const char kspl_zero_lock_msg[] =
+    "a Mutex or Cond_var used before new(): its zero value holds no lock";
 static const char kspl_relock_msg[] =
     "Mutex.lock: this thread already holds the lock (a Mutex is not re-entrant)";
 static const char kspl_foreign_unlock_msg[] = "Mutex.unlock: this thread does not hold the lock";
@@ -147,7 +151,7 @@ KSPL_LINK I64 kspl_mutex_create(void) {
 }
 
 KSPL_LINK void kspl_mutex_lock(I64 handle) {
-    if (handle == 0) return;
+    if (handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)handle;
     if (pthread_mutex_lock(&m->lock) == EDEADLK) {
         kspl_lock_misuse(kspl_relock_msg);
@@ -157,7 +161,7 @@ KSPL_LINK void kspl_mutex_lock(I64 handle) {
 }
 
 KSPL_LINK void kspl_mutex_unlock(I64 handle) {
-    if (handle == 0) return;
+    if (handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)handle;
     if (!kspl_mutex_held(m)) kspl_lock_misuse(kspl_foreign_unlock_msg);
     kspl_mutex_set_owner(m, 0);
@@ -201,7 +205,7 @@ KSPL_LINK I64 kspl_cond_create(void) {
  * While waiting it is unlocked inside, and relocked when a signal arrives, so the owner is cleared
  * before and set again after. */
 KSPL_LINK void kspl_cond_wait(I64 cond_handle, I64 mutex_handle) {
-    if (cond_handle == 0 || mutex_handle == 0) return;
+    if (cond_handle == 0 || mutex_handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
     if (!kspl_mutex_held(m)) kspl_lock_misuse(kspl_foreign_wait_msg);
     kspl_mutex_set_owner(m, 0);
@@ -216,7 +220,7 @@ KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
     struct timespec ts;
     int rc;
-    if (cond_handle == 0 || mutex_handle == 0) return 1;
+    if (cond_handle == 0 || mutex_handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     if (!kspl_mutex_held(m)) kspl_lock_misuse(kspl_foreign_wait_msg);
     timeout_ms = kspl_wait_ms(timeout_ms);
 #if defined(__APPLE__)
@@ -242,7 +246,7 @@ KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_
 /* A wakeup is given under the lock the waiters take. Given without it, it can come between a
  * waiter's check of its condition and its wait, and that waiter sleeps on. */
 KSPL_LINK void kspl_cond_wake_one(I64 cond_handle, I64 mutex_handle) {
-    if (cond_handle == 0 || mutex_handle == 0) return;
+    if (cond_handle == 0 || mutex_handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     if (!kspl_mutex_held((kspl_mutex_t *)(intptr_t)mutex_handle)) {
         kspl_lock_misuse(kspl_foreign_signal_msg);
     }
@@ -250,7 +254,7 @@ KSPL_LINK void kspl_cond_wake_one(I64 cond_handle, I64 mutex_handle) {
 }
 
 KSPL_LINK void kspl_cond_wake_all(I64 cond_handle, I64 mutex_handle) {
-    if (cond_handle == 0 || mutex_handle == 0) return;
+    if (cond_handle == 0 || mutex_handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     if (!kspl_mutex_held((kspl_mutex_t *)(intptr_t)mutex_handle)) {
         kspl_lock_misuse(kspl_foreign_broadcast_msg);
     }
@@ -321,7 +325,7 @@ KSPL_LINK I64 kspl_mutex_create(void) {
 }
 
 KSPL_LINK void kspl_mutex_lock(I64 handle) {
-    if (handle == 0) return;
+    if (handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)handle;
     if (m->owner == kspl_thread_self()) kspl_lock_misuse(kspl_relock_msg);
     AcquireSRWLockExclusive(&m->lock);
@@ -330,7 +334,7 @@ KSPL_LINK void kspl_mutex_lock(I64 handle) {
 }
 
 KSPL_LINK void kspl_mutex_unlock(I64 handle) {
-    if (handle == 0) return;
+    if (handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)handle;
     if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_unlock_msg);
     InterlockedExchange(&m->owner, 0);
@@ -353,7 +357,7 @@ KSPL_LINK I64 kspl_cond_create(void) {
 
 /* The lock is released while waiting, so the owner is cleared before and set again after. */
 KSPL_LINK void kspl_cond_wait(I64 cond_handle, I64 mutex_handle) {
-    if (cond_handle == 0 || mutex_handle == 0) return;
+    if (cond_handle == 0 || mutex_handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
     if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_wait_msg);
     InterlockedExchange(&m->owner, 0);
@@ -363,7 +367,7 @@ KSPL_LINK void kspl_cond_wait(I64 cond_handle, I64 mutex_handle) {
 
 /* The POSIX side's contract. The timeout is relative, so no clock setting stretches it. */
 KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_ms) {
-    if (cond_handle == 0 || mutex_handle == 0) return 1;
+    if (cond_handle == 0 || mutex_handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
     if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_wait_msg);
     InterlockedExchange(&m->owner, 0);
@@ -375,14 +379,14 @@ KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_
 
 /* The POSIX side's contract: the caller holds the lock the waiters take. */
 KSPL_LINK void kspl_cond_wake_one(I64 cond_handle, I64 mutex_handle) {
-    if (cond_handle == 0 || mutex_handle == 0) return;
+    if (cond_handle == 0 || mutex_handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
     if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_signal_msg);
     WakeConditionVariable((CONDITION_VARIABLE *)(intptr_t)cond_handle);
 }
 
 KSPL_LINK void kspl_cond_wake_all(I64 cond_handle, I64 mutex_handle) {
-    if (cond_handle == 0 || mutex_handle == 0) return;
+    if (cond_handle == 0 || mutex_handle == 0) kspl_lock_misuse(kspl_zero_lock_msg);
     kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
     if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_broadcast_msg);
     WakeAllConditionVariable((CONDITION_VARIABLE *)(intptr_t)cond_handle);

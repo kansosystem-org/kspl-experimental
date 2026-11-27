@@ -2,7 +2,8 @@
 // typed in the bar. Enter, Esc, the list of functions, the closing brackets and the marked pair
 // act there as in the cell. It is a stop of Tab, and it takes no edit where none is allowed.
 // A table drawn again while the bar holds the edit is checked with the served page
-// (`redraws.mjs`), whose drawing comes at a known moment.
+// (`redraws.mjs`), whose drawing comes at a known moment. A press right after a column's rename,
+// which draws the table again, acts on what was pressed.
 // `formulaBar(t)` takes the driver's calls and `main.mjs`'s helpers, and returns its sections.
 import { H, SHIFT, cellAt, check } from "./drive.mjs";
 
@@ -11,7 +12,8 @@ const LONG = '=if(A1 = "1F", "a long text that runs well past the room the formu
 const DOC = `${H}Text.\n\n:::table name="t"\n| "a" | "b" | "c" |\n| "1F" | =hex_to_dec(A1) | 3 |\n` +
   `| "2E" | =hex_to_dec(A2) | ${LONG} |\n:::\n`;
 
-export function formulaBar({ js, settle, until, press, type, click, menu, load, saves }) {
+export function formulaBar({ js, settle, until, press, type, click, menu, load, saves, openCell,
+  rightClick }) {
   const BOX = ".formula-bar .formula-input";
   const bar = () => js(`(() => { const b = document.querySelector('${BOX}'); return { address: ` +
     "document.querySelector('.formula-address').textContent, text: b.value, readOnly: b.readOnly, " +
@@ -176,6 +178,34 @@ export function formulaBar({ js, settle, until, press, type, click, menu, load, 
         "in Read-only the bar shows the formula and takes no edit", JSON.stringify(b));
       await menu("read-only");
       await saves("and nothing changes", DOC);
+    },
+
+    // **A press right after a column's rename acts on what was pressed**: the rename draws the
+    // table again, and each press used the element it had found before.
+    async pressAfterRename() {
+      const src = `${H}:::table name="t"\n| "name" | "n" |\n| "a" | 1 |\n| "b" | 2 |\n:::\n`;
+      const renamed = (src) => src.replace('| "name" | "n" |', '| "name" | "na" |');
+      const chosen = () => js("Array.from(document.querySelectorAll('#doc .chosen')).map((e) => " +
+        "e.dataset.r + ':' + e.dataset.c).join()");
+      const rename = async () => {
+        await load(src);
+        await openCell('#doc th[data-r="-1"][data-c="1"]');
+        await type("a");
+      };
+      await rename();
+      await click(cellAt(1, 1));
+      check(await chosen() === "1:1", "a press on a cell after a rename chooses that cell", await chosen());
+      await rename();
+      await openCell(cellAt(1, 1));
+      check(await js("!!document.querySelector('#doc td[data-r=\"1\"][data-c=\"1\"] .cell-input')"),
+        "a double press after a rename opens the cell pressed");
+      await press("Escape");
+      await rename();
+      await rightClick(cellAt(1, 0));
+      check(await js("!document.querySelector('.menu.context').hidden") && await chosen() === "1:0",
+        "a right press after a rename opens the table's menu on that cell", await chosen());
+      await press("Escape");
+      await saves("and the rename stays", renamed(src));
     },
   };
 }

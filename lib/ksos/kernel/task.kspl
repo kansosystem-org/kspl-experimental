@@ -60,6 +60,8 @@ struct Task
     priv wait_obj: Void$@ //<
         //< the synchronization object waited on while blocked (null if none)
     priv wait_seq: U64 //< when it began its wait, as a count of waits (wake takes the lowest)
+    priv run_seq: U64 //<
+        //< when it was last chosen to run, as a count of choices (among equals the lowest runs)
     priv woken_from: Void$@ //<
         //< what a single wake made it ready from, until it runs its recheck (null otherwise)
         //< Suspending or deleting it before then passes that wake on (`pass_on_wake`).
@@ -79,7 +81,7 @@ priv $g_running: Bool = false // from start_scheduler's entry to its return
 priv $g_stop: Bool = false // stop_scheduler asked start_scheduler to return
 priv $g_tick: U64 = 0
 priv $g_ticking: Bool = false // a periodic tick runs (enable_preemption), so g_tick is real time
-priv $g_rr_start: Sz = 0 // where the search starts, for round-robin among equal priorities
+priv $g_run_seq: U64 = 0 // how many times pick_next has chosen a task (it stamps run_seq)
 priv $g_wait_seq: U64 = 0 // how many waits have begun (block_current stamps each wait with it)
 priv $g_main_ctx: Void$@ = null
 // --- The port ABI (each port implements it; POSIX: lib/ksos/port/posix/ksos_port_posix.c) ---
@@ -151,6 +153,7 @@ impl Task
         r.delay_kept = false
         r.wait_obj = null
         r.wait_seq = 0
+        r.run_seq = 0
         r.woken_from = null
         r.wait_note = null
         r.name = name
@@ -380,20 +383,19 @@ priv fn pick_next(): Task$@? //< picks the runnable task with the highest priori
     //< **With a tick running (g_ticking), it moves nothing** and returns none, so the caller sleeps
     //< until the next tick. A jump there would end a timed wait for an interrupt before it came.
     for
+        // **Among equal priorities, the one chosen longest ago runs** (`run_seq`), so they go
+        // round-robin. A place in the table would not do: a higher task waking on every tick
+        // moved it, and the same one of the lower tasks ran each time.
         $best: Task$@ = null
-        $best_prio: I32 = 0
-        $best_idx: Sz = 0
-        // Compare with ">", not ">=": the first highest-priority task from g_rr_start must win, or
-        // round-robin among equal priorities breaks.
-        for k in Range.asc(g_task_count)
-            idx: = (g_rr_start + k) % g_task_count
-            t: = g_tasks[idx]
-            if t != null && t.state == .ready && (best == null || t.prio > best_prio)
+        for i in Range.asc(g_task_count)
+            t: = g_tasks[i]
+            if t != null && t.state == .ready &&
+                (best == null || t.prio > best.prio ||
+                (t.prio == best.prio && t.run_seq < best.run_seq))
                 best = t
-                best_prio = t.prio
-                best_idx = idx
         if best != null
-            g_rr_start = (best_idx + 1) % g_task_count
+            g_run_seq += 1
+            best.run_seq = g_run_seq
             return .some(best)
         if g_ticking
             return .none // the tick advances the clock in real time, and wakes the task (ksos_tick)

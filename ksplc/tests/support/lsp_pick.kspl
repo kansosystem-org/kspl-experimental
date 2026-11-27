@@ -472,3 +472,34 @@ fn check_completion_variant(client: jsonrpc_client.Client$@, arena: Arena$@)
     verdict.check("completion of a bare name offers no name the compiler wrote",
         !holds(rows@, "_variants_of_Shape"),
         lsp_client.why(client, lsp_client.join(names@, arena), arena))
+    check_completion_in_a_generic(client, arena)
+
+priv fn generic_text(line: U8[], arena: Arena$@): U8[] //<
+    //< A generic function, called from `main`, whose body's second line is `line`
+    return arena.text()
+        .s("priv struct Holder<|T|>\n  item: T\n  count: Sz\n\npriv fn count_of<|T|>(holder: ")
+        .s("Holder<|T|>@): Sz\n").s(line)
+        .s("\n\nfn main(): I32\n  h: = Holder<|I32|>::{ .item = 3, ")
+        .s(".count = 1 }\n  x: = c\n  return I32::count_of(h@) + I32::x\n").take()
+
+priv fn check_completion_in_a_generic(client: jsonrpc_client.Client$@, arena: Arena$@) //<
+    //< Completion in a generic function that is called, and in a file holding its instances
+    //< **The body is read through its instance**, so the mark is the instance's. Taken from the
+    //< template, `holder.` found no receiver and offered the names in scope.
+    $rows: =
+        picks_in(client, "lsp_pick_generic.kspl", generic_text("  return holder.", arena), 5, 16,
+        arena)
+    $names: = labels(rows@, arena)
+    verdict.check("completion after a parameter's '.' in a generic offers its fields",
+        rows.len == 2 && holds(rows@, "item") && holds(rows@, "count"),
+        lsp_client.why(client, lsp_client.join(names@, arena), arena))
+    // A bare name in `main`, before the `c` written there.
+    text: = generic_text("  return holder.count", arena)
+    $bare: = picks_in(client, "lsp_pick_generic.kspl", text, 9, 7, arena)
+    $bare_names: = labels(bare@, arena)
+    $instance: = false
+    for name in bare_names.slice()
+        instance = instance || name.ends_with("_I32")
+    verdict.check("a bare name in a file with generics offers no instance's name",
+        holds(bare@, "count_of") && !instance,
+        lsp_client.why(client, lsp_client.join(bare_names@, arena), arena))

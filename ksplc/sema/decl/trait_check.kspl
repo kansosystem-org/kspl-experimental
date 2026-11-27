@@ -430,7 +430,14 @@ impl Sema_ctx
         //< Caution: **Do not hard-code the index type as `Sz`**, or `Map<|U8[], I32|>`'s `m["k"]`
         //< fails with "expected 'Sz', but got 'U8[]'". The declaration is authoritative; `Sz` is a
         //< fallback.
-        fallback_id: = I32::sema_type_env.Builtin_type_id.size_type
+        return r.operator_param_id(method_sym, 2, I32::sema_type_env.Builtin_type_id.size_type)
+
+    fn operator_value_param_id(r: Self$@, method_sym: Sema_symbol$@): I32 //<
+        //< The value type `Index_mut.set` takes, so `m[k] = .green` reads as `m.set(k, .green)`
+        return r.operator_param_id(method_sym, 3, I32::sema_type_env.Builtin_type_id.unknown)
+
+    priv fn operator_param_id(r: Self$@, method_sym: Sema_symbol$@, nth: Sz, fallback_id: I32): I32 //<
+        //< the type of an operator method's `nth` parameter, the receiver first
         if method_sym == null || method_sym.node == null
             return fallback_id
         p_list: = method_sym.node.get_fn_params()
@@ -439,7 +446,7 @@ impl Sema_ctx
         $seen: Sz = 0
         for ch in base_ast_ext.Param_cursor(p_list, false)
             seen += 1
-            if seen == 2 // the first is the receiver
+            if seen == nth
                 return r.index_param_type_of(ch, fallback_id)
         return fallback_id
 

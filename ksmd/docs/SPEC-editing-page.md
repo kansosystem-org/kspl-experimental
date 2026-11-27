@@ -104,7 +104,7 @@
 | Leave a blank line | `Enter` on an empty line between two blocks. Each press adds one; `Backspace` after it, or `Delete` before it, takes it away |
 | Type today's date or the time | Insert ▸ Today's date (`Ctrl`+`;`), Time now (`Ctrl`+`:`) |
 | Note a paragraph | Insert ▸ Note… (`Shift`+`F2`). An empty note resolves it |
-| Find and replace | Edit ▸ Find… (`Ctrl`+`F`), Replace… (`Ctrl`+`H`). `Enter` and `F3` go to the next match |
+| Find and replace | Edit ▸ Find… (`Ctrl`+`F`), Replace… (`Ctrl`+`H`). `Enter` and `F3` go to the next match. Rows and columns out of sight are passed over |
 | Go to the document's start or end | `Ctrl`+`Home`, `Ctrl`+`End`, also past a table, a chart or a diagram there. Or press below the last block |
 | Select the whole document | `Ctrl`+`A` in the text, also past a table, a chart or a diagram at either end |
 

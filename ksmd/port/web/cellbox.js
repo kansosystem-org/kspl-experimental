@@ -54,13 +54,16 @@ function ksmdCellBox(ks, table) {
     if (open && homeOf(open).parentNode === el) return;
     // Caution: **A cell whose text the model refuses stays open, and no other cell opens.** Its box
     // stood on with nothing owning it: Esc did not drop it, and the draft did not hold its text.
+    // **The place is read before the open cell closes**: a rename draws the table again, and `el`
+    // then stands in no document. The cell is found again at that place.
+    const block = table.blockOf(el);
+    const row = Number(el.dataset.r);
+    const column = Number(el.dataset.c);
     if (!take()) {
       open.input.focus();
       return;
     }
-    const block = table.blockOf(el);
-    const row = Number(el.dataset.r);
-    const column = Number(el.dataset.c);
+    el = table.find(block, row, column) || el;
     table.chooseCell({ block, row, column });
     ks.setPlace("cell");
     // A chosen cell takes keys, copies and a range's sum; read-only only ever chooses.

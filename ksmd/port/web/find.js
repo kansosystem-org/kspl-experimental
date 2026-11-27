@@ -93,6 +93,8 @@ function ksmdFind(ks) {
         written(el, block).forEach((cells, k) => {
           if (k > 0 && body[k - 1].hidden) return;
           cells.forEach((t, column) => {
+            // **Nor a column a closed group folds away**, as with a hidden row.
+            if (el.foldedColumns && el.foldedColumns[column]) return;
             for (const [a, b] of places(t, query, exact)) {
               found.push({ kind: "c", block, row: k - 1, column, text: t, from16: a, to16: b });
             }

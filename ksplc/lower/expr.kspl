@@ -487,10 +487,26 @@ impl Ast_node
         if op_text.equals("(")
             r.order_call_operands(lctx, ops@)
             r.hoist_method_receiver(lctx)
+        if op_text.equals("::")
+            r.hoist_counted_array(lctx)
         r.lower_default(lctx)
         if op_text.equals("::")
             r.lower_lasting_array(lctx)
         ops.finish(lctx)
+
+    priv fn hoist_counted_array(r: Self$@, lctx: Lowering_ctx$@) //<
+        //< A slice made of an array literal of counted values (`Rc<|I32|>[]::{ a, b }`)
+        //< The literal retains each element, so the array goes into a temporary the scope releases,
+        //< as a binding of it would be. Written in place, nothing owned it, and each call leaked
+        //< every element. A slice that leaves its block is `lower_lasting_array`'s.
+        if lctx.lasting_decls != null || !lctx.can_own_temporaries() ||
+            !lctx.sema.env.is_slice(r.type_id)
+            return
+        arr: = r.get_postfix_receiver()
+        if arr.kind_id != .k_struct_literal || !lctx.sema.env.is_array(arr.type_id) ||
+            !lctx.sema.env.type_is_managed(arr.type_id)
+            return
+        r.set_child(0, arr.arc_hoist_owned(lctx))
 
     priv fn lower_lasting_array(r: Self$@, lctx: Lowering_ctx$@) //<
         //< A slice made of an array literal, where the slice leaves the block it is built in

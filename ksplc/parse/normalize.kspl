@@ -168,7 +168,11 @@ impl Ast_node
             if c.kind_id == .k_attribute_list
                 saw_attrs = true
                 for attr in c.children
-                    if !attr.is_attribute_named("cfg")
+                    // **A malformed `#cfg` is kept**, so sema reports it. Discarded, the statement
+                    // ran on every target: `#cfg(windows && debug)` printed on Linux too.
+                    $is_neg: = false
+                    if !attr.is_attribute_named("cfg") ||
+                        attr.cfg_flag_name(is_neg@).len == 0
                         kept.push(attr)
             else if inner == null
                 inner = c

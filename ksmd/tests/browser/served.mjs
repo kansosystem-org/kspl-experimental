@@ -722,6 +722,15 @@ const SECTIONS = {
         await d.js("ksmd.source()") === top, "Open shows the same dialog; a double press opens",
       `${await said(d)} | ${await shown()}`);
       fs.rmSync(path.join(ctx.root, "parts/copy.ksmd"), { force: true });
+      // **A name with a dot of its own still takes `.ksmd`**: `plan v1.2` was saved bare, and Open
+      // did not list it.
+      await d.menu("file-save-as");
+      await d.until("document.querySelector('#browse .browse-list button') !== null");
+      await d.js("document.querySelector('#browse .browse-name').value = 'plan v1.2'");
+      await pressOk();
+      check(ctx.disk("plan v1.2.ksmd") !== null && ctx.disk("plan v1.2") === null,
+        "Save as adds .ksmd to a name with a dot in it", await said(d));
+      fs.rmSync(path.join(ctx.root, "plan v1.2.ksmd"), { force: true });
     });
   },
 

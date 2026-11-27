@@ -444,8 +444,11 @@ function ksmdTable(ks) {
     }
     pressed = null;
     const el = e.target.closest(".table [data-r]");
-    // A right press inside the chosen range keeps it, so the menu acts on the whole range.
-    if (el && e.button === 2 && inRange(blockOf(el), Number(el.dataset.r), Number(el.dataset.c))) {
+    // A right press inside the chosen range keeps it, so the menu acts on the whole range. **A
+    // right press on a cell is left to the menu's own event**, which closes an open cell after it
+    // reads the place: closed here, a renamed column drew the table again, and the menu's event
+    // then fell on whatever had moved under the pointer.
+    if (el && e.button === 2) {
       e.preventDefault();
       return;
     }
@@ -485,8 +488,9 @@ function ksmdTable(ks) {
     const at = wrap && e.target.closest("[data-r], th.row-number, th.letter");
     if (!at) return;
     e.preventDefault();
-    take();
+    // The place is read before the open cell closes, which can draw the table again.
     const block = blockOf(wrap);
+    take();
     const was = ks.cell && ks.cell.block === block ? ks.cell : { row: 0, column: 0 };
     let row = was.row;
     let column = was.column;

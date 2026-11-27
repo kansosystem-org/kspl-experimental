@@ -25,7 +25,8 @@ priv struct Level //< how one level of a list writes its number
     format: U8[] //< `decimal`, `japaneseCounting`, `bullet` …
     text: U8[] //< the label, with `%1` … `%9` standing for each level's number
     legal: Bool //< `isLgl`: every level's number written in plain digits
-    keep: Bool //< `lvlRestart` 0: a shallower level's next number does not restart this one
+    restart: I32 //<
+        //< `lvlRestart`: a level shallower than this one (0-based) restarts it; -1 for any
     suffix: U8[] //< what follows the label: `tab`, `space` or `nothing`
 
 priv struct List_def //< one abstract number: a list's levels, and its counters
@@ -39,6 +40,8 @@ priv struct Num //< one number a paragraph names: its list, and its level starts
     list_id: U8[] //< the id of its abstract number
     list: Sz //< the index of its list in `Numbering.lists`, once read; -1 for none
     starts: I32[9] //< each level's start override, or `NO_START`
+    own: Bool[9] //< whether a `lvlOverride` gives the level a whole definition of its own
+    levels: Level[9] //< those definitions, where `own` says so
     begun: Bool //< whether a paragraph has used it yet
 
 struct Numbering //< every list of a document, and where each one's counting stands
@@ -62,6 +65,7 @@ fn read(src: U8[], work: Work$@, arena: Arena$@): Numbering!U8[] //<
     $level: Sz = -1 //< the level being read, or -1
     $num: Sz = -1 //< the number being read, or -1
     $override: Sz = -1 //< the level a `lvlOverride` names, or -1
+    $own_level: Sz = -1 //< the level a `lvl` inside that `lvlOverride` defines, or -1
     for
         ev: = x.next()!
         if ev == xml.Event.done
@@ -71,6 +75,7 @@ fn read(src: U8[], work: Work$@, arena: Arena$@): Numbering!U8[] //<
                 list = -1
             else if x.name.equals("lvl")
                 level = -1
+                own_level = -1
             else if x.name.equals("num")
                 num = -1
             else if x.name.equals("lvlOverride")
@@ -99,6 +104,14 @@ fn read(src: U8[], work: Work$@, arena: Arena$@): Numbering!U8[] //<
             n.lists.at(list).num_style_link = x.attr_or("val", "", arena)!
         else if name.equals("lvl") && list >= 0 && override < 0
             level = level_number(x.attr_or("ilvl", "0", arena)!)
+        // **A `lvl` inside a `lvlOverride` replaces that level for this number alone**.
+        else if name.equals("lvl") && num >= 0 && override >= 0
+            at: = n.nums.at(num)
+            at.own[override] = true
+            at.levels[override] = default_level()
+            own_level = override
+        else if num >= 0 && own_level >= 0
+            read_level_field(x@, n.nums.at(num).levels[own_level]@, arena)!
         else if list >= 0 && level >= 0
             lv: = n.lists.at(list).levels.at(level)
             read_level_field(x@, lv, arena)!
@@ -138,7 +151,8 @@ priv fn read_level_field(reader: xml.Reader@, lv: Level$@, arena: Arena$@): Void
     else if reader.name.equals("isLgl")
         lv.legal = !val.equals("0") && !val.equals("false")
     else if reader.name.equals("lvlRestart")
-        lv.keep = val.equals("0")
+        // `n` restarts it after level n (1-based) or a shallower one; `0` never.
+        lv.restart = whole(val, -1)
     else if reader.name.equals("suff")
         lv.suffix = val
 
@@ -157,9 +171,7 @@ impl Numbering
     priv fn add_list(r: Self$@, id: U8[], arena: Arena$@): Sz //< a new list, with default levels
         $levels: = List<|Level|>(arena)
         for _k in Range.asc(LEVELS)
-            levels
-                .push(Level::{ .start = 0, .format = "decimal", .text = "", .legal = false,
-                .keep = false, .suffix = "tab" })
+            levels.push(default_level())
         def: = List_def::{ .levels = levels, .style_link = "", .num_style_link = "" }
         r.list_keys.push(Keyed::{ .key = id, .pos = r.lists.len })
         r.lists.push(def)
@@ -169,6 +181,8 @@ impl Numbering
         $num: = Num::{ .list_id = "", .list = -1, .begun = false }
         for k in Range.asc(LEVELS)
             num.starts[k] = NO_START
+            num.own[k] = false
+            num.levels[k] = default_level()
         r.num_keys.push(Keyed::{ .key = id, .pos = r.nums.len })
         r.nums.push(num)
         return r.nums.len - 1
@@ -196,7 +210,8 @@ impl Numbering
             def.value[level] = start_of(num, def, level)
             def.used[level] = true
         for k in Range(level + 1, LEVELS, 1)
-            if !def.levels.get(k).keep
+            limit: = level_of(num, def, k).restart
+            if limit < 0 || I32::level < limit
                 def.used[k] = false
         return .some(found)
 
@@ -205,13 +220,21 @@ impl Numbering
         n: = r.nums.at(num)
         return text_of(n, r.lists.at(n.list), level, arena)
 
+priv fn default_level(): Level //< a level as a list has it before its `lvl` is read
+    return Level::{ .start = 0, .format = "decimal", .text = "", .legal = false, .restart = -1,
+        .suffix = "tab" }
+
+priv fn level_of(num: Num@, def: List_def@, level: Sz): Level //<
+    //< The level as the number shows it: its own override's, or its list's
+    return num.levels[level] if num.own[level] else def.levels.get(level)
+
 priv fn start_of(num: Num@, def: List_def@, level: Sz): I32 //< where a level starts counting
     return (num.starts[level] if num.starts[level] != NO_START
-        else def.levels.get(level).start)
+        else level_of(num, def, level).start)
 
 priv fn text_of(num: Num@, def: List_def@, level: Sz, arena: Arena$@): U8[] //<
     //< The label, with each `%N` replaced by that level's number, and its suffix
-    lv: = def.levels.get(level)
+    lv: = level_of(num, def, level)
     out: = arena.text()
     if lv.format.equals("bullet")
         out.s(bullet(lv.text))
@@ -222,7 +245,8 @@ priv fn text_of(num: Num@, def: List_def@, level: Sz, arena: Arena$@): U8[] //<
             if t[i] == '%' && i + 1 < t.len && t[i + 1] >= '1' && t[i + 1] <= '9'
                 k: = Sz::(t[i + 1] - '1')
                 v: = def.value[k] if def.used[k] else start_of(num, def, k)
-                write_number(out, v, "decimal" if lv.legal else def.levels.get(k).format)
+                write_number(out, v,
+                    "decimal" if lv.legal else level_of(num, def, k).format)
                 i += 2
                 continue
             out.c(t[i])

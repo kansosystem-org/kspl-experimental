@@ -149,6 +149,15 @@ fn run_outline(client: jsonrpc_client.Client$@, caps: json.Value, arena: Arena$@
     verdict.check("a trait's default method comes out once, in the trait", halves == 1, d)
     verdict.check("each name's place lies inside its declaration's range", !outside, d)
 
+    // **A range ends with its declaration's last line**, an interpolated string's included: its
+    // pieces are not spelt in the source, and the range ended at the value inside the braces.
+    said: =
+        ask(client, "file:///os.kspl", "fn said(): U8[]\n  return \"n \\{4\\}!\"\n", arena)
+    $said_seen: = List<|Seen|>(arena)
+    collect(said.get("result"), 0, said_seen@, arena)
+    verdict.check("a range ends at the end of a line with an interpolated string",
+        said_seen.len == 1 && said_seen.get(0).to == 100022I64, lsp_client.dump(said, arena))
+
     // **A document that fails to parse gets what parsed around the error.**
     bad: = ask(client, BROKEN_URI, BROKEN_SRC, arena)
     $bad_seen: = List<|Seen|>(arena)

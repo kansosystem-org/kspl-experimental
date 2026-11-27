@@ -104,7 +104,7 @@ fn test_events_are_read_as_the_standard_has_them()
     defer $r: = Event_reader()
     defer $got: = List<|U8[]|>(null)
     defer arena: = Arena(4096)
-    text: = ":ping\r\n\r\nevent: x\r\ndata: one\r\ndata:two\r\rdata: three\n\ndata: cut"
+    text: = ":ping\r\n\r\nevent: x\r\ndata: one\r\ndata:two\r\rdata:\n\ndata: three\n\ndata: cut"
     for i in Range.asc(text.len)
         r.add(text.sub(i, 1))
         for
@@ -112,7 +112,8 @@ fn test_events_are_read_as_the_standard_has_them()
                 break
             got.push(arena.dup_str(data))
     tail: = r.next(true)
-    verdict.check("each event's data, its lines joined; a comment and an event cut off give none",
+    verdict.check("each event's data, its lines joined; a comment, empty data and an event cut off \
+        give none",
         got.len == 2 && got.get(0).equals("one\ntwo") && got.get(1).equals("three") &&
         tail.is_none(), "")
 

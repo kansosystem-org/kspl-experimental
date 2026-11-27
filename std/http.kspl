@@ -1,8 +1,9 @@
 //< Parses and builds HTTP/1.1 messages, both requests and responses
 //< Use it for a web server or client over `std/net`'s TCP sockets. **A request's body is delimited
 //< by `Content-Length` alone.** A response's can also come in chunks, which `std/http_body` reads
-//< from a connection and `format_chunk` writes. A body read to the close, `100-continue` and
-//< HTTP/2 are not read. The reader handles pipelining through `consumed`; it reads a response as
+//< from a connection and `format_chunk` writes. An interim answer (`100 Continue`, `103 Early
+//< Hints`) is passed over. A body read to the close, sending `Expect: 100-continue`, and HTTP/2
+//< are not supported. The reader handles pipelining through `consumed`; it reads a response as
 //< the answer to a request other than HEAD.
 
 // ==========================================
@@ -287,7 +288,9 @@ pub fn headers( //< an empty header builder
 ): Header_builder //< the builder; each add returns it again, for chaining
     return Header_builder::{ .arena = arena, .own = ::{}, .head = null, .tail = null }
 
-impl Header_builder
+// Caution: **Each `add` moves the builder, so use what it returns.** A copy shares the list's
+// nodes and its own arena: a later `add` on one wrote into the other, and both freed one arena.
+impl Header_builder: Move_only //< a copy would share the list and free its arena twice
     pub fn add( //< appends one header; the same name can be added again
         $r: Self,
         name: U8[], //< the header name

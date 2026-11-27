@@ -494,7 +494,7 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 | `out/` itself | The programs a person runs or a document names, such as `ksplc_stage1.exe`, `kssrv.exe` and `ksmd.exe` |
 | `out/gen/` | What a build writes for a later step: generated C and LLVM IR, `.libs` and `.deps` files, and the `.desktop` entry |
 | `out/test/` | A program built only for a gate, such as `test_debug.exe`, `debug_tools.exe` and `kssrv_llvm.exe` |
-| `out/log/` | Logs and reports: `make.log`, each gate's log under `ci/`, and the comparisons `stage_diff_c.txt` and `ship_diff.txt` |
+| `out/log/` | Logs and reports: `make.log`, each gate's log under `ci/`, the comparisons `stage_diff_c.txt` and `ship_diff.txt`, and the repository's size `repo_stat.txt` |
 | `out/tmp/` | Scratch that a gate or a tool writes during its run |
 | A folder named for a package or a tool | That package's build as its own `Makefile` lays it out (`ksmd/`, `ksos_posix/`). Or one tool's output: `surface/`, `docs/`, `code_complete/` for the coding example's corpus and tokenizer, `ksai/` for what ksai's tools convert, `benches/` for ksai's benchmarks |
 

@@ -621,6 +621,8 @@ impl Rule
 
         result_node: Node$@ =
             Node.create(name, name, start_pos, ctx.arena) if !is_void else null
+        // How many nodes the caller held, so a `_` rule that adds some to it is seen (below).
+        children_before: Sz = parent.children.len if is_void && parent != null else 0
 
         target.parse(ctx, result_node if !is_void else parent) catch e
             ctx.is_syntax_mode = start_mode
@@ -675,7 +677,11 @@ impl Rule
                 result_node.text = ctx.source.sub(start_pos, ctx.pos - start_pos)
             if parent != null
                 parent.add_child(result_node)
-        if !skip_memo
+        // **A `_` rule that added nodes to its caller is not remembered**: the memo holds one node,
+        // and a `_` rule has none of its own. Answered from the memo after a backtrack, it added
+        // nothing, so the same input gave another tree.
+        added: = is_void && parent != null && parent.children.len > children_before
+        if !skip_memo && !added
             rule_entry.memo_writes += 1
             ctx.memo
                 .set(key,

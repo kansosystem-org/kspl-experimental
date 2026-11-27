@@ -24,6 +24,7 @@ fn run()
     turned()
     literals()
     number_formats()
+    decimal_commas()
 
 priv fn carried() //< a copy carries each cell's typed text and its value as calculated
     defer arena: = Arena(64 * 1024)
@@ -194,6 +195,15 @@ priv fn number_formats() //< a copy carries the format each cell shows, and a pa
     after(ed@, "a cell with no format pasted in a formatted column shows as calculated", head,
         "| 1 | 1234.5 | 1234.5 {format=\"grouped:0\"} |\n| 2 | 1234.5 {format=\"general\"} | 1234.5 \
             |\n:::\n")
+
+priv fn decimal_commas() //< text pasted from another program keeps a decimal comma as text
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(join(HEAD, "| | | |\n:::\n", arena), arena)
+    grid: = grid_of("[[\"3,1416\",\"1,2345\",\"1,234.5\"]]", arena)
+    ed.paste_cells(0, 0, 0, grid@) catch e
+        verdict.check("pasting decimal commas", false, e.message())
+    after(ed@, "3,1416 stays text, as only groups of three are separators; 1,234.5 is a number",
+        HEAD, "| \"3,1416\" | \"1,2345\" | 1234.5 |\n:::\n")
 
 priv fn after(ed: Editor@, what: U8[], head: U8[], rest: U8[]) //<
     //< The document saves as `head` followed by `rest`

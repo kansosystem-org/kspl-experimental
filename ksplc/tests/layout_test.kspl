@@ -66,6 +66,13 @@ fn test_statements_share_a_line()
     assert(mend("fn main()\n    for $i: Sz = 0; i < 3; i += 1 { g(i) } h(); k()\n", arena)
         .equals("fn main() {\n    for $i: Sz = 0; i < 3; i += 1 { g(i);} h(); k(); }\n"),
         "after the loop's block has closed, a `;` ends a statement again")
+    // **An attribute before a statement on its line ends with it**; a line of attributes alone,
+    // a `)` in a quoted argument included, takes no terminator of its own.
+    assert(mend("fn main()\n    #cfg(x) g()\n    h()\n", arena)
+        .equals("fn main() {\n    #cfg(x) g();\n    h(); }\n"),
+        "a statement after an attribute on its line keeps its terminator")
+    assert(mend("#section(\")\")\n$v: I32 = 1\n", arena).equals("#section(\")\")\n$v: I32 = 1;\n"),
+        "an attribute alone on its line, a `)` in its string, takes none")
     verdict.pass("each statement on a shared line ended as on a line of its own.")
 
 fn test_joined_line_keeps_its_statement()

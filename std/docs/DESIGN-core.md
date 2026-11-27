@@ -349,7 +349,7 @@ The other key arrives as the type argument `Key`, since `Self` stands only on th
 
 **The built-in types' conformances go in std.** In the compiler, an implementation that exists to make a type a key of std's containers would invert the layers. So the `Hashable` of `Sz` and `U8[]` sits in `std/ds.kspl` beside what requires it.
 
-`ds.fmix32` is the one place where the bit mixing lives: it spreads keys with the same low bits over the slots. **Measure before you add it: added everywhere, it is a mistake.** In a `hash` on the innermost loop, the extra operation outweighs the diffusion. So a parser's memo lookup and a key of token IDs leave it out, since their low bits already differ.
+`ds.fmix32` is the one place where the bit mixing lives: it spreads keys with the same low bits over the slots. **Measure before you add it: added everywhere, it is a mistake.** In a `hash` on the innermost loop, the extra operation outweighs the diffusion. So a parser's memo lookup and a key of token IDs leave it out, since their low bits already differ. A 64-bit integer key (`I64`, `Sz`) takes the high half of one multiply instead, which costs no more. Keys with the same low bits, such as addresses, then spread too.
 
 ### A map holding few pairs stays small over time
 

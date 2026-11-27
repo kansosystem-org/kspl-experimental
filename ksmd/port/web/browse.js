@@ -120,7 +120,10 @@ function ksmdBrowse(local) {
       name.focus();
       return;
     }
-    if (mode !== "open" && !n.slice(n.lastIndexOf("/") + 1).includes(".")) n += ext();
+    // **A document saved takes `.ksmd` unless it ends in it**: a dot in the name (`plan v1.2`)
+    // left it out, and Open then did not list the file.
+    if (mode === "save" && !n.toLowerCase().endsWith(ext())) n += ext();
+    else if (mode !== "open" && !n.slice(n.lastIndexOf("/") + 1).includes(".")) n += ext();
     const path = join(folder, n);
     const there = files.includes(n);
     // A file to include or a functions file is used as it stands, or started where none stands.

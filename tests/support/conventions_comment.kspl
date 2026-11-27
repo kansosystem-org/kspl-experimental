@@ -1,7 +1,6 @@
 //< Comments hold at most 30% of the hand-written source (not the suite)
 //< The rule is in "Comment notation and limits" in `docs/SPEC-plain-language.md`; this file only
 //< counts. The share is the repository's, so one file may hold more.
-import "std/chars" // `find_str`
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
@@ -9,99 +8,33 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
+import "tools/repo_stat_path" as path_kind
 
 priv const MAX_SHARE_PERCENT: Sz = 30
 
-// ==========================================
-// How a line is counted
-// A blank line counts on neither side, so the share does not change with a writing habit. A line
-// that opens with a comment mark, or lies inside a block comment, is a comment line. Every other
-// line is code, a code line that ends in a comment included.
-// ==========================================
-
-priv struct Marks //< a kind of file's comment marks, each empty where the kind has none
-    line: U8[] //< the mark that comments out the rest of a line
-    open: U8[] //< a block comment's opening mark
-    close: U8[] //< a block comment's closing mark
-
-priv fn marks_of(path: U8[]): Marks //< the comment marks of the file's kind, read from its name
-    //< Caution: **`.ksplb` takes `//`, not `#`.** `#` starts an attribute, so every `#cfg(…)` would
-    //< count as a comment.
-    $m: = Marks::{ .line = "", .open = "", .close = "" }
-    if path.ends_with(".kspl") || path.ends_with(".ksplb") || path.ends_with(".c") ||
-        path.ends_with(".h") || path.ends_with(".js") || path.ends_with(".mjs")
-        m.line = "//"
-    else if path.ends_with(".py") || path.ends_with(".mk") || path.ends_with(".yml") ||
-        path.ends_with("Makefile") || path.ends_with("Dockerfile")
-        m.line = "#"
-    if path.ends_with(".c") || path.ends_with(".h") || path.ends_with(".js") ||
-        path.ends_with(".mjs") || path.ends_with(".css") || path.ends_with(".S") ||
-        path.ends_with(".ld")
-        m.open = "/*"
-        m.close = "*/"
-    else if path.ends_with(".html")
-        m.open = "<!--"
-        m.close = "-->"
-    return m
-
-priv fn open_after(line: U8[], marks: Marks, open: Bool): Bool //<
-    //< Whether a block comment is still open at the end of the line
-    //< `open` says a block runs on from the line above.
-    //< Caution: **Skip the strings first**: a `"/*"` in a string opens nothing.
-    if open
-        return line.find_str(marks.close).is_none()
-    if marks.open.len == 0
-        return false
-    $i: Sz = 0
-    $quote: U8 = 0
-    for i < line.len
-        c: = line[i]
-        if quote != 0
-            i += 2 if c == '\\' else 1
-            if c == quote
-                quote = 0
-            continue
-        if c == '"' || c == '\''
-            quote = c
-            i += 1
-            continue
-        rest: = line.sub_from(i)
-        if marks.line.len > 0 && rest.starts_with(marks.line)
-            return false
-        if rest.starts_with(marks.open)
-            return rest.sub_from(marks.open.len).find_str(marks.close).is_none()
-        i += 1
-    return false
-
+// **A line is counted by `count_lines` in `tools/repo_stat_path.kspl`**, the one rule the size
+// report uses too. A blank line counts on neither side, so the share does not change with a
+// writing habit.
 priv struct Tally //< the comment lines and the code lines counted so far
     comment: Sz
     code: Sz
 
-priv fn tally(text: U8[], marks: Marks, total: Tally$@, arena: Arena$@) //< adds one file's lines
-    $open: = false
-    for ln in text.lines(arena)
-        t: = ln.trim_spaces()
-        carried: = open
-        open = open_after(ln, marks, open)
-        if t.len == 0
-            continue
-        if carried || marks.line.len > 0 && t.starts_with(marks.line) ||
-            marks.open.len > 0 && t.starts_with(marks.open)
-            total.comment += 1
-        else
-            total.code += 1
+priv fn tally(text: U8[], path: U8[], total: Tally$@, arena: Arena$@) //< adds one file's lines
+    n: = path_kind.count_lines(text, path, arena)
+    total.comment += n.comment
+    total.code += n.code
 
 priv fn over_cap(count: Tally): Bool //< whether comments hold more than the cap
     return count.comment * 100 > MAX_SHARE_PERCENT * (count.comment + count.code)
 
 priv fn kspl_over_cap(text: U8[], arena: Arena$@): Bool //< the judgment on a text read as KSPL
     $t: = Tally::{}
-    tally(text, marks_of("sample.kspl"), t@, arena)
+    tally(text, "sample.kspl", t@, arena)
     return over_cap(t)
 
 priv fn c_over_cap(text: U8[], arena: Arena$@): Bool //< the judgment on a text read as C
     $t: = Tally::{}
-    tally(text, marks_of("sample.c"), t@, arena)
+    tally(text, "sample.c", t@, arena)
     return over_cap(t)
 
 // The samples read as KSPL.
@@ -129,7 +62,7 @@ priv fn check_share(arena: Arena$@) //< the share over every hand-written source
         if rel.equals("ksplc/seed.c")
             continue
         files += 1
-        tally(harness.read_under_root(rel), marks_of(rel), total@, arena)
+        tally(harness.read_under_root(rel), rel, total@, arena)
     lines: = total.comment + total.code
     permille: = total.comment * 1000 / lines if lines > 0 else 0
     name: = arena.text()

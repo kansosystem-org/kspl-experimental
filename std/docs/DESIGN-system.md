@@ -804,7 +804,7 @@ A type of its own, not an ordering argument, keeps one meaning to each type: a `
 
 ### A mutex is locked once, by one thread
 
-A second lock of a `Mutex<|T|>` on the thread that already holds it stops the program with a message, on every OS. So does an unlock, or a wait, signal or broadcast on a `Cond_var` with it, from a thread that does not hold it.
+A second lock of a `Mutex<|T|>` on the thread that already holds it stops the program with a message, on every OS. So does an unlock, or a wait, signal or broadcast on a `Cond_var` with it, from a thread that does not hold it. So does any of them on a zero `Mutex` or `Cond_var`, a global never given `new()`. It holds no lock, so two threads would change the data at once.
 
 A second lock on the holding thread is a bug: the second would see the first holder's change half-done. The OS's plain locks answer it differently, which is worse than either answer:
 

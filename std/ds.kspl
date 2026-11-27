@@ -97,7 +97,10 @@ impl I32: Hashable<|I32|> //< so an `I32` can be a `Map`'s key
         return r$ == other
 
 priv fn spread_u64(key: U64): U32 //< an integer key's bits folded to 32 and spread over the buckets
-    return (U32::(key ^ (key >> 32))) * U32::2654435761
+    //< **The product's high half**, as Fibonacci hashing takes it: each of its bits depends on the
+    //< key's low bits too. The low half kept a key's low zero bits, and `Map` takes its slot from
+    //< the low bits, so addresses 64 KiB apart all fell in one slot.
+    return U32::((key * 0x9E3779B97F4A7C15U64) >> 32U64)
 
 impl I64: Hashable<|I64|> //< so an `I64` can be a `Map`'s key
     //< A primitive's method receives r as a pointer, so the value is r$

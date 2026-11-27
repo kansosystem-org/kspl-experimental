@@ -341,8 +341,8 @@ test-suites-text: $(addprefix test-,$(SUITES_TEXT))
 # --- The two halves CI runs on separate jobs, of what is left ---
 # **Each half holds one share of the compiler's copy and one of the other packages' two**, so no
 # half waits on two long serial suites. Half A is what B leaves. Caution: **The two CI jobs that
-# run the halves differ by platform**: Linux's job b is the shorter, Windows's (with its LLVM
-# gates) the longer. Before moving a suite, compare both platforms' job times in a run's job list.
+# run the halves hold other gates as well, which differ by platform** (Windows's job b has its
+# LLVM gates). Before moving a suite, compare both platforms' job times in a run's job list.
 # How the rest of the work is dealt between the jobs is "How the gates are arranged" in
 # `docs/SPEC-gates.md`.
 SUITES_B := extract-ksplc-rest extract-std lsp-tree c-warnings $(EXTRA_SUITES)

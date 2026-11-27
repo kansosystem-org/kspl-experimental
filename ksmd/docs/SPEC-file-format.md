@@ -2080,7 +2080,7 @@ It is refused at line 3, column 19.
 | `in:` and values separated by `\|` | Rows whose cell shows one of the values. An empty value stands for an empty cell |
 | `out:` and values separated by `\|` | Rows whose cell shows none of the values |
 | `is:`, `not:` or `contains:`, and a value | Rows whose cell shows that text, any other text, or text that holds it |
-| `above:` or `below:`, and a value | Rows whose number is greater or less. Text compares as text |
+| `above:` or `below:`, and a value | Rows whose number is greater or less. Text compares as text, and an empty cell meets neither |
 | `empty`, `filled` | Rows whose cell is empty, or holds a value |
 
 * **A value is the text the cell shows, in lower case.** The comparison does not regard case.

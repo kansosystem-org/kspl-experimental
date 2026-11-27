@@ -99,6 +99,24 @@ priv const OK_HEAD: U8[] = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\
 priv fn chunked(body: U8[], arena: Arena$@): U8[] //< a 200 response whose body is these chunks
     return arena.text().s(OK_HEAD).s(body).take()
 
+fn test_http_interim_answers_are_passed_over(arena: Arena$@) //<
+    //< `100 Continue` and `103 Early Hints` before the answer are read past, whole or a byte at
+    //< a time; 101 is an answer of its own
+    verdict.start("[HTTP body] an interim 1xx answer is passed over, and the answer after it read")
+    interim: = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </a.css>\r\n\r\n"
+    whole: = arena.text().s(interim).s("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").take()
+    for piece in Sz[]::{ 0, 1 }
+        got: = read_whole(whole, piece, 1024, arena)
+        assert(got.equals("ok"),
+            arena.text().s("written \{piece\} bytes at a time, the body reads as: ").s(got).take())
+    s: = serve("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\n\r\n", 0, 0, arena)
+    head: = http_body.read_response_head(s.client, arena, 1024, WAIT_MS) catch
+        panic("a 101 is read")
+    assert(head.status == 101, "a 101 comes back as the answer")
+    head.free()
+    finish(s)
+    verdict.pass("interim answers were passed over, and a 101 came back.")
+
 fn test_http_chunked_read(arena: Arena$@) //<
     //< A chunked body reads as its data joined, whole or a byte at a time, extensions and
     //< trailers dropped

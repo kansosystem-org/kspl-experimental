@@ -515,7 +515,9 @@ impl Editor
         table: = ed.table_of(block)!
         t: = ed.doc.tables[table]@
         if top < 0 || left < 0 || height < 1 || width < 1 || bottom < top + height - 1 ||
-            right < left + width - 1 || bottom >= t.rows.len || right >= t.columns.len
+            right < left + width - 1 || bottom >= t.rows.len || right >= t.columns.len ||
+            (bottom > top + height - 1 && right > left + width - 1)
+            // **A fill goes one way**, as a fill handle drags: its lines are built for one way.
             throw .table(.outside)
         defer scratch: = Arena(64 * 1024)
         out: = marks_of(left_out, t.rows.len, scratch)!
@@ -922,7 +924,11 @@ priv fn pasted(text: U8[], read: Reading, arena: Arena$@): U8[] //<
             return text
         b.s(t.sub(j + 1, 3))
         j += 4
+    // **Only a decimal part may follow the last group.** More digits there make `3,1416`, a
+    // decimal comma, read as 31416.
     rest: = t.sub_from(j)
+    if rest.len > 0 && rest[0] != '.'
+        return text
     b.s(rest)
     joined: = arena.dup_str(b.slice())
     return joined if value_of(joined, read, arena).kind == .number else text

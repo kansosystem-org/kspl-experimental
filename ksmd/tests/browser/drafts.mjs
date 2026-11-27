@@ -35,6 +35,17 @@ export function drafts({ tab, withTab, idle, said, noticed, choose, typeAtEnd, s
         await e.press("s", CTRL);
         await idle(e);
       });
+      // **Text typed in the formula bar is held too**: its box stands outside the document, and
+      // no draft held it, so a reload lost it.
+      fs.writeFileSync(path.join(ctx.root, "cells.ksmd"), CELLS);
+      await withTab(ctx, "?doc=cells.ksmd", async (d) => {
+        await d.click('#doc td[data-r="0"][data-c="1"]');
+        await d.click(".formula-bar .formula-input");
+        await d.type("7");
+        check((await state(d)).startsWith("Not saved") && await held(d),
+          "text typed in the formula bar is unsaved at once, and a pause holds it as a draft",
+          await state(d));
+      });
       fs.rmSync(path.join(ctx.root, "cells.ksmd"), { force: true });
     },
 

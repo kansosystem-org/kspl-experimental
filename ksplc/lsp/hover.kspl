@@ -411,6 +411,13 @@ priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
 
     if hover.def_node != null
         classify_def_node(state, hover.def_node, def_res.enum_node, hover)
+        // **In a generic function, a parameter or a local shows the type written** (`items: T[]`),
+        // not one instance's (`U8[][]`): the body read is an instance's copy.
+        if written_in_generic(path, hover.def_node)
+            // The instance's tree has the type arguments put in; the template's has `T`.
+            if twin: = template_twin(state.root_file, hover.def_node)
+                hover.def_node = twin
+                hover.type_id = 0
     // Set where the declaration's own type is spelt out (a field's `a: I32`, which carries no id).
     $spelt_from_def: = false
     if hover.type_id == 0
@@ -428,6 +435,41 @@ priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
     // in `Pair::{ .a = 1 }` is the struct literal, so `.a` read `field a: Pair`.
     if hover.type_id == 0 && target_node.kind_id != .k_keyword && !spelt_from_def
         walk_path_for_type(path, target_node, hover)
+priv fn template_twin(root: Ast_node$@, def: Ast_node$@): Ast_node$@? //<
+    //< The node of a generic function's template at `def`'s place, of `def`'s kind
+    //< **An instance borrows its template's places**, so the template's own node stands there.
+    for top in root.children
+        if top.kind_id != .k_decl_fn
+            continue
+        params: = top.find_child(.k_type_gen_params)
+        if params == null || params.children.len == 0
+            continue
+        if found: = twin_below(top, def)
+            return .some(found)
+    return .none
+
+priv fn twin_below(node: Ast_node$@, def: Ast_node$@): Ast_node$@? //<
+    //< A node under `node` of `def`'s kind at `def`'s place
+    for ch in node.children
+        if ch.kind_id == def.kind_id && ch.loc.offset == def.loc.offset &&
+            ch.loc.file_id == def.loc.file_id
+            return .some(ch)
+        if found: = twin_below(ch, def)
+            return .some(found)
+    return .none
+
+priv fn written_in_generic(path: List<|Ast_node$@|>$@, def: Ast_node$@): Bool //<
+    //< Whether `def` is a parameter or a local with its type written, in a generic function
+    if (def.kind_id != .k_fn_param && def.kind_id != .k_decl_var &&
+        def.kind_id != .k_decl_var_item) || def.get_decl_type_node() == null
+        return false
+    for n in path.slice()
+        if n.kind_id == .k_decl_fn &&
+            (n.find_child(.k_type_gen_params) != null ||
+            (n.sym_ptr != null && (Sema_symbol$@::n.sym_ptr).flags.is_generated_instance))
+            return true
+    return false
+
 priv fn classify_def_node(state: Doc_state$@, node: Ast_node$@, parent_enum_in: Ast_node$@,
     hover: Hover_ctx$@) //<
         //< It decides the type and shape from a definition node's kind (the first classification)

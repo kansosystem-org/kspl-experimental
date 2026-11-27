@@ -129,23 +129,33 @@ priv fn add_pick(out: List<|Pick|>$@, name: U8[], kind: I32, prefix: U8[], node:
             return
     out.push(Pick::{ .name = name, .kind = kind, .node = node, .type_id = type_id })
 
+priv fn written_here(decl: Ast_node$@, swapped: Swapped): Bool //<
+    //< Whether a declaration's name is written at its place, in the text the tree was read from
+    //< **A generic's instance is the compiler's** (`main_Holder_I32`): it borrows the template's
+    //< place, where its name is not written.
+    name_node: = decl.find_child(.k_identifier)
+    return name_node == null || lsp_position.is_source_text(name_node, swapped.text)
+
 // The names visible from the cursor.
 // Caution: **Do not list every name of a module.** An imported name is called qualified
 // (`io.out()`). So the unqualified names are only **the enclosing scopes' names, the file's
 // top-level declarations, and the import aliases**. Otherwise thousands of uncallable names mix in.
 priv fn picks_in_scope(state: Doc_state@, path: List<|Ast_node$@|>@, mark: Ast_node@,
-    prefix: U8[], out: List<|Pick|>$@)
+    swapped: Swapped, out: List<|Pick|>$@)
+    prefix: = swapped.prefix
     // What the enclosing scopes declared before the synthesized name (parameters come in here too).
     for i in Range.asc(path.len)
         node: = path.get(i)
         for child in node.children
-            if child.loc.offset >= mark.loc.offset
+            if child.loc.offset >= mark.loc.offset || !written_here(child, swapped)
                 continue
             got: = named_by(child)
             add_pick(out, got.name, got.kind, prefix, got.node, got.type_id)
     // The file's top-level declarations, and the import aliases.
     for child in state.root_file.children
         if !child.loc.file().equals(state.mod_name_perm)
+            continue
+        if !written_here(child, swapped)
             continue
         got: = named_by(child)
         add_pick(out, got.name, got.kind, prefix, got.node, got.type_id)
@@ -283,6 +293,10 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
     // (`find_path_at_params`'s contract); otherwise each request leaks one.
     lsp_position.find_path_at_offset(state.root_file, state.sema, swapped.offset,
         state.mod_name_perm, path)
+    // **The mark is the one on the path**: in a generic function's body, `find_mark` meets the
+    // template's first, while the path runs through an instance, and `holder.` found no receiver.
+    if path.len > 0 && path.get(path.len - 1).text.equals(mark.text)
+        mark = path.get(path.len - 1)
     $out: = List<|Pick|>(arena)
     recv: = lsp_nav.dot_receiver_of(state.sema, path, mark)
     head: = qualifier_of(path, mark)
@@ -307,7 +321,7 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
             add_variants(state.sema, named, swapped.prefix, out@)
             picks_of_type(state.sema, named, false, swapped.prefix, out@)
     else
-        picks_in_scope(state, path, mark, swapped.prefix, out@)
+        picks_in_scope(state, path, mark, swapped, out@)
     // By name; picks of one name keep the order they were found in.
     $sorted: = out.order_by(fn(left: Pick@, right: Pick@; ): I32 {
         return left.name.compare(right.name);

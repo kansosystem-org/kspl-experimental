@@ -247,6 +247,9 @@ function ksmdCatalog(ks) {
   ks.handle("insert-function", () => open(null), { direct: true, looks: true });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "F3" || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    // While the find bar is open, Shift+F3 steps back through its matches (`find.js`).
+    const find = document.querySelector(".find");
+    if (find && !find.hidden) return;
     e.preventDefault();
     e.stopPropagation();
     ks.command("insert-function");

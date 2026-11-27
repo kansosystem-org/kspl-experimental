@@ -1,0 +1,193 @@
+//< Classifies files by name alone, and counts a file's comment lines and code lines
+//< It is kept apart from its caller `tools/repo_stat.kspl` so that a test can import it: a
+//< program holds only one `main`. **`count_lines` is the one rule for a comment line**: the
+//< report and `make test-conventions`'s 30% check both count with it, so they cannot disagree.
+import "std/chars" // `find_char` / `rfind_char`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+
+fn listed(tracked: U8[], others: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The files to count, from git's two lists (`ls-files` and `ls-files --others`), sorted
+    //< Each list holds one path a line. **Sorted as one**: a group's subtotal is written where the
+    //< top-level folder changes, so an untracked file must fall among its folder's tracked ones.
+    //< Caution: **Count what git lists, not what a walk finds.** A walk also enters what is
+    //< ignored, an ignored worktree nested inside the clone among it, and counts another checkout's
+    //< files.
+    $all: = List<|U8[]|>(arena)
+    for text in U8[][]::{ tracked, others }
+        for line in text.lines(arena)
+            path: = line.trim_end()
+            if path.len > 0
+                all.push(path)
+    return all.order_by(fn(left: U8[]@, right: U8[]@; ): I32 {
+        return left.compare(right$);
+    }, arena)
+
+fn is_generated(path: U8[]): Bool //< whether the file is generated rather than hand-written
+    //< Caution: **Do not count it with the hand-written files**: the bootstrap seed is a large
+    //< share of the repository, and it would dominate "the size".
+    return path.equals("ksplc/seed.c")
+
+pub fn comment_marker(path: U8[]): U8[] //< the line-comment mark that extension uses
+    //< Empty for none (`.md`, `.json`; `.S`, `.ld`, `.css` and `.html` have only `block_marks`).
+    //< Caution: **Do not put `.ksplb` on the `#` side.** `#` starts an attribute, so every
+    //< `#cfg(…)` would become a comment and the line count would silently shrink.
+    if path.ends_with(".kspl") || path.ends_with(".ksplb") || path.ends_with(".c") ||
+        path.ends_with(".h") || path.ends_with(".js") || path.ends_with(".mjs") ||
+        path.ends_with(".kspeg")
+        return "//"
+    if path.ends_with(".py") || path.ends_with(".mk") || path.ends_with(".yml") ||
+        path.ends_with(".sh") || path.ends_with(".cfg") || path.ends_with("Makefile") ||
+        path.ends_with("Dockerfile") || path.ends_with(".gitignore") ||
+        path.ends_with(".gitattributes")
+        return "#"
+    return ""
+
+pub struct Block_marks //< a block comment's two ends, both empty where the kind has none
+    pub open: U8[]
+    pub close: U8[]
+
+pub fn block_marks(path: U8[]): Block_marks //< the block comment that extension uses
+    //< **A kind may have a line mark as well** (C and JavaScript also take `//`); KSPL has none.
+    if path.ends_with(".c") || path.ends_with(".h") || path.ends_with(".js") ||
+        path.ends_with(".mjs") || path.ends_with(".css") || path.ends_with(".S") ||
+        path.ends_with(".ld")
+        return Block_marks::{ .open = "/*", .close = "*/" }
+    if path.ends_with(".html")
+        return Block_marks::{ .open = "<!--", .close = "-->" }
+    return Block_marks::{ .open = "", .close = "" }
+
+pub struct Opening //< where a line's comment text starts, and whether a block runs on past it
+    pub at: I64 //< -1 if the line has no comment
+    pub block: Bool //<
+        //< whether that comment is a block's (`/* */`, `<!-- -->`) rather than a line's
+    pub open: Bool //< whether a block is still open at the line's end
+
+pub fn opening(line: U8[], mark: U8[], block: Block_marks, open: Bool): Opening //<
+    //< Where the comment's text starts on this line, using the file kind's comment marks
+    //< So `#cfg` opens nothing. `open` says a block continues from the line above.
+    //<
+    //< Caution: **Skip the strings first**: a generator writes its output's heading as `.s("//
+    //< ...")`, so the first `//` would return the program's output, not a comment
+    //< (`ksplc/tools/interface.kspl`).
+    if open
+        return Opening::{ .at = 0, .block = true,
+            .open = line.find_str(block.close).is_none() }
+    $i: Sz = 0
+    $quote: U8 = 0
+    for i < line.len
+        c: = line[i]
+        if quote != 0
+            if c == '\\'
+                i += 2
+                continue
+            if c == quote
+                quote = 0
+            i += 1
+            continue
+        if c == '"' || c == '\''
+            quote = c
+            i += 1
+            continue
+        rest: = line.sub_from(i)
+        if mark.len > 0 && rest.starts_with(mark)
+            return Opening::{ .at = past_mark(line, i, mark), .block = false, .open = false }
+        if block.open.len > 0 && rest.starts_with(block.open)
+            at: = past_mark(line, i, block.open)
+            return Opening::{ .at = at, .block = true,
+                .open = line.sub_from(at).find_str(block.close).is_none() }
+        i += 1
+    return Opening::{ .at = -1, .block = false, .open = false }
+
+pub struct Line_count //< a text's lines by kind
+    pub blank: Sz
+    pub comment: Sz //< a line that opens with a comment mark, or lies inside a block comment
+    pub code: Sz //< any other line that is not blank, imports and declarations included
+    pub trail: Sz //< the code lines that end in a comment
+
+pub fn count_lines(text: U8[], path: U8[], arena: Arena$@): Line_count //<
+    //< Counts a text's lines by the comment marks of `path`'s kind of file
+    //< The lines are `lines` in `std/str`, so an unterminated last line counts. **A block's lines
+    //< after its first are comments**, a block opened after code included.
+    mark: = comment_marker(path)
+    block: = block_marks(path)
+    $n: = Line_count::{}
+    $open: = false
+    for ln in text.lines(arena)
+        t: = ln.trim_spaces()
+        carried: = open
+        op: = opening(ln, mark, block, open)
+        open = op.open
+        if t.len == 0
+            n.blank += 1
+        else if carried || (mark.len > 0 && t.starts_with(mark)) ||
+            (block.open.len > 0 && t.starts_with(block.open))
+            n.comment += 1
+        else
+            n.code += 1
+            if op.at >= 0
+                n.trail += 1
+    return n
+
+priv fn past_mark(line: U8[], at: Sz, mark: U8[]): Sz //< just past a comment's opening mark
+    //< **A comment can open with more than its mark**: `///`, `//<`, `##` and `/**` open comments
+    //< too. Skipping only the mark leaves a character before a label that is in fact first.
+    $i: = at + mark.len
+    last: = mark[mark.len - 1]
+    for i < line.len && line[i] == last
+        i += 1
+    return i + 1 if mark.equals("//") && i < line.len && line[i] == '<' else i
+
+enum Role //< what a hand-written file is for; the sheet totals each apart
+    functional //< what the packages ship: the compiler, the library, the packages and their demos
+    test //< what checks the rest: a file under a `tests/` folder, or one named `*_test.*`
+    tooling //< what builds and checks the repository: `tools/`, the make files, editor and CI setup
+    prose //< a file with no comment mark at all: documents and data (`.md`, `.json`, `.ksmd`)
+
+priv const TOOLING_TOPS: U8[][_] = ::{ "", "tools", "mk", ".github", ".devcontainer", ".vscode",
+    "private" } //< the top folders that hold only tooling; "" is the root's own files
+
+fn role_of(path: U8[]): Role //< the role, read from the path alone
+    //< Caution: **Ask about tests before the folder.** `tools/tests/` is test code, not tooling.
+    if comment_marker(path).len == 0 && block_marks(path).open.len == 0
+        return .prose
+    $name: = path
+    if slash: = path.rfind_char('/')
+        name = path.sub_from(slash + 1)
+    if path.starts_with("tests/") || path.find_str("/tests/").is_some() ||
+        name.find_str("_test.").is_some()
+        return .test
+    top: = top_of(path)
+    for t in TOOLING_TOPS
+        if top.equals(t)
+            return .tooling
+    if name.equals("Makefile") || name.ends_with(".mk") || name.equals("Dockerfile")
+        return .tooling
+    return .functional
+
+fn ext_of(path: U8[]): U8[] //< the extension
+    //< A name with no `.` returns itself (`Makefile`, where the name stands for the kind).
+    $name: = path
+    if slash: = path.rfind_char('/')
+        name = path.sub_from(slash + 1)
+    dot: = name.rfind_char('.').unwrap_or(0)
+    return name if dot == 0 else name.sub_from(dot) // a name that opens with its `.` has none
+
+fn group_of(path: U8[]): U8[] //< the folder a file's subtotal is for, empty for a file at the root
+    //< The top-level folder, but a package under `lib/` is a group of its own (`lib/ksai`): the
+    //< packages differ in purpose, and one subtotal for them all would say nothing.
+    top: = top_of(path)
+    if !top.equals("lib")
+        return top
+    rest: = path.sub_from(top.len + 1)
+    if slash: = rest.find_char('/')
+        return path.sub(0, top.len + 1 + slash)
+    return top
+
+fn top_of(path: U8[]): U8[] //< the top-level folder's name, empty for a file at the root
+    //< Sorted, the root's files fall between the folders, so "same as the last" cannot group them.
+    if slash: = path.find_char('/')
+        return path.sub(0, slash)
+    return ""

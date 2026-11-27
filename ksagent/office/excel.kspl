@@ -399,10 +399,10 @@ priv fn row_of(ref: U8[]): I32 //< the row of a reference like `AB12`; -1 if non
     return whole(ref.sub_from(i)) if i < ref.len else -1
 
 priv fn merge_of(ref: U8[]): Merge!U8[] //< a merged range from its reference, `A4:B5`
-    colon: = ref.find_char(':') catch
-        throw "a sheet names a merged range that is no range"
+    //< A lone cell (`A4`), which some libraries write, is a range of one cell.
+    colon: = ref.find_char(':').unwrap_or(ref.len)
     first: = ref.sub(0, colon)
-    last: = ref.sub_from(colon + 1)
+    last: = ref.sub_from(colon + 1) if colon < ref.len else first
     m: = Merge::{ .top = row_of(first), .bottom = row_of(last), .left = column_of(first),
         .right = column_of(last), .text = "" }
     if m.top < 1 || m.bottom < m.top || m.bottom > MAX_ROW || m.left < 1 || m.right < m.left ||

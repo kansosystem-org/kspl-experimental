@@ -91,9 +91,10 @@ function ksmdFilter(ks) {
       case "is": return text === arg;
       case "not": return text !== arg;
       case "contains": return text.includes(arg);
-      // A number compares as a formula does, at the digits it shows (`ks.compareNumbers`).
-      case "above": return numeric ? ks.compareNumbers(v[1], number) > 0 : text > arg;
-      case "below": return numeric ? ks.compareNumbers(v[1], number) < 0 : text < arg;
+      // A number compares as a formula does, at the digits it shows (`ks.compareNumbers`). An
+      // empty cell is neither greater nor less, as in Excel, so "is less than 100" hides it.
+      case "above": return text !== "" && (numeric ? ks.compareNumbers(v[1], number) > 0 : text > arg);
+      case "below": return text !== "" && (numeric ? ks.compareNumbers(v[1], number) < 0 : text < arg);
       case "empty": return text === "";
       default: return text !== "";
     }

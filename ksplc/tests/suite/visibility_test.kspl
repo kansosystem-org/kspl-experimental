@@ -48,9 +48,9 @@ priv const BOX_GEN: U8[] = //< a generic type declared `priv`, used inside its f
     "priv struct Box<|T|> { v: T; }\npub fn mk(): I32 { b: Box<|I32|> = Box<|I32|>::{ .v = 1 }; \
         return b.v; }\n"
 
-priv const PUB_LIB: U8[] = //< a function, a generic type and a plain type, all `pub`
+priv const PUB_LIB: U8[] = //< a function, a generic type, a plain type and a constant, all `pub`
     "pub fn twice(x: I32): I32 { return x * 2; }\npub struct Box<|T|> { pub v: T; }\npub struct \
-        Plain { pub v: I32; }\n"
+        Plain { pub v: I32; }\npub const LIMIT: I32 = 10\n"
 
 priv const FAR_TRAIT: U8[] = //< a trait whose default body names its file's `priv` function
     "priv fn step(): I32 { return 1; }\npub trait Shape { fn area(r: Self): I32; fn stepped(r: \
@@ -212,6 +212,16 @@ priv const CASES: Case[] = Case[]::{
         .expect =
         "missing import alias prefix. 'Plain' is declared in 'alpha/deep/wide'. This file imports \
             it as '_p'. Write '_p.Plain'" },
+    // **A selective import refuses an `as`**, so the advice there is its `+`.
+    // **The file at the root is named by its own path too**, which reached that advice.
+    Case::{ .name = "and a name after the file a selective import leaves out says to add the '+'",
+        .extra_rels = U8[][]::{ "wide.kspl", "main.kspl" },
+        .extra_bodies = U8[][]::{ PUB_LIB,
+        "import \"wide\" { Plain }\nfn main(): I32 { return wide.LIMIT; }\n" },
+        .entry = "main.kspl",
+        .expect =
+        "This file imports only names listed from it. Add a '+' ('import \"wide\" + { ... }') and \
+            write 'wide.LIMIT'" },
 }
 
 priv fn prepare(case_row: Case, index: Sz, arena: Arena$@): Job //<

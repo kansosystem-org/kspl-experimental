@@ -101,6 +101,17 @@ priv fn end_of(ctx: Ctx$@, node: Ast_node@): Sz //<
             far = got
     return far
 
+priv fn line_end(ctx: Ctx@, at: Sz): Sz //<
+    //< The end of the line `at` stands on, its trailing spaces left out
+    //< **A declaration's range ends with its last line.** A part the source does not spell, as an
+    //< interpolated string's pieces, otherwise ended it partway through that line.
+    $end: = at
+    for end < ctx.src.len && ctx.src[end] != '\n' && ctx.src[end] != '\r'
+        end += 1
+    for end > at && (ctx.src[end - 1] == ' ' || ctx.src[end - 1] == '\t')
+        end -= 1
+    return end
+
 priv fn symbol(ctx: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Value? //<
     //< One declaration as a `DocumentSymbol`, its members nested, or none where it has no name
     $name: U8[] = ""
@@ -133,7 +144,8 @@ priv fn symbol(ctx: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Val
     // **The whole declaration is the range, the name the selection.** The editor puts the cursor
     // on the selection and highlights the range. The selection must lie inside the range.
     whole: = ctx.b
-        .range_in(ctx.src, node.loc.offset, end_of(ctx, node) - node.loc.offset, ctx.starts)
+        .range_in(ctx.src, node.loc.offset,
+        line_end(ctx, end_of(ctx, node)) - node.loc.offset, ctx.starts)
     sel: = ctx.b.range_in(ctx.src, sel_off, sel_len, ctx.starts)
     return .some(ctx.b.obj().set("name", ctx.b.str_val(name))
         .set("kind", ctx.b.int_val(kind)).set("range", whole).set("selectionRange", sel)

@@ -116,7 +116,9 @@ impl Json_builder: Manual_free //< `free()` lets go the arena it made for itself
         //< Given an arena, it frees nothing: that arena does. A second `free()` frees nothing.
         r.own.free()
 
-impl Array_builder
+// Caution: **Each `push` and `set` moves the builder, so use what it returns.** A copy shares
+// the nodes, so a later `push` on one changed what the other built.
+impl Array_builder: Move_only //< a copy would share the nodes a later push writes
     pub fn push( //< adds one element at the end
         $r: Self,
         val: Value, //< the element to add
@@ -128,7 +130,7 @@ impl Array_builder
     pub fn build(r: Self): Value //< the array built so far
         return .array_val(Array::{ .head = r.head })
 
-impl Object_builder
+impl Object_builder: Move_only //< a copy would share the members a later set writes
     pub fn set( //< adds a member; an existing key is replaced, not added again
         //< Caution: **Replace an existing key.** If appended, `{"a":1,"a":2}` makes `get` return
         //< the first while `dump` writes both, and another parser reads a different value. The scan

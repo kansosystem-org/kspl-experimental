@@ -57,8 +57,14 @@ impl Event_reader
                 return .some(r.data.slice())
 
     priv fn line(r: Self$@, line: U8[]): Bool //< reads one line; true where it ends an event
+        // **An event whose data is empty is not handed out**, as the standard has it: a lone
+        // `data:` line went on as "", which the reply then failed to read as JSON.
         if line.len == 0
-            return r.has_data
+            if r.has_data && r.data.slice().len > 0
+                return true
+            r.data.clear()
+            r.has_data = false
+            return false
         if line[0] == ':'
             return false
         colon: = line.find_char(':').unwrap_or(line.len)

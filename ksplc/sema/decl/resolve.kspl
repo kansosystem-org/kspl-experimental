@@ -53,10 +53,12 @@ impl Sema_ctx
         //<
         //< Caution: **Do not look up the name with its qualifier stripped.** A short name answers
         //< for whatever this file can see under it, so `io.List<|I32|>` would count as found.
+        //< Caution: **Do not count an id in the type table.** Resolving a field or a return type
+        //< gives a name the file lacks an id of its own (`resolve_written_type`), and `io.Writer`
+        //< then passed every check and failed in the C compiler. A `priv` type is in `by_fqn`.
         fqn: = r.build_mod_fqn(file_path, name)
-        return r.symtab.resolve(fqn).is_some() ||
-            r.generics.templates.get(fqn).is_some() ||
-            r.env.type_to_id.get(fqn).unwrap_or(0) != 0
+        return r.symtab.resolve(fqn).is_some() || r.symtab.by_fqn.get(fqn).is_some() ||
+            r.generics.templates.get(fqn).is_some()
 
     fn is_type_name(r: Self$@, name: U8[]): Bool //< whether that name names a type
         //< It answers for a short name, for `Self`, and for an alias prefix alike.

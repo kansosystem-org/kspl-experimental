@@ -383,7 +383,10 @@ impl Ast_node
             if else_block != null && else_block.infer_stmts_failed(ctx)
                 has_err = true
 
-        sema_body_lint_stmt.lint_if_stmt(ctx, r, then_block, else_block)
+        // **A constant condition has already emptied the branch it leaves out**: linted after, `if
+        // VERBOSE` with a body read as an empty block.
+        if !is_static
+            sema_body_lint_stmt.lint_if_stmt(ctx, r, then_block, else_block)
         if has_err
             throw .analysis_failed
 
@@ -843,4 +846,4 @@ priv fn infer_index_set(ctx: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@,
     left.def_node = method_sym.node
     left.type_id = method_sym.type_id
     index_node.infer_expr(ctx, ctx.operator_index_param_id(method_sym))!
-    right.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!
+    right.infer_expr(ctx, ctx.operator_value_param_id(method_sym))!

@@ -407,6 +407,23 @@ fn main()
   t.free()
 """
 
+priv const ZERO_MUTEX_SRC: U8[] = //< a child that locks a global Mutex never given `new()`
+    """import "std/thread"
+
+priv $counter: thread.Mutex<|I32|>
+
+fn main()
+  _v: = counter.lock()
+"""
+
+fn test_zero_mutex_stops(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //< **A zero Mutex holds no lock**: passed over, two threads changed its data at once
+    verdict.start("[Thread] a Mutex used before new() stops the program...")
+    argv: = sys_test.child_argv(ksplc, "mutex_zero", ZERO_MUTEX_SRC, arena)
+    assert(sys_test.stops_with(argv, "a Mutex or Cond_var used before new()", arena),
+        "a lock of a zero Mutex must stop the program with the reason")
+    verdict.pass("a Mutex used before new() stops the program and says why.")
+
 fn expect_lock_misuse( //< runs the three children and checks that each stopped with its reason
     //< The argvs are given whole, so a run under Wine can pass children built beforehand.
     relock: U8[][],

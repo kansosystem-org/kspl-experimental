@@ -85,7 +85,8 @@ function ksmdImages(ks) {
     const x0 = e.clientX;
     let percent = null;
     const move = (m) => {
-      const px = Math.max(16, start.width + m.clientX - x0);
+      // The pointer moves in the window's pixels, which the zoom scales; the text's width does not.
+      const px = Math.max(16, (start.width + m.clientX - x0) / ks.zoom.factor());
       percent = Math.max(1, Math.min(100, Math.round((px / full) * 100)));
       fig.classList.add("sized");
       fig.style.setProperty("--image-width", `${percent}%`);
